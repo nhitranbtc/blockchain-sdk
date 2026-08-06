@@ -26,8 +26,11 @@ pub enum ChainId {
 /// Solana cluster discriminator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SolanaCluster {
+    /// Solana mainnet-beta.
     Mainnet,
+    /// Solana testnet.
     Testnet,
+    /// Solana devnet (local development).
     Devnet,
 }
 
@@ -54,16 +57,32 @@ pub trait ChainWallet: Send + Sync {
 /// into this enum at the umbrella boundary.
 #[derive(Debug, Error)]
 pub enum ChainError {
+    /// Network/RPC call failed (Esplora, Electrum, JSON-RPC, etc.)
     #[error("network error: {0}")]
     Network(String),
+    /// Local persistence operation failed (SQLite, file I/O).
     #[error("storage error: {0}")]
     Storage(String),
+    /// Cryptographic signing or verification failed.
     #[error("signing error: {0}")]
     Sign(String),
-    #[error("not initialized: {0}")]
+    /// Wallet not yet initialized (mnemonic missing, etc.).
+    #[error("not initialized")]
     NotInitialized,
+    /// Requested chain not supported by this build.
     #[error("chain not supported: {0}")]
-    Unsupported(ChainId),
+    Unsupported(String),
+}
+
+impl ChainId {
+    /// String representation for error messages + serialization.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChainId::Bitcoin(_) => "bitcoin",
+            ChainId::Ethereum(_) => "ethereum",
+            ChainId::Solana(_) => "solana",
+        }
+    }
 }
 
 #[cfg(test)]

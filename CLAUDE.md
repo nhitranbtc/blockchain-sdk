@@ -187,8 +187,14 @@ task/N-<short-name>                       running
 3. **TDD cycle** — write failing test (plan Step 1), run (expect fail), implement (plan Step 2), run (expect pass), refactor (plan Step 3+).
 4. **Verify** — `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --workspace`. Wrap with `superpowers:verification-before-completion` for the "done" claim gate.
 5. **PAUSE** — report diff summary + test output. Ask: "commit + push + PR?" per `~/.claude/.../memory/MEMORY.md` rules.
-6. **Commit + push + PR** — `commit-commands:commit-push-pr` (combined commit + push + open PR). `pr-review-toolkit:code-review` audits full diff. Fix loop max 3 rounds. Then merge + close issue + update ledger.
-7. **Drift update** (if implementation differs from plan) — update plan + spec in same PR. Per CLAUDE.md "Update spec + plan if implementation drifted."
+6. **Commit + push + PR** — `commit-commands:commit-push-pr` (combined commit + push + open PR). `pr-review-toolkit:code-review` audits full diff. Fix loop max 3 rounds.
+7. **Pre-merge checklist** (per user rule "update completed steps before merge"):
+   - [ ] Update issue body checkboxes via `gh issue edit N --body "..."` — flip all completed steps from `[ ]` to `[x]`
+   - [ ] PR review via `pr-review-toolkit` (or inline fallback if skill unavailable)
+   - [ ] Merge via `gh pr merge N --squash --delete-branch`
+   - [ ] Close issue via `gh issue close N` (or auto on merge)
+   - [ ] Update ledger `.superpowers/sdd/<plan>/progress.md` with commit SHA + PR number + merge state
+8. **Drift update** (if implementation differs from plan) — update plan + spec in same PR. Per CLAUDE.md "Update spec + plan if implementation drifted."
 
 ### Plugins / skills (apply in order per task)
 
@@ -259,12 +265,15 @@ Ledger survives compaction — trust it over session memory.
 ### Project scaffolding (current v0.1)
 
 ```text
-bitcoin-wallet-rs/                  (workspace root)
+rust-wallet-app/                    (workspace root)
 ├── Cargo.toml                      (workspace)
 ├── crates/
-│   ├── bitcoin-wallet-core/        (library — BDK 3.1 + rust-bitcoin 0.32)
-│   └── btc/                        (CLI — clap 4)
+│   ├── chain-traits/               (ChainWallet trait — umbrella, exists)
+│   ├── bitcoin-wallet-core/        (library — BDK 3.1 + rust-bitcoin 0.32, v0.1 to build)
+│   └── btc/                        (CLI — clap 4, v0.1 to build)
 └── .github/workflows/ci.yml
 ```
 
-Multi-chain umbrella `rust-wallet-app/` (with `chain-traits/` defining `ChainWallet` trait) is a separate v0.2 plan; scaffolded at `rust-wallet-app/crates/chain-traits/` but not in active scope.
+`bitcoin-wallet-core/` and `btc/` are v0.1 deliverables per the merged plan
+(`docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`). They live INSIDE
+the umbrella workspace `rust-wallet-app/`.
