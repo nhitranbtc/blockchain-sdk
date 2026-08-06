@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/chain-traits",
+    # "crates/bitcoin-wallet-core",  # v0.1 — pending disk presence; uncomment when present
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+# repository — set per fork. Default placeholder: change to your fork URL.
+
+[workspace.dependencies]
+# Per-chain SDKs
+# bitcoin-wallet-core = { path = "crates/bitcoin-wallet-core" }  # v0.1 — uncomment when on disk
+bitcoin = "0.32"
+bdk_wallet = { version = "3.1", features = ["keys-bip39"] }
+
+# Shared async + HTTP
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Errors + tracing
+thiserror = "1"
+tracing = "0.1"
+
+# Test
+proptest = "1"
