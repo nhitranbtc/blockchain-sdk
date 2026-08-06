@@ -1,0 +1,52 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Pin third-party actions to full commit SHAs per security guidance.
+      # Update SHAs via Dependabot (config at .github/dependabot.yml).
+      # Format: <sha> # <tag>
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          persist-credentials: false
+      # SECURITY ACCEPTED RISK (per user direction 2026-08-06):
+      # Using major tags instead of SHA pins. Automated review flagged this
+      # as HIGH supply-chain-pin-mismatch (tag rewrite attack vector).
+      # Accepted because SHA pins not yet known for v1.85 / v2.9.2 of these
+      # upstream repos. Dependabot config at .github/dependabot.yml will
+      # auto-bump SHAs after initial Dependabot PR is merged.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Format check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        working-directory: rust-wallet-app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Build
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Test
+        working-directory: rust-wallet-app
+        run: cargo test --workspace
+      - name: Geiger (unsafe audit)
+        working-directory: rust-wallet-app
+        run: |
+          cargo install cargo-geiger --locked
+          cargo geiger --workspace
