@@ -1,0 +1,16 @@
+# Dependabot config: auto-bump third-party GitHub Action SHAs
+# Per security guidance: weekly cadence keeps SHA pins current.
+# After initial SHA lookup, Dependabot opens PRs with updates.
+
+version: 2
+
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci(deps):"
+    labels:
+      - "dependencies"
+      - "ci"

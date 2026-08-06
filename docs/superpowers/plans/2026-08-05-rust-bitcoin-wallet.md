@@ -2,36 +2,37 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Per-task Rust SDK reference:** see [`2026-08-05-rust-bitcoin-wallet-task-sdk-map.md`](2026-08-05-rust-bitcoin-wallet-task-sdk-map.md) — maps every task to the specific crates + API surface it uses. The plan describes the WHAT; that doc describes the WITH-WHAT.
+> **Review audit:** [../reviews/2026-08-05-rust-bitcoin-wallet.md](../reviews/2026-08-05-rust-bitcoin-wallet.md) — 50 doc-review findings applied; 2 deferred to Open Questions.
+>
+> **Spec:** [../specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (commit `e2d51ec`).
+> **Architecture:** [../specs/2026-08-06-rust-bitcoin-wallet-architecture.md](../specs/2026-08-06-rust-bitcoin-wallet-architecture.md).
+> **Research:** [../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`).
 
-**Goal:** Replace `tangem-app-ios/Modules/BlockchainSdk/Blockchains/Bitcoin/` (~2,070 Swift LOC) with a standalone Rust Bitcoin wallet — library + CLI — no Swift host, no `TangemSdk`, no hardware. HTTP/REST server deferred.
+**Goal:** Replace `tangem-app-ios/Modules/BlockchainSdk/Blockchains/Bitcoin/` (~2,070 Swift LOC) with a standalone Rust Bitcoin wallet — library + minimal CLI. No Swift host, no `TangemSdk`, no hardware. Phase 1 ships MVP (Tasks 0-9 + minimal CLI); remaining user stories and v0.2 multi-chain umbrella deferred per F33/F35.
 
-**Architecture:** Cargo workspace `bitcoin-wallet-rs/`. Crate `bitcoin-wallet-core` (BDK 3.1 + rust-bitcoin 0.32) owns signing + chain. `secp256k1` and `miniscript` are re-exported via `bdk_wallet::bitcoin::*`; no direct deps needed. Crate `btc` (clap 4) is the CLI. **Default network is Bitcoin testnet** for all development and CI; mainnet is opt-in via `--network mainnet`. Full architecture (component model, state, concurrency, security model, locked decisions, open questions): [`../specs/2026-08-06-rust-bitcoin-wallet-architecture.md`](../specs/2026-08-06-rust-bitcoin-wallet-architecture.md).
+**Architecture:** Cargo workspace `bitcoin-wallet-rs/`. Crate `bitcoin-wallet-core` (BDK 3.1 + rust-bitcoin 0.32) owns signing + chain + encryption. `secp256k1` and `miniscript` re-exported via `bdk_wallet::bitcoin::*`; no direct deps needed. Crate `btc` (clap 4) is the minimal CLI. **Default network is Bitcoin testnet** for all development and CI; mainnet is opt-in via `--network mainnet`.
 
-**Tech Stack:** Rust 1.85 MSRV, BDK 3.1 (with `keys-bip39` feature for `bip39` re-export), rust-bitcoin 0.32 (re-exports `secp256k1` + `miniscript` + `bip39` internally — no direct deps needed), bip32 0.6 (BIP-32 derivation), tokio 1, reqwest 0.12, thiserror 1, tracing 0.1, clap 4, proptest 1.
+**MVP scope (per F35):** Tasks 0-9 + minimal CLI = working wallet create + sync + balance. Stories 1, 2, 3, 4, 11, 12 in scope. Stories 5-10, 13-20 deferred to v0.1.1/v0.1.2.
 
-**Spec:** [docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (commit `e2d51ec`).
-**Research:** [docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`).
+**Tech Stack:** Rust 1.85 MSRV (justification per F31: `bdk_wallet 3.1` requires 1.85; if a lower MSRV proves compatible, downgrade), BDK 3.1 (with `keys-bip39` feature for `bip39` re-export), rust-bitcoin 0.32 (re-exports `secp256k1` + `miniscript` + `bip39`), bip32 0.6 (fallback `^0.5` per F46), tokio 1, reqwest 0.12, thiserror 1, tracing 0.1, clap 4, proptest 1, argon2 0.5, aes-gcm 0.10, rand 0.8, zeroize 1.
 
 ## Global Constraints
 
-- **MSRV:** Rust 1.85. Set in workspace `rust-toolchain.toml`.
+- **MSRV:** Rust 1.85. (Justification per F31: bdk_wallet 3.1 requires 1.85; if Task 31 spike finds lower works, downgrade to 1.82.) Set in workspace `rust-toolchain.toml`.
 - **Edition:** Rust 2021.
-- **License:** MIT.
-- **Repo layout:** workspace `bitcoin-wallet-rs/`; 2 crates under `crates/{bitcoin-wallet-core,btc}`. HTTP/REST server deferred — see Global Constraint "No REST/HTTP server in v1".
+- **License:** MIT. Copyright (c) 2026 individual contributors. CLA required.
+- **Repo layout:** workspace `bitcoin-wallet-rs/`; 2 crates under `crates/{bitcoin-wallet-core,btc}`. Multi-chain umbrella is a separate v0.2 plan.
 - **No hardware-wallet integration** anywhere.
-- **No `unsafe`** in user code. Only FFI is `secp256k1` (re-exported from `bdk_wallet::bitcoin`; audited as part of Bitcoin Core's libsecp256k1).
+- **No `unsafe` in user code except as documented in Task 1.5** (per F16 + F53). One permitted exception: `Secret::into_inner` in `keys/secret.rs` uses a single scoped `unsafe` block (`ptr::read` + `mem::forget`) to move out before `ZeroizeOnDrop` fires. CI runs `cargo geiger` to enforce.
 - **No `anyhow` in `bitcoin-wallet-core`.** `anyhow` only in `btc` CLI top-level.
-- **All public functions return `Result<T, Error>`.** No `unwrap` / `panic!` in library code.
+- **All public functions return `Result<T, Error>`.** No `unwrap` / `panic!` in library code (per F43 — `p2wpkh`/`p2pkh`/`p2tr_key_path` return `Result<ScriptBuf, Error>`).
 - **Default fee strategy:** half-hour (3-block target). Override per send.
-- **Mnemonic storage:** plain on disk in v1 with strong warning. v1.1 adds encryption.
+- **Mnemonic storage:** encrypted at rest with Argon2id + AES-256-GCM (per F6 — promoted from add-on to v0.1 core). Argon2id calibrated to `m=256 MiB, t=10, p=4` (per F5 — Sparrow reference; 500ms wall-clock target).
 - **DB:** `bdk_file_store` (SQLite) under `data_dir/{wallet_id}/`.
-- **Default network:** testnet. Mainnet opt-in via `--network mainnet`. Regtest opt-in via `--network regtest` (requires local `bitcoind`).
-- **No REST/HTTP server in v1.** CLI only (`btc` binary). HTTP interface deferred.
+- **Default network:** testnet. Mainnet opt-in via `--network mainnet`. Regtest opt-in via `--network regtest` (requires local bitcoind via `bdk_testenv`).
+- **No REST/HTTP server in MVP.** CLI only. HTTP interface deferred to v0.2.
 
 ## File Structure
-
-Full directory tree below is the **concrete map** of the architecture doc's layered view ([`../specs/2026-08-06-rust-bitcoin-wallet-architecture.md` §2](../specs/2026-08-06-rust-bitcoin-wallet-architecture.md)). Task 1 (scaffold) creates the structure; later tasks fill it in.
 
 ```text
 bitcoin-wallet-rs/
@@ -42,113 +43,129 @@ bitcoin-wallet-rs/
 ├── deny.toml
 ├── crates/
 │   ├── bitcoin-wallet-core/            (library)
-│   │   ├── Cargo.toml
+│   │   ├── Cargo.toml                  (with regtest-tests feature per F3)
 │   │   ├── src/
 │   │   │   ├── lib.rs                  (re-exports module tree)
 │   │   │   ├── error.rs                (Error enum, thiserror)
-│   │   │   ├── config.rs               (WalletConfig)
-│   │   │   ├── util/{mod,atomic_write,permissions}.rs     # added by Task 1.5
-│   │   │   ├── keys/{mod,mnemonic,derivation,signer,secret}.rs  # secret from Task 1.5
-│   │   │   ├── script/{mod,builder,parser}.rs
+│   │   │   ├── config.rs               (WalletConfig + EsploraPinnedPubkey)
+│   │   │   ├── threat.rs               (Sighash enum, MessageClass enum — per F21)
+│   │   │   ├── util/{mod,atomic_write,permissions}.rs
+│   │   │   ├── keys/{mod,mnemonic,derivation,signer,secret}.rs
+│   │   │   ├── crypto/{mod,argon2,aes_gcm,bip137}.rs   # per F6/F9/F50
+│   │   │   ├── script/{mod,builder,parser}.rs          # builder returns Result per F43
 │   │   │   ├── address/{mod,legacy,segwit,taproot}.rs
-│   │   │   ├── chain/{mod,network,esplora,electrum,explorer}.rs  # explorer from Task 27
-│   │   │   ├── wallet/{mod,builder,sync,balance,addresses,watch_only}.rs  # watch_only from Task 32
-│   │   │   └── tx/{mod,builder,psbt,sighash,sign,fee,broadcast,bump_fee,dust,sign_external}.rs  # dust+sign_external from Tasks 26+28
-│   │   └── tests/{regtest_send_roundtrip,vectors,proptest_script,proptest_address}.rs
+│   │   │   ├── chain/{mod,network,esplora,electrum}.rs  # client pinned pubkey per F20
+│   │   │   └── wallet/{mod,builder,sync,balance,addresses,load}.rs
+│   │   └── tests/{regtest_send_roundtrip,proptest_script,proptest_address}.rs  # vectors.rs removed per F40
 │   └── btc/                            (CLI)
 │       ├── Cargo.toml
-│       └── src/{main,commands/*}.rs
-├── fuzz/fuzz_targets/script_parser.rs                   # from Task 20
-├── docker/{Dockerfile,docker-compose.yml}
-└── .github/workflows/{ci,release,integration-testnet}.yml  # integration-testnet from Task 33
+│       └── src/{main,commands/{mod,wallet}}.rs   # minimal CLI
+└── .github/workflows/ci.yml             (regtest-tests feature gate per F3)
 ```
 
-25 tasks across 7 weeks. Each task ends with a `cargo test` + `git commit` cycle.
-
-## Story coverage matrix
-
-20 user stories defined in [`docs/wallets/2026-08-05-btc-wallet-user-stories.md`](../../wallets/2026-08-05-btc-wallet-user-stories.md). This matrix maps each story to the plan task(s) that implement it. Coverage gaps are visible at the top of the plan so they can be addressed before v0.1 release.
+## Story Coverage Matrix (MVP)
 
 | # | Story | Plan task(s) | Phase | Status |
 |---|---|---|---|---|
-| 1 | Create wallet | 1.5, 3, 9, 16 | W1+W3+W5 | core |
-| 2 | Import wallet | 3, 9, 16 | W1+W3+W5 | core |
-| 3 | Check balance | 9, 16 | W3+W5 | core |
-| 4 | Sync chain | 8, 9, 16 | W3+W5 | core |
-| 5 | Send payment | 11-13, 17 | W4+W5 | core |
-| 6 | Custom fee rate | 17.6, 17 | W5 | core (flag added by Task 17.6) |
-| 7 | Tx history | 17.5, 17 | W5 | core (API added by Task 17.5) |
-| 8 | Fee estimates | 14, 17 | W4+W5 | core |
-| 9 | Wallet manager (list/show/delete/rename) | 16, 18.5 | W5 | core (extended by Task 18.5) |
-| 10 | Mainnet explicit | 16, 18.7 | W3+W5 | core (confirmation prompt by Task 18.7) |
-| 11 | Config show | 17 | W5 | core |
-| 12 | Persist across invocations | 7, 9, 17 | W3+W5 | core |
-| 13 | Multi-recipient send | 17, 18.6 | W5 | core (flag added by Task 18.6) |
-| 14 | Drain | 18.6 | W5 | core |
-| 15 | Coin selection algo | 18.6 | W5 | core |
-| 16 | Manual UTXO | 18.6 | W5 | core |
-| 17 | Bump fee (RBF) | 14, 18.5 | W4+W5 | core (CLI by Task 18.5) |
-| 18 | Sign message (BIP-137) | 18.5 | W5 | core (added by Task 18.5) |
-| 19 | Export descriptor | 18.5 | W5 | core (added by Task 18.5) |
-| 20 | Address type on create | 16, 18.6 | W5 | core (flag added by Task 18.6) |
+| 1 | Create wallet | 3, 9 | MVP | core |
+| 2 | Import wallet | 3, 9 | MVP | core |
+| 3 | Check balance | 9 | MVP | core |
+| 4 | Sync chain | 9 | MVP | core |
+| 11 | Persist across invocations | 9 | MVP | core (via bdk_file_store) |
+| 12 | Config show | 9 | MVP | core (via WalletConfig struct) |
 
-**Coverage:** 20 of 20 user stories in core. Add-on tasks (26-34) are now labeled "Tangem iOS comparison gap closure" and "recommendations acted on" — optional polish, not required for v0.1 user stories. Task 31 (BDK API spike) remains a critical-path dependency for Task 9.
+**Deferred stories** (5, 6, 7, 8, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog) below.
 
 ---
 
-## Week 1 — Skeleton + keys (Tasks 1-4)
+## Task 0: Threat Model
+
+### Task 0a: Threat Model (per F24)
+
+**Files:**
+- Create: `docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md`
+
+**Content (template):**
+
+```markdown
+# Threat Model: bitcoin-wallet-core v0.1
+
+## Assets
+- Mnemonic (encrypted at rest per F6)
+- xprv (derived from mnemonic, in-memory only)
+- PSBT (transit only, never persisted)
+- UTXO set (persisted in bdk_file_store SQLite db)
+- Signed messages (BIP-137 — per F7 API, no raw key exposure)
+- Wallet metadata (address_type, network, derivation path)
+
+## Adversaries
+- A1: Local user with read access to data dir
+- A2: Local user with write access to data dir
+- A3: Network attacker (MITM, BGP hijack, rogue CA)
+- A4: Malicious Esplora/Electrum endpoint
+- A5: Malicious PSBT provider (coinjoin coord, hw wallet workflow)
+- A6: Supply-chain compromise (dep crate, CI pipeline)
+- A7: Phishing vector (user signs arbitrary bytes via CLI)
+- A8: Local process with /proc/$pid/mem access
+
+## Trust boundaries
+- B1: Process ↔ filesystem (data dir, mnemonic.enc, descriptors)
+- B2: Process ↔ network (Esplora over TLS — pinned pubkey per F20)
+- B3: Process ↔ PSBT source (CLI stdin — review per F25 deferred to v0.1.1)
+- B4: Library ↔ hardware (no v0.1 hw integration)
+
+## Abuse cases
+- U1: Malicious PSBT redirects 100% of balance (mitigation: deferred to v0.1.1)
+- U2: Fake Esplora lies about UTXOs (mitigation: F20 pin pubkey)
+- U3: Process memory leak via /proc/$pid/mem (mitigation: mlock deferred to v0.2)
+- U4: Supply-chain compromise of atty crate (mitigation: F48 IsTerminal)
+- U5: User signs arbitrary hash via CLI (mitigation: F7 narrow API)
+- U6: World-readable mnemonic file (mitigation: F19 atomic_write + 0o600)
+- U7: Crashed mid-write leaves partial mnemonic (mitigation: F19 atomic_write)
+
+## Mitigations mapping
+| Abuse case | Mitigation task | Status |
+| ---------- | --------------- | ------ |
+| U1 | F25 (deferred) | v0.1.1 |
+| U2 | F20 (Task 7) | in plan |
+| U3 | mlock | deferred to v0.2 |
+| U4 | F48 (deferred) | v0.1.1 |
+| U5 | F7 (Task 6) | in plan |
+| U6, U7 | F19 (Task 1.5) | in plan |
+```
+
+- [ ] **Step 1:** Write threat-model.md content above.
+- [ ] **Step 2:** Pause for commit approval.
+
+---
+
+## Week 1 — Foundation (Tasks 1-4)
 
 ### Task 1: Workspace + CI scaffold
 
 **Files:**
-- Create: `bitcoin-wallet-rs/Cargo.toml`
-- Create: `bitcoin-wallet-rs/rust-toolchain.toml`
-- Create: `bitcoin-wallet-rs/LICENSE`
+- Create: `bitcoin-wallet-rs/Cargo.toml` (workspace manifest)
+- Create: `bitcoin-wallet-rs/rust-toolchain.toml` (1.85)
+- Create: `bitcoin-wallet-rs/LICENSE` (MIT + copyright per F32)
 - Create: `bitcoin-wallet-rs/.gitignore`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/lib.rs`
 - Create: `bitcoin-wallet-rs/crates/btc/Cargo.toml`
 - Create: `bitcoin-wallet-rs/crates/btc/src/main.rs`
 - Create: `bitcoin-wallet-rs/.github/workflows/ci.yml`
+- Create: `bitcoin-wallet-rs/deny.toml`
 
-**Interfaces:**
-- Produces: empty library crate `bitcoin_wallet_core` (re-exports nothing yet)
-- Produces: empty CLI binary `btc`
-- Produces: CI workflow that runs `cargo fmt`, `cargo clippy`, `cargo test`
-
-**Create-wallet flow (locked decision from feature audit + deep-dive):**
-
-The 4-step flow that Story 1 + Task 9 implement end-to-end. **This is the canonical Bitcoin wallet creation in Rust.** All other features layer on top of this flow.
+- [ ] **Step 1: Write failing test for workspace build**
 
 ```rust
-// 1. Generate 12-word BIP-39 mnemonic (BDK re-exports bip39, feature `keys-bip39`)
-use bdk_wallet::keys::bip39::Mnemonic;
-let m = Mnemonic::generate(12)?;  // 12 English words
-
-// 2. Derive BIP-32 master xprv (standalone bip32 crate — BDK doesn't re-export)
-use bip32::{XPrv, DerivationPath};
-let seed: [u8; 64] = m.to_seed("");
-let master = XPrv::derive_from_path(&seed, &DerivationPath::from_str("m")?)?;
-
-// 3. Build descriptor string (no shortcut in BDK 3.1 — must hand-build)
-let account = master.derive_path(&DerivationPath::from_str("m/84'/0'/0'"))?;
-let xprv = account.to_string();
-let external_descriptor = format!("wpkh({xprv})/0/*");
-let change_descriptor   = format!("wpkh({xprv})/1/*");
-
-// 4. Create BDK wallet
-let wallet = bdk_wallet::Wallet::create(external_descriptor, change_descriptor)
-    .network(bitcoin::Network::Testnet)
-    .create_wallet_no_persist()?;
+// tests/build_workspace.rs
+#[test]
+fn workspace_members_compile() {
+    // cargo build --workspace enforces this; test exists to gate CI
+}
 ```
 
-**Crate footprint for this flow:** 4 production deps — `bdk_wallet 3.1` (with `keys-bip39` feature) + `rust-bitcoin 0.32` + `bip32 0.6`. The `secp256k1`, `miniscript`, and `bip39` crates are re-exported via `bdk_wallet::bitcoin::*` and `bdk_wallet::keys::bip39::*` — we use those re-exports directly, no direct dep needed. **No `rand` dep needed** — `Mnemonic::from_entropy_in` handles randomness internally via the `rand` feature (re-exported).
-
-**v0.1 hygiene (added per decision doc):** wrap `m` in `Secret<Mnemonic>` (zeroize crate) so plaintext entropy is wiped on drop. Task 30's Secret<T> newtype.
-
-**v0.2 encryption (added per decision doc):** before step 4, encrypt the mnemonic with `argon2(passphrase) → AES-256-GCM` and write to disk; on subsequent calls, decrypt and resume at step 1. Argon2id calibrated to 500ms wall-clock. AES-256-GCM (AEAD).
-
-- [ ] **Step 1: Create `bitcoin-wallet-rs/Cargo.toml`** (workspace manifest)
+- [ ] **Step 2: Create workspace Cargo.toml**
 
 ```toml
 [workspace]
@@ -160,58 +177,80 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/tangem/bitcoin-wallet-rs"
+# repository — set per fork. Default placeholder.
 
 [workspace.dependencies]
+# Bitcoin (BDK 3.1 + fallback chain per F26)
+bdk_wallet = { version = "^3.1", features = ["keys-bip39"] }
+bdk_chain = "^3.1"
+bdk_esplora = { version = "^0.22", features = ["async"] }
+bdk_electrum = "^0.24"
+bdk_file_store = "^0.15"
+bitcoin = "0.32"
+bip32 = "^0.6"  # fallback: ^0.5 if 0.6 unpublished per F46
+
+# Async + HTTP
 tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Errors + tracing
 thiserror = "1"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Bitcoin
-bdk_wallet = { version = "3.1", features = ["keys-bip39"] }
-bdk_chain = "3.1"
-bdk_esplora = "0.22"
-bdk_electrum = "0.24"
-bdk_file_store = "0.15"
-bitcoin = "0.32"
-# secp256k1 is re-exported as `bdk_wallet::bitcoin::secp256k1` (from `bitcoin ^0.32`).
-# Use that path in Task 4 + Task 29. No direct secp256k1 dep needed.
-# miniscript is re-exported as `bdk_wallet::miniscript` (used by BDK internally for descriptors).
-# Not used directly in v0.1. No direct miniscript dep needed.
-bip32 = "0.6"
-# bip39 is re-exported by `bdk_wallet::keys::bip39::Mnemonic` (feature `keys-bip39`). No direct dep.
-
-# HTTP (Esplora + Electrum clients via reqwest; axum/utoipa deferred with btc-server)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
-
-# v0.2 (Task 30): encrypted mnemonic
+# Crypto (per F6 mnemonic encryption in v0.1 core)
 argon2 = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
-zeroize = "1"
+zeroize = { version = "1", features = ["derive"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
 
 # Test
 proptest = "1"
+tempfile = "3"
+
+# Encoding (used by crypto::bip137 for base64-encoded message signatures)
+base64 = "0.22"
 ```
 
-- [ ] **Step 2: Create `bitcoin-wallet-rs/rust-toolchain.toml`**
+- [ ] **Step 3: Create rust-toolchain.toml**
 
 ```toml
 [toolchain]
 channel = "1.85"
-components = ["rustfmt", "clippy"]
+components = ["rustfmt", "clippy", "rust-src"]
 ```
 
-- [ ] **Step 3: Create `bitcoin-wallet-rs/LICENSE`** with MIT text (https://opensource.org/licenses/MIT).
+- [ ] **Step 4: Create LICENSE (MIT + copyright per F32)**
 
-- [ ] **Step 4: Create `bitcoin-wallet-rs/.gitignore`**
+```
+MIT License
+
+Copyright (c) 2026 [copyright holder]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+- [ ] **Step 5: Create .gitignore**
 
 ```text
 /target
@@ -221,7 +260,7 @@ Cargo.lock
 .env
 ```
 
-- [ ] **Step 5: Create `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml`**
+- [ ] **Step 6: Create bitcoin-wallet-core/Cargo.toml**
 
 ```toml
 [package]
@@ -230,7 +269,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-repository.workspace = true
+# repository.workspace = true  # uncomment if workspace.repository set
+
+[features]
+default = []
+regtest-tests = []  # per F3
 
 [dependencies]
 bdk_wallet = { workspace = true, features = ["keys-bip39"] }
@@ -239,44 +282,55 @@ bdk_esplora = { workspace = true }
 bdk_electrum = { workspace = true }
 bdk_file_store = { workspace = true }
 bitcoin = { workspace = true }
-# secp256k1 + miniscript + bip39: re-exported by bdk_wallet::bitcoin. No direct deps.
 bip32 = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+argon2 = { workspace = true }
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+zeroize = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 tokio = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
 ```
 
-- [ ] **Step 6: Create `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/lib.rs`**
+- [ ] **Step 7: Create bitcoin-wallet-core/src/lib.rs**
 
 ```rust
 //! bitcoin-wallet-core: standalone Bitcoin wallet engine.
 //!
-//! See the spec at docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md.
+//! See spec at docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md.
+//! Threat model: docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md.
+//!
+//! One permitted `unsafe` exception: keys/secret.rs Secret::into_inner uses
+//! ptr::read + mem::forget to move out before ZeroizeOnDrop fires.
+//! Tracked by `cargo geiger` in CI per F53.
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 pub mod error;
 pub mod config;
+pub mod threat;
+pub mod util;
 pub mod keys;
+pub mod crypto;
 pub mod script;
 pub mod address;
 pub mod chain;
 pub mod wallet;
-pub mod tx;
 
 pub use error::{Error, Result};
 ```
 
-- [ ] **Step 7: Create `bitcoin-wallet-rs/crates/btc/Cargo.toml`**
+- [ ] **Step 8: Create btc/Cargo.toml**
 
 ```toml
 [package]
@@ -298,7 +352,7 @@ tracing-subscriber = { workspace = true }
 serde_json = { workspace = true }
 ```
 
-- [ ] **Step 8: Create `bitcoin-wallet-rs/crates/btc/src/main.rs`**
+- [ ] **Step 9: Create btc/src/main.rs**
 
 ```rust
 fn main() {
@@ -306,7 +360,7 @@ fn main() {
 }
 ```
 
-- [ ] **Step 9: Create `bitcoin-wallet-rs/.github/workflows/ci.yml`**
+- [ ] **Step 10: Create .github/workflows/ci.yml**
 
 ```yaml
 name: CI
@@ -318,13 +372,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.85
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, rust-src
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test --all
+      - run: cargo test --workspace
+      - run: cargo install cargo-geiger --locked
+      - run: cargo geiger --workspace
+      - run: cargo test --workspace --features regtest-tests -- --ignored
+        if: github.event.name == 'push' && github.ref == 'refs/heads/main'
 ```
 
-- [ ] **Step 10: Stub `error.rs` so lib.rs compiles**
+- [ ] **Step 11: Create deny.toml**
+
+```toml
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause"]
+```
+
+- [ ] **Step 12: Stub error.rs**
 
 ```rust
 // crates/bitcoin-wallet-core/src/error.rs
@@ -336,69 +407,38 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 ```
 
-- [ ] **Step 11: Stub other modules so lib.rs compiles**
+- [ ] **Step 13: Stub empty modules**
 
 ```rust
-// crates/bitcoin-wallet-core/src/config.rs
-// empty
-
-// crates/bitcoin-wallet-core/src/keys/mod.rs
-// empty
-
-// crates/bitcoin-wallet-core/src/script/mod.rs
-// empty
-
-// crates/bitcoin-wallet-core/src/address/mod.rs
-// empty
-
-// crates/bitcoin-wallet-core/src/chain/mod.rs
-// empty
-
-// crates/bitcoin-wallet-core/src/wallet/mod.rs
-// empty
-
-// crates/bitcoin-wallet-core/src/tx/mod.rs
-// empty
+// crates/bitcoin-wallet-core/src/{config,threat,util/mod,keys/mod,crypto/mod,script/mod,address/mod,chain/mod,wallet/mod}.rs
+// each file contains: // empty
 ```
 
-- [ ] **Step 12: Build the workspace**
+- [ ] **Step 14: Verify workspace builds**
 
-Run: `cd bitcoin-wallet-rs && cargo build`
-Expected: success, 1 binary (`btc`) produced.
+Run: `cargo build --workspace`
+Expected: success.
 
-- [ ] **Step 13: Commit**
+Run: `cargo test --workspace`
+Expected: 1 pass.
 
-```bash
-cd bitcoin-wallet-rs
-git init
-git add .
-git commit -m "feat: scaffold bitcoin-wallet-rs workspace with lib + CLI + CI"
-```
+- [ ] **Step 15:** Pause for commit approval (per `never-auto-commit` rule).
 
----
-
-### Task 1.5: v0.1 hygiene — `Secret<Mnemonic>` + atomic write + world-writable refusal
-
-Closes `docs/wallets/2026-08-05-mnemonic-handling-decision.md` §"Concrete deltas" #1-3. Cheap (90 LOC total), prevents the three most common v0.1 footguns. Must land before Task 3 (mnemonic) consumes raw `Mnemonic`.
+### Task 1.5: v0.1 hygiene — Secret<T> + atomic_write + world-writable refusal (per F19, F47, F53)
 
 **Files:**
-
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/secret.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/util/atomic_write.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/util/mod.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/util/permissions.rs`
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/mod.rs` (re-export)
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/lib.rs` (add `util` mod)
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml` (add `zeroize = "1"`)
 
-- [ ] **Step 1: `Secret<T>` newtype with `ZeroizeOnDrop`**
+- [ ] **Step 1: Write failing tests for Secret (per F53 scoped unsafe block)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/keys/secret.rs
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Wrapper that wipes its inner value on drop. Use for `Mnemonic`, xprv
-/// strings, and any plaintext that should not outlive its scope.
+/// Wrapper that wipes its inner value on drop.
 #[derive(ZeroizeOnDrop)]
 pub struct Secret<T: Zeroize>(T);
 
@@ -406,16 +446,11 @@ impl<T: Zeroize> Secret<T> {
     pub fn new(value: T) -> Self { Self(value) }
     pub fn expose(&self) -> &T { &self.0 }
 
-    /// Move the inner value out. Caller takes responsibility for zeroizing.
-    /// This is the only `unsafe` in core (scoped to a single block; see crate-level
-    /// `#![deny(unsafe_code)]`). The `#[allow(unsafe_code)]` opt-out is local to
-    /// this method; the crate root's deny still applies everywhere else.
-    #[allow(unsafe_code)]
+    /// Move inner value out. Caller takes responsibility for zeroizing.
+    /// Per F53: `#[allow(unsafe_code)]` is scoped to the unsafe block,
+    /// not the method. Crate-level `#![deny(unsafe_code)]` still applies.
     pub fn into_inner(self) -> T {
-        // SAFETY: we read the inner value out of `self`, then `mem::forget(self)`
-        // to prevent the `Drop` impl from running on the now-moved-out value.
-        // No double-free: `self` is forgotten before `drop` could fire.
-        let v = unsafe { std::ptr::read(&self.0) };
+        let v = unsafe { #[allow(unsafe_code)] std::ptr::read(&self.0) };
         std::mem::forget(self);
         v
     }
@@ -424,107 +459,45 @@ impl<T: Zeroize> Secret<T> {
 impl<T: Zeroize> Drop for Secret<T> {
     fn drop(&mut self) { self.0.zeroize(); }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn secret_round_trip() {
+        let s: Secret<Vec<u8>> = Secret::new(vec![1, 2, 3, 4]);
+        assert_eq!(s.expose(), &vec![1, 2, 3, 4]);
+    }
+    #[test]
+    fn secret_into_inner_returns_value() {
+        let s: Secret<Vec<u8>> = Secret::new(vec![5, 6, 7, 8]);
+        let v = s.into_inner();
+        assert_eq!(v, vec![5, 6, 7, 8]);
+    }
+}
 ```
 
-(Note: `into_inner` uses `unsafe` because we need to move out before drop runs. This is the only `unsafe` in core outside `secp256k1` FFI; the surrounding `unsafe_code` deny is preserved by scoping the allow to a single `unsafe` block with a clear safety comment. Alternative: `mem::take` on a `Default` type, but `Mnemonic` is not `Default`.)
-
-- [ ] **Step 2: Add `zeroize` to workspace + crate deps**
-
-Edit `bitcoin-wallet-rs/Cargo.toml` `[workspace.dependencies]`:
-
-```toml
-zeroize = { version = "1", features = ["zeroize_derive"] }
-```
-
-Edit `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml`:
-
-```toml
-zeroize = { workspace = true }
-```
-
-- [ ] **Step 3: Re-export `Secret` from `keys` module**
-
-```rust
-// In crates/bitcoin-wallet-core/src/keys/mod.rs
-mod secret;
-pub use secret::Secret;
-```
-
-- [ ] **Step 4: Atomic-write helper**
+- [ ] **Step 2: Write failing test for atomic_write (per F19 + parent dir fsync)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/util/atomic_write.rs
 use std::path::Path;
 use std::io;
 
-/// Write `bytes` to `path` atomically: write to `path.tmp`, fsync, rename.
-/// On POSIX (Linux/macOS) `rename` within the same filesystem is atomic.
+/// Write bytes to path atomically: write to .tmp, fsync, fsync parent, rename.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, bytes)?;
     let f = std::fs::File::open(&tmp)?;
     f.sync_all()?;
+    // Per F19 followup: fsync parent dir for full crash safety on COW/NFS.
+    let parent = path.parent().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no parent dir"))?;
+    let parent_file = std::fs::File::open(parent)?;
+    parent_file.sync_all()?;
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
-```
 
-```rust
-// crates/bitcoin-wallet-core/src/util/mod.rs
-pub mod atomic_write;
-pub mod permissions;
-```
-
-- [ ] **Step 5: World-writable refusal**
-
-```rust
-// crates/bitcoin-wallet-core/src/util/permissions.rs
-use std::path::Path;
-use std::io;
-
-use crate::error::{Error, Result};
-
-/// Returns `Err` if `path` is group/other-accessible. Wallet data dirs and
-/// mnemonic files must be owner-private (mode 0o700/0o600) so other users on
-/// the host cannot read mnemonics. Per plan/mnemonic-handling-decision v0.1
-/// hygiene, this is a hard refusal, not a warning.
-pub fn refuse_world_writable(path: &Path) -> Result<()> {
-    let md = std::fs::metadata(path)?;
-    let mode = md.permissions().mode();
-    // 0o077 = any group or other access bit. Reject if any set.
-    if mode & 0o077 != 0 {
-        return Err(Error::Storage(format!(
-            "path {} is group/other-accessible (mode {:o}); refusing (require 0o700/0o600)",
-            path.display(), mode
-        )));
-    }
-    Ok(())
-}
-```
-
-- [ ] **Step 6: Add `util` module to `lib.rs`**
-
-```rust
-// In crates/bitcoin-wallet-core/src/lib.rs
-pub mod util;
-```
-
-- [ ] **Step 7: Tests**
-
-```rust
-// In secret.rs (bottom of file)
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn secret_zeroizes_on_drop() {
-        // We can't directly observe zeroize, but we can confirm Secret round-trips.
-        let s: Secret<Vec<u8>> = Secret::new(vec![1, 2, 3, 4]);
-        assert_eq!(s.expose(), &vec![1, 2, 3, 4]);
-    }
-}
-
-// In atomic_write.rs (bottom of file)
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,25 +517,37 @@ mod tests {
         assert!(!dir.path().join("f.tmp").exists());
     }
 }
+```
 
-// In permissions.rs (bottom of file)
+- [ ] **Step 3: Write failing test for refuse_world_writable**
+
+```rust
+// crates/bitcoin-wallet-core/src/util/permissions.rs
+use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::io;
+use crate::error::{Error, Result};
+
+pub fn refuse_world_writable(path: &Path) -> Result<()> {
+    let md = std::fs::metadata(path)?;
+    let mode = md.permissions().mode();
+    if mode & 0o077 != 0 {
+        return Err(Error::Storage(format!(
+            "path {} is group/other-accessible (mode {:o}); refusing (require 0o700/0o600)",
+            path.display(), mode
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
     #[test]
-    fn refuse_world_writable_catches_group_or_other_access() {
-        // 0o755 = group/other readable. Must reject.
+    fn refuse_world_writable_catches_755() {
         let dir = tempdir().unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(refuse_world_writable(dir.path()).is_err());
-    }
-    #[test]
-    fn refuse_world_writable_catches_world_writable() {
-        // 0o777 = all access. Must reject.
-        let dir = tempdir().unwrap();
-        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
         assert!(refuse_world_writable(dir.path()).is_err());
     }
     #[test]
@@ -574,63 +559,49 @@ mod tests {
 }
 ```
 
-- [ ] **Step 8: Run tests**
+- [ ] **Step 4: Create util/mod.rs**
 
-Run: `cargo test -p bitcoin-wallet-core keys::secret:: util::`
-Expected: 4 pass.
-
-- [ ] **Step 9: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/keys/secret.rs \
-        crates/bitcoin-wallet-core/src/util/ \
-        crates/bitcoin-wallet-core/src/keys/mod.rs \
-        crates/bitcoin-wallet-core/src/lib.rs \
-        crates/bitcoin-wallet-core/Cargo.toml \
-        Cargo.toml
-git commit -m "feat(core): v0.1 hygiene — Secret<Mnemonic> zeroize, atomic write, world-writable refusal (mnemonic-handling-decision #1-3)"
+```rust
+pub mod atomic_write;
+pub mod permissions;
 ```
 
----
+- [ ] **Step 5: Re-export Secret in keys/mod.rs**
+
+```rust
+mod secret;
+pub use secret::Secret;
+```
+
+- [ ] **Step 6: Run tests, pause for commit.**
 
 ### Task 2: Error enum (thiserror)
 
 **Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/error.rs` (replace stub)
+- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/error.rs`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write failing tests**
 
 ```rust
-// crates/bitcoin-wallet-core/src/error.rs (tests at bottom)
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn test_invalid_mnemonic_displays_message() {
+    fn invalid_mnemonic_displays_message() {
         let err = Error::InvalidMnemonic("bad words".into());
         assert_eq!(err.to_string(), "invalid mnemonic: bad words");
     }
-
     #[test]
-    fn test_insufficient_funds_displays_amounts() {
+    fn insufficient_funds_displays_amounts() {
         let err = Error::InsufficientFunds { needed: 1000, available: 500 };
         assert_eq!(err.to_string(), "insufficient funds: needed 1000 sat, have 500 sat");
     }
 }
 ```
 
-- [ ] **Step 2: Run test, expect failure**
-
-Run: `cargo test -p bitcoin-wallet-core error::`
-Expected: compile error (Error enum has no variants).
-
-- [ ] **Step 3: Implement Error enum**
+- [ ] **Step 2: Implement Error enum (adds Encryption variant)**
 
 ```rust
-// crates/bitcoin-wallet-core/src/error.rs
-//! Top-level error type for the wallet.
-
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -655,10 +626,14 @@ pub enum Error {
     Psbt(String),
     #[error("address derivation error: {0}")]
     AddressDerivation(String),
+    #[error("script build error: {0}")]
+    ScriptBuild(String),
     #[error("storage error: {0}")]
     Storage(String),
     #[error("not initialized: {0}")]
     NotInitialized(String),
+    #[error("encryption error: {0}")]
+    Encryption(String),
     #[error("bitcoin: {0}")]
     Bitcoin(#[from] bitcoin::consensus::encode::Error),
     #[error("bdk: {0}")]
@@ -668,21 +643,9 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 ```
 
-- [ ] **Step 4: Run test, expect pass**
+- [ ] **Step 3: Run tests, pause for commit.**
 
-Run: `cargo test -p bitcoin-wallet-core error::`
-Expected: 2 tests pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/error.rs
-git commit -m "feat(core): add Error enum with thiserror"
-```
-
----
-
-### Task 3: keys::mnemonic (BIP-39)
+### Task 3: keys::mnemonic (BIP-39) — entropy sized per word count
 
 **Files:**
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/mnemonic.rs`
@@ -690,232 +653,135 @@ git commit -m "feat(core): add Error enum with thiserror"
 - [ ] **Step 1: Write failing test**
 
 ```rust
-// crates/bitcoin-wallet-core/src/keys/mnemonic.rs
-// Use BDK's re-export (behind `keys-bip39` feature) — same `bip39::Mnemonic` type, 1 fewer direct dep.
-use bdk_wallet::keys::bip39::{Language, Mnemonic};
+use bdk_wallet::keys::bip39::Mnemonic;
+use crate::error::Error;
 
-/// Generate a new 12-word BIP-39 mnemonic using OS RNG.
-pub fn generate_12(words: usize) -> Result<Mnemonic, crate::Error> {
-    todo!()
-}
-
-/// Parse a mnemonic from a whitespace-separated string. Validates checksum.
-pub fn from_str(s: &str) -> Result<Mnemonic, crate::Error> {
-    todo!()
-}
-
-/// Convert a mnemonic to its 64-byte seed (PBKDF2, BIP-39).
-pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] {
-    todo!()
-}
+pub fn generate(words: usize) -> Result<Mnemonic, Error> { todo!() }
+pub fn from_str(s: &str) -> Result<Mnemonic, Error> { todo!() }
+pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] { todo!() }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn test_generate_12_produces_valid_12_word_mnemonic() {
-        let m = generate_12(12).unwrap();
+    fn generate_12_produces_12_words() {
+        let m = generate(12).unwrap();
         assert_eq!(m.word_count(), 12);
     }
-
     #[test]
-    fn test_from_str_accepts_known_mnemonic() {
-        // BIP-39 test vector (TREZOR): "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+    fn from_str_accepts_known_mnemonic() {
         let s = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let m = from_str(s).unwrap();
         assert_eq!(m.word_count(), 12);
     }
-
     #[test]
-    fn test_from_str_rejects_invalid_checksum() {
-        // Same words but last word swapped for invalid checksum
+    fn from_str_rejects_invalid_checksum() {
         let s = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
-        let r = from_str(s);
-        assert!(r.is_err());
+        assert!(from_str(s).is_err());
     }
-
     #[test]
-    fn test_to_seed_is_64_bytes() {
+    fn to_seed_is_64_bytes() {
         let m = from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
-        let s = to_seed(&m, "");
-        assert_eq!(s.len(), 64);
+        assert_eq!(to_seed(&m, "").len(), 64);
     }
 }
 ```
 
-- [ ] **Step 2: Run test, expect failure**
-
-Run: `cargo test -p bitcoin-wallet-core keys::mnemonic::`
-Expected: compile error (functions return `todo!()`).
-
-- [ ] **Step 3: Implement**
+- [ ] **Step 2: Implement with correct entropy sizes**
 
 ```rust
-// crates/bitcoin-wallet-core/src/keys/mnemonic.rs
-// BDK re-export — feature `keys-bip39` must be enabled on `bdk_wallet` (set in workspace Cargo.toml).
 use bdk_wallet::keys::bip39::{Language, Mnemonic, MnemonicType};
 use rand::RngCore;
-
 use crate::error::Error;
 
-/// Generate a new BIP-39 mnemonic of the given word count (12, 15, 18, 21, or 24).
+/// Generate BIP-39 mnemonic. Entropy sized per word count per spec.
 pub fn generate(words: usize) -> Result<Mnemonic, Error> {
     let count = match words {
         12 => MnemonicType::Words12,
         15 => MnemonicType::Words15,
         18 => MnemonicType::Words18,
-         3 => MnemonicType::Words21,  // BDK's enum variant; see BDK source
+        21 => MnemonicType::Words21,
         24 => MnemonicType::Words24,
         n => return Err(Error::InvalidMnemonic(format!("unsupported word count: {n}"))),
     };
-    let mut entropy = [0u8; 32];
+    // Per spec: 12→16B, 15→20B, 18→24B, 21→28B, 24→32B.
+    let entropy_bytes = match count {
+        MnemonicType::Words12 => 16,
+        MnemonicType::Words15 => 20,
+        MnemonicType::Words18 => 24,
+        MnemonicType::Words21 => 28,
+        MnemonicType::Words24 => 32,
+    };
+    let mut entropy = vec![0u8; entropy_bytes];
     rand::thread_rng().fill_bytes(&mut entropy);
     Mnemonic::from_entropy_in(Language::English, &entropy)
         .map_err(|e| Error::InvalidMnemonic(e.to_string()))
 }
 
-/// Parse a mnemonic from a whitespace-separated string. Validates checksum.
 pub fn from_str(s: &str) -> Result<Mnemonic, Error> {
     Mnemonic::parse_in(Language::English, s)
         .map_err(|e| Error::InvalidMnemonic(e.to_string()))
 }
 
-/// Mnemonic seed (BIP-39). Always 64 bytes for any word count.
 pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] {
     m.to_seed(passphrase)
 }
 ```
 
-(Note: BDK's re-export exposes `from_entropy_in` and `parse_in` directly. The `MnemonicType` enum lives in `bdk_wallet::keys::bip39`. Word counts 12/15/18/21/24 are supported. BDK does NOT expose a `Words21` variant — adjust based on what BDK actually exposes. Task 31 spike validates.)
+- [ ] **Step 3: Run tests, pause for commit.**
 
-- [ ] **Step 4: Update test to call `generate(12)` and `to_seed`**
-
-```rust
-#[test]
-fn test_generate_12_produces_valid_12_word_mnemonic() {
-    let m = generate(12).unwrap();
-    assert_eq!(m.word_count(), 12);
-}
-
-#[test]
-fn test_to_seed_is_64_bytes() {
-    let m = from_str("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
-    let s = to_seed(&m, "");
-    assert_eq!(s.len(), 64);
-}
-```
-
-- [ ] **Step 5: Add `rand` to workspace deps**
-
-Edit `bitcoin-wallet-rs/Cargo.toml` `[workspace.dependencies]`:
-
-```toml
-rand = "0.8"
-```
-
-Edit `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml`:
-
-```toml
-rand = { workspace = true }
-```
-
-- [ ] **Step 6: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core keys::mnemonic::`
-Expected: 4 tests pass.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/keys/mnemonic.rs Cargo.toml crates/bitcoin-wallet-core/Cargo.toml
-git commit -m "feat(core): add BIP-39 mnemonic generate/parse/to_seed (BDK re-export)"
-```
-
----
-
-### Task 4: keys::derivation + keys::signer (BIP-32 + secp256k1)
+### Task 4: keys::derivation + keys::signer (BIP-32 + secp256k1) (per F44, F47)
 
 **Files:**
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/derivation.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/signer.rs`
 
-- [ ] **Step 1: Write failing test for derivation**
+- [ ] **Step 1: Write failing tests for derivation**
 
 ```rust
-// crates/bitcoin-wallet-core/src/keys/derivation.rs
 use bip32::{DerivationPath, XPrv};
-
 use crate::error::Error;
 
 pub enum AddressType { Legacy, NestedSegwit, NativeSegwit, Taproot }
 
-pub fn address_type_to_path(t: AddressType, account: u32, index: u32) -> Result<DerivationPath, Error> {
-    todo!()
-}
-
-pub fn master_from_seed(seed: &[u8; 64]) -> Result<XPrv, Error> {
-    todo!()
-}
-
-pub fn derive_xprv(master: &XPrv, path: &DerivationPath) -> Result<XPrv, Error> {
-    todo!()
-}
+pub fn address_type_to_path(t: AddressType, coin_type: u32, account: u32, index: u32) -> Result<DerivationPath, Error> { todo!() }
+pub fn master_from_seed(seed: &[u8; 64]) -> Result<XPrv, Error> { todo!() }
+pub fn derive_xprv(master: &XPrv, path: &DerivationPath) -> Result<XPrv, Error> { todo!() }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn test_bip84_native_segwit_path() {
-        // 4-arg: (address_type, coin_type, account, index). Mainnet = coin_type 0.
+    fn bip84_native_segwit_path() {
         let p = address_type_to_path(AddressType::NativeSegwit, 0, 0, 5).unwrap();
         assert_eq!(p.to_string(), "m/84'/0'/0'/0/5");
     }
-
     #[test]
-    fn test_bip86_taproot_path() {
+    fn bip86_taproot_path() {
         let p = address_type_to_path(AddressType::Taproot, 0, 0, 0).unwrap();
         assert_eq!(p.to_string(), "m/86'/0'/0'/0/0");
     }
-
     #[test]
-    fn test_master_from_seed_known_vector() {
-        // BIP-32 test vector 1: seed 000102030405060708090a0b0c0d0e0f
-        let seed = [0u8; 16];
-        let _ = master_from_seed(&{
-            let mut s = [0u8; 64];
-            s[..16].copy_from_slice(&seed);
-            s
-        }).unwrap();
+    fn master_from_seed_known_vector() {
+        let mut seed = [0u8; 64];
+        seed[..16].copy_from_slice(&[0u8; 16]);
+        let _ = master_from_seed(&seed).unwrap();
     }
 }
 ```
 
-- [ ] **Step 2: Run test, expect failure**
-
-Run: `cargo test -p bitcoin-wallet-core keys::derivation::`
-Expected: compile error.
-
-- [ ] **Step 3: Implement derivation**
+- [ ] **Step 2: Implement derivation**
 
 ```rust
-// crates/bitcoin-wallet-core/src/keys/derivation.rs
-use bip32::{DerivationPath, XPrv, Prefix};
+use bip32::{DerivationPath, XPrv};
 use bitcoin::Network;
-
 use crate::error::Error;
 
-/// Bitcoin address type, mapped to a BIP-44/49/84/86 coin-type path.
 pub enum AddressType {
-    /// BIP-44: Legacy P2PKH
-    Legacy,
-    /// BIP-49: Nested SegWit (P2SH-P2WPKH)
-    NestedSegwit,
-    /// BIP-84: Native SegWit (P2WPKH) — default
-    NativeSegwit,
-    /// BIP-86: Taproot (P2TR)
-    Taproot,
+    Legacy,        // BIP-44
+    NestedSegwit,  // BIP-49
+    NativeSegwit,  // BIP-84 (default)
+    Taproot,       // BIP-86
 }
 
 impl AddressType {
@@ -929,471 +795,341 @@ impl AddressType {
     }
 }
 
-/// Convert address type + account + index to a BIP-44 derivation path.
-/// Mainnet coin_type = 0. (For testnet/regtest: caller swaps.)
-pub fn address_type_to_path(
-    t: AddressType,
-    coin_type: u32,
-    account: u32,
-    index: u32,
-) -> Result<DerivationPath, Error> {
+pub fn address_type_to_path(t: AddressType, coin_type: u32, account: u32, index: u32) -> Result<DerivationPath, Error> {
     let s = format!("m/{}'/{}'/{}'/0/{}", t.purpose(), coin_type, account, index);
     DerivationPath::from_str(&s).map_err(|e| Error::InvalidDerivationPath(e.to_string()))
 }
 
-/// Master xprv from BIP-39 seed.
 pub fn master_from_seed(seed: &[u8; 64]) -> Result<XPrv, Error> {
     XPrv::derive_from_path(seed, &DerivationPath::from_str("m").unwrap())
         .map_err(|e| Error::InvalidDerivationPath(e.to_string()))
 }
 
-/// Derive child xprv at path from master.
 pub fn derive_xprv(master: &XPrv, path: &DerivationPath) -> Result<XPrv, Error> {
     master.derive_path(path).map_err(|e| Error::InvalidDerivationPath(e.to_string()))
 }
 ```
 
-- [ ] **Step 4: Add deps `bitcoin` (already there) and `bip32` (already there).**
-
-- [ ] **Step 5: Run derivation test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core keys::derivation::`
-Expected: 3 tests pass.
-
-- [ ] **Step 6: Write failing test for signer**
+- [ ] **Step 3: Write failing test for signer (per F47 Secret<Keypair> wrap)**
 
 ```rust
-// crates/bitcoin-wallet-core/src/keys/signer.rs
-use bdk_wallet::bitcoin::hashes::Hash;
-use bdk_wallet::bitcoin::secp256k1::{ecdsa::Signature, Keypair, Message, Secp256k1, SecretKey};
-
+use bdk_wallet::bitcoin::secp256k1::{ecdsa::Signature, Keypair, Message, Secp256k1};
+use bdk_wallet::bitcoin::secp256k1::SecretKey;
 use crate::error::Error;
+use super::super::util::Secret;
 
+/// Internal signer. Wrapped in Secret<Keypair> per F47 for explicit ZeroizeOnDrop.
 pub struct Signer {
-    keypair: Keypair,
+    keypair: Secret<Keypair>,
     secp: Secp256k1<bdk_wallet::bitcoin::secp256k1::All>,
 }
 
 impl Signer {
     pub fn from_secret_key(sk: SecretKey) -> Self {
         let secp = Secp256k1::new();
-        let keypair = Keypair::from_secret_key(&secp, &sk);
-        Self { keypair, secp }
+        // secp256k1 0.30 Keypair::from_secret_key returns Result; panics on invalid key.
+        let keypair = Keypair::from_secret_key(&secp, &sk).expect("valid secret key");
+        Self { keypair: Secret::new(keypair), secp }
     }
 
     pub fn public_key(&self) -> bdk_wallet::bitcoin::secp256k1::PublicKey {
-        bdk_wallet::bitcoin::secp256k1::PublicKey::from_keypair(&self.keypair)
+        bdk_wallet::bitcoin::secp256k1::PublicKey::from_keypair(self.keypair.expose())
     }
 
     /// Sign a 32-byte hash. Returns a 64-byte low-S ECDSA signature.
     pub fn sign_ecdsa(&self, hash: &[u8; 32]) -> Result<Signature, Error> {
         let msg = Message::from_digest(*hash);
-        Ok(self.secp.sign_ecdsa(&msg, &self.keypair))
-    }
+        Ok(self.secp.sign_ecdsa(&msg, self.keypair.expose()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn test_sign_ecdsa_known_vector() {
-        // BIP-143 test vector: privkey = 0x01, message hash = ...
+    fn sign_ecdsa_known_vector() {
         let sk_bytes = [0x01u8; 32];
         let sk = SecretKey::from_slice(&sk_bytes).unwrap();
         let s = Signer::from_secret_key(sk);
         let hash = [0u8; 32];
         let sig = s.sign_ecdsa(&hash).unwrap();
-        // Signature must be 64 bytes
         assert_eq!(sig.serialize_compact().len(), 64);
     }
 }
 ```
 
-- [ ] **Step 7: Run test, expect failure**
-
-Run: `cargo test -p bitcoin-wallet-core keys::signer::`
-Expected: compile error.
-
-- [ ] **Step 8: Implement signer**
-
-```rust
-// crates/bitcoin-wallet-core/src/keys/signer.rs
-use secp256k1::{ecdsa::Signature, Keypair, Message, Secp256k1, SecretKey};
-
-use crate::error::Error;
-
-/// Internal signer. Holds a single keypair; signs ECDSA over 32-byte hashes.
-pub struct Signer {
-    keypair: Keypair,
-    secp: Secp256k1<secp256k1::All>,
-}
-
-impl Signer {
-    pub fn from_secret_key(sk: SecretKey) -> Self {
-        let secp = Secp256k1::new();
-        let keypair = Keypair::from_secret_key(&secp, &sk);
-        Self { keypair, secp }
-    }
-
-    pub fn public_key(&self) -> secp256k1::PublicKey {
-        secp256k1::PublicKey::from_keypair(&self.keypair)
-    }
-
-    /// Sign a 32-byte hash. Returns a 64-byte low-S ECDSA signature.
-    pub fn sign_ecdsa(&self, hash: &[u8; 32]) -> Result<Signature, Error> {
-        let msg = Message::from_digest(*hash);
-        Ok(self.secp.sign_ecdsa(&msg, &self.keypair))
-    }
-}
-```
-
-NOTE: 4-arg vs 3-arg inconsistency detected by ecc:architect review (Finding #5). Test cases below
-in the plan call `address_type_to_path(AddressType::NativeSegwit, 0, 5)` with 3 args while the
-implementation takes 4 (t, coin_type, account, index). The TDD step in the plan was never run;
-all derived paths are 4-arg. See Step 3 below for the test fix.
-```
-
-- [ ] **Step 9: Run signer test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core keys::signer::`
-Expected: 1 test passes.
-
-- [ ] **Step 10: Run all core tests**
-
-Run: `cargo test -p bitcoin-wallet-core`
-Expected: 8 tests pass total (2 error + 3 mnemonic + 3 derivation + 1 signer — note 4 mnemonic + 3 derivation + 1 signer = 8; error=2 = 10; total 10 — adjust if miscounted, all should pass).
-
-- [ ] **Step 11: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/keys/
-git commit -m "feat(core): add BIP-32 derivation + secp256k1 ECDSA signer"
-```
+- [ ] **Step 4: Run tests, pause for commit.**
 
 ---
 
-## Week 2 — Script + address (Tasks 5-6)
+## Week 2 — Crypto (Tasks 5-6)
 
-### Task 5: script::builder + script::parser
+### Task 5: crypto::argon2 + crypto::aes_gcm (per F5, F6)
 
 **Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/script/builder.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/script/parser.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/argon2.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/aes_gcm.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/mod.rs`
 
-- [ ] **Step 1: Write failing test for builder**
+- [ ] **Step 1: Write failing test for Argon2id (per F5 calibration)**
 
 ```rust
-// crates/bitcoin-wallet-core/src/script/builder.rs
-use bitcoin::{hashes::Hash, secp256k1::PublicKey, Address, Script, ScriptBuf};
-use bitcoin::blockdata::script::Builder as BdkScriptBuilder;
+// crates/bitcoin-wallet-core/src/crypto/argon2.rs
+//! Argon2id password-based KDF.
+//! Calibration per F5: m=256 MiB, t=10, p=4 (Sparrow reference).
 
-pub fn p2pkh(pubkey: &PublicKey) -> ScriptBuf { todo!() }
-pub fn p2wpkh(pubkey: &PublicKey) -> ScriptBuf { todo!() }
-pub fn p2tr_key_path(internal_key: &PublicKey) -> ScriptBuf { todo!() }
+use argon2::{Argon2, Algorithm, Params, Version};
+use crate::error::{Error, Result};
+
+pub const ARGON2_M_COST_KIB: u32 = 256 * 1024;
+pub const ARGON2_T_COST: u32 = 10;
+pub const ARGON2_P_COST: u32 = 4;
+pub const SALT_LEN: usize = 16;
+
+pub fn derive_key(password: &[u8], salt: &[u8]) -> Result<[u8; 32]> {
+    let params = Params::new(ARGON2_M_COST_KIB, ARGON2_T_COST, ARGON2_P_COST, Some(32))
+        .map_err(|e| Error::Encryption(e.to_string()))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut key = [0u8; 32];
+    argon.hash_password_into(password, salt, &mut key)
+        .map_err(|e| Error::Encryption(e.to_string()))?;
+    Ok(key)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::secp256k1::Secp256k1;
-
-    fn random_pk() -> PublicKey {
-        let secp = Secp256k1::new();
-        let mut rng = rand::thread_rng();
-        let sk = secp256k1::SecretKey::random(&mut rng);
-        PublicKey::from_secret_key(&secp, &sk)
-    }
-
     #[test]
-    fn test_p2pkh_starts_with_op_dup_op_hash160() {
-        let pk = random_pk();
-        let s = p2pkh(&pk);
-        assert_eq!(&s.as_bytes()[0..2], &[0x76, 0xa9]);
+    fn derive_key_produces_32_bytes() {
+        let salt = [0u8; 16];
+        let key = derive_key(b"password", &salt).unwrap();
+        assert_eq!(key.len(), 32);
     }
-
     #[test]
-    fn test_p2wpkh_is_0014_20_bytes() {
-        let pk = random_pk();
-        let s = p2wpkh(&pk);
-        // OP_0 PUSHBYTES_20 <pubkey-hash>
-        assert_eq!(s.as_bytes()[0], 0x00);
-        assert_eq!(s.as_bytes()[1], 0x14);
-        assert_eq!(s.len(), 22);
+    fn derive_key_deterministic_for_same_inputs() {
+        let salt = [0u8; 16];
+        let k1 = derive_key(b"password", &salt).unwrap();
+        let k2 = derive_key(b"password", &salt).unwrap();
+        assert_eq!(k1, k2);
+    }
+    #[test]
+    fn derive_key_different_salt_yields_different_key() {
+        let k1 = derive_key(b"password", &[0u8; 16]).unwrap();
+        let k2 = derive_key(b"password", &[1u8; 16]).unwrap();
+        assert_ne!(k1, k2);
     }
 }
 ```
 
-- [ ] **Step 2: Run test, expect failure**
-
-Run: `cargo test -p bitcoin-wallet-core script::builder::`
-Expected: compile error.
-
-- [ ] **Step 3: Implement builder**
+- [ ] **Step 2: Write failing test for AES-256-GCM (per F6 encryption at rest)**
 
 ```rust
-// crates/bitcoin-wallet-core/src/script/builder.rs
-use bitcoin::{secp256k1::PublicKey, ScriptBuf};
-use bitcoin::script::Builder;
+// crates/bitcoin-wallet-core/src/crypto/aes_gcm.rs
+//! AES-256-GCM AEAD. Per F6: mnemonic encrypted at rest.
 
-pub fn p2pkh(pubkey: &PublicKey) -> ScriptBuf {
-    Builder::new()
-        .op_opcode(bitcoin::opcodes::all::OP_DUP)
-        .op_opcode(bitcoin::opcodes::all::OP_HASH160)
-        .push_slice(&pubkey.pubkey_hash().to_byte_array())
-        .op_opcode(bitcoin::opcodes::all::OP_EQUALVERIFY)
-        .op_opcode(bitcoin::opcodes::all::OP_CHECKSIG)
-        .into_script()
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use aes_gcm::aead::{Aead, KeyInit, OsRng, RngCore};
+use crate::error::{Error, Result};
+
+pub const NONCE_LEN: usize = 12;
+
+pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher.encrypt(nonce, plaintext)
+        .map_err(|e| Error::Encryption(e.to_string()))?;
+    let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
 }
 
-pub fn p2wpkh(pubkey: &PublicKey) -> ScriptBuf {
-    Builder::new()
-        .op_opcode(bitcoin::opcodes::all::OP_PUSHBYTES_0)
-        .push_slice(&pubkey.wpubkey_hash().unwrap().to_byte_array())
-        .into_script()
+pub fn decrypt(key: &[u8; 32], blob: &[u8]) -> Result<Vec<u8>> {
+    if blob.len() < NONCE_LEN {
+        return Err(Error::Encryption("blob too short".into()));
+    }
+    let (nonce_bytes, ciphertext) = blob.split_at(NONCE_LEN);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(nonce_bytes);
+    cipher.decrypt(nonce, ciphertext)
+        .map_err(|e| Error::Encryption(e.to_string()))
 }
-
-pub fn p2tr_key_path(internal_key: &PublicKey) -> ScriptBuf {
-    use bitcoin::secp256k1::XOnlyPublicKey;
-    let xonly = XOnlyPublicKey::from(*internal_key);
-    Builder::new()
-        .push_x_only_key(&xonly)
-        .op_opcode(bitcoin::opcodes::all::OP_CHECKSIG)
-        .into_script()
-}
-```
-
-- [ ] **Step 4: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core script::builder::`
-Expected: 2 tests pass.
-
-- [ ] **Step 5: Write parser test**
-
-```rust
-// crates/bitcoin-wallet-core/src/script/parser.rs
-use bitcoin::Script;
-use crate::error::Error;
-
-pub fn parse_to_opcodes(script: &Script) -> Result<Vec<String>, Error> { todo!() }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::script::builder;
-
     #[test]
-    fn test_parse_p2pkh_returns_5_opcodes() {
-        let secp = bitcoin::secp256k1::Secp256k1::new();
-        let sk = bitcoin::secp256k1::SecretKey::from_slice(&[2u8; 32]).unwrap();
-        let pk = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk);
-        let s = builder::p2pkh(&pk);
-        let ops = parse_to_opcodes(&s).unwrap();
-        assert!(ops.len() >= 5);
-        assert!(ops[0].contains("OP_DUP"));
+    fn roundtrip() {
+        let key = [7u8; 32];
+        let pt = b"hello world";
+        let ct = encrypt(&key, pt).unwrap();
+        let pt2 = decrypt(&key, &ct).unwrap();
+        assert_eq!(pt, pt2.as_slice());
+    }
+    #[test]
+    fn wrong_key_fails() {
+        let k1 = [7u8; 32];
+        let k2 = [8u8; 32];
+        let ct = encrypt(&k1, b"secret").unwrap();
+        assert!(decrypt(&k2, &ct).is_err());
     }
 }
 ```
 
-- [ ] **Step 6: Implement parser**
+- [ ] **Step 3: Create crypto/mod.rs**
 
 ```rust
-// crates/bitcoin-wallet-core/src/script/parser.rs
-use bitcoin::Script;
+pub mod argon2;
+pub mod aes_gcm;
+pub mod bip137;
+```
 
-use crate::error::Error;
+- [ ] **Step 4: Run tests, pause for commit.**
 
-pub fn parse_to_opcodes(script: &Script) -> Result<Vec<String>, Error> {
-    Ok(script
-        .instructions()
-        .map(|i| i.map(|x| x.to_string()).map_err(|e| Error::TxBuild(e.to_string())))
-        .collect::<Result<Vec<_>, _>>()?)
+### Task 6: crypto::bip137 (per F7, F9, F50, F21)
+
+**Files:**
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/bip137.rs`
+
+- [ ] **Step 1: Write failing tests for BIP-137 (per F9 varint, F50 recovery byte, F7 narrow API, F21 Sighash wrapper)**
+
+```rust
+// crates/bitcoin-wallet-core/src/crypto/bip137.rs
+//! BIP-137 message signing.
+//! Per F7: narrow API, no raw key exposure.
+//! Per F9: Bitcoin varint length prefix.
+//! Per F50: recovery flag byte prepended.
+//! Per F21: caller passes typed Sighash wrapper.
+
+use crate::error::{Error, Result};
+use crate::threat::{Sighash, MessageClass};
+
+pub fn sign_message_bip137(
+    message: &str,
+    address_pkh: &[u8; 20],
+    sighash_fn: impl Fn(&Sighash) -> Result<[u8; 64]>,
+) -> Result<String> {
+    // Per F7: sign_message_bip137 takes original message + address pk-hash.
+    // Caller does not see raw key.
+    let mut buf = Vec::new();
+    buf.extend_from_slice(b"\x18Bitcoin Signed Message:\n");
+    encode_varint(&mut buf, message.len());
+    buf.extend_from_slice(message.as_bytes());
+
+    let hash1 = sha256d(&buf);
+    for rec_id in 0u8..2 {
+        let mut hash_with_rec = hash1.to_vec();
+        hash_with_rec.push(rec_id);
+        let hash2 = sha256d(&hash_with_rec);
+        let typed = Sighash(hash2, MessageClass::Bip137Message);
+        let sig_compact = sighash_fn(&typed)?;
+        if let Some(pubkey) = recover_pubkey(&sig_compact, rec_id, &hash2) {
+            let pk_hash = hash160(&pubkey);
+            if &pk_hash == address_pkh {
+                let mut full_sig = [0u8; 65];
+                full_sig[0] = 27 + rec_id + 4; // compressed
+                full_sig[1..65].copy_from_slice(&sig_compact);
+                return Ok(base64::engine::general_purpose::STANDARD.encode(&full_sig));
+            }
+        }
+    }
+    Err(Error::Sign("recovery failed for both candidates".into()))
+}
+
+fn encode_varint(out: &mut Vec<u8>, n: usize) {
+    if n < 0xfd {
+        out.push(n as u8);
+    } else if n <= 0xffff {
+        out.push(0xfd);
+        out.extend_from_slice(&(n as u16).to_le_bytes());
+    } else if n <= 0xffffffff {
+        out.push(0xfe);
+        out.extend_from_slice(&(n as u32).to_le_bytes());
+    } else {
+        out.push(0xff);
+        out.extend_from_slice(&(n as u64).to_le_bytes());
+    }
+}
+
+fn sha256d(_data: &[u8]) -> [u8; 32] { unimplemented!() }
+fn hash160(_pk: &[u8]) -> [u8; 20] { unimplemented!() }
+fn recover_pubkey(_sig: &[u8; 64], _rec_id: u8, _hash: &[u8; 32]) -> Option<Vec<u8>> { unimplemented!() }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn varint_encoding_short() {
+        let mut buf = Vec::new();
+        encode_varint(&mut buf, 10);
+        assert_eq!(buf, vec![10]);
+    }
+    #[test]
+    fn varint_encoding_253() {
+        let mut buf = Vec::new();
+        encode_varint(&mut buf, 253);
+        assert_eq!(buf, vec![0xfd, 253, 0]);
+    }
+    #[test]
+    fn varint_encoding_300() {
+        let mut buf = Vec::new();
+        encode_varint(&mut buf, 300);
+        assert_eq!(buf, vec![0xfd, 44, 1]);
+    }
 }
 ```
 
-- [ ] **Step 7: Run parser test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core script::`
-Expected: 3 tests pass (2 builder + 1 parser).
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/script/
-git commit -m "feat(core): add script builder (P2PKH/P2WPKH/P2TR) + parser"
-```
+- [ ] **Step 2: Pause for commit.** (End-to-end BIP-137 verification with Bitcoin Core RPC deferred to v0.1.1 per F9 cross-verification test.)
 
 ---
 
-### Task 6: address::legacy + address::segwit + address::taproot
+## Week 3 — Wallet MVP (Tasks 7-9)
+
+### Task 7: WalletConfig + EsploraClient (per F20 pinning, F15 sidecar)
 
 **Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/address/legacy.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/address/segwit.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/address/taproot.rs`
-
-- [ ] **Step 1: Write failing test for legacy**
-
-```rust
-// crates/bitcoin-wallet-core/src/address/legacy.rs
-use bitcoin::{secp256k1::PublicKey, Address, Network};
-use crate::error::Error;
-
-pub fn p2pkh_address(pubkey: &PublicKey, network: Network) -> Result<Address, Error> { todo!() }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bitcoin::secp256k1::Secp256k1;
-
-    #[test]
-    fn test_p2pkh_mainnet_starts_with_1() {
-        let secp = Secp256k1::new();
-        let sk = secp256k1::SecretKey::from_slice(&[2u8; 32]).unwrap();
-        let pk = PublicKey::from_secret_key(&secp, &sk);
-        let a = p2pkh_address(&pk, Network::Bitcoin).unwrap();
-        assert!(a.to_string().starts_with('1'));
-    }
-
-    #[test]
-    fn test_p2pkh_testnet_starts_with_m_or_n() {
-        let secp = Secp256k1::new();
-        let sk = secp256k1::SecretKey::from_slice(&[2u8; 32]).unwrap();
-        let pk = PublicKey::from_secret_key(&secp, &sk);
-        let a = p2pkh_address(&pk, Network::Testnet).unwrap();
-        let s = a.to_string();
-        assert!(s.starts_with('m') || s.starts_with('n'));
-    }
-}
-```
-
-- [ ] **Step 2: Implement legacy**
-
-```rust
-// crates/bitcoin-wallet-core/src/address/legacy.rs
-use bitcoin::{secp256k1::PublicKey, Address, Network};
-
-use crate::error::Error;
-
-pub fn p2pkh_address(pubkey: &PublicKey, network: Network) -> Result<Address, Error> {
-    let payload = bitcoin::WPubkeyHash::from(pubkey);
-    Ok(Address::p2pkh(&payload, network))
-}
-```
-
-- [ ] **Step 3: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core address::legacy::`
-Expected: 2 pass.
-
-- [ ] **Step 4: Write + implement segwit**
-
-```rust
-// crates/bitcoin-wallet-core/src/address/segwit.rs
-use bitcoin::{secp256k1::PublicKey, Address, Network};
-use crate::error::Error;
-
-pub fn p2wpkh_address(pubkey: &PublicKey, network: Network) -> Result<Address, Error> {
-    let payload = pubkey.wpubkey_hash().map_err(|e| Error::AddressDerivation(e.to_string()))?;
-    Ok(Address::p2wpkh(&payload, network))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bitcoin::secp256k1::Secp256k1;
-
-    #[test]
-    fn test_p2wpkh_mainnet_starts_with_bc1q() {
-        let secp = Secp256k1::new();
-        let sk = secp256k1::SecretKey::from_slice(&[2u8; 32]).unwrap();
-        let pk = PublicKey::from_secret_key(&secp, &sk);
-        let a = p2wpkh_address(&pk, Network::Bitcoin).unwrap();
-        assert!(a.to_string().starts_with("bc1q"));
-    }
-}
-```
-
-- [ ] **Step 5: Write + implement taproot**
-
-```rust
-// crates/bitcoin-wallet-core/src/address/taproot.rs
-use bitcoin::{Address, Network, secp256k1::PublicKey};
-use secp256k1::XOnlyPublicKey;
-use crate::error::Error;
-
-pub fn p2tr_address(internal_key: &PublicKey, network: Network) -> Result<Address, Error> {
-    let xonly = XOnlyPublicKey::from(*internal_key);
-    let addr = Address::p2tr(&secp256k1::Secp256k1::new(), xonly, None, network);
-    Ok(addr)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bitcoin::secp256k1::Secp256k1;
-
-    #[test]
-    fn test_p2tr_mainnet_starts_with_bc1p() {
-        let secp = Secp256k1::new();
-        let sk = secp256k1::SecretKey::from_slice(&[2u8; 32]).unwrap();
-        let pk = PublicKey::from_secret_key(&secp, &sk);
-        let a = p2tr_address(&pk, Network::Bitcoin).unwrap();
-        assert!(a.to_string().starts_with("bc1p"));
-    }
-}
-```
-
-- [ ] **Step 6: Run all address tests**
-
-Run: `cargo test -p bitcoin-wallet-core address::`
-Expected: 4 tests pass (2 legacy + 1 segwit + 1 taproot).
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/address/
-git commit -m "feat(core): add address encoders (P2PKH/P2WPKH/P2TR) for all 4 networks"
-```
-
----
-
-## Week 3 — Wallet + chain sync (Tasks 7-10)
-
-### Task 7: chain::network + config
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/network.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/config.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/mod.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/network.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/esplora.rs`
 
-- [ ] **Step 1: Write config struct**
+- [ ] **Step 1: Write failing test for WalletConfig (per F15 sidecar pattern)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/config.rs
 use bitcoin::Network;
 use serde::{Deserialize, Serialize};
 
-/// Configuration for a wallet. Public; passed to `WalletBuilder::new`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
     pub network: Network,
     pub esplora_url: String,
+    /// Optional SPKI pin (base64) for Esplora TLS verification. Per F20.
+    pub esplora_pinned_pubkey: Option<String>,
     pub electrum_url: Option<String>,
+    pub electrum_pinned_pubkey: Option<String>,
+    /// Path to the SQLite database file. Per F15 sidecar pattern.
     pub db_path: std::path::PathBuf,
 }
 
 impl WalletConfig {
-    pub fn mainnet(esplora_url: impl Into<String>, db_path: impl Into<std::path::PathBuf>) -> Self {
-        Self { network: Network::Bitcoin, esplora_url: esplora_url.into(), electrum_url: None, db_path: db_path.into() }
-    }
     pub fn testnet(esplora_url: impl Into<String>, db_path: impl Into<std::path::PathBuf>) -> Self {
-        Self { network: Network::Testnet, esplora_url: esplora_url.into(), electrum_url: None, db_path: db_path.into() }
+        Self {
+            network: Network::Testnet,
+            esplora_url: esplora_url.into(),
+            esplora_pinned_pubkey: None,
+            electrum_url: None,
+            electrum_pinned_pubkey: None,
+            db_path: db_path.into(),
+        }
+    }
+    pub fn mainnet(esplora_url: impl Into<String>, db_path: impl Into<std::path::PathBuf>) -> Self {
+        Self { network: Network::Bitcoin, ..Self::testnet(esplora_url, db_path) }
     }
     pub fn regtest(esplora_url: impl Into<String>, db_path: impl Into<std::path::PathBuf>) -> Self {
-        Self { network: Network::Regtest, esplora_url: esplora_url.into(), electrum_url: None, db_path: db_path.into() }
-    }
-    pub fn signet(esplora_url: impl Into<String>, db_path: impl Into<std::path::PathBuf>) -> Self {
-        Self { network: Network::Signet, esplora_url: esplora_url.into(), electrum_url: None, db_path: db_path.into() }
+        Self { network: Network::Regtest, ..Self::testnet(esplora_url, db_path) }
     }
 }
 
@@ -1401,179 +1137,150 @@ impl WalletConfig {
 mod tests {
     use super::*;
     #[test]
-    fn test_mainnet_config() {
-        let c = WalletConfig::mainnet("https://blockstream.info/api", "/tmp/db");
-        assert_eq!(c.network, Network::Bitcoin);
+    fn testnet_default() {
+        let c = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db");
+        assert_eq!(c.network, Network::Testnet);
     }
-}
-```
-
-- [ ] **Step 2: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core config::`
-Expected: 1 pass.
-
-- [ ] **Step 3: chain::network helper**
-
-```rust
-// crates/bitcoin-wallet-core/src/chain/network.rs
-use bitcoin::Network;
-
-pub fn to_bdk_network(n: Network) -> bdk_chain::ChainPosition {
-    // bdk_wallet uses bitcoin::Network directly; this helper just exists for future mapping.
-    // For now, return the input as-is.
-    let _ = n;
-    unimplemented!()
-}
-```
-
-(Actually bdk_wallet 3.x takes `bitcoin::Network` directly — no mapping needed. Delete this file. Re-run cargo build.)
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/config.rs
-git commit -m "feat(core): add WalletConfig struct + network helpers"
-```
-
----
-
-### Task 8: chain::esplora + chain::electrum
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/esplora.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/electrum.rs`
-
-- [ ] **Step 1: Write failing test for esplora client**
-
-```rust
-// crates/bitcoin-wallet-core/src/chain/esplora.rs
-use crate::error::Error;
-
-pub struct EsploraClient {
-    base_url: String,
-    client: reqwest::Client,
-}
-
-impl EsploraClient {
-    pub fn new(base_url: impl Into<String>) -> Result<Self, Error> {
-        Ok(Self { base_url: base_url.into(), client: reqwest::Client::builder().build().map_err(|e| Error::Network(e.to_string()))? })
-    }
-
-    /// Fetch fee estimates from `/fee-estimates`. Returns map of confirmation-target blocks → sat/vB.
-    pub async fn fee_estimate(&self) -> Result<std::collections::HashMap<String, f64>, Error> {
-        todo!()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
     #[test]
-    fn test_esplora_client_constructs() {
-        let c = EsploraClient::new("https://blockstream.info/api").unwrap();
-        assert_eq!(c.base_url, "https://blockstream.info/api");
+    fn pinned_pubkey_optional() {
+        let c = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db");
+        assert!(c.esplora_pinned_pubkey.is_none());
     }
 }
 ```
 
-- [ ] **Step 2: Implement**
+- [ ] **Step 2: Write failing test for EsploraClient (per F20 pinning)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/chain/esplora.rs
 use std::collections::HashMap;
-
 use reqwest::Client;
-
 use crate::error::Error;
 
 pub struct EsploraClient {
     pub(crate) base_url: String,
+    pub(crate) pinned_pubkey: Option<String>,
     pub(crate) client: Client,
 }
 
 impl EsploraClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self, Error> {
-        Ok(Self {
-            base_url: base_url.into(),
-            client: Client::builder().build().map_err(|e| Error::Network(e.to_string()))?,
-        })
+        let client = Client::builder()
+            .build()
+            .map_err(|e| Error::Network(e.to_string()))?;
+        Ok(Self { base_url: base_url.into(), pinned_pubkey: None, client })
+    }
+
+    pub fn with_pinned_pubkey(mut self, pk: String) -> Self {
+        self.pinned_pubkey = Some(pk);
+        self
     }
 
     pub async fn fee_estimate(&self) -> Result<HashMap<String, f64>, Error> {
         let url = format!("{}/fee-estimates", self.base_url);
-        let resp = self.client.get(&url).send().await.map_err(|e| Error::Esplora(e.to_string()))?;
+        let resp = self.client.get(&url).send().await
+            .map_err(|e| Error::Esplora(e.to_string()))?;
         resp.json().await.map_err(|e| Error::Esplora(e.to_string()))
     }
-}
-```
-
-- [ ] **Step 3: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core chain::esplora::`
-Expected: 1 pass.
-
-- [ ] **Step 4: Electrum client (placeholder, used as fallback)**
-
-```rust
-// crates/bitcoin-wallet-core/src/chain/electrum.rs
-use crate::error::Error;
-
-pub struct ElectrumClient {
-    pub(crate) url: String,
-}
-
-impl ElectrumClient {
-    pub fn new(url: impl Into<String>) -> Self { Self { url: url.into() } }
-    pub async fn ping(&self) -> Result<(), Error> { Ok(()) } // bdk_electrum handles the rest
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn test_electrum_client_constructs() {
-        let c = ElectrumClient::new("blockstream.info:700");
-        assert_eq!(c.url, "blockstream.info:700");
+    fn esplora_client_constructs() {
+        let c = EsploraClient::new("https://blockstream.info/api").unwrap();
+        assert_eq!(c.base_url, "https://blockstream.info/api");
+        assert!(c.pinned_pubkey.is_none());
+    }
+    #[test]
+    fn esplora_with_pinned_pubkey() {
+        let c = EsploraClient::new("https://blockstream.info/api")
+            .unwrap()
+            .with_pinned_pubkey("base64-spki".into());
+        assert_eq!(c.pinned_pubkey.as_deref(), Some("base64-spki"));
     }
 }
 ```
 
-- [ ] **Step 5: Run test, expect pass**
+- [ ] **Step 3: Create chain/mod.rs**
 
-Run: `cargo test -p bitcoin-wallet-core chain::electrum::`
-Expected: 1 pass.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/chain/
-git commit -m "feat(core): add Esplora + Electrum HTTP clients (fee estimate + ping)"
+```rust
+pub mod network;
+pub mod esplora;
 ```
 
----
+- [ ] **Step 4: Run tests, pause for commit.**
 
-### Task 9: wallet::Wallet (from_mnemonic + sync + balance)
+### Task 8: chain::network helper (per F37 — replaces deleted Task 7 Step 3 stub)
 
 **Files:**
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/network.rs`
+
+- [ ] **Step 1: Write failing test**
+
+```rust
+use bitcoin::Network;
+
+pub fn coin_type_for(n: Network) -> u32 {
+    match n {
+        Network::Bitcoin => 0,
+        Network::Testnet | Network::Regtest | Network::Signet => 1,
+        _ => 1,  // Future testnet4 etc — safer than mainnet(0).
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn mainnet_coin_type_zero() { assert_eq!(coin_type_for(Network::Bitcoin), 0); }
+    #[test]
+    fn testnet_coin_type_one() { assert_eq!(coin_type_for(Network::Testnet), 1); }
+    #[test]
+    fn regtest_coin_type_one() { assert_eq!(coin_type_for(Network::Regtest), 1); }
+    #[test]
+    fn signet_coin_type_one() { assert_eq!(coin_type_for(Network::Signet), 1); }
+}
+```
+
+- [ ] **Step 2: Run tests, pause for commit.**
+
+### Task 9: Wallet::from_mnemonic + sync + balance (per F12, F13, F14, F15, F21, F34, F44, F26)
+
+**Predecessor:** Original Task 31 (BDK API spike) must complete first per F26. Spike validates `Wallet::create(...).create_wallet_no_persist()` + `bdk_esplora::EsploraExt::full_scan` + `bdk_wallet::bitcoin::FeeRate`.
+
+**Files:**
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/mod.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/builder.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/sync.rs`
 - Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/balance.rs`
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/mod.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/threat.rs`
 
-**Predecessor:** Task 31 (BDK 3.1 API spike) must complete before this task. Task 9's code depends on `bdk_wallet::Wallet::create` + `bdk_esplora::EsploraExt::full_scan` + `bdk_wallet::bitcoin::FeeRate` APIs that Task 31 validates against the actual 3.1 release. If spike finds API drift, edit Tasks 9, 11, 13, 14 before starting implementation.
+- [ ] **Step 1: Create threat.rs (per F21)**
 
-- [ ] **Step 1: Add `bdk_wallet`, `bdk_esplora`, `bdk_file_store` to `bitcoin-wallet-core/Cargo.toml`** (already added in Task 1).
+```rust
+// crates/bitcoin-wallet-core/src/threat.rs
+//! Typed wrappers preventing cross-protocol signature reuse.
 
-- [ ] **Step 2: Write failing test for Wallet::from_mnemonic**
+#[derive(Debug, Clone, Copy)]
+pub enum MessageClass {
+    Transaction,
+    TapScript,
+    Bip137Message,
+}
+
+/// Typed sighash with explicit message-class tag.
+pub struct Sighash(pub [u8; 32], pub MessageClass);
+```
+
+- [ ] **Step 2: Write failing test for Wallet::from_mnemonic (per F34 concrete assert)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/mod.rs
 use std::sync::Mutex;
 use bdk_wallet::{Wallet as BdkWallet, KeychainKind};
-use bitcoin::Network;
 use bip39::Mnemonic;
-
 use crate::config::WalletConfig;
 use crate::error::{Error, Result};
 use crate::keys;
@@ -1591,13 +1298,9 @@ impl Wallet {
         passphrase: &str,
         config: WalletConfig,
         address_type: keys::derivation::AddressType,
-    ) -> Result<Self> {
-        todo!()
-    }
+    ) -> Result<Self> { todo!() }
 
-    pub fn network(&self) -> Network {
-        self.config.network
-    }
+    pub fn network(&self) -> bitcoin::Network { self.config.network }
 }
 
 #[cfg(test)]
@@ -1610,30 +1313,24 @@ mod tests {
     async fn test_wallet_from_mnemonic_constructs() {
         let m = mnemonic::generate(12).unwrap();
         let dir = tempdir().unwrap();
-        let cfg = WalletConfig::regtest("http://127.0.0.1:3000", dir.path());
-        // Just construct (no sync). If regtest esplora not available, this should still construct.
+        let cfg = WalletConfig::regtest("http://127.0.0.1:3000", dir.path().join("wallet.db"));
         let w = Wallet::from_mnemonic(&m, "", cfg, keys::derivation::AddressType::NativeSegwit).await;
-        assert!(w.is_ok() || w.is_err()); // network might not be reachable, but constructor should not panic
+        // Per F34: tautological assert replaced with concrete expectation.
+        assert!(w.is_ok(), "wallet construction failed: {:?}", w.err());
     }
 }
 ```
 
-- [ ] **Step 3: Run test, expect compile error**
-
-Run: `cargo test -p bitcoin-wallet-core wallet::`
-Expected: compile error (function is `todo!()`).
-
-- [ ] **Step 4: Implement `Wallet::from_mnemonic`**
+- [ ] **Step 3: Implement Wallet::from_mnemonic (per F44 drop unused derive_xprv)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/builder.rs
 use bdk_wallet::{Wallet as BdkWallet, KeychainKind};
-use bip32::DerivationPath;
 use bip39::Mnemonic;
-use bitcoin::Network;
 use std::sync::Mutex;
 
 use crate::chain::esplora::EsploraClient;
+use crate::chain::network::coin_type_for;
 use crate::config::WalletConfig;
 use crate::error::{Error, Result};
 use crate::keys::{self, derivation::AddressType};
@@ -1648,15 +1345,15 @@ pub async fn from_mnemonic(
 ) -> Result<Wallet> {
     let seed = keys::mnemonic::to_seed(mnemonic, passphrase);
     let master = keys::derivation::master_from_seed(&seed)?;
-    let path = keys::derivation::address_type_to_path(address_type, coin_type_for(config.network), 0, 0)?;
+    let path = keys::derivation::address_type_to_path(
+        address_type, coin_type_for(config.network), 0, 0
+    )?;
+    // Per F44: derive once.
     let xprv = keys::derivation::derive_xprv(&master, &path)?;
-    let secp = secp256k1::Secp256k1::new();
-    let xprv_str = keys::derivation::derive_xprv(&master, &path)?.to_string();
-    // BIP-84 Native SegWit (default). The selected AddressType determines the
-    // purpose field; here we build wpkh for single-key SegWit. For Legacy or
-    // Taproot, swap the script template accordingly (see Task 6 + Task 28).
-    let external_descriptor = format!("wpkh({xprv_str})/0/*");
-    let change_descriptor   = format!("wpkh({xprv_str})/1/*");
+    let xprv_str = xprv.to_string();
+    let ext = descriptor_template(&xprv_str, address_type);
+    let external_descriptor = format!("{ext}/0/*");
+    let change_descriptor = format!("{ext}/1/*");
     let bdk = BdkWallet::create(external_descriptor, change_descriptor)
         .network(config.network)
         .create_wallet_no_persist()
@@ -1665,85 +1362,45 @@ pub async fn from_mnemonic(
     Ok(Wallet { bdk: Mutex::new(bdk), esplora, config })
 }
 
-fn coin_type_for(n: Network) -> u32 {
-    // SLIP-0132 / BIP-44 convention: mainnet = 0; testnet, regtest, signet = 1.
-    // The wildcard fallback (`_ => 1`) intentionally maps future variants
-    // (e.g. Network::Testnet4 per BIP-94) to the testnet family — safer
-    // than mainnet (0) for any unknown network. Closes the v0.1 risk of
-    // accidentally deriving at mainnet paths when a new testnet appears.
-    match n {
-        Network::Bitcoin => 0,
-        Network::Testnet | Network::Regtest | Network::Signet => 1,
-        _ => 1,
+fn descriptor_template(xprv: &str, t: AddressType) -> String {
+    match t {
+        AddressType::Legacy => format!("pkh({xprv})"),
+        AddressType::NestedSegwit => format!("sh(wpkh({xprv}))"),
+        AddressType::NativeSegwit => format!("wpkh({xprv})"),
+        AddressType::Taproot => format!("tr({xprv})"),
     }
 }
 ```
 
-- [ ] **Step 5: Update `wallet/mod.rs` to call the builder**
-
-```rust
-// In wallet/mod.rs, replace the `from_mnemonic` `todo!()` body with:
-pub async fn from_mnemonic(
-    mnemonic: &Mnemonic,
-    passphrase: &str,
-    config: WalletConfig,
-    address_type: keys::derivation::AddressType,
-) -> Result<Self> {
-    builder::from_mnemonic(mnemonic, passphrase, config, address_type).await
-}
-```
-
-- [ ] **Step 6: Add `mod builder;` to `wallet/mod.rs`**
-
-```rust
-// At top of wallet/mod.rs
-mod builder;
-mod sync;
-mod balance;
-mod addresses;
-
-pub use builder::from_mnemonic as _from_mnemonic_builder; // unused, kept for tree
-```
-
-(Actually just `mod builder;` is enough; rust resolves `builder::from_mnemonic` from the `wallet` module.)
-
-- [ ] **Step 7: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core wallet::`
-Expected: 1 test passes (constructor may fail if regtest esplora unreachable, but the test asserts `is_ok() || is_err()` which always passes — actual behavior is "constructs fine, sync skipped").
-
-- [ ] **Step 8: Implement `sync`**
+- [ ] **Step 4: Implement Wallet::sync (per F12 wallet.start_full_scan)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/sync.rs
 use bdk_esplora::EsploraExt;
-
 use super::Wallet;
 use crate::error::Result;
 
 impl Wallet {
     pub async fn sync(&self) -> Result<()> {
-        // CRITICAL: never hold `bdk` lock across `.await` (would not compile
-        // and violates arch doc §6 invariant). Build the client, do the
-        // async scan, THEN acquire the lock for the sync apply+persist.
         let client = bdk_esplora::esplora_client::Builder::new(&self.esplora.base_url)
             .build_async()
             .map_err(|e| crate::error::Error::Esplora(e.to_string()))?;
-        // For simplicity, do a full scan (no incremental index). Real impl would use Update from chain.
-        let request = bdk_wallet::spk_client::FullScanRequest::new();
+        // Per F12: use wallet.start_full_scan() pattern (not bare FullScanRequest).
+        let request = {
+            let g = self.bdk.lock().unwrap();
+            g.start_full_scan()
+        };
         let update = client.full_scan(request, 5, 1).await
             .map_err(|e| crate::error::Error::Esplora(e.to_string()))?;
         let mut guard = self.bdk.lock().unwrap();
         guard.apply_update(update).map_err(crate::error::Error::Bdk)?;
-        guard.persist().ok(); // best-effort
+        guard.persist().ok();
         Ok(())
     }
 }
 ```
 
-(Stub if `bdk_esplora` API differs in the pinned version — the engineer must adjust based on the actual bdk_esplora 0.22 API. The pattern is identical: build client, call `full_scan`, apply update.)
-
-- [ ] **Step 9: Implement `balance`**
+- [ ] **Step 5: Implement Wallet::balance**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/balance.rs
@@ -1770,2659 +1427,60 @@ impl Wallet {
 }
 ```
 
-- [ ] **Step 10: Run all tests**
-
-Run: `cargo test -p bitcoin-wallet-core`
-Expected: all pass.
-
-- [ ] **Step 11: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/wallet/
-git commit -m "feat(core): add Wallet from_mnemonic + sync + balance"
-```
+- [ ] **Step 6: Run tests, pause for commit.**
 
 ---
 
-### Task 10: wallet::addresses (multi-address via xpub)
+## Phase 2 Backlog (deferred to v0.1.1 / v0.1.2 per F33, F35)
 
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/addresses.rs`
+The following user stories deferred until MVP ships:
 
-- [ ] **Step 1: Write failing test**
+- **v0.1.1** (after MVP ships): Stories 5 (send), 6 (custom fee rate), 7 (tx history), 8 (fee estimates)
+- **v0.1.2**: Stories 9 (wallet manager), 10 (mainnet explicit), 13-20 (multi-recipient send, drain, coin selection, manual UTXO, RBF, BIP-137 full CLI, descriptor export, address type on create)
+- **v0.2**: Multi-chain umbrella (`rust-wallet-app`/`chain-traits`) with ETH + SOL additions
 
-```rust
-// crates/bitcoin-wallet-core/src/wallet/addresses.rs
-use super::Wallet;
-use crate::error::Result;
-use bitcoin::Address;
+Tasks removed from this plan (deferred indefinitely, per F1, F27, F28, F29, F38):
 
-pub struct AddressInfo {
-    pub address: Address,
-    pub index: u32,
-}
+- Original Tasks 17, 17.5, 17.6, 18, 18.5, 18.6, 18.7 (CLI features beyond basic wallet/sync/balance)
+- Original Task 27 (`chain::explorer`)
+- Original Task 28 (`tx::sign_external`)
+- Original Task 29 (bump-fee + sign-message CLI) — merged into v0.1.2 Story 17+18
+- Original Task 32 (watch-only wallet)
+- Original Task 34 (wallet manager CLI) — merged into v0.1.2 Story 9
+- Original Task 38 (dust module) — BDK built-in suffices
 
-impl Wallet {
-    pub fn address(&self, index: u32) -> Result<AddressInfo> { todo!() }
-    pub fn new_address(&mut self) -> Result<AddressInfo> { todo!() }
-    pub fn peek_address(&self, index: u32) -> Result<AddressInfo> { todo!() }
-}
+Tasks kept (post-spike only):
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::WalletConfig;
-    use crate::keys::{mnemonic, derivation::AddressType};
-    use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn test_address_at_index_0() {
-        let m = mnemonic::generate(12).unwrap();
-        let dir = tempdir().unwrap();
-        let cfg = WalletConfig::regtest("http://127.0.0.1:3000", dir.path());
-        let w = Wallet::from_mnemonic(&m, "", cfg, AddressType::NativeSegwit).await.unwrap();
-        let a = w.address(0).unwrap();
-        assert!(a.address.to_string().starts_with("bcrt1q") || a.address.to_string().starts_with("tb1q"));
-    }
-}
-```
-
-- [ ] **Step 2: Implement**
-
-```rust
-// crates/bitcoin-wallet-core/src/wallet/addresses.rs
-use bdk_wallet::KeychainKind;
-
-use super::Wallet;
-use crate::error::Result;
-
-pub struct AddressInfo {
-    pub address: bitcoin::Address,
-    pub index: u32,
-}
-
-impl Wallet {
-    pub fn peek_address(&self, index: u32) -> Result<AddressInfo> {
-        let g = self.bdk.lock().unwrap();
-        let addr = g.peek_address(KeychainKind::External, index).address;
-        Ok(AddressInfo { address: addr, index })
-    }
-
-    pub fn new_address(&mut self) -> Result<AddressInfo> {
-        let mut g = self.bdk.lock().unwrap();
-        let idx = g.next_derivation_index(KeychainKind::External);
-        let addr = g.reveal_next_address(KeychainKind::External).address;
-        g.persist().ok();
-        Ok(AddressInfo { address: addr, index: idx })
-    }
-
-    pub fn address(&self, index: u32) -> Result<AddressInfo> { self.peek_address(index) }
-}
-```
-
-- [ ] **Step 3: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core wallet::addresses::`
-Expected: 1 pass.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/wallet/addresses.rs
-git commit -m "feat(core): add address derivation (peek/new)"
-```
+- Original Task 31 (BDK API spike) — gates Task 9 + this whole plan
 
 ---
 
-## Week 4 — Transactions (Tasks 11-15)
+## Self-Review
 
-### Task 11: tx::builder (BDK TxBuilder wrapper)
+1. **Spec coverage:** Spec referenced. Story coverage matrix shows MVP covers Stories 1, 2, 3, 4, 11, 12. Stories 5-10, 13-20 deferred. Coverage gap intentional per F35.
 
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/builder.rs`
-
-- [ ] **Step 1: Write failing test**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/builder.rs
-use bitcoin::{Address, Amount};
-use bdk_wallet::bitcoin::FeeRate;
-
-use super::super::wallet::Wallet;
-use crate::error::Result;
-
-pub struct TxParams {
-    pub to: Address,
-    pub amount: Amount,
-    pub fee_rate: FeeRate,
-}
-
-impl Wallet {
-    pub fn build_tx(&self, params: TxParams) -> Result<bdk_wallet::bitcoin::Psbt> { todo!() }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::WalletConfig;
-    use crate::keys::{mnemonic, derivation::AddressType};
-    use bdk_wallet::bitcoin::Network;
-    use tempfile::tempdir;
-
-    #[tokio::test]
-    async fn test_build_tx_for_unfunded_wallet_returns_insufficient_funds() {
-        let m = mnemonic::generate(12).unwrap();
-        let dir = tempdir().unwrap();
-        let cfg = WalletConfig::regtest("http://127.0.0.1:3000", dir.path());
-        let w = Wallet::from_mnemonic(&m, "", cfg, AddressType::NativeSegwit).await.unwrap();
-        // No UTXOs → should error with InsufficientFunds
-        let to_addr: Address = "bcrt1q0000000000000000000000000000000000000".parse().unwrap();
-        let r = w.build_tx(TxParams { to: to_addr, amount: Amount::from_sat(1000), fee_rate: FeeRate::from_sat_per_vb(1) });
-        assert!(matches!(r, Err(crate::Error::InsufficientFunds { .. }) | Err(crate::Error::Bdk(_))));
-    }
-}
-```
-
-- [ ] **Step 2: Implement**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/builder.rs
-use bitcoin::{Address, Amount};
-use bdk_wallet::bitcoin::{FeeRate, Psbt};
-
-use super::super::wallet::Wallet;
-use crate::error::{Error, Result};
-
-pub struct TxParams {
-    pub to: Address,
-    pub amount: Amount,
-    pub fee_rate: FeeRate,
-}
-
-impl Wallet {
-    pub fn build_tx(&self, params: TxParams) -> Result<Psbt> {
-        let g = self.bdk.lock().unwrap();
-        let mut b = g.build_tx();
-        b.add_recipient(params.to.script_pubkey(), params.amount)
-         .fee_rate(params.fee_rate);
-        b.finish().map_err(|e| match e {
-            bdk_wallet::Error::InsufficientFunds { needed, available } => Error::InsufficientFunds {
-                needed: needed.to_sat(), available: available.to_sat(),
-            },
-            other => Error::Bdk(other),
-        })
-    }
-}
-```
-
-- [ ] **Step 3: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core tx::builder::`
-Expected: 1 pass.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/tx/builder.rs
-git commit -m "feat(core): add build_tx wrapper around BDK TxBuilder"
-```
-
----
-
-### Task 12: tx::psbt + tx::sighash
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/psbt.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/sighash.rs`
-
-- [ ] **Step 1: Write failing test for psbt**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/psbt.rs
-use bdk_wallet::bitcoin::Psbt;
-use crate::error::{Error, Result};
-
-pub fn to_base64(psbt: &Psbt) -> String { psbt.to_string() }
-pub fn from_base64(s: &str) -> Result<Psbt> {
-    Psbt::deserialize(&base64::decode(s).map_err(|e| Error::Psbt(e.to_string()))?)
-        .map_err(|e| Error::Psbt(e.to_string()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_roundtrip_base64() {
-        // Build a minimal empty PSBT
-        let psbt = Psbt::from_unsigned_tx(bitcoin::Transaction {
-            version: bitcoin::transaction::Version::TWO,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        }).unwrap();
-        let s = to_base64(&psbt);
-        let p2 = from_base64(&s).unwrap();
-        assert_eq!(p2.unsigned_tx.compute_txid(), psbt.unsigned_tx.compute_txid());
-    }
-}
-```
-
-- [ ] **Step 2: Add `base64` to deps**
-
-Edit `bitcoin-wallet-rs/Cargo.toml` `[workspace.dependencies]`:
-```toml
-base64 = "0.22"
-```
-
-Edit `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml`:
-```toml
-base64 = { workspace = true }
-```
-
-- [ ] **Step 3: Implement**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/psbt.rs
-use bdk_wallet::bitcoin::Psbt;
-
-use crate::error::{Error, Result};
-
-pub fn to_base64(psbt: &Psbt) -> String { base64::encode(psbt.serialize()) }
-
-pub fn from_base64(s: &str) -> Result<Psbt> {
-    let bytes = base64::decode(s).map_err(|e| Error::Psbt(e.to_string()))?;
-    Psbt::deserialize(&bytes).map_err(|e| Error::Psbt(e.to_string()))
-}
-```
-
-- [ ] **Step 4: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core tx::psbt::`
-Expected: 1 pass.
-
-- [ ] **Step 5: sighash (wrapper around BDK's signing_request + finalize)**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/sighash.rs
-use bdk_wallet::bitcoin::Psbt;
-
-use crate::error::Result;
-
-pub fn signing_requests(psbt: &Psbt) -> Vec<bdk_wallet::bitcoin::sighash::Sighash> {
-    psbt.inputs.iter().filter_map(|i| i.sighash).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_signing_requests_empty() {
-        let psbt = Psbt::from_unsigned_tx(bitcoin::Transaction {
-            version: bitcoin::transaction::Version::TWO,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        }).unwrap();
-        assert_eq!(signing_requests(&psbt).len(), 0);
-    }
-}
-```
-
-- [ ] **Step 6: Run test, expect pass**
-
-Run: `cargo test -p bitcoin-wallet-core tx::sighash::`
-Expected: 1 pass.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/tx/psbt.rs crates/bitcoin-wallet-core/src/tx/sighash.rs Cargo.toml crates/bitcoin-wallet-core/Cargo.toml
-git commit -m "feat(core): add PSBT base64 serialize/deserialize + sighash request extraction"
-```
-
----
-
-### Task 13: tx::sign + tx::broadcast
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/sign.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/broadcast.rs`
-
-- [ ] **Step 1: Implement sign**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/sign.rs
-use bdk_wallet::bitcoin::{Psbt, Transaction};
-
-use super::super::wallet::Wallet;
-use crate::error::Result;
-
-impl Wallet {
-    pub fn sign(&self, psbt: &mut Psbt) -> Result<Transaction> {
-        let g = self.bdk.lock().unwrap();
-        g.sign(psbt, bdk_wallet::SignOptions::default()).map_err(crate::error::Error::Bdk)?;
-        Ok(psbt.extract_tx().map_err(crate::error::Error::Bdk)?)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Sign needs funded UTXOs; tested in Task 15 regtest integration.
-}
-```
-
-- [ ] **Step 2: Implement broadcast**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/broadcast.rs
-use bdk_esplora::EsploraExt;
-use bdk_wallet::bitcoin::{Transaction, Txid};
-
-use super::super::wallet::Wallet;
-use crate::error::Result;
-
-impl Wallet {
-    pub async fn broadcast(&self, tx: &Transaction) -> Result<Txid> {
-        // Build async client (blocking client has no .await broadcast).
-        let client = bdk_esplora::esplora_client::Builder::new(&self.esplora.base_url)
-            .build_async()
-            .map_err(|e| crate::error::Error::Esplora(e.to_string()))?;
-        client.broadcast(tx).await
-            .map_err(|e| crate::error::Error::Esplora(e.to_string()))
-    }
-}
-```
-
-- [ ] **Step 3: Build to verify compiles**
-
-Run: `cargo build -p bitcoin-wallet-core`
-Expected: success.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/tx/sign.rs crates/bitcoin-wallet-core/src/tx/broadcast.rs
-git commit -m "feat(core): add sign() + broadcast()"
-```
-
----
-
-### Task 14: tx::fee + tx::bump_fee
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/fee.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/bump_fee.rs`
-
-- [ ] **Step 1: Implement fee**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/fee.rs
-use bdk_wallet::bitcoin::FeeRate;
-
-use super::super::wallet::Wallet;
-use crate::error::Result;
-
-#[derive(Debug, Clone, Copy)]
-pub struct FeeEstimate {
-    pub fastest: FeeRate,     // 1 block
-    pub half_hour: FeeRate,   // 3 blocks
-    pub hour: FeeRate,        // 6 blocks
-    pub economy: FeeRate,     // 144 blocks
-    pub minimum: FeeRate,     // 1008 blocks
-}
-
-impl Wallet {
-    pub async fn fee_estimate(&self) -> Result<FeeEstimate> {
-        let raw = self.esplora.fee_estimate().await?;
-        let get = |target: &str| -> Result<FeeRate> {
-            let v = raw.get(target).ok_or_else(|| crate::error::Error::Esplora(format!("missing target {target}")))?;
-            Ok(FeeRate::from_sat_per_vb(*v as u64))
-        };
-        Ok(FeeEstimate {
-            fastest: get("1")?,
-            half_hour: get("3")?,
-            hour: get("6")?,
-            economy: get("144")?,
-            minimum: get("1008")?,
-        })
-    }
-}
-```
-
-- [ ] **Step 2: Implement bump_fee (RBF)**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/bump_fee.rs
-use bdk_wallet::bitcoin::{FeeRate, Psbt, Txid};
-
-use super::super::wallet::Wallet;
-use crate::error::Result;
-
-impl Wallet {
-    pub fn bump_fee(&self, txid: &Txid, new_rate: FeeRate) -> Result<Psbt> {
-        let g = self.bdk.lock().unwrap();
-        let mut builder = g.build_fee_bump(*txid).map_err(crate::error::Error::Bdk)?;
-        builder.fee_rate(new_rate);
-        builder.finish().map_err(|e| match e {
-            bdk_wallet::Error::UnknownUtxo => crate::error::Error::NotInitialized("tx not in wallet".into()),
-            other => crate::error::Error::Bdk(other),
-        })
-    }
-}
-```
-
-- [ ] **Step 3: Build + commit**
-
-```bash
-cargo build -p bitcoin-wallet-core
-git add crates/bitcoin-wallet-core/src/tx/fee.rs crates/bitcoin-wallet-core/src/tx/bump_fee.rs
-git commit -m "feat(core): add fee_estimate + bump_fee (RBF)"
-```
-
----
-
-### Task 15: Regtest integration test (send roundtrip)
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/tests/regtest_send_roundtrip.rs`
-- Add: `bitcoind` to dev-deps
-
-- [ ] **Step 1: Add `bitcoind` dev-dep**
-
-Edit `bitcoin-wallet-rs/Cargo.toml`:
-```toml
-bitcoind = "0.36"
-```
-
-Edit `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml` `[dev-dependencies]`:
-```toml
-bitcoind = { workspace = true }
-bitcoind-async-client = "0.36"
-```
-
-- [ ] **Step 2: Start bitcoind regtest (external command, run before test)**
-
-The test starts its own bitcoind via the `bitcoind` crate. No external setup needed if bitcoind binary is on PATH.
-
-- [ ] **Step 3: Write test**
-
-```rust
-// crates/bitcoin-wallet-core/tests/regtest_send_roundtrip.rs
-#![cfg(feature = "regtest-tests")] // gated, run with: cargo test --features regtest-tests
-
-use std::time::Duration;
-use bitcoin::{Amount, Network};
-use bitcoin_wallet_core::{keys::mnemonic, config::WalletConfig, wallet::Wallet, keys::derivation::AddressType};
-use bdk_wallet::bitcoin::FeeRate;
-use bitcoind::BitcoinD;
-use bitcoind_async_client::Client;
-use tempfile::tempdir;
-
-#[tokio::test]
-async fn regtest_send_roundtrip() {
-    let bitcoind = BitcoinD::new("/tmp/btc-wallet-test", bitcoind::exe_path().unwrap()).unwrap();
-    bitcoind.client().create_wallet("test", None, None, None, None).await.unwrap();
-    let client = Client::new(
-        bitcoind.rpc_url().as_str(),
-        bitcoind::Auth::CookieFile(bitcoind.cookie_file().unwrap()),
-    ).await.unwrap();
-    let miner_addr = client.get_new_address(None, None).await.unwrap();
-    client.generate_to_address(101, &miner_addr).await.unwrap();
-
-    let m = mnemonic::generate(12).unwrap();
-    let dir = tempdir().unwrap();
-    let esplora_url = bitcoind.esplora_url().unwrap().to_string();
-    let cfg = WalletConfig::regtest(esplora_url, dir.path());
-    let mut w = Wallet::from_mnemonic(&m, "", cfg, AddressType::NativeSegwit).await.unwrap();
-
-    // Send 1 BTC from miner to wallet's first address
-    let waddr = w.peek_address(0).unwrap().address;
-    client.send_to_address(&waddr, Amount::from_btc(1.0).unwrap()).await.unwrap();
-    client.generate_to_address(1, &miner_addr).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await; // let esplora index
-    w.sync().await.unwrap();
-
-    let bal = w.balance().unwrap();
-    assert!(bal.confirmed >= 100_000_000, "expected >= 1 BTC, got {}", bal.confirmed);
-
-    // Build + sign + broadcast a 0.1 BTC send
-    let miner_addr_2 = client.get_new_address(None, None).await.unwrap();
-    let psbt = w.build_tx(bitcoin_wallet_core::tx::builder::TxParams {
-        to: miner_addr_2.assume_checked(),
-        amount: Amount::from_btc(0.1),
-        fee_rate: FeeRate::from_sat_per_vb(1),
-    }).unwrap();
-    let tx = w.sign(&mut psbt).unwrap();
-    let txid = w.broadcast(&tx).await.unwrap();
-    client.generate_to_address(1, &miner_addr).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    w.sync().await.unwrap();
-    let txs = w.transactions().unwrap();
-    assert!(txs.iter().any(|t| t.txid == txid), "tx {} not found in wallet history", txid);
-}
-```
-
-(Adjust API surface to match the actual `bdk_wallet` and `bitcoind` crate versions. The pattern is the canonical BDK regtest test.)
-
-- [ ] **Step 4: Run test**
-
-Run: `cargo test -p bitcoin-wallet-core --features regtest-tests --test regtest_send_roundtrip -- --ignored --nocapture`
-Expected: passes if `bitcoind` binary installed locally; otherwise "bitcoind not found".
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/tests/ Cargo.toml crates/bitcoin-wallet-core/Cargo.toml
-git commit -m "test(core): regtest send roundtrip (mine → wallet → send → confirm)"
-```
-
----
-
-## Week 5 — CLI `btc` (Tasks 16-18)
-
-### Task 16: btc CLI scaffold + wallet/address/balance/sync commands
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/btc/src/commands/{mod,wallet,address,balance,sync}.rs`
-- Modify: `bitcoin-wallet-rs/crates/btc/src/main.rs`
-
-- [ ] **Step 1: Define CLI structure**
-
-```rust
-// crates/btc/src/main.rs
-use anyhow::Result;
-use clap::{Parser, Subcommand};
-
-mod commands;
-use commands::*;
-
-#[derive(Parser)]
-#[command(name = "btc", about = "Bitcoin wallet CLI")]
-struct Cli {
-    #[command(subcommand)]
-    cmd: Cmd,
-    /// Data directory for wallet DBs
-    #[arg(long, env = "BTC_DATA_DIR", default_value = "~/.local/share/btc")]
-    data_dir: String,
-    /// Esplora URL (testnet default; mainnet opt-in via URL or --network mainnet)
-    #[arg(long, default_value = "https://blockstream.info/testnet/api")]
-    esplora_url: String,
-}
-
-#[derive(Subcommand)]
-enum Cmd {
-    Wallet(wallet::WalletCmd),
-    Address(address::AddressCmd),
-    Balance(balance::BalanceCmd),
-    Sync(sync::SyncCmd),
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-    let cli = Cli::parse();
-    let ctx = commands::Context { data_dir: cli.data_dir.into(), esplora_url: cli.esplora_url };
-    match cli.cmd {
-        Cmd::Wallet(c) => c.run(&ctx).await,
-        Cmd::Address(c) => c.run(&ctx).await,
-        Cmd::Balance(c) => c.run(&ctx).await,
-        Cmd::Sync(c) => c.run(&ctx).await,
-    }
-}
-```
-
-- [ ] **Step 2: `commands/mod.rs`**
-
-```rust
-// crates/btc/src/commands/mod.rs
-use std::path::PathBuf;
-
-pub struct Context {
-    pub data_dir: PathBuf,
-    pub esplora_url: String,
-}
-
-pub mod wallet;
-pub mod address;
-pub mod balance;
-pub mod sync;
-```
-
-- [ ] **Step 3: `commands/wallet.rs`**
-
-```rust
-// crates/btc/src/commands/wallet.rs
-use anyhow::Result;
-use bitcoin::{Network};
-use bitcoin_wallet_core::{config::WalletConfig, keys::{mnemonic, derivation::AddressType}, wallet::Wallet};
-use clap::Subcommand;
-use std::fs;
-
-use super::Context;
-
-#[derive(Subcommand)]
-pub enum WalletCmd {
-    /// Create a new wallet (generates 12-word mnemonic).
-    Create {
-        /// Wallet name (used as wallet_id in DB path)
-        name: String,
-        /// Network (mainnet|testnet|regtest|signet)
-        #[arg(long, default_value = "testnet")]
-        network: String,
-        /// Address type (legacy|nested-segwit|native-segwit|taproot)
-        #[arg(long, default_value = "native-segwit")]
-        address_type: String,
-    },
-    /// List all wallets in the data directory.
-    List,
-}
-
-impl WalletCmd {
-    pub async fn run(self, ctx: &Context) -> Result<()> {
-        match self {
-            Self::Create { name, network, address_type } => {
-                let network = parse_network(&network)?;
-                let address_type = parse_address_type(&address_type)?;
-                let m = mnemonic::generate(12)?;
-                let db_path = ctx.data_dir.join(&name);
-                fs::create_dir_all(&db_path)?;
-                let cfg = match network {
-                    Network::Bitcoin => WalletConfig::mainnet(&ctx.esplora_url, &db_path),
-                    Network::Testnet => WalletConfig::testnet(&ctx.esplora_url, &db_path),
-                    Network::Regtest => WalletConfig::regtest(&ctx.esplora_url, &db_path),
-                    Network::Signet => WalletConfig::signet(&ctx.esplora_url, &db_path),
-                    _ => anyhow::bail!("unsupported network"),
-                };
-                let w = Wallet::from_mnemonic(&m, "", cfg, address_type).await?;
-                let addr = w.peek_address(0)?;
-                println!("WALLET NAME: {}", name);
-                println!("NETWORK: {:?}", w.network());
-                println!("MNEMONIC (write down!): {}", m.to_string());
-                println!("FIRST ADDRESS: {}", addr.address);
-                println!();
-                println!("WARNING: mnemonic stored in plaintext in {}/mnemonic.txt", db_path.display());
-                Ok(())
-            }
-            Self::List => {
-                let entries = fs::read_dir(&ctx.data_dir)?;
-                for e in entries {
-                    let e = e?;
-                    if e.path().is_dir() {
-                        println!("{}", e.file_name().to_string_lossy());
-                    }
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-fn parse_network(s: &str) -> Result<Network> {
-    Ok(match s { "mainnet" => Network::Bitcoin, "testnet" => Network::Testnet, "regtest" => Network::Regtest, "signet" => Network::Signet, _ => anyhow::bail!("unknown network: {s}") })
-}
-
-fn parse_address_type(s: &str) -> Result<AddressType> {
-    Ok(match s { "legacy" => AddressType::Legacy, "nested-segwit" => AddressType::NestedSegwit, "native-segwit" => AddressType::NativeSegwit, "taproot" => AddressType::Taproot, _ => anyhow::bail!("unknown address type: {s}") })
-}
-```
-
-- [ ] **Step 4: `commands/address.rs`, `commands/balance.rs`, `commands/sync.rs`** (similar shape — each has a Subcommand enum, a `run` method, loads wallet from `ctx.data_dir/{name}/mnemonic.txt`).
-
-For brevity, the other 3 commands follow the same pattern: load wallet from disk (parse mnemonic, recreate `Wallet` via `from_mnemonic`), call the relevant core method, print result.
-
-- [ ] **Step 5: Build + smoke test**
-
-Run: `cargo build -p btc && ./target/debug/btc wallet create --name test --network testnet --type native-segwit`
-Expected: prints mnemonic + first address. No panic.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/btc/
-git commit -m "feat(cli): btc wallet/address/balance/sync commands"
-```
-
----
-
-### Task 17: btc send + tx + fee + config commands
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/btc/src/commands/{send,tx,fee,config}.rs`
-- Modify: `bitcoin-wallet-rs/crates/btc/src/main.rs` (add subcommands)
-
-- [ ] **Step 1: `commands/send.rs`** — load wallet, build tx, sign, broadcast
-
-```rust
-// crates/btc/src/commands/send.rs
-use anyhow::Result;
-use bitcoin::Amount;
-use bitcoin_wallet_core::tx::builder::TxParams;
-use bdk_wallet::bitcoin::FeeRate;
-use clap::Subcommand;
-
-use super::{Context, wallet::load_wallet};
-
-#[derive(Subcommand)]
-pub enum SendCmd {
-    /// Build, sign, broadcast a transaction.
-    Send {
-        #[arg(long)] wallet: String,
-        #[arg(long)] to: String,
-        /// Amount in satoshis. Flag name locked: `--amount-sats` matches Task 22 README + Task 33 CI workflow.
-        #[arg(long)] amount_sats: u64,
-        /// Fee tier: fastest|half_hour|hour|economy (live-fetched from Esplora at send time; see plan Task 17)
-        #[arg(long, default_value = "half_hour")]
-        fee: String,
-        /// Print the PSBT but do not sign or broadcast
-        #[arg(long)] dry_run: bool,
-    },
-}
-
-impl SendCmd {
-    pub async fn run(self, ctx: &Context) -> Result<()> {
-        let (wallet_name, to, amount_sats, fee, dry_run) = match self {
-            Self::Send { wallet, to, amount_sats, fee, dry_run } => (wallet, to, amount_sats, fee, dry_run),
-        };
-        let w = load_wallet(ctx, &wallet_name).await?;
-        let to_addr: bitcoin::Address = to.parse()?;
-        // Fetch live fee estimate from Esplora (spec §13.4: half-hour is 3-block
-        // target, not a hardcoded constant). tier → FeeEstimate field mapping.
-        let fee_estimate = w.fee_estimate().await?;
-        let fee_rate = match fee.as_str() {
-            "fastest"   => fee_estimate.fastest,
-            "half_hour" => fee_estimate.half_hour,
-            "hour"      => fee_estimate.hour,
-            "economy"   => fee_estimate.economy,
-            _ => anyhow::bail!("unknown fee tier: {fee}"),
-        };
-        let mut psbt = w.build_tx(TxParams { to: to_addr, amount: Amount::from_sat(amount_sat), fee_rate })?;
-        if dry_run {
-            println!("PSBT (base64): {}", bitcoin_wallet_core::tx::psbt::to_base64(&psbt));
-            return Ok(());
-        }
-        let tx = w.sign(&mut psbt)?;
-        let txid = w.broadcast(&tx).await?;
-        println!("Sent. txid: {txid}");
-        Ok(())
-    }
-}
-```
-
-- [ ] **Step 2: `commands/tx.rs`** — show tx history
-
-```rust
-// crates/btc/src/commands/tx.rs
-use anyhow::Result;
-use clap::Subcommand;
-
-use super::{Context, wallet::load_wallet};
-
-#[derive(Subcommand)]
-pub enum TxCmd {
-    /// List transactions for a wallet.
-    List { #[arg(long)] wallet: String },
-}
-
-impl TxCmd {
-    pub async fn run(self, ctx: &Context) -> Result<()> {
-        let wallet = match self { Self::List { wallet } => wallet };
-        let w = load_wallet(ctx, &wallet).await?;
-        let txs = w.transactions()?;
-        for t in txs {
-            println!("{}: received={} sent={} fee={:?} conf={:?}", t.txid, t.received, t.sent, t.fee, t.confirmation_time);
-        }
-        Ok(())
-    }
-}
-```
-
-- [ ] **Step 3: `commands/fee.rs`** — show fee estimate
-
-```rust
-// crates/btc/src/commands/fee.rs
-use anyhow::Result;
-use clap::Subcommand;
-
-use super::{Context, wallet::load_wallet};
-
-#[derive(Subcommand)]
-pub enum FeeCmd {
-    /// Show current fee estimates.
-    Show { #[arg(long)] wallet: String },
-}
-
-impl FeeCmd {
-    pub async fn run(self, ctx: &Context) -> Result<()> {
-        let wallet = match self { Self::Show { wallet } => wallet };
-        let w = load_wallet(ctx, &wallet).await?;
-        let f = w.fee_estimate().await?;
-        println!("fastest:     {} sat/vB", f.fastest.to_sat_per_vb_ceil());
-        println!("half_hour:   {} sat/vB", f.half_hour.to_sat_per_vb_ceil());
-        println!("hour:        {} sat/vB", f.hour.to_sat_per_vb_ceil());
-        println!("economy:     {} sat/vB", f.economy.to_sat_per_vb_ceil());
-        println!("minimum:     {} sat/vB", f.minimum.to_sat_per_vb_ceil());
-        Ok(())
-    }
-}
-```
-
-- [ ] **Step 4: `commands/config.rs`** — show/edit CLI config
-
-```rust
-// crates/btc/src/commands/config.rs
-use anyhow::Result;
-use clap::Subcommand;
-use std::fs;
-
-use super::Context;
-
-#[derive(Subcommand)]
-pub enum ConfigCmd {
-    /// Print current effective config.
-    Show { #[arg(long, default_value = "https://blockstream.info/api")] esplora_url: String, #[arg(long, default_value = "~/.local/share/btc")] data_dir: String },
-}
-
-impl ConfigCmd {
-    pub async fn run(self, _ctx: &Context) -> Result<()> {
-        match self {
-            Self::Show { esplora_url, data_dir } => {
-                println!("esplora_url: {esplora_url}");
-                println!("data_dir:    {data_dir}");
-                let path = std::path::PathBuf::from(&data_dir);
-                if path.exists() { println!("data_dir exists: yes ({:?})", fs::read_dir(&path)?.count()) } else { println!("data_dir exists: no") }
-                Ok(())
-            }
-        }
-    }
-}
-```
-
-- [ ] **Step 5: Add `Send`, `Tx`, `Fee`, `Config` to `main.rs` Subcommand enum + dispatch**
-
-- [ ] **Step 6: Add `load_wallet` helper to `commands/wallet.rs`** (parses `mnemonic.txt` from `data_dir/{name}/`, recreates Wallet)
-
-```rust
-// At bottom of commands/wallet.rs
-pub async fn load_wallet(ctx: &Context, name: &str) -> Result<Wallet> {
-    let path = ctx.data_dir.join(name).join("mnemonic.txt");
-    let s = std::fs::read_to_string(&path)?;
-    let network = detect_network_from_dir(&ctx.data_dir.join(name))?;
-    let address_type = AddressType::NativeSegwit; // store this in a file in v1.1
-    let m = bitcoin_wallet_core::keys::mnemonic::from_str(s.trim())?;
-    let cfg = match network {
-        Network::Bitcoin => WalletConfig::mainnet(&ctx.esplora_url, ctx.data_dir.join(name)),
-        Network::Testnet => WalletConfig::testnet(&ctx.esplora_url, ctx.data_dir.join(name)),
-        Network::Regtest => WalletConfig::regtest(&ctx.esplora_url, ctx.data_dir.join(name)),
-        Network::Signet => WalletConfig::signet(&ctx.esplora_url, ctx.data_dir.join(name)),
-        _ => anyhow::bail!("unsupported network"),
-    };
-    Ok(Wallet::from_mnemonic(&m, "", cfg, address_type).await?)
-}
-```
-
-- [ ] **Step 7: Update `wallet::create` to also write `mnemonic.txt`**
-
-In `WalletCmd::Create`, after creating the wallet, append to the run:
-
-```rust
-fs::write(ctx.data_dir.join(&name).join("mnemonic.txt"), m.to_string())?;
-```
-
-- [ ] **Step 8: Build + smoke test**
-
-Run: `cargo build -p btc && ./target/debug/btc --help`
-Expected: shows all subcommands.
-
-- [ ] **Step 9: Commit**
-
-```bash
-git add crates/btc/
-git commit -m "feat(cli): btc send/tx/fee/config commands + load_wallet helper"
-```
-
----
-
-### Task 17.5: implement `Wallet::transactions()` (Story 7)
-
-Closes ecc:architect OOS finding + Story 7 AC. `Wallet::transactions()` is referenced in Task 15 regtest test + Task 17 `tx.rs` but never implemented.
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/transactions.rs`
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/mod.rs`
-
-- [ ] **Step 1: Implement `Wallet::transactions()`**
-
-```rust
-// crates/bitcoin-wallet-core/src/wallet/transactions.rs
-use bdk_wallet::bitcoin::Txid;
-use super::Wallet;
-use crate::error::Result;
-
-pub struct TransactionRecord {
-    pub txid: Txid,
-    pub received: u64,
-    pub sent: u64,
-    pub fee: Option<u64>,
-    pub confirmation_time: Option<u64>,
-}
-
-impl Wallet {
-    pub fn transactions(&self) -> Result<Vec<TransactionRecord>> {
-        let g = self.bdk.lock().unwrap();
-        let txs = g.transactions();
-        Ok(txs.into_iter().map(|tx| TransactionRecord {
-            txid: tx.tx_node.txid,
-            received: tx.received.to_sat(),
-            sent: tx.sent.to_sat(),
-            fee: tx.fee.map(|f| f.to_sat()),
-            confirmation_time: tx.chain_position.confirmation_time().map(|c| c.height),
-        }).collect())
-    }
-}
-```
-
-(Exact BDK 3.1 field names on `WalletTx` may vary; verify against the API confirmed in Task 31 spike.)
-
-- [ ] **Step 2: Add `transactions` to `wallet/mod.rs`**
-
-```rust
-mod transactions;
-```
-
-- [ ] **Step 3: Run regtest test** (Task 15) — `wallet.transactions()` should now resolve
-
-Run: `cargo test -p bitcoin-wallet-core --test regtest_send_roundtrip -- --ignored --nocapture`
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/wallet/transactions.rs crates/bitcoin-wallet-core/src/wallet/mod.rs
-git commit -m "feat(core): implement Wallet::transactions() (Story 7 + Task 15 regtest test)"
-```
-
----
-
-### Task 17.6: add `--fee-rate-sat-per-vb` flag to SendCmd (Story 6)
-
-Story 6 AC: exact sat/vB rate. Currently only tier names work.
-
-**Files:**
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/send.rs`
-
-- [ ] **Step 1: Add flag to `SendCmd`**
-
-```rust
-Send {
-    #[arg(long)] wallet: String,
-    #[arg(long)] to: String,
-    #[arg(long)] amount_sats: u64,
-    /// Fee tier: fastest|half_hour|hour|economy. Mutually exclusive with --fee-rate-sat-per-vb.
-    #[arg(long, default_value = "half_hour")]
-    fee: String,
-    /// Exact fee rate in sat/vB. Overrides --fee. Mutually exclusive.
-    #[arg(long)]
-    fee_rate_sat_per_vb: Option<u64>,
-    #[arg(long)] dry_run: bool,
-},
-```
-
-- [ ] **Step 2: Use it in `run()`**
-
-```rust
-let fee_rate = if let Some(rate) = fee_rate_sat_per_vb {
-    if rate < 1 { anyhow::bail!("fee rate must be >= 1 sat/vB"); }
-    bitcoin_wallet_core::bdk_wallet::bitcoin::FeeRate::from_sat_per_vb(rate)
-} else {
-    let fee_estimate = w.fee_estimate().await?;
-    match fee.as_str() {
-        "fastest"   => fee_estimate.fastest,
-        "half_hour" => fee_estimate.half_hour,
-        "hour"      => fee_estimate.hour,
-        "economy"   => fee_estimate.economy,
-        _ => anyhow::bail!("unknown fee tier: {fee}"),
-    }
-};
-```
-
-- [ ] **Step 3: Update assert_cmd smoke test** (Task 18) to cover both forms
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/btc/src/commands/send.rs crates/btc/tests/
-git commit -m "feat(cli): --fee-rate-sat-per-vb flag (Story 6 exact rate)"
-```
-
----
-
-### Task 18.7: mainnet confirmation prompt (Story 10)
-
-Story 10 AC: `btc wallet create --network mainnet` requires typing `yes`. Currently no prompt.
-
-**Files:**
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/wallet.rs` (Task 16's `WalletCmd::Create` handler)
-
-- [ ] **Step 1: Add prompt before wallet creation when network is mainnet**
-
-```rust
-if network == Network::Bitcoin {
-    eprintln!("WARNING: this wallet uses real Bitcoin on mainnet. Funds are at risk.");
-    eprint!("Type 'yes' to continue: ");
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-    if input.trim() != "yes" {
-        std::process::exit(1);
-    }
-}
-```
-
-- [ ] **Step 2: TTY guard** — skip prompt if stdin is not a TTY (CI)
-
-```rust
-if network == Network::Bitcoin && atty::is(atty::Stream::Stdin) {
-    // ... prompt ...
-}
-```
-
-Add `atty = "0.2"` to workspace deps.
-
-- [ ] **Step 3: Skip flag for automation** — `--yes` / `--no-confirm`
-
-```rust
-#[arg(long)]
-yes: bool,  // skip mainnet confirmation
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/btc/src/commands/wallet.rs Cargo.toml
-git commit -m "feat(cli): mainnet confirmation prompt + --yes skip flag (Story 10 AC)"
-```
-
----
-
-### Task 18.5: CLI wallet manager + bump-fee + sign-message + descriptor export (Stories 9, 17, 18, 19)
-
-Promoted from old add-on Task 29 + 34. 4 user stories that were add-on-only. All core wallet operations.
-
-**Files:**
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/wallet.rs` (add `show`, `delete`, `rename`, `list --json`)
-- Create: `bitcoin-wallet-rs/crates/btc/src/commands/bump_fee.rs`
-- Create: `bitcoin-wallet-rs/crates/btc/src/commands/sign_message.rs`
-- Modify: `bitcoin-wallet-rs/crates/btc/src/main.rs` (add subcommands)
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/mod.rs` (add `first_private_key` for sign-message)
-
-- [ ] **Step 1: Wallet subcommands** (Story 9 full + Story 19)
-
-```rust
-Show {
-    #[arg(long)] name: String,
-    #[arg(long)] descriptor: bool,
-    #[arg(long)] no_private: bool,
-},
-Delete {
-    #[arg(long)] name: String,
-    #[arg(long, default_value = "true")] yes: bool,
-},
-Rename {
-    #[arg(long)] name: String,
-    #[arg(long)] to: String,
-    #[arg(long, default_value = "true")] yes: bool,
-},
-```
-
-- [ ] **Step 2: bump_fee command** (Story 17) — uses `Wallet::bump_fee()` from Task 14
-
-- [ ] **Step 3: sign_message command** (Story 18) — BIP-137 prefix + sha256 + secp256k1 ECDSA. Uses new `Wallet::first_private_key()` core method.
-
-- [ ] **Step 4: Add `first_private_key()` to Wallet** (core)
-
-```rust
-impl Wallet {
-    /// Returns the private key for the first external-chain address.
-    /// Tx signing uses `sign()` which never returns the key; this is sign-only.
-    pub fn first_private_key(&self) -> Result<crate::keys::signer::Signer> {
-        // derive from descriptor via bdk_wallet::keys::DescriptorSecretKey
-    }
-}
-```
-
-- [ ] **Step 5: Wire all into `main.rs` Subcommand enum + dispatch**
-
-- [ ] **Step 6: Build + smoke test**
-
-Run: `cargo build -p btc && ./target/debug/btc wallet show --help && ./target/debug/btc bump-fee --help && ./target/debug/btc sign-message --help`
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add crates/btc/src/commands/ crates/bitcoin-wallet-core/src/wallet/mod.rs crates/btc/src/main.rs
-git commit -m "feat(cli): wallet manager (show/delete/rename) + bump-fee + sign-message + descriptor export (Stories 9, 17, 18, 19)"
-```
-
----
-
-### Task 18.6: CLI advanced send — multi-recipient + drain + coin-selection + manual UTXO + --type (Stories 13, 14, 15, 16, 20)
-
-Promoted from old add-on Task 34. 5 user stories that were add-on-only.
-
-**Files:**
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/send.rs` (extend `SendCmd`)
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/wallet.rs` (add `--type` to `Create`)
-
-- [ ] **Step 1: Multi-recipient `--to`** (Story 13)
-
-```rust
-Send {
-    #[arg(long)] wallet: String,
-    /// Recipient as `<address>:<satoshis>`. Repeatable.
-    #[arg(long, value_parser = parse_addr_amount, num_args = 1..)]
-    to: Vec<(Address, u64)>,
-    #[arg(long, default_value = "half_hour")] fee: String,
-    #[arg(long)] fee_rate_sat_per_vb: Option<u64>,
-    /// Coin selection algorithm (Story 15): bnb (default) | knapsack | lowest_fee
-    #[arg(long, default_value = "bnb")]
-    coin_selection: String,
-    /// Manual UTXO selection (Story 16): `<txid>:<vout>`. Repeatable.
-    #[arg(long, value_parser = parse_outpoint)]
-    input: Vec<OutPoint>,
-    #[arg(long)] manual_selection_only: bool,
-    /// Drain all spendable UTXOs to single address (Story 14)
-    #[arg(long)] drain: bool,
-    #[arg(long, value_parser = parse_outpoint)]
-    exclude_utxo: Vec<OutPoint>,
-    #[arg(long)] dry_run: bool,
-    #[arg(long, default_value = "true")] broadcast: bool,
-},
-```
-
-- [ ] **Step 2: `--type` flag on `wallet create`** (Story 20)
-
-```rust
-address_type: String,  // legacy | nested-segwit | native-segwit (default) | taproot
-```
-
-- [ ] **Step 3: Wire coin selection algorithm**
-
-```rust
-let coin_selection_alg = match coin_selection.as_str() {
-    "bnb" => Box::new(bdk_wallet::coin_selection::BranchAndBound::default()),
-    "knapsack" => Box::new(bdk_wallet::coin_selection::Knapsack::default()),
-    "lowest_fee" => Box::new(bdk_wallet::coin_selection::OldestFirstCoinFirst::default()),
-    _ => anyhow::bail!("unknown coin selection algorithm: {coin_selection}"),
-};
-```
-
-- [ ] **Step 4: Build + smoke test**
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/btc/src/commands/send.rs crates/btc/src/commands/wallet.rs
-git commit -m "feat(cli): multi-recipient + drain + coin-selection + manual UTXO + --type on create (Stories 13-16, 20)"
-```
-
----
-
-### Task 18: btc end-to-end CLI test (assert_cmd)
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/btc/tests/cli_smoke.rs`
-- Add: `assert_cmd` dev-dep
-
-- [ ] **Step 1: Add dev-dep**
-
-Edit `bitcoin-wallet-rs/crates/btc/Cargo.toml`:
-```toml
-[dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
-```
-
-- [ ] **Step 2: Write smoke test**
-
-```rust
-// crates/btc/tests/cli_smoke.rs
-use assert_cmd::Command;
-use predicates::prelude::*;
-
-#[test]
-fn test_btc_help_works() {
-    let mut cmd = Command::cargo_bin("btc").unwrap();
-    cmd.arg("--help");
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("Bitcoin wallet CLI"));
-}
-
-#[test]
-fn test_btc_wallet_create_help_works() {
-    let mut cmd = Command::cargo_bin("btc").unwrap();
-    cmd.args(["wallet", "create", "--help"]);
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("--network"));
-}
-```
-
-- [ ] **Step 3: Run test**
-
-Run: `cargo test -p btc`
-Expected: 2 pass.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/btc/tests/ crates/btc/Cargo.toml
-git commit -m "test(cli): assert_cmd smoke tests for btc help + wallet create help"
-```
-
----
-
-## Week 6 — Hardening (Tasks 19-21)
-
-### Task 19: proptest + miri
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/tests/proptest_script.rs`
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/tests/proptest_address.rs`
-
-- [ ] **Step 1: proptest for script builder round-trip**
-
-```rust
-// crates/bitcoin-wallet-core/tests/proptest_script.rs
-use bitcoin::secp256k1::{Secp256k1, SecretKey};
-use bitcoin_wallet_core::script::{builder, parser};
-use proptest::prelude::*;
-
-proptest! {
-    #[test]
-    fn script_roundtrip(seed: u64) {
-        let secp = Secp256k1::new();
-        let mut hasher = seed;
-        let mut key = [0u8; 32];
-        for i in 0..32 { hasher = hasher.wrapping_mul(1103515245).wrapping_add(12345); key[i] = hasher as u8; }
-        let sk = SecretKey::from_slice(&key).unwrap();
-        let pk = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk);
-        let s = builder::p2wpkh(&pk);
-        let ops = parser::parse_to_opcodes(&s).unwrap();
-        prop_assert!(ops.iter().any(|o| o.contains("OP_PUSHBYTES_0") || o.contains("OP_0")));
-    }
-}
-```
-
-- [ ] **Step 2: proptest for address round-trip**
-
-```rust
-// crates/bitcoin-wallet-core/tests/proptest_address.rs
-use bitcoin::secp256k1::{Secp256k1, SecretKey};
-use bitcoin::Network;
-use bitcoin_wallet_core::address::{legacy, segwit, taproot};
-use proptest::prelude::*;
-
-proptest! {
-    #[test]
-    fn address_roundtrip(seed: u64) {
-        let secp = Secp256k1::new();
-        let mut hasher = seed;
-        let mut key = [0u8; 32];
-        for i in 0..32 { hasher = hasher.wrapping_mul(1103515245).wrapping_add(12345); key[i] = hasher as u8; }
-        let sk = SecretKey::from_slice(&key).unwrap();
-        let pk = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk);
-        for n in [Network::Bitcoin, Network::Testnet, Network::Regtest, Network::Signet] {
-            prop_assert!(legacy::p2pkh_address(&pk, n).is_ok());
-            prop_assert!(segwit::p2wpkh_address(&pk, n).is_ok());
-            prop_assert!(taproot::p2tr_address(&pk, n).is_ok());
-        }
-    }
-}
-```
-
-- [ ] **Step 3: Run**
-
-Run: `cargo test -p bitcoin-wallet-core --test proptest_script --test proptest_address`
-Expected: 50+ cases pass.
-
-- [ ] **Step 4: miri on core**
-
-Run: `cargo +nightly miri test -p bitcoin-wallet-core --lib`
-Expected: passes (we use no `unsafe`).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/tests/
-git commit -m "test(core): proptest for script+address roundtrip; miri soundness"
-```
-
----
-
-### Task 20: cargo-deny + cargo-fuzz
-
-**Files:**
-- Create: `bitcoin-wallet-rs/deny.toml`
-- Create: `bitcoin-wallet-rs/fuzz/fuzz_targets/script_parser.rs`
-
-- [ ] **Step 1: deny.toml**
-
-```toml
-[graph]
-all-features = true
-
-[advisories]
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
-yanked = "warn"
-
-[licenses]
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-DFS-2016", "CC0-1.0"]
-confidence-threshold = 0.8
-
-[bans]
-multiple-versions = "warn"
-wildcards = "deny"
-```
-
-- [ ] **Step 2: Run cargo-deny**
-
-Run: `cargo deny check`
-Expected: passes (no copyleft, no advisories).
-
-- [ ] **Step 3: cargo-fuzz scaffold**
-
-```bash
-cargo install cargo-fuzz
-cargo fuzz init
-```
-
-- [ ] **Step 4: Fuzz target**
-
-```rust
-// fuzz/fuzz_targets/script_parser.rs
-#![no_main]
-use libfuzzer_sys::fuzz_target;
-use bitcoin::Script;
-
-fuzz_target!(|data: &[u8]| {
-    let s = Script::from_bytes(data);
-    let _ = bitcoin_wallet_core::script::parser::parse_to_opcodes(&s);
-});
-```
-
-- [ ] **Step 5: Run fuzzer briefly**
-
-Run: `cargo fuzz run script_parser -- -max_total_time=60`
-Expected: no panic in 60s.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add deny.toml fuzz/
-git commit -m "chore: cargo-deny config + cargo-fuzz target for script parser"
-```
-
----
-
-### Task 21: Docker + size audit
-
-**Files:**
-- Create: `bitcoin-wallet-rs/docker/Dockerfile`
-- Create: `bitcoin-wallet-rs/.dockerignore`
-
-- [ ] **Step 1: Multi-stage Dockerfile for the CLI**
-
-```dockerfile
-# syntax=docker/dockerfile:1
-FROM rust:1.85-bookworm AS builder
-WORKDIR /build
-COPY . .
-RUN cargo build --release -p btc
-RUN strip target/release/btc
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /build/target/release/btc /usr/local/bin/btc
-ENV BTC_DATA_DIR=/data
-ENV BTC_ESPLORA=https://blockstream.info/testnet/api
-WORKDIR /data
-ENTRYPOINT ["/usr/local/bin/btc"]
-```
-
-- [ ] **Step 2: .dockerignore**
-
-```text
-target
-.git
-.github
-docker
-tests
-*.md
-LICENSE
-deny.toml
-```
-
-- [ ] **Step 3: Build + size check**
-
-Run: `docker build -t btc:dev -f docker/Dockerfile .`
-Run: `docker run --rm btc:dev --help`
-Expected: shows CLI help. Image size ~30 MB.
-
-- [ ] **Step 4: Local size-optimized build**
-
-Run: `RUSTFLAGS="-C opt-level=z -C lto=fat -C strip=symbols -C panic=abort" cargo build --release -p btc`
-Run: `ls -lh target/release/btc`
-Expected: ≤ 15 MB.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add docker/ .dockerignore
-git commit -m "chore: multi-stage Dockerfile for btc CLI + size audit"
-```
-
----
-
-## Week 7 — Docs + release (Tasks 22-25)
-
-### Task 22: README
-
-**Files:**
-- Create: `bitcoin-wallet-rs/README.md`
-
-- [ ] **Step 1: Write README**
-
-```markdown
-# bitcoin-wallet-rs
-
-Standalone Rust Bitcoin wallet — library + CLI. Replaces the Swift implementation
-in `tangem-app-ios/Modules/BlockchainSdk/Blockchains/Bitcoin/`. **Default network is
-Bitcoin testnet**; mainnet opt-in via `--network mainnet`.
-
-## Crates
-
-- `bitcoin-wallet-core` — library, the wallet engine
-- `btc` — CLI (`cargo install btc`)
-
-## Quick start
-
-\`\`\`bash
-# Create a new wallet on testnet (default)
-btc wallet create --name my-wallet
-
-# List wallets
-btc wallet list
-
-# Check balance (default network: testnet)
-btc balance --wallet my-wallet
-
-# Send (default fee tier: half_hour)
-btc send --wallet my-wallet --to tb1q... --amount-sats 1000
-
-# Get fee estimates
-btc fee --wallet my-wallet
-
-# Sync chain state
-btc sync --wallet my-wallet
-
-# Transaction history
-btc tx list --wallet my-wallet
-\`\`\`
-
-## Mainnet usage
-
-\`\`\`bash
-btc wallet create --name mainnet-wallet --network mainnet
-btc balance --wallet mainnet-wallet --esplora-url https://blockstream.info/api
-\`\`\`
-
-## Specification
-
-Spec + plan live in the **parent monorepo's** `docs/superpowers/` directory (not in this `bitcoin-wallet-rs/` repo, which ships only the code):
-
-- Spec: `https://github.com/tangem/bitcoin-wallet-rs/blob/main/docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md`
-- Plan: `https://github.com/tangem/bitcoin-wallet-rs/blob/main/docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`
-- Architecture: `https://github.com/tangem/bitcoin-wallet-rs/blob/main/docs/superpowers/specs/2026-08-06-rust-bitcoin-wallet-architecture.md`
-
-## License
-
-MIT.
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add README.md
-git commit -m "docs: README with quick start (testnet default, mainnet opt-in)"
-```
-
----
-
-### Task 23: CONTRIBUTING + CHANGELOG + SECURITY
-
-**Files:**
-- Create: `bitcoin-wallet-rs/CONTRIBUTING.md`
-- Create: `bitcoin-wallet-rs/CHANGELOG.md`
-- Create: `bitcoin-wallet-rs/SECURITY.md`
-
-- [ ] **Step 1: CONTRIBUTING.md**
-
-```markdown
-# Contributing
-
-1. Fork, branch, PR.
-2. `cargo fmt` + `cargo clippy --all-targets --all-features -- -D warnings` + `cargo test` must pass.
-3. Add tests for new behavior (TDD).
-4. Reference an issue in the PR body.
-5. Use conventional commit messages (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`).
-
-## Dev setup
-
-\`\`\`bash
-rustup install 1.85
-cargo install cargo-deny cargo-fuzz
-\`\`\`
-
-## Testing
-
-\`\`\`bash
-cargo test --all
-cargo test -p bitcoin-wallet-core --test regtest_send_roundtrip -- --ignored
-cargo +nightly miri test -p bitcoin-wallet-core
-\`\`\`
-```
-
-- [ ] **Step 2: CHANGELOG.md**
-
-```markdown
-# Changelog
-
-## 0.1.0 — 2026-08-05
-
-Initial release.
-
-- `bitcoin-wallet-core`: BIP-39 mnemonic, BIP-32 derivation, secp256k1 signing, BDK wallet, Esplora + Electrum backends, fee estimation, RBF
-- `btc` CLI: create/import/list wallets, balance, send, tx history, fee, sync. Default network: testnet. Mainnet opt-in.
-```
-
-- [ ] **Step 3: SECURITY.md**
-
-```markdown
-# Security
-
-This is a **software wallet**. There is **no hardware-backed key storage** in v1.
-Anyone with read access to `~/.local/share/btc/{wallet_id}/mnemonic.txt` can spend the funds.
-
-## Reporting vulnerabilities
-
-Email: security@<your-domain>.tld (replace before public release). PGP key TBD.
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add CONTRIBUTING.md CHANGELOG.md SECURITY.md
-git commit -m "docs: CONTRIBUTING, CHANGELOG, SECURITY"
-```
-
----
-
-### Task 24: Workspace-level CI
-
-**Files:**
-- Modify: `bitcoin-wallet-rs/.github/workflows/ci.yml`
-- Create: `bitcoin-wallet-rs/.github/workflows/release.yml`
-
-- [ ] **Step 1: Expand CI**
-
-```yaml
-name: CI
-on: [push, pull_request]
-jobs:
-  fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-        with: { components: rustfmt }
-      - run: cargo fmt --all -- --check
-  clippy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-        with: { components: clippy }
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-      - run: cargo test --all
-  deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-      - run: cargo install cargo-deny && cargo deny check
-  size:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-      - run: RUSTFLAGS="-C opt-level=z -C lto=fat -C strip=symbols -C panic=abort" cargo build --release -p btc
-      - run: test $(stat -c %s target/release/btc) -lt 15728640
-```
-
-- [ ] **Step 2: Release workflow (crates.io only; Docker removed in v1)**
-
-```yaml
-name: Release
-on:
-  push:
-    tags: ['v*']
-jobs:
-  publish:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-      - run: cargo publish -p bitcoin-wallet-core
-```
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add .github/workflows/
-git commit -m "ci: expand workflow (fmt/clippy/test/deny/size) + release on tag (crates.io only)"
-```
-
----
-
-### Task 25: v0.1.0 release (commit, tag, publish)
-
-- [ ] **Step 1: Tag**
-
-```bash
-git tag v0.1.0
-git push origin main --tags
-```
-
-- [ ] **Step 2: Verify CI passes**
-
-Open GitHub Actions. All jobs green.
-
-- [ ] **Step 3: Publish to crates.io** (one-time, requires `cargo login`)
-
-```bash
-cargo publish -p bitcoin-wallet-core
-```
-
-(One-time setup: `cargo login <token>` with a crates.io API token.)
-
-- [ ] **Step 4: Verify docs.rs build**
-
-After publish, https://docs.rs/bitcoin-wallet-core shows the API documentation.
-
-- [ ] **Step 5: Final summary commit**
-
-```bash
-echo "# bitcoin-wallet-rs v0.1.0" > RELEASE.md
-echo "" >> RELEASE.md
-echo "- bitcoin-wallet-core published to crates.io" >> RELEASE.md
-echo "- All 25 tasks complete; testnet round-trip verified" >> RELEASE.md
-git add RELEASE.md
-git commit -m "release: v0.1.0"
-git push origin main
-```
-
----
-
-## Add-on Tasks (Tasks 26-29) — close gaps from Tangem iOS comparison
-
-These four tasks close the 6% surface gap between the 25-task v1 plan and the Tangem iOS Bitcoin module. Insert them between Task 25 (release) and the Self-Review checklist. They keep Phase 1 deliverable (lib + CLI on testnet) intact while unblocking a future Phase 2 mobile migration.
-
-### Task 26: tx::dust (dust restriction per output script type)
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/dust.rs`
-
-- [ ] **Step 1: Write failing test**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/dust.rs
-use bitcoin::Address;
-use bitcoin::ScriptBuf;
-use crate::error::Result;
-
-/// Returns true if `value_sat` is below the dust threshold for `script_pubkey`.
-/// Mirrors Tangem's `DustRestrictable.minimalFee: 0.00001` and per-script dust limits.
-pub fn is_dust(script_pubkey: &ScriptBuf, value_sat: u64) -> bool { todo!() }
-
-/// Default dust threshold in satoshis (3 * minRelayFee at 3000 sat/kvB ≈ 294 sat).
-/// Used when a script-type-specific threshold is not configured.
-pub fn default_dust_threshold() -> u64 { 294 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bitcoin::secp256k1::{Secp256k1, SecretKey};
-    use crate::script::builder;
-
-    #[test]
-    fn test_zero_value_p2wpkh_is_dust() {
-        let secp = Secp256k1::new();
-        let sk = SecretKey::from_slice(&[2u8; 32]).unwrap();
-        let pk = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk);
-        let s = builder::p2wpkh(&pk);
-        assert!(is_dust(&s, 0));
-    }
-
-    #[test]
-    fn test_default_dust_threshold_is_294() {
-        assert_eq!(default_dust_threshold(), 294);
-    }
-}
-```
-
-- [ ] **Step 2: Implement**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/dust.rs
-use bitcoin::ScriptBuf;
-
-use crate::error::Result;
-
-const MIN_RELAY_FEE_SAT_PER_KVB: u64 = 3000;
-const DUST_DIVISOR: u64 = 3;
-
-pub fn default_dust_threshold() -> u64 { MIN_RELAY_FEE_SAT_PER_KVB / DUST_DIVISOR }
-
-/// Dust = output_value * 3 < size_in_vbytes * min_relay_fee.
-/// Approximation: `value_sat < (script_bytes + 41) * min_relay_fee / 1000`.
-/// For 3000 sat/kvB → 3 sat/vB.
-pub fn is_dust(script_pubkey: &ScriptBuf, value_sat: u64) -> bool {
-    let size = script_pubkey.len() + 41; // 41 = P2WPKH witness envelope
-    let threshold = (size as u64) * 3; // 3 sat/vB min relay
-    value_sat < threshold
-}
-
-pub fn check_dust(_outputs: &[(ScriptBuf, u64)]) -> Result<()> {
-    // Stub for now; per-output check in tx builder.
-    Ok(())
-}
-```
-
-- [ ] **Step 3: Wire into `tx::builder`**
-
-In `crates/bitcoin-wallet-core/src/tx/builder.rs`, inside `build_tx`, after building the recipient list:
-
-```rust
-for (script, value) in &recipients {
-    if crate::tx::dust::is_dust(script, value.to_sat()) {
-        return Err(crate::error::Error::TxBuild(format!(
-            "output value {value} sat is below dust threshold for recipient script"
-        )));
-    }
-}
-```
-
-- [ ] **Step 4: Run test**
-
-Run: `cargo test -p bitcoin-wallet-core tx::dust::`
-Expected: 2 pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/tx/dust.rs crates/bitcoin-wallet-core/src/tx/builder.rs
-git commit -m "feat(core): dust restriction per output script (3 sat/vB threshold)"
-```
-
----
-
-### Task 27: chain::explorer (block-explorer link provider)
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/explorer.rs`
-
-- [ ] **Step 1: Write failing test**
-
-```rust
-// crates/bitcoin-wallet-core/src/chain/explorer.rs
-use bitcoin::{Address, Network, Txid};
-use crate::error::Result;
-
-pub struct ExplorerLinks {
-    pub tx_url: Box<dyn Fn(&Txid) -> String + Send + Sync>,
-    pub address_url: Box<dyn Fn(&Address) -> String + Send + Sync>,
-}
-
-/// Build default Blockstream / blockchair / mempool.space URLs for `network`.
-pub fn default_links(network: Network) -> Result<ExplorerLinks> { todo!() }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_mainnet_tx_url_uses_blockstream() {
-        let links = default_links(Network::Bitcoin).unwrap();
-        let url = (links.tx_url)(&"0000000000000000000000000000000000000000000000000000000000000001".parse().unwrap());
-        assert!(url.contains("blockstream.info") || url.contains("blockchair.com") || url.contains("mempool.space"));
-    }
-
-    #[test]
-    fn test_testnet_tx_url_uses_blockstream_testnet() {
-        let links = default_links(Network::Testnet).unwrap();
-        let url = (links.tx_url)(&"0000000000000000000000000000000000000000000000000000000000000001".parse().unwrap());
-        assert!(url.contains("testnet"));
-    }
-}
-```
-
-- [ ] **Step 2: Implement**
-
-```rust
-// crates/bitcoin-wallet-core/src/chain/explorer.rs
-use bitcoin::{Address, Network, Txid};
-
-use crate::error::{Error, Result};
-
-pub struct ExplorerLinks {
-    pub tx_url: Box<dyn Fn(&Txid) -> String + Send + Sync>,
-    pub address_url: Box<dyn Fn(&Address) -> String + Send + Sync>,
-}
-
-pub fn default_links(network: Network) -> Result<ExplorerLinks> {
-    let base = match network {
-        Network::Bitcoin => "https://blockstream.info".to_string(),
-        Network::Testnet => "https://blockstream.info/testnet".to_string(),
-        Network::Regtest => return Err(Error::NotInitialized("regtest has no public explorer".into())),
-        Network::Signet => "https://mempool.space/signet".to_string(),
-        _ => return Err(Error::NotInitialized(format!("unsupported network: {network}"))),
-    };
-    Ok(ExplorerLinks {
-        tx_url: Box::new(move |txid| format!("{base}/tx/{txid}")),
-        address_url: Box::new(move |addr| format!("{base}/address/{addr}")),
-    })
-}
-```
-
-- [ ] **Step 3: Run test**
-
-Run: `cargo test -p bitcoin-wallet-core chain::explorer::`
-Expected: 2 pass.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/chain/explorer.rs
-git commit -m "feat(core): block-explorer link provider (blockstream/mempool)"
-```
-
----
-
-### Task 28: tx::sign_external (external signer trait for Phase 2 UniFFI)
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/tx/sign_external.rs`
-
-- [ ] **Step 1: Define Signer trait**
-
-```rust
-// crates/bitcoin-wallet-core/src/tx/sign_external.rs
-//! External signer interface.
-//!
-//! Used by Phase 2 (UniFFI) to plug Tangem's `TangemSdk` (or any hardware signer)
-//! into the Bitcoin signing flow. Phase 1 has no consumer — this is a contract
-//! for future mobile integration.
-
-use bitcoin::secp256k1::ecdsa::Signature;
-
-use crate::error::Result;
-
-/// A signer that can produce ECDSA signatures over 32-byte hashes.
-pub trait Signer: Send + Sync {
-    /// Sign a single 32-byte hash. Returns a 64-byte low-S ECDSA signature.
-    fn sign_ecdsa(&self, hash: &[u8; 32]) -> Result<Signature>;
-
-    /// The secp256k1 public key (compressed, 33 bytes) for this signer.
-    /// Used to identify which input(s) this signer can sign.
-    fn public_key(&self) -> bitcoin::secp256k1::PublicKey;
-}
-```
-
-- [ ] **Step 2: Add to `tx/mod.rs`**
-
-```rust
-// In crates/bitcoin-wallet-core/src/tx/mod.rs
-pub mod sign_external;
-pub use sign_external::Signer;
-```
-
-- [ ] **Step 3: Build + verify trait is exported**
-
-Run: `cargo build -p bitcoin-wallet-core`
-Expected: success; `bitcoin_wallet_core::tx::Signer` is importable.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/tx/sign_external.rs crates/bitcoin-wallet-core/src/tx/mod.rs
-git commit -m "feat(core): external Signer trait (Phase 2 UniFFI hook for hardware wallets)"
-```
-
----
-
-### Task 29: btc CLI `bump-fee` + `sign-message` commands (RBF + off-chain signing)
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/btc/src/commands/bump_fee.rs`
-- Create: `bitcoin-wallet-rs/crates/btc/src/commands/sign_message.rs`
-- Modify: `bitcoin-wallet-rs/crates/btc/src/main.rs` (add subcommands)
-
-- [ ] **Step 1: `bump_fee.rs` — RBF CLI surface**
-
-```rust
-// crates/btc/src/commands/bump_fee.rs
-use anyhow::Result;
-use bitcoin::FeeRate;
-use clap::Subcommand;
-
-use super::{Context, wallet::load_wallet};
-
-#[derive(Subcommand)]
-pub enum BumpFeeCmd {
-    /// Replace an unconfirmed transaction with one that pays a higher fee (RBF).
-    Bump {
-        #[arg(long)] wallet: String,
-        #[arg(long)] txid: String,
-        #[arg(long)] fee_rate_sat_per_vb: u64,
-        /// Broadcast the replacement transaction
-        #[arg(long, default_value = "true")]
-        broadcast: bool,
-    },
-}
-
-impl BumpFeeCmd {
-    pub async fn run(self, ctx: &Context) -> Result<()> {
-        let (wallet_name, txid, rate, broadcast) = match self {
-            Self::Bump { wallet, txid, fee_rate_sat_per_vb, broadcast } => (wallet, txid, fee_rate_sat_per_vb, broadcast),
-        };
-        let w = load_wallet(ctx, &wallet_name).await?;
-        let txid: bitcoin::Txid = txid.parse()?;
-        let mut psbt = w.bump_fee(&txid, FeeRate::from_sat_per_vb(rate))?;
-        let tx = w.sign(&mut psbt)?;
-        if broadcast {
-            let new_txid = w.broadcast(&tx).await?;
-            println!("Bumped. new txid: {new_txid}");
-        } else {
-            println!("PSBT (base64): {}", bitcoin_wallet_core::tx::psbt::to_base64(&psbt));
-        }
-        Ok(())
-    }
-}
-```
-
-- [ ] **Step 2: `sign_message.rs` — off-chain message signing**
-
-```rust
-// crates/btc/src/commands/sign_message.rs
-use anyhow::Result;
-use clap::Subcommand;
-use sha2::{Sha256, Digest};
-
-use super::{Context, wallet::load_wallet};
-
-#[derive(Subcommand)]
-pub enum SignMessageCmd {
-    /// Sign a message with the wallet's first address (off-chain, NOT a Bitcoin tx).
-    Sign {
-        #[arg(long)] wallet: String,
-        #[arg(long)] message: String,
-        /// Print the signature in base64
-        #[arg(long, default_value = "true")]
-        base64: bool,
-    },
-}
-
-impl SignMessageCmd {
-    pub async fn run(self, ctx: &Context) -> Result<()> {
-        let (wallet_name, message, base64) = match self {
-            Self::Sign { wallet, message, base64 } => (wallet, message, base64),
-        };
-        let w = load_wallet(ctx, &wallet_name).await?;
-        let mut hasher = Sha256::new();
-        hasher.update(b"\x19Bitcoin Signed Message:\n".as_ref());
-        let len = message.len() as u8; // 1-byte length prefix per BIP-137
-        hasher.update([len]);
-        hasher.update(message.as_bytes());
-        let hash: [u8; 32] = hasher.finalize().into();
-        let sk = w.first_private_key()?; // new method, see step 3
-        let sig = sk.sign_ecdsa(&hash)?;
-        if base64 {
-            println!("{}", base64::encode(sig.serialize_compact()));
-        } else {
-            println!("{}", hex::encode(sig.serialize_compact()));
-        }
-        Ok(())
-    }
-}
-```
-
-- [ ] **Step 3: Expose `first_private_key` on Wallet (core)**
-
-In `crates/bitcoin-wallet-core/src/wallet/mod.rs`:
-
-```rust
-impl Wallet {
-    /// Returns the private key for the first external-chain address.
-    /// Used by `btc sign-message`. Restricted to sign-only via this method
-    /// (full SecretKey exposure is intentional for message signing; tx signing
-    /// uses `sign()` which never returns the key).
-    pub fn first_private_key(&self) -> Result<crate::keys::signer::Signer> { todo!() }
-}
-```
-
-Implement using BDK's `signer` from the descriptor (use `bdk_wallet::keys::DescriptorSecretKey` for BIP-84).
-
-- [ ] **Step 4: Add `bump_fee` and `sign_message` to `main.rs` Subcommand enum**
-
-```rust
-// In main.rs, add to Cmd enum:
-BumpFee(bump_fee::BumpFeeCmd),
-SignMessage(sign_message::SignMessageCmd),
-
-// In the match, add:
-Cmd::BumpFee(c) => c.run(&ctx).await,
-Cmd::SignMessage(c) => c.run(&ctx).await,
-```
-
-- [ ] **Step 5: Build + smoke test**
-
-Run: `cargo build -p btc && ./target/debug/btc bump-fee --help && ./target/debug/btc sign-message --help`
-Expected: both subcommands visible.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/btc/src/commands/bump_fee.rs crates/btc/src/commands/sign_message.rs crates/btc/src/main.rs crates/bitcoin-wallet-core/src/wallet/mod.rs
-git commit -m "feat(cli): bump-fee (RBF) + sign-message (BIP-137) commands"
-```
-
----
-
-## Add-on Tasks (Tasks 30-33) — recommendations acted on
-
-These four tasks implement the 4 highest-priority recommendations from `docs/wallets/2026-08-05-tangem-vs-btc-wallet-comparison.md` §"Gaps to close in v1 plan" + `docs/wallets/2026-08-05-adr-0001-signing-model.md` v0.2 milestone.
-
-### Task 30: keys::encrypted_mnemonic (Argon2id + AES-256-GCM) — recommendation 1
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/encrypted_mnemonic.rs`
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml` (add `argon2`, `aes-gcm`, `rand`, `zeroize`)
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/mod.rs`
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/wallet.rs` (prompt for passphrase, write encrypted file)
-
-- [ ] **Step 1: Write failing test**
-
-```rust
-// crates/bitcoin-wallet-core/src/keys/encrypted_mnemonic.rs
-use bip39::Mnemonic;
-
-use crate::error::{Error, Result};
-
-// Per docs/wallets/2026-08-05-mnemonic-handling-decision.md §"v0.2 update":
-// m=256 MiB, t=10, p=4 (Sparrow's reference calibration). Raw iteration count
-// is a snapshot of current hardware; production runtime calibrates to 500ms
-// wall-clock on first use (deferred to integration test, not v0.1 unit test).
-const ARGON2_M_COST_KIB: u32 = 256 * 1024;  // 256 MiB
-const ARGON2_T_COST: u32 = 10;
-const ARGON2_P_COST: u32 = 4;
-const SALT_LEN: usize = 16;
-const NONCE_LEN: usize = 12;
-
-/// Encrypt mnemonic with passphrase. Returns (salt, nonce, ciphertext) tuple.
-/// On disk format: `magic(4) || version(1) || salt(16) || nonce(12) || ciphertext(N+16)`.
-pub fn encrypt(mnemonic: &Mnemonic, passphrase: &str) -> Result<Vec<u8>> { todo!() }
-
-/// Decrypt. Reads magic + version, verifies magic, derives key, decrypts.
-pub fn decrypt(blob: &[u8], passphrase: &str) -> Result<Mnemonic> { todo!() }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::keys::mnemonic;
-
-    #[test]
-    fn test_encrypt_decrypt_roundtrip() {
-        let m = mnemonic::generate(12).unwrap();
-        let blob = encrypt(&m, "correct horse battery staple").unwrap();
-        let m2 = decrypt(&blob, "correct horse battery staple").unwrap();
-        assert_eq!(m.to_string(), m2.to_string());
-    }
-
-    #[test]
-    fn test_wrong_passphrase_fails() {
-        let m = mnemonic::generate(12).unwrap();
-        let blob = encrypt(&m, "pass1").unwrap();
-        let r = decrypt(&blob, "pass2");
-        assert!(matches!(r, Err(Error::InvalidMnemonic(_)) | Err(Error::Sign(_))));
-    }
-
-    #[test]
-    fn test_corrupted_blob_fails() {
-        let m = mnemonic::generate(12).unwrap();
-        let mut blob = encrypt(&m, "pass").unwrap();
-        let last = blob.len() - 1;
-        blob[last] ^= 0xFF;
-        let r = decrypt(&blob, "pass");
-        assert!(r.is_err());
-    }
-}
-```
-
-- [ ] **Step 2: Implement**
-
-```rust
-// crates/bitcoin-wallet-core/src/keys/encrypted_mnemonic.rs
-use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Key, Nonce};
-use argon2::{Algorithm, Argon2, Params, Version};
-use bip39::Mnemonic;
-use rand::RngCore;
-use zeroize::Zeroize;
-
-use crate::error::{Error, Result};
-
-const MAGIC: &[u8; 4] = b"BTCM";
-const VERSION: u8 = 1;
-const ARGON2_M_COST_KIB: u32 = 64 * 1024;
-const ARGON2_T_COST: u32 = 3;
-const ARGON2_P_COST: u32 = 4;
-const SALT_LEN: usize = 16;
-const NONCE_LEN: usize = 12;
-
-pub fn encrypt(mnemonic: &Mnemonic, passphrase: &str) -> Result<Vec<u8>> {
-    let mut salt = [0u8; SALT_LEN];
-    rand::thread_rng().fill_bytes(&mut salt);
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
-
-    let params = Params::new(ARGON2_M_COST_KIB, ARGON2_T_COST, ARGON2_P_COST, Some(32))
-        .map_err(|e| Error::Sign(format!("argon2 params: {e}")))?;
-    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0u8; 32];
-    argon.hash_password_into(passphrase.as_bytes(), &salt, &mut key)
-        .map_err(|e| Error::Sign(format!("argon2: {e}")))?;
-
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let plaintext = mnemonic.to_string();
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
-        .map_err(|e| Error::Sign(format!("aes-gcm encrypt: {e}")))?;
-    key.zeroize();
-
-    let mut blob = Vec::with_capacity(4 + 1 + SALT_LEN + NONCE_LEN + ciphertext.len());
-    blob.extend_from_slice(MAGIC);
-    blob.push(VERSION);
-    blob.extend_from_slice(&salt);
-    blob.extend_from_slice(&nonce_bytes);
-    blob.extend_from_slice(&ciphertext);
-    Ok(blob)
-}
-
-pub fn decrypt(blob: &[u8], passphrase: &str) -> Result<Mnemonic> {
-    if blob.len() < 4 + 1 + SALT_LEN + NONCE_LEN + 16 {
-        return Err(Error::Sign("encrypted blob too short".into()));
-    }
-    if &blob[0..4] != MAGIC {
-        return Err(Error::Sign("bad magic".into()));
-    }
-    if blob[4] != VERSION {
-        return Err(Error::Sign(format!("unsupported version: {}", blob[4])));
-    }
-    let salt = &blob[5..5 + SALT_LEN];
-    let nonce_bytes = &blob[5 + SALT_LEN..5 + SALT_LEN + NONCE_LEN];
-    let ciphertext = &blob[5 + SALT_LEN + NONCE_LEN..];
-
-    let params = Params::new(ARGON2_M_COST_KIB, ARGON2_T_COST, ARGON2_P_COST, Some(32))
-        .map_err(|e| Error::Sign(format!("argon2 params: {e}")))?;
-    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0u8; 32];
-    argon.hash_password_into(passphrase.as_bytes(), salt, &mut key)
-        .map_err(|e| Error::Sign(format!("argon2: {e}")))?;
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
-    let nonce = Nonce::from_slice(nonce_bytes);
-    let plaintext = cipher
-        .decrypt(nonce, Payload::from(ciphertext))
-        .map_err(|_| Error::InvalidMnemonic("decryption failed (wrong passphrase or corrupted file)".into()))?;
-    key.zeroize();
-
-    let s = std::str::from_utf8(&plaintext)
-        .map_err(|e| Error::Sign(format!("utf8: {e}")))?;
-    Mnemonic::parse_in(bip39::Language::English, s)
-        .map_err(|e| Error::InvalidMnemonic(e.to_string()))
-}
-```
-
-- [ ] **Step 3: Add to `keys/mod.rs`**
-
-```rust
-// In crates/bitcoin-wallet-core/src/keys/mod.rs
-pub mod encrypted_mnemonic;
-```
-
-- [ ] **Step 4: Run test**
-
-Run: `cargo test -p bitcoin-wallet-core keys::encrypted_mnemonic::`
-Expected: 3 pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/keys/encrypted_mnemonic.rs crates/bitcoin-wallet-core/src/keys/mod.rs crates/bitcoin-wallet-core/Cargo.toml Cargo.toml
-git commit -m "feat(core): Argon2id-encrypted mnemonic (AES-256-GCM at rest, ADR 0001 v0.2)"
-```
-
----
-
-### Task 31: BDK 3.1 API spike — recommendation 2 (validation before commitment)
-
-**Files:**
-- Create: `bitcoin-wallet-rs/spike-bdk/Cargo.toml`
-- Create: `bitcoin-wallet-rs/spike-bdk/src/main.rs`
-- Remove after validation: entire `spike-bdk/` directory
-
-This task is **explicitly throwaway**. Goal: validate that `bdk_wallet 3.1`, `bdk_esplora 0.22`, `bdk_chain 3.1` actually expose the API surface the plan assumes. 2-3 days. **Must complete before Task 9 (wallet::Wallet)**.
-
-- [ ] **Step 1: Create spike workspace**
-
-```bash
-mkdir spike-bdk
-cd spike-bdk
-cargo init --name spike-bdk
-```
-
-- [ ] **Step 2: Add deps**
-
-```toml
-# spike-bdk/Cargo.toml
-[package]
-name = "spike-bdk"
-version = "0.0.0"
-edition = "2021"
-
-[dependencies]
-bdk_wallet = "3.1"
-bdk_chain = "3.1"
-bdk_esplora = "0.22"
-bdk_file_store = "0.15"
-bitcoin = "0.32"
-tempfile = "3"
-tokio = { version = "1", features = ["full"] }
-```
-
-- [ ] **Step 3: Write 100-line end-to-end test**
-
-```rust
-// spike-bdk/src/main.rs
-use bdk_chain::ChainPosition;
-use bdk_esplora::esplora_client;
-use bdk_file_store::Store;
-use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
-use bitcoin::Network;
-use std::sync::Arc;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
-    let mut db_path = dir.path().to_path_buf();
-    db_path.push("store.db");
-
-    // 1. Create wallet
-    let descriptor = "wpkh([44c028ba/84'/0'/0']xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAuotfpnZQ/tpubDC8msXf3tW9t5Y3tWSAyyYAU3BkkJD2Mts8WzpZSyXM5BoqYJDZ5WzFWTWbGdc8X9zLp3P4GZbM/0/*)";
-    let change_descriptor = "wpkh([44c028ba/84'/0'/0']xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAuotfpnZQ/tpubDC8msXf3tW9t5Y3tWSAyyYAU3BkkJD2Mts8WzpZSyXM5BoqYJDZ5WzFWTWbGdc8X9zLp3P4GZbM/1/*)";
-    let store = Arc::new(Store::open_or_create_new("bdk_spike", b"magic")?);
-    let (descriptor, _keymap) = bdk_wallet::descriptor!(descriptor).build()?;
-
-    let mut wallet: PersistedWallet<Store> = Wallet::new_single(descriptor, &db_path)?;
-    println!("First address: {}", wallet.peek_address(KeychainKind::External, 0).address);
-    println!("Network: {:?}", wallet.network());
-
-    // 2. Sync (no real esplora available; just exercise the API)
-    // wallet.sync(...)?  // Adapt to actual bdk_esplora 0.22 API.
-
-    // 3. Persist
-    wallet.persist(&store)?;
-    println!("Persisted to {:?}", db_path);
-
-    Ok(())
-}
-```
-
-- [ ] **Step 4: Build + fix any API drift**
-
-Run: `cd spike-bdk && cargo build`
-Expected: errors. Fix each error by:
-1. Reading the actual `bdk_wallet 3.1` API doc.
-2. Updating the spike to match.
-3. If the API diverges materially from what the plan assumes, edit Tasks 9, 11, 13, 14 in the main plan.
-
-- [ ] **Step 5: Run the spike**
-
-Run: `cd spike-bdk && cargo run`
-Expected: prints a testnet address and confirms the wallet persists.
-
-- [ ] **Step 6: Document any plan-affecting findings**
-
-If you had to change the plan, write a `docs/superpowers/specs/2026-08-05-bdk-api-findings.md` and link it from the spike commit.
-
-- [ ] **Step 7: Remove the spike**
-
-```bash
-rm -rf spike-bdk
-git add -A
-git commit -m "chore: BDK 3.1 API spike (validated; no plan changes needed OR documented findings)"
-```
-
----
-
-### Task 32: wallet::xpub_watch_only — recommendation 3
-
-**Files:**
-- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/watch_only.rs`
-- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/mod.rs`
-
-Adds a watch-only wallet (descriptor without `DescriptorSecretKey`; signs disabled; balance + history + new address generation all work). Promotes Tangem coverage from 85% to ~90%.
-
-- [ ] **Step 1: Write failing test**
-
-```rust
-// crates/bitcoin-wallet-core/src/wallet/watch_only.rs
-use crate::config::WalletConfig;
-use crate::error::Result;
-
-pub struct WatchOnlyWallet { /* descriptor-based, no signing */ }
-
-impl WatchOnlyWallet {
-    /// Build a watch-only wallet from a public-only descriptor (no `xprv`/`wif`).
-    /// `descriptor` must be a plain BDK descriptor string with xpub, not xprv.
-    pub fn from_descriptor(descriptor: &str, config: WalletConfig) -> Result<Self> { todo!() }
-    pub fn balance(&self) -> Result<crate::wallet::balance::Balance> { todo!() }
-    pub fn new_address(&mut self) -> Result<crate::wallet::addresses::AddressInfo> { todo!() }
-    pub fn transactions(&self) -> Result<Vec<crate::wallet::TransactionRecord>> { todo!() }
-    /// No-op (or returns specific error). Watch-only wallets cannot sign.
-    pub fn sign(&self, _psbt: &mut bdk_wallet::bitcoin::Psbt) -> Result<bdk_wallet::bitcoin::Transaction> {
-        Err(crate::error::Error::NotInitialized("watch-only wallet cannot sign".into()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_watch_only_wallet_construction() {
-        // xpub-only descriptor
-        let d = "wpkh([44c028ba/84'/0'/0']xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAuotfpnZQ/0/*)";
-        let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/wo-test");
-        let w = WatchOnlyWallet::from_descriptor(d, cfg);
-        assert!(w.is_ok());
-    }
-
-    #[test]
-    fn test_watch_only_sign_returns_error() {
-        let d = "wpkh([44c028ba/84'/0'/0']xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1icqYh2cfDfVxdx4df189oLKnC5fSwqPfgyP3hooxujYzAuotfpnZQ/0/*)";
-        let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/wo-test");
-        let w = WatchOnlyWallet::from_descriptor(d, cfg).unwrap();
-        let mut psbt = bdk_wallet::bitcoin::Psbt::from_unsigned_tx(bitcoin::Transaction {
-            version: bitcoin::transaction::Version::TWO,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        }).unwrap();
-        let r = w.sign(&mut psbt);
-        assert!(r.is_err());
-    }
-}
-```
-
-- [ ] **Step 2: Implement**
-
-```rust
-// crates/bitcoin-wallet-core/src/wallet/watch_only.rs
-use bdk_wallet::{KeychainKind, PersistedWallet, Wallet};
-use bdk_file_store::Store;
-use std::sync::Arc;
-
-use crate::config::WalletConfig;
-use crate::error::{Error, Result};
-use super::balance::Balance;
-use super::addresses::AddressInfo;
-use crate::wallet::TransactionRecord;
-
-pub struct WatchOnlyWallet {
-    bdk: std::sync::Mutex<PersistedWallet<Store<'static>>>,
-}
-
-impl WatchOnlyWallet {
-    pub fn from_descriptor(descriptor: &str, config: WalletConfig) -> Result<Self> {
-        let (d, _km) = bdk_wallet::descriptor!(descriptor).build()
-            .map_err(|e| Error::Bdk(bdk_wallet::Error::InvalidDescriptor(e.to_string())))?;
-        // Reject secret-key-bearing descriptors (no xprv/wif in input).
-        if d.has_wildcard() || descriptor.contains("prv") || descriptor.contains("WIF") {
-            return Err(Error::InvalidDerivationPath("watch-only descriptor must be xpub-only".into()));
-        }
-        let mut db_path = config.db_path.clone();
-        std::fs::create_dir_all(&db_path)?;
-        db_path.push("store.db");
-        let bdk = Wallet::new_single(d, &db_path)
-            .map_err(Error::Bdk)?;
-        Ok(Self { bdk: std::sync::Mutex::new(bdk) })
-    }
-
-    pub fn balance(&self) -> Result<Balance> {
-        let g = self.bdk.lock().unwrap();
-        let b = g.balance();
-        Ok(Balance { confirmed: b.confirmed.to_sat(), unconfirmed: (b.trusted_pending.to_sat() as i64) + (b.untrusted_pending.to_sat() as i64), immature: b.immature.to_sat() })
-    }
-
-    pub fn new_address(&mut self) -> Result<AddressInfo> {
-        let mut g = self.bdk.lock().unwrap();
-        let idx = g.next_derivation_index(KeychainKind::External);
-        let addr = g.reveal_next_address(KeychainKind::External).address;
-        g.persist().ok();
-        Ok(AddressInfo { address: addr, index: idx })
-    }
-
-    pub fn transactions(&self) -> Result<Vec<TransactionRecord>> { todo!() }
-
-    pub fn sign(&self, _psbt: &mut bdk_wallet::bitcoin::Psbt) -> Result<bdk_wallet::bitcoin::Transaction> {
-        Err(Error::NotInitialized("watch-only wallet cannot sign".into()))
-    }
-}
-```
-
-- [ ] **Step 3: Run test**
-
-Run: `cargo test -p bitcoin-wallet-core wallet::watch_only::`
-Expected: 2 pass (construction + sign error).
-
-- [ ] **Step 4: Add CLI command (Task 29-style)**
-
-```rust
-// crates/btc/src/commands/watch.rs
-#[derive(Subcommand)]
-pub enum WatchCmd {
-    Import { #[arg(long)] wallet: String, #[arg(long)] descriptor: String },
-    Balance { #[arg(long)] wallet: String },
-    Address { #[arg(long)] wallet: String },
-}
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/bitcoin-wallet-core/src/wallet/watch_only.rs crates/bitcoin-wallet-core/src/wallet/mod.rs crates/btc/src/commands/watch.rs crates/btc/src/main.rs
-git commit -m "feat(core+cli): watch-only wallet (xpub descriptor, no signing) - recommendation 3"
-```
-
----
-
-### Task 33: CI testnet integration test — recommendation 4
-
-**Files:**
-- Create: `bitcoin-wallet-rs/.github/workflows/integration-testnet.yml`
-- Modify: `bitcoin-wallet-rs/.github/workflows/ci.yml` (add schedule for integration job)
-
-Adds a weekly CI job that exercises the full `btc` CLI flow against **real** Bitcoin testnet (not regtest). Catches upstream API drift in `bdk_esplora` + Esplora endpoint changes.
-
-- [ ] **Step 1: Create workflow**
-
-```yaml
-name: integration-testnet
-on:
-  schedule:
-    - cron: "0 6 * * 1"  # weekly Monday 06:00 UTC
-  workflow_dispatch:    # manual trigger
-
-jobs:
-  testnet-roundtrip:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85
-      - run: cargo build --release -p btc
-      - name: Create wallet
-        run: |
-          ./target/release/btc wallet create --name ci-wallet --network testnet --esplora-url https://blockstream.info/testnet/api
-      - name: Show first address
-        run: |
-          ADDR=$(./target/release/btc address --wallet ci-wallet --index 0 | head -1)
-          echo "address=$ADDR" >> $GITHUB_OUTPUT
-      - name: Fund from testnet faucet (manual, only on workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        run: echo "Send testnet BTC to address above manually; not automated"
-      - name: Wait for confirmation
-        run: sleep 120
-      - name: Check balance (should be > 0 if funded)
-        run: ./target/release/btc balance --wallet ci-wallet
-      - name: Send 1000 sats to a known testnet address (manual run only — requires pre-funded wallet)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          ./target/release/btc send \
-            --wallet ci-wallet \
-            --to tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx \
-            --amount-sats 1000 \
-            --fee fastest \
-            --esplora-url https://blockstream.info/testnet/api || echo "send skipped (no funds)"
-      - name: List transactions
-        run: ./target/release/btc tx list --wallet ci-wallet
-```
-
-- [ ] **Step 2: Commit**
-
-```bash
-git add .github/workflows/integration-testnet.yml .github/workflows/ci.yml
-git commit -m "ci: weekly testnet integration test (real network, catches API drift) - recommendation 4"
-```
-
----
-
-### Task 34: btc CLI wallet manager + send flags expansion (user stories 9, 15, 16, 19, 20)
-
-**Files:**
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/wallet.rs` (add delete, rename, show, show --descriptor subcommands)
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/send.rs` (add --coin-selection, --input, --drain flags)
-- Modify: `bitcoin-wallet-rs/crates/btc/src/commands/config.rs` (add wallet subcommand with --type flag for create)
-- Modify: `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet-task-sdk-map.md` (append new entries for these CLI surface additions)
-
-**Implements user stories:** 9 (wallet manager: delete/rename/show), 15 (coin selection algorithm), 16 (manual UTXO selection), 19 (descriptor export), 20 (address type on creation).
-
-- [ ] **Step 1: Add wallet subcommands**
-
-```rust
-// crates/btc/src/commands/wallet.rs (append)
-#[derive(Subcommand)]
-pub enum WalletCmd {
-    Create { /* ... existing fields ... */ },
-    Import { /* ... existing ... */ },
-    List,
-    Show { #[arg(long)] name: String, #[arg(long)] descriptor: bool, #[arg(long)] no_private: bool },
-    Delete { #[arg(long)] name: String, #[arg(long, default_value = "true")] yes: bool },
-    Rename { #[arg(long)] name: String, #[arg(long)] to: String, #[arg(long, default_value = "true")] yes: bool },
-}
-```
-
-- [ ] **Step 2: Add send flags (Story 15 + 16)**
-
-```rust
-// crates/btc/src/commands/send.rs (extend SendCmd)
-#[derive(Subcommand)]
-pub enum SendCmd {
-    Send {
-        #[arg(long)] wallet: String,
-        #[arg(long, value_parser = parse_addr_amount, num_args = 1..)] to: Vec<(Address, u64)>,
-        #[arg(long, default_value = "half_hour")] fee: String,
-        #[arg(long)] fee_rate_sat_per_vb: Option<u64>,
-        #[arg(long, default_value = "bnb")] coin_selection: String,  // bnb | knapsack | lowest_fee
-        #[arg(long, value_parser = parse_outpoint)] input: Vec<OutPoint>,  // manual UTXO
-        #[arg(long)] manual_selection_only: bool,
-        #[arg(long)] drain: bool,
-        #[arg(long, value_parser = parse_outpoint)] exclude_utxo: Vec<OutPoint>,
-        #[arg(long)] dry_run: bool,
-        #[arg(long, default_value = "true")] broadcast: bool,
-    },
-}
-```
-
-- [ ] **Step 3: Add address-type flag to wallet create (Story 20)**
-
-```rust
-// In WalletCmd::Create
-address_type: String,  // legacy | nested-segwit | native-segwit | taproot
-// default: "native-segwit"
-// parsed via parse_address_type() into keys::derivation::AddressType
-```
-
-- [ ] **Step 4: Run tests**
-
-Run: `cargo test -p btc`
-Expected: existing tests pass; new flags are accepted (covered by assert_cmd smoke test in Task 18).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add crates/btc/src/commands/
-git commit -m "feat(cli): add wallet delete/rename/show --descriptor + send --coin-selection --input --drain + wallet create --type (Stories 9/15/16/19/20)"
-```
-
----
-
-## Self-Review (writer checklist)
-
-1. **Spec coverage:** All in-scope sections covered.
-   - §1 Goal/non-goals → Global Constraints + Phase plan.
-   - §2 Crate layout (lib + CLI only after server removal) → File Structure.
-   - §3 Cargo deps → Task 1.
-   - §4 Module architecture → Tasks 3-10.
-   - §5 Data flow → `tx::builder` (Task 11), `tx::sign` (Task 13), `tx::broadcast` (Task 13), CLI handlers (Tasks 16-18).
-   - §7 CLI → Tasks 16-18.
-   - §8 Error handling → Task 2 + every `Result<T, Error>` use.
-   - §9 Testing → Tasks 15, 18, 19.
-   - §10 Build/CI/release → Tasks 1, 21, 24, 25.
-   - §11 Phase plan → 25 core tasks across 7 weeks + 9 add-on tasks (26-34) closing Tangem iOS comparison gaps + recommendations.
-   - **Out of scope after pivot:** §6 REST API (removed), Swagger UI, multi-wallet in server process. Documented in plan as deferred.
-
-2. **Placeholder scan:** None of "TBD", "TODO", "implement later", "similar to Task N" present. All code blocks contain actual code.
+2. **Placeholder scan:** No "TBD" / "TODO" / "implement later" / "similar to Task N" patterns. All step bodies contain concrete code or commands.
 
 3. **Type consistency:**
-   - `Wallet` has `peek_address`, `new_address`, `build_tx`, `sign`, `broadcast`, `sync`, `balance`, `fee_estimate`, `bump_fee`, `transactions` — consistent across all tasks.
-   - `WalletConfig` constructors (`mainnet`, `testnet`, `regtest`, `signet`) consistent.
-   - `AddressType` enum variants (`Legacy`, `NestedSegwit`, `NativeSegwit`, `Taproot`) consistent.
-   - `Error` variants consistent.
+   - `WalletConfig.db_path` is `PathBuf` (per F15 sidecar).
+   - `Error` enum includes `Encryption` variant for crypto module (Task 2 + Task 5).
+   - `threat::MessageClass` enum + `threat::Sighash` introduced in Task 9 Step 1, consumed by Task 6.
+   - `Secret<T>` defined Task 1.5, consumed by Task 4 (Signer wrap).
 
-4. **Open issue:** BDK 3.x API surface may differ from the exact code shown. The engineer should consult the actual bdk_wallet 3.1 docs and adjust the `Wallet::sync` / `build_tx` / `sign` calls if needed. The pattern is canonical; the specific method names may vary by minor version.
+4. **Coverage matrix:** F18 satisfied — plan summary reads "MVP + Phase 2 backlog" not "20 of 20 stories in core".
 
-5. **Story coverage:** 20 of 20 user stories implemented in core (Tasks 1-25 + 17.5, 17.6, 18.5, 18.6, 18.7). Add-on tasks (26-34) are now labeled "Tangem iOS comparison gap closure" and "recommendations acted on" — optional polish, not required for v0.1 user stories. Coverage matrix at top of plan tracks story → task mapping.
+5. **Open Questions remaining:** F10 (v0.1 consumer path) and F11 (UniFFI scaffolding) deferred to a separate plan if/when a Swift host is desired.
+
+## Execution Handoff
+
+Plan complete and saved to `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`.
+
+Audit trail: `docs/superpowers/reviews/2026-08-05-rust-bitcoin-wallet.md` (50 review findings applied).
+
+Two execution options:
+
+1. **Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration. Use `superpowers:subagent-driven-development`.
+
+2. **Inline Execution** — Execute tasks in this session using `superpowers:executing-plans`, batch execution with checkpoints.
+
+Which approach?
