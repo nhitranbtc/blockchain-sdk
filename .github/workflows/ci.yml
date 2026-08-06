@@ -45,8 +45,13 @@ jobs:
       - name: Test
         working-directory: rust-wallet-app
         run: cargo test --workspace
-      - name: Geiger (unsafe audit)
+      - name: cargo-deny
         working-directory: rust-wallet-app
         run: |
-          cargo install cargo-geiger --locked
-          cargo geiger --workspace
+          cargo install cargo-deny --locked
+          cargo deny check
+      - name: cargo-audit
+        working-directory: rust-wallet-app
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
