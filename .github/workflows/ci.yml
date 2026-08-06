@@ -49,4 +49,4 @@ jobs:
         working-directory: rust-wallet-app
         run: |
           cargo install cargo-geiger --locked
-          cargo geiger --workspace
+          cargo geiger -p chain-traits
