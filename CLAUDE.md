@@ -11,9 +11,9 @@ stablecoin integration, wallet security comparisons.
 
 Two coexisting layers:
 - **Docs/research layer** (`docs/`) — pure prose, markdown only
-- **Code layer** (`rust-wallet-app/` for v0.2 umbrella, `bitcoin-wallet-rs/` for v0.1) — Rust workspace, git-tracked, executable
+- **Code layer** (`rust-wallet-app/`) — Rust workspace containing `bitcoin-wallet-core/` (v0.1 library) + `btc/` (v0.1 CLI) + `chain-traits/` (umbrella v0.2 scaffold, exists)
 
-Current execution target: v0.1 `bitcoin-wallet-rs/` per active plan.
+Current execution target: v0.1 `bitcoin-wallet-core` library inside `rust-wallet-app/crates/` per active plan.
 
 ## Task display rule
 
@@ -137,7 +137,7 @@ fix/left-rail-master-toggle             success
 
 ## Implementation workflow (rust-bitcoin-wallet v0.1)
 
-**Direction (v0.1):** Bitcoin-only MVP. Build `bitcoin-wallet-core` Rust library + `btc` CLI per merged plan. Future v0.2 adds multi-chain umbrella (`rust-wallet-app/`) consuming v0.1 as cargo path dep.
+**Direction (v0.1):** Bitcoin-only MVP. Build `rust-wallet-app/crates/bitcoin-wallet-core/` (library) + `rust-wallet-app/crates/btc/` (CLI) per merged plan. The umbrella `rust-wallet-app/` workspace already exists (scaffolded). `chain-traits/` (umbrella trait) exists; future v0.2 expands it for ETH/SOL.
 
 **Active plan:** [`docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`](docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md) — review-cleaned canonical plan (50 doc-review findings applied, MVP scope). 10 tasks: Task 0 (threat model) + Tasks 1-9 (scaffold + crypto + wallet).
 
@@ -246,12 +246,16 @@ Pauses required: commit (per never-auto-commit).
 1. TDD cycle produces red→green tests
 2. `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` (combined)
 3. **verification-gate** — forces real cargo output before any "done" claim (current plugin: `superpowers:verification-before-completion`)
-4. **PAUSE for user commit approval** (per `never-auto-commit` rule)
-5. **commit-push-pr** — combined commit + push + open PR (current plugin: `commit-commands:commit-push-pr`)
-6. **pr-review** — full diff audit (current plugin: `pr-review-toolkit:code-review`)
-7. Fix loop max 3 rounds
-8. Merge + close issue + update ledger
-9. Drift update (if implementation differs from plan) — update plan + spec in same PR
+4. **cargo-deny** — license + advisory + bans check (requires `deny.toml` at workspace root)
+5. **cargo-audit** — security CVE check (requires `Cargo.lock`)
+6. **PAUSE for user commit approval** (per `never-auto-commit` rule)
+7. **commit-push-pr** — combined commit + push + open PR (current plugin: `commit-commands:commit-push-pr`)
+8. **pr-review** — full diff audit (current plugin: `pr-review-toolkit:code-review`)
+9. Fix loop max 3 rounds
+10. Merge + close issue + update ledger
+11. Drift update (if implementation differs from plan) — update plan + spec in same PR
+
+**Note:** Geiger (unsafe audit) is disabled for MVP — `rust-wallet-app/` is a virtual manifest. Re-add when codebase grows beyond MVP scope or when bitcoin-wallet-core/ lands.
 
 ### Ledger
 
