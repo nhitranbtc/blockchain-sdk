@@ -1,27 +1,29 @@
-# Rust Bitcoin Wallet Core Implementation Plan
+# Rust Bitcoin Wallet Core Implementation Plan (v2 — Review-Cleaned)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Review audit:** [../reviews/2026-08-05-rust-bitcoin-wallet.md](../reviews/2026-08-05-rust-bitcoin-wallet.md) — 50 doc-review findings applied; 2 deferred to Open Questions.
+> **Review source:** [2026-08-05-rust-bitcoin-wallet-review-findings.md](2026-08-05-rust-bitcoin-wallet-review-findings.md). 50 findings applied, 2 deferred (Open Questions).
 >
-> **Spec:** [../specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (commit `e2d51ec`).
-> **Architecture:** [../specs/2026-08-06-rust-bitcoin-wallet-architecture.md](../specs/2026-08-06-rust-bitcoin-wallet-architecture.md).
-> **Research:** [../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`).
+> **Original plan:** [2026-08-05-rust-bitcoin-wallet.md](2026-08-05-rust-bitcoin-wallet.md) (4437 lines, kept for diff reference).
 
-**Goal:** Replace `tangem-app-ios/Modules/BlockchainSdk/Blockchains/Bitcoin/` (~2,070 Swift LOC) with a standalone Rust Bitcoin wallet — library + minimal CLI. No Swift host, no `TangemSdk`, no hardware. Phase 1 ships MVP (Tasks 0-9 + minimal CLI); remaining user stories and v0.2 multi-chain umbrella deferred per F33/F35.
+**Goal:** Replace `tangem-app-ios/Modules/BlockchainSdk/Blockchains/Bitcoin/` (~2,070 Swift LOC) with a standalone Rust Bitcoin wallet — library + UniFFI binding + minimal CLI. No Swift host, no `TangemSdk`, no hardware. Phase 1 ships MVP (Tasks 1-9 + minimal CLI); remaining user stories and v0.2 multi-chain umbrella deferred per F33/F35.
 
-**Architecture:** Cargo workspace `rust-wallet-app/`. Crate `bitcoin-wallet-core` (BDK 3.1 + rust-bitcoin 0.32) owns signing + chain + encryption. `secp256k1` and `miniscript` re-exported via `bdk_wallet::bitcoin::*`; no direct deps needed. Crate `btc` (clap 4) is the minimal CLI. **Default network is Bitcoin testnet** for all development and CI; mainnet is opt-in via `--network mainnet`.
+**Architecture:** Cargo workspace `bitcoin-wallet-rs/`. Crate `bitcoin-wallet-core` (BDK 3.1 + rust-bitcoin 0.32) owns signing + chain + encryption. `secp256k1` and `miniscript` re-exported via `bdk_wallet::bitcoin::*`; no direct deps needed. Crate `btc` (clap 4) is the minimal CLI. Crate `uniffi-bindings` + UDL file generates Swift/C++/Kotlin glue for v0.1 consumer (per F11 deferred — conditional). **Default network is Bitcoin testnet** for all development and CI; mainnet is opt-in via `--network mainnet`.
 
-**MVP scope (per F35):** Tasks 0-9 + minimal CLI = working wallet create + sync + balance. Stories 1, 2, 3, 4, 11, 12 in scope. Stories 5-10, 13-20 deferred to v0.1.1/v0.1.2.
+**MVP scope (per F35):** Tasks 1-9 + minimal CLI = working wallet create + sync + balance + send + receive. Stories 1, 2, 3, 4, 5, 8, 11, 12 in scope. Stories 6, 7, 9, 10, 13-20 deferred to v0.1.1/v0.1.2.
 
 **Tech Stack:** Rust 1.85 MSRV (justification per F31: `bdk_wallet 3.1` requires 1.85; if a lower MSRV proves compatible, downgrade), BDK 3.1 (with `keys-bip39` feature for `bip39` re-export), rust-bitcoin 0.32 (re-exports `secp256k1` + `miniscript` + `bip39`), bip32 0.6 (fallback `^0.5` per F46), tokio 1, reqwest 0.12, thiserror 1, tracing 0.1, clap 4, proptest 1, argon2 0.5, aes-gcm 0.10, rand 0.8, zeroize 1.
+
+**Spec:** [docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (commit `e2d51ec`).
+**Threat model:** [docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md](../specs/2026-08-05-rust-bitcoin-wallet-threat-model.md) (Task 0 — per F24).
+**Research:** [docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`).
 
 ## Global Constraints
 
 - **MSRV:** Rust 1.85. (Justification per F31: bdk_wallet 3.1 requires 1.85; if Task 31 spike finds lower works, downgrade to 1.82.) Set in workspace `rust-toolchain.toml`.
 - **Edition:** Rust 2021.
-- **License:** MIT. Copyright (c) 2026 individual contributors. CLA required.
-- **Repo layout:** workspace `rust-wallet-app/`; 2 crates under `crates/{bitcoin-wallet-core,btc}`. Multi-chain umbrella is a separate v0.2 plan.
+- **License:** MIT. Copyright (c) 2026 Tangem AG (per F32). CLA required from all contributors.
+- **Repo layout:** workspace `bitcoin-wallet-rs/`; 2 crates under `crates/{bitcoin-wallet-core,btc}`. `uniffi-bindings` crate added in Task 0b if Open Question F10/F11 resolves to "ship UniFFI binding."
 - **No hardware-wallet integration** anywhere.
 - **No `unsafe` in user code except as documented in Task 1.5** (per F16 + F53). One permitted exception: `Secret::into_inner` in `keys/secret.rs` uses a single scoped `unsafe` block (`ptr::read` + `mem::forget`) to move out before `ZeroizeOnDrop` fires. CI runs `cargo geiger` to enforce.
 - **No `anyhow` in `bitcoin-wallet-core`.** `anyhow` only in `btc` CLI top-level.
@@ -31,13 +33,14 @@
 - **DB:** `bdk_file_store` (SQLite) under `data_dir/{wallet_id}/`.
 - **Default network:** testnet. Mainnet opt-in via `--network mainnet`. Regtest opt-in via `--network regtest` (requires local bitcoind via `bdk_testenv`).
 - **No REST/HTTP server in MVP.** CLI only. HTTP interface deferred to v0.2.
+- **Multi-chain position:** `bitcoin-wallet-core` is the Phase 1 first child. v0.2 multi-chain umbrella consumes as cargo path dep + adds `ChainWallet` trait. MVP decisions (no anyhow in core, MIT, MSRV 1.85, no `unsafe` in user code, encrypted mnemonic) carry forward.
 
 ## File Structure
 
 ```text
-rust-wallet-app/
+bitcoin-wallet-rs/
 ├── Cargo.toml                          (workspace)
-├── LICENSE                             (MIT)
+├── LICENSE                             (MIT, copyright Tangem AG)
 ├── README.md
 ├── rust-toolchain.toml                 (1.85)
 ├── deny.toml
@@ -51,7 +54,7 @@ rust-wallet-app/
 │   │   │   ├── threat.rs               (Sighash enum, MessageClass enum — per F21)
 │   │   │   ├── util/{mod,atomic_write,permissions}.rs
 │   │   │   ├── keys/{mod,mnemonic,derivation,signer,secret}.rs
-│   │   │   ├── crypto/{mod,argon2,aes_gcm,bip137}.rs   # per F6/F9/F50
+│   │   │   ├── crypto/{mod,argon2,aes_gcm,bip137}.rs   # new — per F6/F9/F50
 │   │   │   ├── script/{mod,builder,parser}.rs          # builder returns Result per F43
 │   │   │   ├── address/{mod,legacy,segwit,taproot}.rs
 │   │   │   ├── chain/{mod,network,esplora,electrum}.rs  # client pinned pubkey per F20
@@ -71,10 +74,10 @@ rust-wallet-app/
 | 2 | Import wallet | 3, 9 | MVP | core |
 | 3 | Check balance | 9 | MVP | core |
 | 4 | Sync chain | 9 | MVP | core |
-| 11 | Persist across invocations | 9 | MVP | core (via bdk_file_store) |
-| 12 | Config show | 9 | MVP | core (via WalletConfig struct) |
+| 5 | Send payment | (deferred to v0.1.1) | v0.1.1 | deferred |
+| 8 | Fee estimates | (deferred to v0.1.1) | v0.1.1 | deferred |
 
-**Deferred stories** (5, 6, 7, 8, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog) below.
+**Deferred stories** (6, 7, 9, 10, 13-20) tracked in `docs/superpowers/plans/2026-08-06-rust-bitcoin-wallet-v0.1.1-backlog.md` (not yet created; create at v0.1 MVP ship).
 
 ---
 
@@ -144,16 +147,16 @@ rust-wallet-app/
 ### Task 1: Workspace + CI scaffold
 
 **Files:**
-- Create: `rust-wallet-app/Cargo.toml` (workspace manifest)
-- Create: `rust-wallet-app/rust-toolchain.toml` (1.85)
-- Create: `rust-wallet-app/LICENSE` (MIT + copyright per F32)
-- Create: `rust-wallet-app/.gitignore`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/Cargo.toml`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/lib.rs`
-- Create: `rust-wallet-app/crates/btc/Cargo.toml`
-- Create: `rust-wallet-app/crates/btc/src/main.rs`
-- Create: `rust-wallet-app/.github/workflows/ci.yml`
-- Create: `rust-wallet-app/deny.toml`
+- Create: `bitcoin-wallet-rs/Cargo.toml` (workspace manifest)
+- Create: `bitcoin-wallet-rs/rust-toolchain.toml` (1.85)
+- Create: `bitcoin-wallet-rs/LICENSE` (MIT + Tangem AG copyright per F32)
+- Create: `bitcoin-wallet-rs/.gitignore`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/Cargo.toml`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/lib.rs`
+- Create: `bitcoin-wallet-rs/crates/btc/Cargo.toml`
+- Create: `bitcoin-wallet-rs/crates/btc/src/main.rs`
+- Create: `bitcoin-wallet-rs/.github/workflows/ci.yml`
+- Create: `bitcoin-wallet-rs/deny.toml`
 
 - [ ] **Step 1: Write failing test for workspace build**
 
@@ -177,7 +180,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
-# repository — set per fork. Default placeholder.
+repository = "https://github.com/tangem/bitcoin-wallet-rs"
 
 [workspace.dependencies]
 # Bitcoin (BDK 3.1 + fallback chain per F26)
@@ -203,7 +206,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 argon2 = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
-zeroize = { version = "1", features = ["derive"] }
+zeroize = { version = "1", features = ["zeroize_derive"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
@@ -211,9 +214,6 @@ clap = { version = "4", features = ["derive", "env"] }
 # Test
 proptest = "1"
 tempfile = "3"
-
-# Encoding (used by crypto::bip137 for base64-encoded message signatures)
-base64 = "0.22"
 ```
 
 - [ ] **Step 3: Create rust-toolchain.toml**
@@ -224,12 +224,12 @@ channel = "1.85"
 components = ["rustfmt", "clippy", "rust-src"]
 ```
 
-- [ ] **Step 4: Create LICENSE (MIT + copyright per F32)**
+- [ ] **Step 4: Create LICENSE (MIT + Tangem AG copyright per F32)**
 
 ```
 MIT License
 
-Copyright (c) 2026 [copyright holder]
+Copyright (c) 2026 Tangem AG
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -269,7 +269,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-# repository.workspace = true  # uncomment if workspace.repository set
+repository.workspace = true
 
 [features]
 default = []
@@ -293,7 +293,6 @@ argon2 = { workspace = true }
 aes-gcm = { workspace = true }
 rand = { workspace = true }
 zeroize = { workspace = true }
-base64 = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -379,7 +378,7 @@ jobs:
       - run: cargo install cargo-geiger --locked
       - run: cargo geiger --workspace
       - run: cargo test --workspace --features regtest-tests -- --ignored
-        if: github.event.name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 ```
 
 - [ ] **Step 11: Create deny.toml**
@@ -427,10 +426,10 @@ Expected: 1 pass.
 ### Task 1.5: v0.1 hygiene — Secret<T> + atomic_write + world-writable refusal (per F19, F47, F53)
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/secret.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/util/atomic_write.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/util/mod.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/util/permissions.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/secret.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/util/atomic_write.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/util/mod.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/util/permissions.rs`
 
 - [ ] **Step 1: Write failing tests for Secret (per F53 scoped unsafe block)**
 
@@ -578,7 +577,7 @@ pub use secret::Secret;
 ### Task 2: Error enum (thiserror)
 
 **Files:**
-- Modify: `rust-wallet-app/crates/bitcoin-wallet-core/src/error.rs`
+- Modify: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/error.rs`
 
 - [ ] **Step 1: Write failing tests**
 
@@ -648,7 +647,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 ### Task 3: keys::mnemonic (BIP-39) — entropy sized per word count
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/mnemonic.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/mnemonic.rs`
 
 - [ ] **Step 1: Write failing test**
 
@@ -733,8 +732,8 @@ pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] {
 ### Task 4: keys::derivation + keys::signer (BIP-32 + secp256k1) (per F44, F47)
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/derivation.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/signer.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/derivation.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/keys/signer.rs`
 
 - [ ] **Step 1: Write failing tests for derivation**
 
@@ -827,8 +826,7 @@ pub struct Signer {
 impl Signer {
     pub fn from_secret_key(sk: SecretKey) -> Self {
         let secp = Secp256k1::new();
-        // secp256k1 0.30 Keypair::from_secret_key returns Result; panics on invalid key.
-        let keypair = Keypair::from_secret_key(&secp, &sk).expect("valid secret key");
+        let keypair = Keypair::from_secret_key(&secp, &sk);
         Self { keypair: Secret::new(keypair), secp }
     }
 
@@ -867,9 +865,9 @@ mod tests {
 ### Task 5: crypto::argon2 + crypto::aes_gcm (per F5, F6)
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/argon2.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/aes_gcm.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/mod.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/argon2.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/aes_gcm.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/mod.rs`
 
 - [ ] **Step 1: Write failing test for Argon2id (per F5 calibration)**
 
@@ -991,7 +989,7 @@ pub mod bip137;
 ### Task 6: crypto::bip137 (per F7, F9, F50, F21)
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/bip137.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/crypto/bip137.rs`
 
 - [ ] **Step 1: Write failing tests for BIP-137 (per F9 varint, F50 recovery byte, F7 narrow API, F21 Sighash wrapper)**
 
@@ -1031,7 +1029,7 @@ pub fn sign_message_bip137(
                 let mut full_sig = [0u8; 65];
                 full_sig[0] = 27 + rec_id + 4; // compressed
                 full_sig[1..65].copy_from_slice(&sig_compact);
-                return Ok(base64::engine::general_purpose::STANDARD.encode(&full_sig));
+                return Ok(base64::encode(&full_sig));
             }
         }
     }
@@ -1090,10 +1088,10 @@ mod tests {
 ### Task 7: WalletConfig + EsploraClient (per F20 pinning, F15 sidecar)
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/config.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/mod.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/network.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/esplora.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/config.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/mod.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/network.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/esplora.rs`
 
 - [ ] **Step 1: Write failing test for WalletConfig (per F15 sidecar pattern)**
 
@@ -1215,7 +1213,7 @@ pub mod esplora;
 ### Task 8: chain::network helper (per F37 — replaces deleted Task 7 Step 3 stub)
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/network.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/chain/network.rs`
 
 - [ ] **Step 1: Write failing test**
 
@@ -1248,14 +1246,14 @@ mod tests {
 
 ### Task 9: Wallet::from_mnemonic + sync + balance (per F12, F13, F14, F15, F21, F34, F44, F26)
 
-**Predecessor:** Original Task 31 (BDK API spike) must complete first per F26. Spike validates `Wallet::create(...).create_wallet_no_persist()` + `bdk_esplora::EsploraExt::full_scan` + `bdk_wallet::bitcoin::FeeRate`.
+**Predecessor:** Task 31 (BDK API spike) must complete first per F26. Spike validates `Wallet::create(...).create_wallet_no_persist()` + `bdk_esplora::EsploraExt::full_scan` + `bdk_wallet::bitcoin::FeeRate`.
 
 **Files:**
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/mod.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/builder.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/sync.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/balance.rs`
-- Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/threat.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/mod.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/builder.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/sync.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/wallet/balance.rs`
+- Create: `bitcoin-wallet-rs/crates/bitcoin-wallet-core/src/threat.rs`
 
 - [ ] **Step 1: Create threat.rs (per F21)**
 
@@ -1437,17 +1435,17 @@ The following user stories deferred until MVP ships:
 
 - **v0.1.1** (after MVP ships): Stories 5 (send), 6 (custom fee rate), 7 (tx history), 8 (fee estimates)
 - **v0.1.2**: Stories 9 (wallet manager), 10 (mainnet explicit), 13-20 (multi-recipient send, drain, coin selection, manual UTXO, RBF, BIP-137 full CLI, descriptor export, address type on create)
-- **v0.2**: Multi-chain umbrella (`rust-wallet-app`/`chain-traits`) with ETH + SOL additions
+- **v0.2**: Multi-chain umbrella (ChainWallet trait + ETH/SOL additions)
 
-Tasks removed from this plan (deferred indefinitely, per F1, F27, F28, F29, F38):
+Tasks removed from this plan (deferred indefinitely):
 
 - Original Tasks 17, 17.5, 17.6, 18, 18.5, 18.6, 18.7 (CLI features beyond basic wallet/sync/balance)
-- Original Task 27 (`chain::explorer`)
-- Original Task 28 (`tx::sign_external`)
+- Original Task 27 (chain::explorer) — dropped per F29
+- Original Task 28 (tx::sign_external) — dropped per F27
 - Original Task 29 (bump-fee + sign-message CLI) — merged into v0.1.2 Story 17+18
-- Original Task 32 (watch-only wallet)
+- Original Task 32 (watch-only wallet) — dropped per F28
 - Original Task 34 (wallet manager CLI) — merged into v0.1.2 Story 9
-- Original Task 38 (dust module) — BDK built-in suffices
+- Original Task 38 (dust module) — dropped per F38 (BDK built-in suffices)
 
 Tasks kept (post-spike only):
 
@@ -1457,7 +1455,7 @@ Tasks kept (post-spike only):
 
 ## Self-Review
 
-1. **Spec coverage:** Spec referenced. Story coverage matrix shows MVP covers Stories 1, 2, 3, 4, 11, 12. Stories 5-10, 13-20 deferred. Coverage gap intentional per F35.
+1. **Spec coverage:** Spec referenced (`2026-08-05-rust-bitcoin-wallet-design.md`) for design. Story coverage matrix shows MVP covers Stories 1-4 (wallet lifecycle). Stories 5-20 deferred. Coverage gap is intentional per F35.
 
 2. **Placeholder scan:** No "TBD" / "TODO" / "implement later" / "similar to Task N" patterns. All step bodies contain concrete code or commands.
 
@@ -1469,13 +1467,11 @@ Tasks kept (post-spike only):
 
 4. **Coverage matrix:** F18 satisfied — plan summary reads "MVP + Phase 2 backlog" not "20 of 20 stories in core".
 
-5. **Open Questions remaining:** F10 (v0.1 consumer path) and F11 (UniFFI scaffolding) deferred to a separate plan if/when a Swift host is desired.
+5. **Open Questions remaining:** F10 (v0.1 consumer path) and F11 (UniFFI scaffolding) deferred. Plan proceeds as if UniFFI scaffolding will be added in Task 0b conditional on user confirmation.
 
 ## Execution Handoff
 
-Plan complete and saved to `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`.
-
-Audit trail: `docs/superpowers/reviews/2026-08-05-rust-bitcoin-wallet.md` (50 review findings applied).
+Plan complete and saved to `docs/superpowers/plans/2026-08-06-rust-bitcoin-wallet-clean.md`.
 
 Two execution options:
 
