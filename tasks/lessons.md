@@ -125,13 +125,41 @@ before commit.
 **Rule**:
 
 - **Issue body** = concise status tracker. Checkboxes for steps, brief drift summary, acceptance criteria, link to PR. Stays readable at-a-glance across many issues.
-- **PR body** = detailed analysis when there's a fix worth documenting. Before/after tables, severity, score delta, pros/cons, main points. Carries the rationale reviewers need.
-- When a fix happens mid-merge (e.g. security review post-push), the detailed before/after table goes in the **PR body**, not the issue body. Update PR via `gh pr edit`; simplify issue body.
+- **PR body** = detailed analysis when there's a fix worth documenting. Before/after table with explicit trade-offs (not "pros/cons"). Carries the rationale reviewers need.
+- When a fix happens mid-merge (e.g. security review post-push), the detailed table goes in the **PR body**, not the issue body. Update PR via `gh pr edit`; simplify issue body.
 
 **Why**: PRs are reviewed by humans reading code; issues are tracking artifacts that get archived. Long-lived rationale lives where people read once (PR); current state lives where people check often (issue). Detailed analysis in an issue body bloats every list/search result and obscures the checklist.
 
-**Apply**:
+**Apply — required PR table schema:**
 
-- Any PR with a non-trivial fix (drift, security, refactor) → PR body gets a before/after table with: severity, file:line, issue description, before code/behavior, after code/behavior, pros, cons, score (1-10) before/after, and main points.
-- Issue body stays as checklist + 1-line drift summary + PR link.
-- Per-trigger reminder: when automated review (security / pr-review / etc.) flags findings after push, the fix-forward PR is the place for the table; the issue is just "PR #N fixes it".
+| Column | Content |
+| --- | --- |
+| `#` | finding number |
+| `Severity` | CRITICAL/HIGH/MEDIUM/LOW (or N/A for non-fix rows) |
+| `File:line` | pin to current code lines after fix, OR label "(before-fix commit `<sha>`)" — never blank, never vague |
+| `Issue` | one-sentence root cause |
+| `Before` | code/behavior pre-fix (link to before-commit if applicable) |
+| `After` | code/behavior post-fix (link to lines in PR) |
+| `Trade-off` | REQUIRED — costs (LOC delta, Unix-only, API stability, behavior delta, test coverage gap) — not just benefits |
+
+Plus, after the table:
+
+- **Test gaps**: any code path in the fix that lacks a test. Name the path + line. Required.
+- **Migration impact**: any behavior change visible to callers. If API is unchanged but behavior is stricter, document. Required for security/permissive-related fixes.
+- **Per-dimension verdict**: PASS / PARTIAL / FAIL with explicit rubric per dimension:
+  - Correctness (plan + spec compliance)
+  - Security (threat-model coverage)
+  - Test coverage (happy path + N negative cases)
+  - Code simplicity (karpathy §2)
+  No single overall score — let reader average. Drop the "5.5 → 8.0" headline number; it's theater without weights.
+- **Main points** (numbered list): trigger for the fix, plan-compliance vs hardening distinction, threat-model mapping, drift-from-plan to record.
+
+Anti-patterns to avoid:
+
+- "Pros / Cons" columns — conflate fix-correctness with code quality. Replace with single Trade-off column.
+- 1-10 score scale with 0.5 precision — no rubric defines 6 vs 7. Use PASS/PARTIAL/FAIL.
+- Single overall score — averages hide dimension-specific failure.
+- Burying costs in prose — every cost goes in Trade-off column.
+- Skipping test-gap callout — if you wrote code without a test, name the missing test.
+
+Apply this schema to: drift fixes, security findings, refactors, breaking changes. Skip for trivial typo/style PRs (one-line body is fine).
