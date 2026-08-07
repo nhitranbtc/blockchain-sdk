@@ -15,6 +15,19 @@ Two coexisting layers:
 
 Project-local vocabulary and threat-model hard rules live in [`rust-wallet-app/CONTEXT.md`](rust-wallet-app/CONTEXT.md). Read before code work.
 
+## Agent skills
+
+- **Tracker:** GitHub via `gh` — `docs/agents/issue-tracker.md`
+- **Triage labels:** canonical — `docs/agents/triage-labels.md`
+- **Domain docs:** single-context, glossary at `rust-wallet-app/CONTEXT.md` — `docs/agents/domain.md`
+
+## Memory
+
+Durable rules:
+
+- `~/.claude/projects/-home-nhitran-Projects-blockchain-sdk/memory/MEMORY.md` — never-auto-commit, workflow-approval-required, update-issues-before-merge (auto-loaded via SessionStart hook)
+- `tasks/lessons.md` — project-local corrections ledger (auto-loaded via SessionStart hook)
+
 Current execution target: v0.1 `bitcoin-wallet-core` library inside `rust-wallet-app/crates/` per active plan.
 
 ## Task display rule
@@ -112,30 +125,15 @@ fix/left-rail-master-toggle             success
 
 ## Conventions
 
-- **Docs/research layer only:** no build, no tests, no lint on `docs/`. All output is markdown.
-- **Code layer** (`rust-wallet-app/`, `bitcoin-wallet-rs/`): standard Rust tooling — `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test`, `cargo geiger`.
-- **Filename pattern:** `YYYY-MM-DD-<topic>.md`. ADRs use
-  `YYYY-MM-DD-adr-NNNN-<title>.md` with NNNN zero-padded and monotonic.
-- **Cross-SDK comparison tables.** Each feature audit produces one
-  index file plus per-area reports. Tables include explicit column per
-  SDK (`rust-bitcoin`, `BDK`, …) so gaps are visible.
-- **Use case coverage matrices** link each user story to the SDK
-  primitive that fulfils it. Audit for missing rows whenever the
-  source library changes.
-- **ADRs capture decision + rejected alternatives**, not just the
-  chosen path.
-- **Plan review before commit.** `docs/superpowers/plans/*.md` describe
-  implementation intent. Re-read before each commit and flag drift
-  between plan and current docs.
-- **Research methodology:** parallel Agent subagents (one per area) +
-  exa/firecrawl MCP web sources. Available tools:
-  `mcp__exa__web_search_exa`, `mcp__exa__web_fetch_exa`,
-  `mcp__firecrawl__firecrawl_search`, `mcp__firecrawl__firecrawl_scrape`,
-  `mcp__firecrawl__firecrawl_extract`, `mcp__firecrawl__firecrawl_crawl`,
-  `mcp__firecrawl__firecrawl_map`, `mcp__firecrawl__firecrawl_deep_research`.
-  Each finding cites its source.
-- **No invented content.** Every claim links back to a source file or
-  external URL.
+- **Docs/research layer** (`docs/`): no build, no tests, no lint. Markdown only.
+- **Code layer** (`rust-wallet-app/`): standard Rust tooling — `cargo fmt`, `cargo clippy -- -D warnings`, `cargo test`, `cargo geiger`.
+- **Filenames:** `YYYY-MM-DD-<topic>.md`; ADRs `YYYY-MM-DD-adr-NNNN-<title>.md` (NNNN zero-padded, monotonic).
+- **Cross-SDK comparison tables:** one index + per-area reports, column per SDK.
+- **Use case coverage matrices:** link each user story to the SDK primitive that fulfils it.
+- **ADRs:** capture decision + rejected alternatives, not just the chosen path.
+- **Plan review before commit:** re-read `docs/superpowers/plans/*.md`; flag drift.
+- **Research methodology:** parallel Agent subagents (one per area) + exa/firecrawl MCP web sources. Each finding cites its source.
+- **No invented content:** every claim links back to a source file or external URL.
 
 ## Implementation workflow (rust-bitcoin-wallet v0.1)
 
@@ -168,7 +166,7 @@ fix/left-rail-master-toggle             success
 5. **Issue close:** close issue after PR merge. Update spec + plan if
    implementation drifted.
 
-### Per-task loop (10 steps)
+### Per-task loop
 
 ```text
 Pipeline
@@ -179,47 +177,24 @@ task/N-<short-name>                       running
   ⋮ cargo fmt + clippy + test + verify
   ○ PAUSE — approval for commit + push + PR
   ○ commit-commands:commit-push-pr
+  ○ Flip issue checkboxes [ ]→[x]
   ○ PR review + merge + close issue
 ```
 
-**Step details:**
+Step-by-step mechanics (pickup, TDD, verify, pre-merge checklist) live in the active SDD plan under `docs/superpowers/plans/`. Operational rules — pause-before-commit, flip-issue-checkboxes-before-merge — live in `~/.claude/projects/-home-nhitran-Projects-blockchain-sdk/memory/MEMORY.md` and load via the SessionStart hook.
 
-1. **Pick up issue** — `gh issue view <N>` reads body + acceptance criteria.
-2. **`andrej-karpathy-skills:karpathy-guidelines` + branch checkout** — invoke karpathy-guidelines once per task (load behavioral guidelines), then `git checkout task/N-<name>`; create from main if missing: `git checkout -b task/N-<name> main`. Pull + rebase to ensure branch starts from latest main.
-3. **TDD cycle** — write failing test (plan Step 1), run (expect fail), implement (plan Step 2), run (expect pass), refactor (plan Step 3+).
-4. **Verify** — `cargo fmt --all -- --check && cargo clippy --all-targets --all-features -- -D warnings && cargo test --workspace`. Wrap with `superpowers:verification-before-completion` for the "done" claim gate.
-5. **PAUSE** — report diff summary + test output. Ask: "commit + push + PR?" per `~/.claude/.../memory/MEMORY.md` rules.
-6. **Commit + push + PR** — `commit-commands:commit-push-pr` (combined commit + push + open PR). `pr-review-toolkit:code-review` audits full diff. Fix loop max 3 rounds.
-7. **Pre-merge checklist** (per user rule "update completed steps before merge"):
-   - [ ] Update issue body checkboxes via `gh issue edit N --body "..."` — flip all completed steps from `[ ]` to `[x]`
-   - [ ] PR review via `pr-review-toolkit` (or inline fallback if skill unavailable)
-   - [ ] Merge via `gh pr merge N --squash --delete-branch`
-   - [ ] Close issue via `gh issue close N` (or auto on merge)
-   - [ ] Update ledger `.superpowers/sdd/<plan>/progress.md` with commit SHA + PR number + merge state
-8. **Drift update** (if implementation differs from plan) — update plan + spec in same PR. Per CLAUDE.md "Update spec + plan if implementation drifted."
+### Plugins / skills
 
-### Plugins / skills (apply in order per task)
+Plugin **types** (intent) live here; exact plugin IDs change between sessions. Resolve at runtime via `Skill(skill="<type>", args="...")` or `Agent(subagent_type="...", ...)`. Fall back to inline equivalent if a plugin is missing (ask user first).
 
-CLAUDE.md lists **plugin types** (intent), not exact plugin IDs. Plugin IDs change between sessions — resolve at runtime via `Skill` tool.
-
-- **karpathy-guidelines** — behavioral guidelines for code work (loaded once per task)
-- **TDD-skill** — red test first (any superpowers:* or ecc:* skill providing TDD enforcement)
-- **cargo-error-fix** — Cargo / compiler errors (current name: `ecc:rust-build`)
-- **test-design** — test design + execution (current name: `ecc:rust-test`)
-- **rust-review** — ownership / `unsafe` / crypto / multi-crate review (current name: `ecc:rust-review`)
-- **security-review** — secret storage / signing / cross-chain trust, Tasks 5, 6, 9 (current name: `ecc:security-review`; deeper: `compass:security-auditor`)
-- **verification-gate** — gate on real cargo output before "done" claim (current name: `superpowers:verification-before-completion`)
-- **commit** — single commit with pre-commit hooks (current name: `commit-commands:commit`)
-- **commit-push-pr** — combined commit + push + open PR (current name: `commit-commands:commit-push-pr`)
-- **pr-review** — full diff audit (current name: `pr-review-toolkit:code-review`)
-- **doc-review** — reconcile spec/plan contradictions if drift detected (current name: `compound-engineering:ce-doc-review`)
-- **finish-branch** — at week end (current name: `superpowers:finishing-a-development-branch`)
-
-### How to resolve plugin IDs at runtime
-
-- Use `Skill` tool with description match: `Skill(skill="<type>", args="...")`
-- Use `Agent` tool with `subagent_type` for subagents: `Agent(subagent_type="compass:rust-engineer", ...)`
-- If plugin not found, fall back to inline equivalent (ask user first)
+- karpathy-guidelines (behavioral anchor)
+- TDD: `superpowers:test-driven-development` / `ecc:tdd-workflow`
+- Cargo: `ecc:rust-build`, `ecc:rust-test`, `ecc:rust-review`
+- Security: `ecc:security-review`, `compass:security-auditor`
+- Verification: `superpowers:verification-before-completion`
+- Commit/PR: `commit-commands:commit`, `commit-commands:commit-push-pr`, `pr-review-toolkit:code-review`, `compound-engineering:ce-doc-review`
+- Branch: `superpowers:finishing-a-development-branch`
+- Matt Pocock: `grill-with-docs`, `triage`, `to-spec`, `to-tickets`, `wayfinder` (router: `ask-matt`)
 
 ### Session-start rule
 
@@ -272,16 +247,4 @@ Ledger survives compaction — trust it over session memory.
 
 ### Project scaffolding (current v0.1)
 
-```text
-rust-wallet-app/                    (workspace root)
-├── Cargo.toml                      (workspace)
-├── crates/
-│   ├── chain-traits/               (ChainWallet trait — umbrella, exists)
-│   ├── bitcoin-wallet-core/        (library — BDK 3.1 + rust-bitcoin 0.32, v0.1 to build)
-│   └── btc/                        (CLI — clap 4, v0.1 to build)
-└── .github/workflows/ci.yml
-```
-
-`bitcoin-wallet-core/` and `btc/` are v0.1 deliverables per the merged plan
-(`docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`). They live INSIDE
-the umbrella workspace `rust-wallet-app/`.
+v0.1 deliverables per the merged plan: `rust-wallet-app/crates/bitcoin-wallet-core/` (library) + `rust-wallet-app/crates/btc/` (CLI), inside the umbrella `rust-wallet-app/` workspace. `chain-traits/` exists as the v0.2 umbrella scaffold.
