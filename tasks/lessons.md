@@ -213,22 +213,6 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - If a skill invocation feels redundant with manual approach, the redundancy IS the value — manual approach has unknown blind spots; skill approach has known workflow.
 - Negative example: in Task 1.5, I ran `cargo test + cargo clippy + cargo fmt` and declared done. `superpowers:verification-before-completion` would have surfaced "did you check security?" — manual checklist didn't.
 
-**Result (post-grill critique, 2026-08-07):**
-
-User asked "why did you choose these plugins?" — honest answer: **selection method was description-match, not validated use.** Of the 9 entries, only 1 (`commit-commands:commit-push-pr`) was actually invoked (Tasks 0/1/1.5). The other 8 are untested.
-
-| # | Entry | Selection basis | Status |
-| --- | --- | --- | --- |
-| 1 | `domain-modeling` / `ce-plan` | Description match (new domain, multi-step) | Unvalidated |
-| 2 | `mattpocock-skills:tdd` | Name-recognition (Pocock's signature). **Arbitrary**: `superpowers:test-driven-development` and `ecc:tdd-workflow` exist. "First match" not "best match." "NOT manual red→green" is self-critique dressed as recommendation. | Unvalidated + arbitrary |
-| 3 | `diagnosing-bugs` | Match for Task 1's multi-variable build error | Unvalidated (I iterated manually instead) |
-| 4 | `codebase-design` | "Deep module" lens for Task 1.5's 80-LOC atomic_write | Unvalidated |
-| 5 | `code-review` (parallel sub-agents) | Unique to this skill (Standards + Spec axes) | Unvalidated |
-| 6 | `pr-test-analyzer` | Coverage gap analysis | Unvalidated (Task 1.5's parent-symlink untested path is the canary) |
-| 7 | `ce-doc-review` | Doc review. **Weakest**: no threat-model-specific skill in loaded set; falls back to generic doc-review. | Unvalidated + weak |
-| 8 | `verification-before-completion` | "Before declaring done" gate. User rejected adding to L13 step 11. | Unvalidated (deferred) |
-| 9 | `commit-commands:commit-push-pr` | Used 3 times | **Validated** |
-
 **Score-based re-evaluation (2026-08-07, after user asked "why these plugins?"):**
 
 Scored all 9 steps on 5 dimensions (description match / prior use / suite consistency / specificity / caveat awareness, 1-5 each, max 25). Compared L11 pick to score-based winner:
@@ -253,25 +237,6 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 | 3 | CHANGE | `superpowers:systematic-debugging` (was `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)) |
 | 4 | CHANGE (add pair) | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) + `pr-review-toolkit:type-design-analyzer` (was just `codebase-design`) |
 | 7 | CHANGE | `mattpocock-skills:domain-modeling` (re-invoke; was `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`)) |
-
-**5 picks unchanged:** 1, 5, 6, 8, 9.
-
-**Pattern of changes:** I over-indexed on Matt Pocock for steps 2, 3, 7. Honest re-read: `superpowers:*` is more rigorous (steps 2, 3); domain-modeling (re-invoke) beats generic doc-review for threat-model review (step 7). Step 4 was missing `type-design-analyzer` — now added as pair per L13 Q4 (max 2 skills/step).
-
-**3 honest problems:**
-
-1. **Unvalidated.** 8 of 9 entries are untested. The table is opinion, not evidence.
-2. **Arbitrary in row 2.** Three TDD skills exist; I picked one by name-recognition. The value is the discipline, not the brand.
-3. **Missing row 10:** `pr-review-toolkit:type-design-analyzer` is already invoked in the L13 pipeline (parallel sub-agents in pre-PR review) but absent from this mapping. Inconsistency.
-
-**Recommended improvements (apply empirically through use, not as patch):**
-
-- **Validate the table through use.** Pick the next task (Task 2); invoke the recommended skill at each step; record whether the skill added value vs manual. After 3-5 tasks, prune entries that don't pull weight.
-- **Add `type-design-analyzer` row** for "interface design" (overlaps with `codebase-design` but more specific).
-- **Reframe row 2:** drop "NOT manual" gatekeeping; replace with "any of {`tdd`, `superpowers:test-driven-development`, `ecc:tdd-workflow`} — pick one and stick with it."
-- **Move row 7 caveat inline:** "no threat-model-specific skill; `ce-doc-review` is generic; review threat model manually with the L10 checklist."
-
-**Apply-Apply (meta-rule for THIS skill → task-step mapping):** Treat the table as a hypothesis. Re-evaluate after 3-5 task pickups. Don't treat it as a fixed recipe.
 
 ---
 
