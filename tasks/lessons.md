@@ -229,6 +229,35 @@ User asked "why did you choose these plugins?" — honest answer: **selection me
 | 8 | `verification-before-completion` | "Before declaring done" gate. User rejected adding to L13 step 11. | Unvalidated (deferred) |
 | 9 | `commit-commands:commit-push-pr` | Used 3 times | **Validated** |
 
+**Score-based re-evaluation (2026-08-07, after user asked "why these plugins?"):**
+
+Scored all 9 steps on 5 dimensions (description match / prior use / suite consistency / specificity / caveat awareness, 1-5 each, max 25). Compared L11 pick to score-based winner:
+
+| Step | L11 pick | Score | Score-based pick | Score | Winner | Reason for change |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1. Task pickup | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step | 21 + 15 | `domain-modeling` + `ce-plan` (same) | 21 + 15 | **Same** | Score-aligned. domain-modeling wins on specificity; ce-plan on multi-step structure. |
+| 2. TDD | `mattpocock-skills:tdd` | 17 | `superpowers:test-driven-development` | **19** | **CHANGE → superpowers:tdd** | superpowers suite is more rigorous + well-documented. "NOT manual" was gatekeeping dressed as recommendation. |
+| 3. Build error cascade | `mattpocock-skills:diagnosing-bugs` | 17 | `superpowers:systematic-debugging` | **19** | **CHANGE → superpowers:systematic-debugging** | Same suite-rigor pattern as #2. systematic-debugging has structured engineering workflow. |
+| 4. Module interface | `mattpocock-skills:codebase-design` | 19 | `codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair) | 19 + 19 | **CHANGE → pair (per L13 Q4)** | Different lens: codebase-design = seam/deep-module; type-design-analyzer = type-level invariants. Rust-natural. Per L13 max 2 skills/step, pair them. |
+| 5. Pre-PR review | `pr-review-toolkit:code-review` | 20 | `pr-review-toolkit:code-review` (same) | 20 | **Same** | Unique parallel sub-agents (Standards + Spec). No competitor. |
+| 6. Coverage gap | `pr-review-toolkit:pr-test-analyzer` | 20 | `pr-test-analyzer` (same) | 20 | **Same** | Direct match. No competitor. |
+| 7. Doc / threat-model | `compound-engineering:ce-doc-review` | 14 | `mattpocock-skills:domain-modeling` (re-invoke) | **18** | **CHANGE → domain-modeling re-invoke** | Threat model IS a domain artifact. The same skill that built it can review it. Generic doc-review lacks threat-model awareness. |
+| 8. Before declaring done | `superpowers:verification-before-completion` | 20 | `verification-before-completion` (same) | 20 | **Same** | Direct name match. (User rejected adding to L13 step 11 — L11 mapping still recommends it.) |
+| 9. Commit + push + PR | `commit-commands:commit-push-pr` | **22** | `commit-push-pr` (same) | 22 | **Same** | Validated 3x (Tasks 0/1/1.5). Only entry with prior-use evidence. |
+
+**Summary of changes:**
+
+| Step | Action | New pick |
+| --- | --- | --- |
+| 2 | CHANGE | `superpowers:test-driven-development` (was `mattpocock-skills:tdd`) |
+| 3 | CHANGE | `superpowers:systematic-debugging` (was `mattpocock-skills:diagnosing-bugs`) |
+| 4 | CHANGE (add pair) | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (was just `codebase-design`) |
+| 7 | CHANGE | `mattpocock-skills:domain-modeling` (re-invoke; was `compound-engineering:ce-doc-review`) |
+
+**5 picks unchanged:** 1, 5, 6, 8, 9.
+
+**Pattern of changes:** I over-indexed on Matt Pocock for steps 2, 3, 7. Honest re-read: `superpowers:*` is more rigorous (steps 2, 3); domain-modeling (re-invoke) beats generic doc-review for threat-model review (step 7). Step 4 was missing `type-design-analyzer` — now added as pair per L13 Q4 (max 2 skills/step).
+
 **3 honest problems:**
 
 1. **Unvalidated.** 8 of 9 entries are untested. The table is opinion, not evidence.
