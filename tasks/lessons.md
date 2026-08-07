@@ -22,6 +22,8 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L8] flip issue checkboxes before squash-merge (memory)
 - [L9] issue bodies = status, PR bodies = fix analysis (with table)
 - [L10] threat model is the answer key — read before writing code
+- [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
+- [L12] code review runs BEFORE local verify gate, not after
 
 ---
 
