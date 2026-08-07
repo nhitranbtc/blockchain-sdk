@@ -167,36 +167,7 @@ fix/left-rail-master-toggle             success
 
 ### Per-task loop
 
-```text
-Pipeline
-task/N-<short-name>                       running
-  ✓ Pick up issue
-  ✓ karpathy-guidelines + branch checkout
-  ✓ L10: re-read threat model + CONTEXT.md
-  ✓ L11: skill-tag 3-5 relevant
-  ✓ L13: complexity tier (self-detect + user confirm)
-  ⋮ mattpocock-skills:tdd red-green cycle
-  ⋮ L12: pre-PR code review FIRST (parallel: type-design-analyzer + code-reviewer)
-  ○ cargo fmt + clippy -D warnings + test + verify (double-gate per L13)
-  ○ PAUSE — approval for commit + push + PR
-  ○ commit-commands:commit-push-pr
-  ○ Flip issue checkboxes [ ]→[x]
-  ○ PR review + merge + close issue
-```
-
-**Why this order (per L12):** pre-PR code review catches missing tests, security gaps, and type-design issues that local verify tools (`cargo test`, `cargo clippy`, `cargo fmt`) cannot. Running review *before* verify means fixes are local, not PR-bounced. Task 1.5's 4 HIGH-severity findings caught post-push by `security-guidance` would have been caught pre-PR by `pr-review-toolkit:code-review` if L12 had been applied then.
-
-**Complexity tier → pipeline variation** (L13, self-detect + user confirm):
-
-| Tier | Pipeline |
-| --- | --- |
-| `trivial` (doc-only / single-line) | doc-review only; skip pre-PR code review |
-| `normal` (typical feature) | full pipeline above |
-| `critical` (key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`) |
-
-**Off-rails recovery** (L13, when stuck 3 fix rounds): PAUSE → revert to last green commit on branch → open follow-up issue → log to ledger. Never ship broken.
-
-Step-by-step mechanics (pickup, TDD, verify, pre-merge checklist) live in the active SDD plan under `docs/superpowers/plans/`. Operational rules — pause-before-commit, flip-issue-checkboxes-before-merge — live in `~/.claude/projects/-home-nhitran-Projects-blockchain-sdk/memory/MEMORY.md` and load via the SessionStart hook.
+**Per-task pipeline spec lives in [`tasks/lessons.md` L13](tasks/lessons.md#l13--per-task-pipeline-spec-10-decisions-2026-08-07-grill)** — single source of truth for the pipeline, complexity tier, off-rails recovery, and 10-decision rationale. CLAUDE.md intentionally does not duplicate it. Operational rules (L6/L7/L8) auto-load from `~/.claude/projects/-home-nhitran-Projects-blockchain-sdk/memory/MEMORY.md` via SessionStart hook; see also [`tasks/lessons.md`](tasks/lessons.md) for the project-specific form.
 
 ### Plugins / skills
 
