@@ -158,7 +158,8 @@ rust-wallet-app/
 - [ ] **Step 1: Write failing test for workspace build**
 
 ```rust
-// tests/build_workspace.rs
+// crates/bitcoin-wallet-core/tests/build_workspace.rs  (lives under member crate
+// so cargo test --workspace picks it up; the workspace root has no [package] block)
 #[test]
 fn workspace_members_compile() {
     // cargo build --workspace enforces this; test exists to gate CI
@@ -182,12 +183,12 @@ license = "MIT"
 [workspace.dependencies]
 # Bitcoin (BDK 3.1 + fallback chain per F26)
 bdk_wallet = { version = "^3.1", features = ["keys-bip39"] }
-bdk_chain = "^3.1"
+bdk_chain = "^0.23"  # corrected from plan draft `^3.1`: crates.io latest is 0.23.x (bdk_wallet 3.x pins it)
 bdk_esplora = { version = "^0.22", features = ["async"] }
 bdk_electrum = "^0.24"
-bdk_file_store = "^0.15"
+bdk_file_store = "^0.22"  # corrected from plan draft `^0.15`: crates.io latest is 0.22.x
 bitcoin = "0.32"
-bip32 = "^0.6"  # fallback: ^0.5 if 0.6 unpublished per F46
+bip32 = "^0.5"  # F46 fallback: 0.6 is pre-release only (0.6.0-pre.1)
 
 # Async + HTTP
 tokio = { version = "1", features = ["full"] }
@@ -220,7 +221,9 @@ base64 = "0.22"
 
 ```toml
 [toolchain]
-channel = "1.85"
+# MSRV is 1.85 (F31) but transitive icu_* deps require rustc ≥1.86.
+# Use stable available locally; down-pin per crate if needed.
+channel = "1.94"
 components = ["rustfmt", "clippy", "rust-src"]
 ```
 

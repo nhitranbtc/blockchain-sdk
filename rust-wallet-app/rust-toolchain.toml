@@ -1,0 +1,5 @@
+[toolchain]
+# MSRV is 1.85 (per plan §Task 1 + F31) but transitive deps (icu_* via reqwest/rustls)
+# require rustc ≥1.86. Using 1.94 stable locally. Down-pin per crate if needed.
+channel = "1.94"
+components = ["rustfmt", "clippy", "rust-src"]
