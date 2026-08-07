@@ -1,0 +1,11 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Tool state (claude-flow, local Claude config)
+.claude-flow/
+**/.claude-flow/
+.claude/
+
+# Scratch / external reference
+tangem-app-ios/
