@@ -13,7 +13,7 @@ use std::path::Path;
 /// Returns `io::Result` so this module is self-contained — Task 2 will
 /// add `Error::Storage` and callers can `.map_err` at the boundary.
 pub fn refuse_world_writable(path: &Path) -> io::Result<()> {
-    let md = std::fs::metadata(path)?;
+    let md = std::fs::symlink_metadata(path)?;
     let mode = md.permissions().mode();
     if mode & 0o077 != 0 {
         return Err(io::Error::new(
