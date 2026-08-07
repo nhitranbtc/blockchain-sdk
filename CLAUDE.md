@@ -21,12 +21,11 @@ Project-local vocabulary and threat-model hard rules live in [`rust-wallet-app/C
 - **Triage labels:** canonical — `docs/agents/triage-labels.md`
 - **Domain docs:** single-context, glossary at `rust-wallet-app/CONTEXT.md` — `docs/agents/domain.md`
 
-## Memory
+## Operational rules
 
-Durable rules:
+**Single source of truth: [`tasks/lessons.md`](tasks/lessons.md)** — L1 through L13 cover all workflow rules (workspace path consistency, config validation, never-auto-commit, pause-before-state-modifying, issue-checkbox flip, threat model, skill enumeration, code-review-before-verify, per-task pipeline spec, etc.). Read at every task pickup per L11.
 
-- `~/.claude/projects/-home-nhitran-Projects-blockchain-sdk/memory/MEMORY.md` — never-auto-commit, workflow-approval-required, update-issues-before-merge (auto-loaded via SessionStart hook)
-- `tasks/lessons.md` — project-local corrections ledger (auto-loaded via SessionStart hook)
+MEMORY.md (auto-loaded via SessionStart hook) holds the same durable rules for cross-project consistency; the project-specific form lives in lessons.md.
 
 Current execution target: v0.1 `bitcoin-wallet-core` library inside `rust-wallet-app/crates/` per active plan.
 
