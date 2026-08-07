@@ -198,12 +198,12 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Task step | Skill to invoke first |
 | --- | --- |
 | Task pickup (understand + plan) | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step |
-| TDD red-green-refactor | `mattpocock-skills:tdd` (NOT manual red→green) |
-| Build/cargo error cascade | `mattpocock-skills:diagnosing-bugs` |
-| Module interface design | `mattpocock-skills:codebase-design` |
+| TDD red-green-refactor | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`) |
+| Build/cargo error cascade | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`) |
+| Module interface design | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) |
 | Pre-PR review (security, tests, structure) | `pr-review-toolkit:code-review` (parallel sub-agents for Standards + Spec axes) |
 | Test coverage gap analysis | `pr-review-toolkit:pr-test-analyzer` |
-| Doc / threat-model review | `compound-engineering:ce-doc-review` |
+| Doc / threat-model review | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`) |
 | Before declaring done | `superpowers:verification-before-completion` |
 | Commit + push + PR | `commit-commands:commit-push-pr` |
 
@@ -237,11 +237,11 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 | --- | --- | --- | --- | --- | --- | --- |
 | 1. Task pickup | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step | 21 + 15 | `domain-modeling` + `ce-plan` (same) | 21 + 15 | **Same** | Score-aligned. domain-modeling wins on specificity; ce-plan on multi-step structure. |
 | 2. TDD | `mattpocock-skills:tdd` | 17 | `superpowers:test-driven-development` | **19** | **CHANGE → superpowers:tdd** | superpowers suite is more rigorous + well-documented. "NOT manual" was gatekeeping dressed as recommendation. |
-| 3. Build error cascade | `mattpocock-skills:diagnosing-bugs` | 17 | `superpowers:systematic-debugging` | **19** | **CHANGE → superpowers:systematic-debugging** | Same suite-rigor pattern as #2. systematic-debugging has structured engineering workflow. |
-| 4. Module interface | `mattpocock-skills:codebase-design` | 19 | `codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair) | 19 + 19 | **CHANGE → pair (per L13 Q4)** | Different lens: codebase-design = seam/deep-module; type-design-analyzer = type-level invariants. Rust-natural. Per L13 max 2 skills/step, pair them. |
+| 3. Build error cascade | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`) | 17 | `superpowers:systematic-debugging` | **19** | **CHANGE → superpowers:systematic-debugging** | Same suite-rigor pattern as #2. systematic-debugging has structured engineering workflow. |
+| 4. Module interface | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) | 19 | `codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair) | 19 + 19 | **CHANGE → pair (per L13 Q4)** | Different lens: codebase-design = seam/deep-module; type-design-analyzer = type-level invariants. Rust-natural. Per L13 max 2 skills/step, pair them. |
 | 5. Pre-PR review | `pr-review-toolkit:code-review` | 20 | `pr-review-toolkit:code-review` (same) | 20 | **Same** | Unique parallel sub-agents (Standards + Spec). No competitor. |
 | 6. Coverage gap | `pr-review-toolkit:pr-test-analyzer` | 20 | `pr-test-analyzer` (same) | 20 | **Same** | Direct match. No competitor. |
-| 7. Doc / threat-model | `compound-engineering:ce-doc-review` | 14 | `mattpocock-skills:domain-modeling` (re-invoke) | **18** | **CHANGE → domain-modeling re-invoke** | Threat model IS a domain artifact. The same skill that built it can review it. Generic doc-review lacks threat-model awareness. |
+| 7. Doc / threat-model | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`) | 14 | `mattpocock-skills:domain-modeling` (re-invoke) | **18** | **CHANGE → domain-modeling re-invoke** | Threat model IS a domain artifact. The same skill that built it can review it. Generic doc-review lacks threat-model awareness. |
 | 8. Before declaring done | `superpowers:verification-before-completion` | 20 | `verification-before-completion` (same) | 20 | **Same** | Direct name match. (User rejected adding to L13 step 11 — L11 mapping still recommends it.) |
 | 9. Commit + push + PR | `commit-commands:commit-push-pr` | **22** | `commit-push-pr` (same) | 22 | **Same** | Validated 3x (Tasks 0/1/1.5). Only entry with prior-use evidence. |
 
@@ -250,9 +250,9 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 | Step | Action | New pick |
 | --- | --- | --- |
 | 2 | CHANGE | `superpowers:test-driven-development` (was `mattpocock-skills:tdd`) |
-| 3 | CHANGE | `superpowers:systematic-debugging` (was `mattpocock-skills:diagnosing-bugs`) |
-| 4 | CHANGE (add pair) | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (was just `codebase-design`) |
-| 7 | CHANGE | `mattpocock-skills:domain-modeling` (re-invoke; was `compound-engineering:ce-doc-review`) |
+| 3 | CHANGE | `superpowers:systematic-debugging` (was `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)) |
+| 4 | CHANGE (add pair) | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) + `pr-review-toolkit:type-design-analyzer` (was just `codebase-design`) |
+| 7 | CHANGE | `mattpocock-skills:domain-modeling` (re-invoke; was `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`)) |
 
 **5 picks unchanged:** 1, 5, 6, 8, 9.
 
