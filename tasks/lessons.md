@@ -177,6 +177,40 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ---
 
+## L11 — Scan skills list at session start, tag 3-5 relevant, invoke before doing
+
+**Trigger**: Session 2026-08-07 — 9 Matt Pocock skills (`mattpocock-skills:*`), ~15 superpowers, ~10 compound-engineering, ~10 pr-review-toolkit, ~20 compass/ecc skills were loaded. Used 3 total (karpathy-guidelines, commit-commands:commit-push-pr, pr-review-toolkit:review-pr). Said "I don't see Matt Pocock plugins" when they were loaded — only saw them after user repeated the question and SessionStart hook listed them again.
+
+**Rule**:
+
+1. **At every session start**, enumerate the skills list (`/skills` if listed, or the SessionStart hook output) and tag 3-5 skills that match the active task.
+2. **Before starting each task step** (pickup, TDD, verify, pre-PR, post-merge), invoke the relevant skill — don't rely on manual checklist.
+3. **If a skill exists for a step I'm doing manually, invoke it.** Manual checklist failure modes: blind spots, missing sub-agents, no parallel review.
+
+**Why**: 47 skills available. Skills encode battle-tested workflows (Pocock's TDD, superpowers:verification-before-completion, pr-review-toolkit:code-review with parallel sub-agents). Each one I skip is a workflow gap. Task 1.5's 4 security findings would have been caught by `pr-review-toolkit:code-review` invoked pre-PR instead of `security-guidance` invoked post-push.
+
+**Skill → task-step mapping** (use this as starting checklist):
+
+| Task step | Skill to invoke first |
+| --- | --- |
+| Task pickup (understand + plan) | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step |
+| TDD red-green-refactor | `mattpocock-skills:tdd` (NOT manual red→green) |
+| Build/cargo error cascade | `mattpocock-skills:diagnosing-bugs` |
+| Module interface design | `mattpocock-skills:codebase-design` |
+| Pre-PR review (security, tests, structure) | `pr-review-toolkit:code-review` (parallel sub-agents for Standards + Spec axes) |
+| Test coverage gap analysis | `pr-review-toolkit:pr-test-analyzer` |
+| Doc / threat-model review | `compound-engineering:ce-doc-review` |
+| Before declaring done | `superpowers:verification-before-completion` |
+| Commit + push + PR | `commit-commands:commit-push-pr` |
+
+**Apply**:
+
+- After every `Skill` invocation that returns useful guidance, invoke it AGAIN at the next task step (don't skip).
+- If a skill invocation feels redundant with manual approach, the redundancy IS the value — manual approach has unknown blind spots; skill approach has known workflow.
+- Negative example: in Task 1.5, I ran `cargo test + cargo clippy + cargo fmt` and declared done. `superpowers:verification-before-completion` would have surfaced "did you check security?" — manual checklist didn't.
+
+---
+
 ## L10 — Threat model is the answer key; read before writing code
 
 **Trigger**: Task 1.5 (PR #23) — 4 security findings (3 HIGH + 1 MEDIUM) caught only by post-push automated review. Original `atomic_write` + `permissions` implementation copied plan §Task 1.5 reference code verbatim without re-reading the threat model spec. The plan author had omitted `0o600`, symlink rejection, and RAII cleanup from the code template; the implementation inherited those omissions.
