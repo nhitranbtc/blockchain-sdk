@@ -146,12 +146,6 @@ fix/left-rail-master-toggle             success
 - [`docs/superpowers/specs/2026-08-06-rust-bitcoin-wallet-architecture.md`](docs/superpowers/specs/2026-08-06-rust-bitcoin-wallet-architecture.md) — Bitcoin v0.1 architecture
 - [`docs/superpowers/specs/2026-08-06-rust-wallet-app-architecture.md`](docs/superpowers/specs/2026-08-06-rust-wallet-app-architecture.md) — v0.2 multi-chain umbrella (future)
 
-**Audit archive:**
-
-- [`docs/superpowers/reviews/2026-08-05-rust-bitcoin-wallet.md`](docs/superpowers/reviews/2026-08-05-rust-bitcoin-wallet.md) — 50 doc-review findings audit
-- [`docs/superpowers/reviews/2026-08-06-rust-bitcoin-wallet-clean.md`](docs/superpowers/reviews/2026-08-06-rust-bitcoin-wallet-clean.md) — pre-merge snapshot (kept for diff)
-
-**Research:** [`docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md`](docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`) — reference Swift implementation, no project affiliation.
 
 **Workflow:**
 
