@@ -2,7 +2,8 @@
 resolver = "2"
 members = [
     "crates/chain-traits",
-    # "crates/bitcoin-wallet-core",  # v0.1 — pending disk presence; uncomment when present
+    "crates/bitcoin-wallet-core",
+    "crates/btc",
 ]
 
 [workspace.package]
@@ -14,9 +15,22 @@ license = "MIT"
 
 [workspace.dependencies]
 # Per-chain SDKs
-# bitcoin-wallet-core = { path = "crates/bitcoin-wallet-core" }  # v0.1 — uncomment when on disk
+bitcoin-wallet-core = { path = "crates/bitcoin-wallet-core" }
 bitcoin = "0.32"
-bdk_wallet = { version = "3.1", features = ["keys-bip39"] }
+
+# Bitcoin (BDK 3.1 + fallback chain per F26)
+# Note: bdk_wallet 3.x pins bdk_chain 0.23.x and bdk_file_store 0.22.x.
+# Plan §Task 1 Step 2 originally cited ^3.1 for both; corrected to actual
+# published versions on crates.io (see ledger note 2026-08-07).
+bdk_wallet = { version = "^3.1", features = ["keys-bip39"] }
+bdk_chain = "^0.23"
+bdk_electrum = "^0.24"
+bdk_file_store = "^0.22"
+# bdk_esplora dropped per drift update 2026-08-07: pulls transitive
+# rustls-webpki 0.101.7 (RUSTSEC-2026-0106) + esplora-client that we
+# don't use (Task 7 EsploraClient is raw reqwest + custom cert verifier
+# per F20). Re-add only if/when we actually need bdk_esplora's sync helpers.
+bip32 = "^0.5"  # F46 fallback: 0.6 is pre-release only (0.6.0-pre.1)
 
 # Shared async + HTTP
 tokio = { version = "1", features = ["full"] }
@@ -24,7 +38,26 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 
 # Errors + tracing
 thiserror = "1"
+anyhow = "1"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Crypto (per F6 mnemonic encryption in v0.1 core)
+argon2 = "0.5"
+aes-gcm = "0.10"
+rand = "0.8"
+zeroize = { version = "1", features = ["derive"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
 
 # Test
 proptest = "1"
+tempfile = "3"
+
+# Encoding (used by crypto::bip137 for base64-encoded message signatures)
+base64 = "0.22"
+
+# Serde (config + Error serialization)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
