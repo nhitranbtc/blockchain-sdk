@@ -130,19 +130,28 @@ before commit.
 
 **Why**: PRs are reviewed by humans reading code; issues are tracking artifacts that get archived. Long-lived rationale lives where people read once (PR); current state lives where people check often (issue). Detailed analysis in an issue body bloats every list/search result and obscures the checklist.
 
-**Apply — required PR table schema:**
+**Apply — required PR drift table schema (v3):**
 
 | Column | Content |
 | --- | --- |
-| `#` | finding number |
-| `Severity` | CRITICAL/HIGH/MEDIUM/LOW (or N/A for non-fix rows) |
-| `File:line` | pin to current code lines after fix, OR label "(before-fix commit `<sha>`)" — never blank, never vague |
-| `Issue` | one-sentence root cause |
-| `Before` | code/behavior pre-fix (link to before-commit if applicable) |
-| `After` | code/behavior post-fix (link to lines in PR) |
-| `Trade-off` | REQUIRED — costs (LOC delta, Unix-only, API stability, behavior delta, test coverage gap) — not just benefits |
+| `Area` | code area (`Secret`, `atomic_write`, `permissions`, etc.) — not "step N" |
+| `Drift` | what changed vs plan/spec |
+| `Sev` | LOW / MEDIUM / HIGH / CRITICAL — tagged by impact, not by review-tool severity |
+| `` File:line `` | code block (e.g. `` `keys/secret.rs:25` ``) — pin to current lines after fix |
+| `Result` | what was achieved after the improvement (concrete outcome) |
+| `Score` | `N/10 — <handle>` — honest self-score per row, with attribution |
+| `Note` | future improvements needed (or "None") |
 
-Plus, after the table:
+**Apply — required PR technical-details table (v3):**
+
+| Column | Content |
+| --- | --- |
+| `Tool / Plugin` | skill / hook / crate / stdlib function |
+| `Role` | `find` (caught the issue) / `resolve` (fixed it) / `review` (audited) |
+| `What it caught / fixed` | one-line summary |
+| `Used at step` | commit + file:line where applied |
+
+Plus, after the tables:
 
 - **Test gaps**: any code path in the fix that lacks a test. Name the path + line. Required.
 - **Migration impact**: any behavior change visible to callers. If API is unchanged but behavior is stricter, document. Required for security/permissive-related fixes.
@@ -151,14 +160,15 @@ Plus, after the table:
   - Security (threat-model coverage)
   - Test coverage (happy path + N negative cases)
   - Code simplicity (karpathy §2)
-  No single overall score — let reader average. Drop the "5.5 → 8.0" headline number; it's theater without weights.
+  No single overall score — let reader average.
 - **Main points** (numbered list): trigger for the fix, plan-compliance vs hardening distinction, threat-model mapping, drift-from-plan to record.
 
 Anti-patterns to avoid:
 
 - "Pros / Cons" columns — conflate fix-correctness with code quality. Replace with single Trade-off column.
-- 1-10 score scale with 0.5 precision — no rubric defines 6 vs 7. Use PASS/PARTIAL/FAIL.
+- 1-10 score scale with 0.5 precision as overall number — PASS/PARTIAL/FAIL per dimension for verdicts; per-row self-score with handle is OK.
 - Single overall score — averages hide dimension-specific failure.
+- "Step N" as row category — use code area instead.
 - Burying costs in prose — every cost goes in Trade-off column.
 - Skipping test-gap callout — if you wrote code without a test, name the missing test.
 
