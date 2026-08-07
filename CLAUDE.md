@@ -13,6 +13,8 @@ Two coexisting layers:
 - **Docs/research layer** (`docs/`) — pure prose, markdown only
 - **Code layer** (`rust-wallet-app/`) — Rust workspace containing `bitcoin-wallet-core/` (v0.1 library) + `btc/` (v0.1 CLI) + `chain-traits/` (umbrella v0.2 scaffold, exists)
 
+Project-local vocabulary and threat-model hard rules live in [`rust-wallet-app/CONTEXT.md`](rust-wallet-app/CONTEXT.md). Read before code work.
+
 Current execution target: v0.1 `bitcoin-wallet-core` library inside `rust-wallet-app/crates/` per active plan.
 
 ## Task display rule
@@ -222,6 +224,8 @@ CLAUDE.md lists **plugin types** (intent), not exact plugin IDs. Plugin IDs chan
 ### Session-start rule
 
 Every session begins by stating the verifiable goal of the session in one sentence. If unclear, ask before acting. Per karpathy-guidelines §1 "Think Before Coding".
+
+Scan `tasks/lessons.md` for relevant project lessons before starting work (auto-loaded via SessionStart hook; new entries after any correction).
 
 **Session-start goal prompt template:**
 
