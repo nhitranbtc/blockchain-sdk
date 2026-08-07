@@ -24,9 +24,12 @@ bitcoin = "0.32"
 # published versions on crates.io (see ledger note 2026-08-07).
 bdk_wallet = { version = "^3.1", features = ["keys-bip39"] }
 bdk_chain = "^0.23"
-bdk_esplora = { version = "^0.22", features = ["async"] }
 bdk_electrum = "^0.24"
 bdk_file_store = "^0.22"
+# bdk_esplora dropped per drift update 2026-08-07: pulls transitive
+# rustls-webpki 0.101.7 (RUSTSEC-2026-0106) + esplora-client that we
+# don't use (Task 7 EsploraClient is raw reqwest + custom cert verifier
+# per F20). Re-add only if/when we actually need bdk_esplora's sync helpers.
 bip32 = "^0.5"  # F46 fallback: 0.6 is pre-release only (0.6.0-pre.1)
 
 # Shared async + HTTP

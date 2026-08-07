@@ -13,7 +13,6 @@ regtest-tests = []  # per F3
 [dependencies]
 bdk_wallet = { workspace = true, features = ["keys-bip39"] }
 bdk_chain = { workspace = true }
-bdk_esplora = { workspace = true }
 bdk_electrum = { workspace = true }
 bdk_file_store = { workspace = true }
 bitcoin = { workspace = true }
