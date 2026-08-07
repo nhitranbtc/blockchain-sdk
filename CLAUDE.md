@@ -206,31 +206,5 @@ Scope: `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md` only.
 Pauses required: commit (per never-auto-commit).
 ```
 
-### Commit verification pipeline (per task)
-
-1. TDD cycle produces red→green tests
-2. `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` (combined)
-3. **verification-gate** — forces real cargo output before any "done" claim (current plugin: `superpowers:verification-before-completion`)
-4. **cargo-deny** — license + advisory + bans check (requires `deny.toml` at workspace root)
-5. **cargo-audit** — security CVE check (requires `Cargo.lock`)
-6. **PAUSE for user commit approval** (per `never-auto-commit` rule)
-7. **commit-push-pr** — combined commit + push + open PR (current plugin: `commit-commands:commit-push-pr`)
-8. **pr-review** — full diff audit (current plugin: `pr-review-toolkit:code-review`)
-9. Fix loop max 3 rounds
-10. Merge + close issue + update ledger
-11. Drift update (if implementation differs from plan) — update plan + spec in same PR
-
-**Note:** Geiger (unsafe audit) is disabled for MVP — `rust-wallet-app/` is a virtual manifest. Re-add when codebase grows beyond MVP scope or when bitcoin-wallet-core/ lands.
-
-### Ledger
-
-Per SDD skill: track progress in `.superpowers/sdd/<plan>/progress.md`. Update on:
-- Pick up (task start)
-- Commit (task progress)
-- Merge (task complete)
-
-Ledger survives compaction — trust it over session memory.
-
-### Project scaffolding (current v0.1)
 
 v0.1 deliverables per the merged plan: `rust-wallet-app/crates/bitcoin-wallet-core/` (library) + `rust-wallet-app/crates/btc/` (CLI), inside the umbrella `rust-wallet-app/` workspace. `chain-traits/` exists as the v0.2 umbrella scaffold.

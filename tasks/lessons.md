@@ -25,6 +25,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
+- [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge, gitignored locally
 
 ---
 
@@ -317,3 +318,23 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Apply**: every new task follows this spec literally. If a step doesn't apply, log why in the ledger. If a step fails, escalate per Q9. Re-grill the pipeline after 5 tasks (or when a pattern emerges that the spec doesn't cover).
 
+
+---
+
+## L14 — Ledger rule
+
+**Trigger**: Session 2026-08-07 dedup — `### Ledger` section removed from CLAUDE.md but rule wasn't re-added to lessons.md; the rule was lost in transit. Caught by `grep -n Ledger tasks/lessons.md` returning empty after the dedup commit.
+
+**Rule**:
+
+- **Track progress in `.superpowers/sdd/<plan>/progress.md`** (gitignored locally — survives compaction, never pushes to remote).
+- **Update on three events**:
+  - **Pick up** (task start): record issue #, branch name, plan link
+  - **Commit** (task progress): record commit SHA, drift notes
+  - **Merge** (task complete): record merge commit, closing issue #, all commits
+- **After compaction**: trust the ledger over session memory. If they conflict, ledger wins (it was written deliberately; session memory may be compacted and lose detail).
+- **Recovery pattern**: if you delete a rule from CLAUDE.md, add it to lessons.md in the same commit. Dedup requires two steps: remove + re-insert. One without the other is a silent rule loss.
+
+**Why**: Workflow rules need a single source. CLAUDE.md is read on every session start, so duplicate rules are confusing ("which version wins?"). lessons.md is the project-local corrections ledger — versioned via L1-L14, append-only. Rules go in lessons.md; agent setup, plugin inventory, and visual templates stay in CLAUDE.md.
+
+**Apply**: For every CLAUDE.md dedup, do a 2-step: (1) add rule to lessons.md in the same commit, (2) remove from CLAUDE.md. Verify with `grep <keyword> lessons.md` after the commit.
