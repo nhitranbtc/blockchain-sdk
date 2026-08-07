@@ -21,6 +21,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L7] pause before state-modifying actions (memory)
 - [L8] flip issue checkboxes before squash-merge (memory)
 - [L9] issue bodies = status, PR bodies = fix analysis (with table)
+- [L10] threat model is the answer key — read before writing code
 
 ---
 
@@ -173,3 +174,29 @@ Anti-patterns to avoid:
 - Skipping test-gap callout — if you wrote code without a test, name the missing test.
 
 Apply this schema to: drift fixes, security findings, refactors, breaking changes. Skip for trivial typo/style PRs (one-line body is fine).
+
+---
+
+## L10 — Threat model is the answer key; read before writing code
+
+**Trigger**: Task 1.5 (PR #23) — 4 security findings (3 HIGH + 1 MEDIUM) caught only by post-push automated review. Original `atomic_write` + `permissions` implementation copied plan §Task 1.5 reference code verbatim without re-reading the threat model spec. The plan author had omitted `0o600`, symlink rejection, and RAII cleanup from the code template; the implementation inherited those omissions.
+
+**Rule**: Before writing any code that touches signing / keys / network / secrets / persistence / permissions:
+
+1. **Read the threat model spec** — [`docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md`](../docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md) and [`rust-wallet-app/CONTEXT.md`](../../rust-wallet-app/CONTEXT.md). For each Adversary (A1-A8) and Abuse case (U1-U7), name which task defends against it.
+2. **List attacker-model inputs** for every new function: symlinks? umask? race window? caller-controlled path? Does this implementation actually defend?
+3. **Negative-path tests required.** For atomic_write-style code: "what if dest is symlink?", "what if parent is symlink?", "what if permission can't be read?" Each branch needs a test.
+4. **Verification = Security + Threat-model coverage**, not just Correctness + Test. L9 v3 per-dimension verdict enforces this; apply it.
+5. **At PR-creation time**, answer: "which A1-A8 / U1-U7 does this PR defend against?" If you can't answer, you haven't read the threat model.
+
+**Why**: The threat model IS the answer key. Plan code templates are drafts that may omit mitigations; copying a plan that doesn't enumerate attackers produces code that doesn't defend against them. Power-loss atomicity (U7) is not the same as attacker atomicity (A2) — both are required, neither is implied by the other.
+
+**Apply**:
+
+- Task pickup (per-task loop step 1): list which A/U each task defends. Write this in the per-task pipeline block.
+- Code-writing: for each function with security relevance, ask "attacker-controlled inputs: which?". Symlinks? Permissions? Path traversal? TOCTOU?
+- Test-writing: name each branch in the function; if no test exists, write one before declaring done.
+- Verification: per-dimension verdict (L9 v3) must include Security + Threat-model coverage.
+- PR-creation: include "Defends against: A2, U6, U7" in the body or drift table.
+
+**Anti-pattern (what I did)**: treat the plan's reference code as ground truth. It's a draft. Validate it.
