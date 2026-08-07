@@ -1,0 +1,137 @@
+# lessons.md
+
+Project-local corrections ledger. Seeded from recent commits + ready for new entries.
+
+**Rules** (from Boris Cherny workflow):
+1. After ANY correction from user/review/CI: write new lesson here.
+2. Review this file at session start for relevant project.
+3. Iterate until mistake rate drops.
+4. Keep entries terse: trigger → rule → why → how to apply.
+
+---
+
+## Index
+
+- [L1] Workspace path consistency across docs + Cargo manifests
+- [L2] Schema-validate config keys before commit
+- [L3] Major-version pins stay mutable; bump via Dependabot
+- [L4] Post-scaffold verify pass catches lint/doc issues
+- [L5] Workspace inheritance only when parent defines it
+- [L6] never auto-commit (memory)
+- [L7] pause before state-modifying actions (memory)
+- [L8] flip issue checkboxes before squash-merge (memory)
+- [L9] issue bodies = status, PR bodies = fix analysis (with table)
+
+---
+
+## L1 — Workspace path consistency
+
+**Trigger**: `c2a64b7 docs(claude): fix workspace refs` + `5943c84 fix(umbrella): post-verify polish`.
+
+**Rule**: When project layout changes (workspace rename, crate relocation), grep all `*.md`, `*.toml`, `*.yml` for old paths in one pass. Update CLAUDE.md + plan + Cargo manifests together.
+
+**Why**: 31 stale path references in plan file alone. Drift between docs and actual tree = wrong file edits, broken links, confused contributors.
+
+**Apply**: After any `mkdir` / `mv` / `cargo new` inside rust-wallet-app/, run:
+```
+grep -rn "old-path" docs/ rust-wallet-app/ rust-wallet-app/crates/*/Cargo.toml
+```
+before commit.
+
+---
+
+## L2 — Schema-validate config keys before commit
+
+**Trigger**: `2a46af1 fix(deny): drop unused-allowed key (not in cargo-deny schema)`.
+
+**Rule**: For any tool config file (`deny.toml`, `Cargo.toml`, `ci.yml`), run the tool's dry-run/check before committing. Don't paste config from docs without verifying.
+
+**Why**: `cargo deny check` rejected `unused-allowed = warn` as unexpected key. CI failed. Reviewer caught it; CI caught it; should have caught at write time.
+
+**Apply**: After editing `deny.toml` → `cargo deny check`. After `ci.yml` → `act` or push to branch. After `Cargo.toml` → `cargo metadata --no-deps`.
+
+---
+
+## L3 — Major-version pins stay mutable
+
+**Trigger**: `bd8499d ci: revert checkout to @v4 major tag` + `0e59e85 ci(deps): bump actions/checkout from 4.1.1 to 7.0.1`.
+
+**Rule**: Pin third-party GitHub Actions to MAJOR tag only (`@v4`, not `@v4.1.1`). Dependabot handles minor/patch. Bumps between majors require user approval.
+
+**Why**: Floating SHA = supply-chain risk. Frozen patch = no security updates. Major tag = auto-patch with manual major review. Dependabot config at `.github/dependabot.yml` covers the loop.
+
+**Apply**: When adding/updating CI action → use `@vN` form. Before bumping major → pause, ask user, document rationale in commit body.
+
+---
+
+## L4 — Post-scaffold verify pass
+
+**Trigger**: `5943c84 fix(umbrella): post-verify polish` (cleanup chain-traits missing_docs, repository inheritance).
+
+**Rule**: After scaffolding a new crate/module, run full verify suite immediately: `cargo fmt --check && cargo clippy -- -D warnings && cargo test && cargo doc --no-deps`. Fix lint/doc warnings before declaring scaffold done.
+
+**Why**: `missing_docs` on `SolanaCluster` variants + `ChainError` variants surfaced only when `cargo doc` ran. Scooping these up post-merge = larger PR noise. Cleaning at scaffold origin = one atomic commit.
+
+**Apply**: After `cargo new` / `cargo init` → run verify in same commit. Use `cargo doc --no-deps` (not just `cargo build`) to catch doc-only warnings.
+
+---
+
+## L5 — Workspace inheritance only when parent defines it
+
+**Trigger**: `5943c84 fix(umbrella): post-verify polish` — `chain-traits/Cargo.toml: remove repository.workspace (parent workspace doesn't define repository)`.
+
+**Rule**: `[workspace]` inheritance in member crates only inherits keys the parent WORKSPACE `[workspace]` table defines. If key lives in parent package, not allowed via `.workspace = true`.
+
+**Why**: Cargo error: `the workspace specified by ... does not have the field "repository"`. Field belongs on package, not workspace. Common confusion since `rust-version`, `edition`, `license` ARE workspace-allowed.
+
+**Apply**: Before adding `[field.workspace] true` to member → check parent `Cargo.toml` `[workspace]` table. Workspace-allowed: `package.*` subset (edition, version, authors, license, repository, homepage, rust-version, etc.) — see Cargo docs.
+
+---
+
+## L6 — Never auto-commit (memory)
+
+**Rule**: Pause and ask before any `git commit`. User wants final say on history.
+
+**Why**: Commits = immutable public artifact. No easy undo without rewrite.
+
+**Apply**: Always STOP before `commit`. Report diff + test output. Ask: "commit?". Resume only after approval.
+
+---
+
+## L7 — Pause before state-modifying actions (memory)
+
+**Rule**: Pause before: `gh` calls, branch ops, file moves outside `docs/`. Discuss first, execute after approval.
+
+**Why**: External surface actions (PR create, branch delete, issue close) hard to reverse cleanly.
+
+**Apply**: For any tool that mutates remote state — describe intent, await approval, then execute.
+
+---
+
+## L8 — Flip issue checkboxes before squash-merge (memory)
+
+**Rule**: Before `gh pr merge --squash`, run `gh issue edit N --body "..."` to flip all completed `[ ]` to `[x]`. Audit trail must reflect actual work done.
+
+**Why**: Issue body = source of truth for task completion. Stale checkbox = misleading retrospective.
+
+**Apply**: Per task: at PR-open time, issue body must match code reality. Final check before merge.
+
+---
+
+## L9 — Issue bodies = status, PR bodies = fix analysis
+
+**Trigger**: Task 1.5 security review (2026-08-07) — 4 findings on PR #23. Initially put the before/after + score table in the issue body; user redirected: tables with detailed analysis belong in the PR, issue stays a status tracker.
+
+**Rule**:
+
+- **Issue body** = concise status tracker. Checkboxes for steps, brief drift summary, acceptance criteria, link to PR. Stays readable at-a-glance across many issues.
+- **PR body** = detailed analysis when there's a fix worth documenting. Before/after tables, severity, score delta, pros/cons, main points. Carries the rationale reviewers need.
+- When a fix happens mid-merge (e.g. security review post-push), the detailed before/after table goes in the **PR body**, not the issue body. Update PR via `gh pr edit`; simplify issue body.
+
+**Why**: PRs are reviewed by humans reading code; issues are tracking artifacts that get archived. Long-lived rationale lives where people read once (PR); current state lives where people check often (issue). Detailed analysis in an issue body bloats every list/search result and obscures the checklist.
+
+**Apply**:
+
+- Any PR with a non-trivial fix (drift, security, refactor) → PR body gets a before/after table with: severity, file:line, issue description, before code/behavior, after code/behavior, pros, cons, score (1-10) before/after, and main points.
+- Issue body stays as checklist + 1-line drift summary + PR link.
+- Per-trigger reminder: when automated review (security / pr-review / etc.) flags findings after push, the fix-forward PR is the place for the table; the issue is just "PR #N fixes it".
