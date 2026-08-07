@@ -24,6 +24,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L10] threat model is the answer key — read before writing code
 - [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
 - [L12] code review runs BEFORE local verify gate, not after
+- [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 
 ---
 
@@ -236,3 +237,83 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - PR-creation: include "Defends against: A2, U6, U7" in the body or drift table.
 
 **Anti-pattern (what I did)**: treat the plan's reference code as ground truth. It's a draft. Validate it.
+
+---
+
+## L13 — Per-task pipeline spec (10 decisions, 2026-08-07 grill)
+
+**Trigger**: Session 2026-08-07. User invoked `mattpocock-skills:grilling` to stress-test the per-task pipeline template. 10 questions, 10 decisions. Output: revised pipeline spec.
+
+**Rule** (the spec):
+
+```text
+## Pre-pickup
+1. L11: enumerate loaded skills; tag 3-5 relevant to active task
+2. (Self-detect complexity) → propose "trivial / normal / critical" → user confirms
+
+## Per task
+3. Pick up issue; read threat model (L10); read CONTEXT.md hard rules
+4. karpathy-guidelines + branch checkout
+
+## Per pipeline step
+5. Step: pick skill pair (max 2) from L11 map
+6. Skill #1: invoke
+7. Skill #2: invoke (if applicable)
+8. Domain-tag wins on conflict: security > correctness > simplicity
+
+## Per task
+9. TDD red-green cycle (mattpocock-skills:tdd)
+10. L12: pre-PR code review FIRST — pr-review-toolkit:code-review
+    - Parallel sub-agents: type-design-analyzer + code-reviewer
+    - Run on first commit on branch
+11. Verify (double gate): cargo fmt + clippy -D warnings + test
+    - Per-step AND task-end
+12. PAUSE for commit approval
+    - Max 3 fix rounds; round = one review + one fix commit pair
+13. commit-commands:commit-push-pr
+14. Flip issue checkboxes [ ]→[x]
+15. PR review (parallel sub-agents) + merge + close
+    - If stuck 3 rounds: PAUSE then revert-to-last-green + follow-up issue + ledger entry
+
+## Per session
+16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill
+17. Update ledger after merge
+18. Add new lessons if user corrections or novel patterns (L9 schema)
+```
+
+**Complexity tier → pipeline variation** (self-detect + user confirm):
+
+| Tier | Pipeline |
+| --- | --- |
+| `trivial` (doc-only / single-line) | doc-review only; skip pre-PR code review |
+| `normal` (typical feature) | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
+| `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`) |
+
+**10 decisions (the grilling record)**:
+
+| Q | Decision |
+| --- | --- |
+| 1 | Goals: A (correctness) + C (learning) — speed + reversibility deprioritized |
+| 2 | Skill-tag: per-task pickup (not session-start, not per-step) |
+| 3 | Skill-conflict resolution: domain-tag wins; security > correctness > simplicity |
+| 4 | Max 2 skills per pipeline step |
+| 5 | Fix-loop limit: 3 rounds then PAUSE; round = one review + one fix commit pair |
+| 6 | Verify: double-gate (per-step + task-end) |
+| 7 | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`) |
+| 8 | Review input: first commit on branch (not uncommitted, not squash-merge candidate) |
+| 9 | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry |
+| 10 | Complexity: self-detect + user confirm (hybrid of C + D) |
+
+**Why this spec**:
+
+- Skill-tag per-task pickup (Q2) matches the per-task commit granularity. Per-session was too coarse (Task 0/1/1.5 each had different needs); per-step was overkill.
+- Domain-tag-wins (Q3) encodes threat-model-first as the priority order. Without it, simplicity skills (e.g., `code-simplifier`) could undo security-tag work (e.g., `type-design-analyzer`).
+- Max 2 skills per step (Q4) bounds cost (~$6-18 per task) without sacrificing rigor.
+- Pre-PR review before verify (L12) catches *missing* tests + security gaps that local verify tools cannot.
+- Parallel sub-agents (Q7) match the `pr-review-toolkit:review-pr` pattern: both reviews run concurrently, both perspectives land at once.
+- Review on first commit (Q8) works for multi-commit PRs (Task 1.5 was 6 commits; squash-merge-candidate broke).
+- Self-detect + user confirm (Q10) avoids the inference-error pattern (agent under-estimates trivial-looking security code — exactly what happened in Task 1.5).
+- Off-rails recovery (Q9) ensures the codebase never ships broken; PAUSE + revert-to-last-green is the safe default.
+
+**Apply**: every new task follows this spec literally. If a step doesn't apply, log why in the ledger. If a step fails, escalate per Q9. Re-grill the pipeline after 5 tasks (or when a pattern emerges that the spec doesn't cover).
+
