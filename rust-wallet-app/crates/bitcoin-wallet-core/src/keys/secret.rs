@@ -15,6 +15,20 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 #[derive(ZeroizeOnDrop)]
 pub struct Secret<T: Zeroize>(T);
 
+/// Manual `Debug` impl that hides the inner value. Per L17:
+///
+/// - Auto-deriving `Debug` would leak the secret via `{:?}` formatting,
+///   defeating the whole point of the wrapper.
+/// - `finish_non_exhaustive()` renders as `Secret { .. }` (no field
+///   names). Per CONTEXT.md hard rule #7, this also avoids field-name
+///   collisions with the BIP-39 wordlist (e.g. "secret", "inner",
+///   "key" are all valid BIP-39 words).
+impl<T: Zeroize> std::fmt::Debug for Secret<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Secret").finish_non_exhaustive()
+    }
+}
+
 impl<T: Zeroize> Secret<T> {
     /// Wrap a value. The wrapper takes ownership and zeros on drop.
     pub fn new(value: T) -> Self {
@@ -29,13 +43,17 @@ impl<T: Zeroize> Secret<T> {
 
     /// Move the inner value out. Caller takes responsibility for zeroizing.
     ///
-    /// Per F53: the `unsafe` is scoped to the block, not the method.
-    /// Crate-level `#![deny(unsafe_code)]` still applies — we use a
-    /// per-statement `#[allow(unsafe_code)]` to permit exactly this block.
+    /// Per L18: `ManuallyDrop` + `ptr::read` is panic-safe — no Drop-during-panic
+    /// gap between read and forget. The wrapper's `ZeroizeOnDrop` is
+    /// suppressed by `ManuallyDrop`, so the inner value is moved out
+    /// cleanly without zeroizing (caller's responsibility).
+    ///
+    /// Crate-level `#![deny(unsafe_code)]` still applies. The single
+    /// scoped `unsafe` block is the only unsafe in this function.
     pub fn into_inner(self) -> T {
+        let me = std::mem::ManuallyDrop::new(self);
         #[allow(unsafe_code)]
-        let v = unsafe { std::ptr::read(&self.0) };
-        std::mem::forget(self);
+        let v = unsafe { std::ptr::read(&me.0) };
         v
     }
 }
