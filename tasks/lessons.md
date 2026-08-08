@@ -316,6 +316,7 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
     - Document lives with the commit (audit trail); no separate file to maintain
     - Template at \`docs/templates/per-task-tech-doc.md\`
     - For trivial tasks: 1-line goal + drift table + migration notes minimum
+    - Skill-tag pair (per L11): \`compass:docs-writer\` (primary, generates 10-section doc) + \`compass:api-designer\` (secondary, refines API surface + Drift sections)
 
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill
