@@ -17,6 +17,7 @@ bdk_electrum = { workspace = true }
 bdk_file_store = { workspace = true }
 bitcoin = { workspace = true }
 bip32 = { workspace = true }
+bip39 = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }

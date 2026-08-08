@@ -31,6 +31,12 @@ bdk_file_store = "^0.22"
 # don't use (Task 7 EsploraClient is raw reqwest + custom cert verifier
 # per F20). Re-add only if/when we actually need bdk_esplora's sync helpers.
 bip32 = "^0.5"  # F46 fallback: 0.6 is pre-release only (0.6.0-pre.1)
+# BIP-39 mnemonic (Task 3) — direct dep to enable `zeroize` feature flag.
+# bdk_wallet's bip39 dep has no features → re-exported Mnemonic does NOT
+# impl Zeroize. `Secret<Mnemonic>` requires Zeroize (F47/F53, U3), so we
+# force feature unification here. Also enables `rand` for
+# `Mnemonic::generate` (uses thread_rng internally).
+bip39 = { version = "2.2", features = ["zeroize", "rand"] }
 
 # Shared async + HTTP
 tokio = { version = "1", features = ["full"] }
