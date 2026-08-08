@@ -57,15 +57,18 @@ pub struct Mnemonic(Secret<bip39::Mnemonic>);
 // Manual `Debug` impl: hides the secret inner in `{:?}` output (threat-model
 // U3 mitigation — mnemonic must never appear in logs, panic messages, or
 // error chains). `Secret<T>` doesn't derive `Debug` for the same reason.
+//
+// Uses `finish_non_exhaustive()` (renders as `Mnemonic { .. }`) instead of
+// naming any field — field names like `"inner"` can collide with BIP-39
+// wordlist words (e.g. "inner" is word 933 of the English wordlist), which
+// makes a "no phrase word appears in Debug" assertion flaky.
 // NOTE: `bip39::Mnemonic` itself impls `Display` and prints the full phrase
 // (bip39 2.2.2 src/lib.rs:646). We deliberately do NOT impl `Display` on our
 // wrapper — `format!("{}", m)` and `println!("{}", m)` would leak the
 // phrase. This omission is load-bearing; do not "fix" it.
 impl std::fmt::Debug for Mnemonic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Mnemonic")
-            .field("inner", &"<hidden>")
-            .finish()
+        f.debug_struct("Mnemonic").finish_non_exhaustive()
     }
 }
 
@@ -361,6 +364,9 @@ mod tests {
         let m = Mnemonic::generate(12).expect("generate");
         let dbg = format!("{m:?}");
         // The actual phrase words must NOT appear in the Debug output.
+        // Uses `finish_non_exhaustive()` so Debug renders as
+        // `Mnemonic { .. }` with no field names (field names can collide
+        // with BIP-39 wordlist words).
         let phrase = m.to_phrase();
         for word in phrase.expose().split_whitespace() {
             assert!(
@@ -368,10 +374,10 @@ mod tests {
                 "Debug output leaks word {word:?}: {dbg}"
             );
         }
-        // The literal "<hidden>" sentinel must appear.
+        // Sanity: Debug output mentions Mnemonic by name.
         assert!(
-            dbg.contains("<hidden>"),
-            "Debug should show <hidden>: {dbg}"
+            dbg.contains("Mnemonic"),
+            "Debug should name Mnemonic: {dbg}"
         );
     }
 
