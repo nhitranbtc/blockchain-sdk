@@ -80,6 +80,14 @@ pub enum Error {
     /// Upstream `std::io::Error` (per drift closure from Task 1.5).
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+
+    /// BIP-137 message-signing protocol error (Task 6). Per F43
+    /// pattern (per-protocol variant): kept distinct from `Sign`
+    /// (transaction signing) so callers can match message-signing
+    /// failures separately. Defends F7 (U5) and F50 (constant-time
+    /// verify).
+    #[error("bip137: {0}")]
+    Bip137(String),
 }
 
 /// Result alias used by every public function in this crate.

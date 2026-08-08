@@ -33,7 +33,8 @@
 //!   caller's original `SecretKey` variable retains a copy (Copy type).
 //!   Caller should `sk.non_secure_erase()` before/after passing.
 
-use bdk_wallet::bitcoin::secp256k1::{ecdsa::Signature, Message, PublicKey, Secp256k1, SecretKey};
+use bdk_wallet::bitcoin::secp256k1::ecdsa::{RecoverableSignature, RecoveryId, Signature};
+use bdk_wallet::bitcoin::secp256k1::{Message, PublicKey, Secp256k1, SecretKey};
 use zeroize::Zeroize;
 
 use crate::error::{Error, Result};
@@ -135,6 +136,24 @@ impl Signer {
         let bytes = self.secret_bytes.expose();
         SecretKey::from_slice(bytes)
             .expect("stored secret bytes are valid (set by from_secret_key/from_xprv)")
+    }
+
+    /// Sign a 32-byte digest recoverably. Returns `(RecoveryId, [u8; 64])`.
+    ///
+    /// **Task 6 (BIP-137):** `pub(crate)` only — public callers must use
+    /// `crypto::bip137::sign_message` so the narrow F7 API stays the
+    /// only signing entrypoint. Per security-auditor L12 review (F7
+    /// hygiene: every `pub` 32-byte-signing method is a phishing vector).
+    ///
+    /// The local `SecretKey` is `non_secure_erase`-ed immediately after
+    /// the FFI call returns. The returned `[u8; 64]` is the compact
+    /// signature bytes (public material, not secret).
+    pub(crate) fn sign_recoverable(&self, hash: &[u8; 32]) -> Result<(RecoveryId, [u8; 64])> {
+        let msg = Message::from_digest(*hash);
+        let mut sk = self.secret_key();
+        let rec_sig: RecoverableSignature = self.secp.sign_ecdsa_recoverable(&msg, &sk);
+        sk.non_secure_erase();
+        Ok(rec_sig.serialize_compact())
     }
 }
 
