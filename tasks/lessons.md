@@ -346,6 +346,40 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 
 **Apply**: every new task follows this spec literally. If a step doesn't apply, log why in the ledger. If a step fails, escalate per Q9. Re-grill the pipeline after 5 tasks (or when a pattern emerges that the spec doesn't cover).
 
+**Display layer (cross-reference)**: every pipeline diagram must use the 6 canonical stages from `CLAUDE.md` Task display rule — **Intent → Rebase → Review → Test → Document → Lint**. L13 owns the process decisions (above); CLAUDE.md owns the display stages. Sub-activities (TDD, L12 review, fix round, merge pause, ledger update) belong in the row's progress detail or as separate notes — not as additional stages.
+
+**Why display layer matters**: Task 5 folded Document + Lint into ad-hoc stages (`Commit + push + PR`, `Ledger + lessons`, `Verify`). The Document work actually happened (module docs, PR body, lessons, threat-model mapping) but was invisible in the pipeline diagram. From Task 6 onward, render pipelines as the 6 stages.
+
+**Document stage checklist** (what Task 5 missed showing):
+
+- Module doc on each new public type (defends / does-not-defend + drift table)
+- Threat-model mapping (F5/F6 references in module docs)
+- PR body with L9 v3 schema (drift table + technical details + test gaps + migration + per-dimension verdict)
+- Lessons.md update (if any new L-number emerged)
+- Ledger update (`.superpowers/sdd/<plan>/progress.md`) — pickup / commit / merge events
+
+**Lint stage checklist**:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --workspace --lib`
+- `cargo geiger` (geiger count must not grow beyond F53-permitted 2)
+
+**Task 5 retroactive 6-stage pipeline** (for reference):
+
+```text
+Pipeline
+task/5-encryption                                                       running
+  ✓ Intent     (pick up #16, branch task/5-encryption from main, L10 threat model)
+  ✓ Rebase     (branched from main; trunk-based, no rebase during task)
+  ✓ Review     (L12: 3 parallel sub-agents — security-auditor + type-design + code-review)
+  ✓ Test       (TDD + 85 tests passing; 20 new crypto tests)
+  ✓ Document   (module docs x4 + drift tables + PR body L9 v3 + lessons L17 + threat-model mapping)
+  ✓ Lint       (cargo fmt + clippy -D warnings + cargo test + cargo geiger)
+```
+
+Future tasks (Task 6 bip137 onward) must use this 6-stage format.
+
 
 ---
 
