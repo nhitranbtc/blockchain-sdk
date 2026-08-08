@@ -25,7 +25,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
-- [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge, gitignored locally
+- [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
 - [L15] `Secret<T>` where T: Copy defeats zeroize-on-drop
 - [L16] `#[derive(ZeroizeOnDrop)]` requires ALL fields to impl Zeroize
 - [L17] `Secret<T>` (and any sensitive newtype) needs manual `Debug` impl using `finish_non_exhaustive()` — auto-derive leaks plaintext via `{:?}` formatting; manual impl also satisfies `Result::expect_err` ergonomics
@@ -147,6 +147,7 @@ before commit.
 | `Sev` | LOW / MEDIUM / HIGH / CRITICAL — tagged by impact, not by review-tool severity |
 | `` File:line `` | code block (e.g. `` `keys/secret.rs:25` ``) — pin to current lines after fix |
 | `Result` | what was achieved after the improvement (concrete outcome) |
+| `Trade-off` | explicit cost the fix imposed (perf, complexity, API surface, deps) — required per antipattern 5 |
 | `Score` | `N/10 — <handle>` — honest self-score per row, with attribution |
 | `Note` | future improvements needed (or "None") |
 
@@ -184,65 +185,6 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ---
 
-## L11 — Scan skills list at session start, tag 3-5 relevant, invoke before doing
-
-**Trigger**: Session 2026-08-07 — 9 Matt Pocock skills (`mattpocock-skills:*`), ~15 superpowers, ~10 compound-engineering, ~10 pr-review-toolkit, ~20 compass/ecc skills were loaded. Used 3 total (karpathy-guidelines, commit-commands:commit-push-pr, pr-review-toolkit:review-pr). Said "I don't see Matt Pocock plugins" when they were loaded — only saw them after user repeated the question and SessionStart hook listed them again.
-
-**Rule**:
-
-1. **At every session start**, enumerate the skills list (`/skills` if listed, or the SessionStart hook output) and tag 3-5 skills that match the active task.
-2. **Before starting each task step** (pickup, TDD, verify, pre-PR, post-merge), invoke the relevant skill — don't rely on manual checklist.
-3. **If a skill exists for a step I'm doing manually, invoke it.** Manual checklist failure modes: blind spots, missing sub-agents, no parallel review.
-
-**Why**: 47 skills available. Skills encode battle-tested workflows (Pocock's TDD, superpowers:verification-before-completion, pr-review-toolkit:code-review with parallel sub-agents). Each one I skip is a workflow gap. Task 1.5's 4 security findings would have been caught by `pr-review-toolkit:code-review` invoked pre-PR instead of `security-guidance` invoked post-push.
-
-**Skill → task-step mapping** (use this as starting checklist):
-
-| Task step | Skill to invoke first |
-| --- | --- |
-| Task pickup (understand + plan) | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step |
-| TDD red-green-refactor | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`) |
-| Build/cargo error cascade | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`) |
-| Module interface design | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) |
-| Pre-PR review (security, tests, structure) | `pr-review-toolkit:code-review` (parallel sub-agents for Standards + Spec axes) |
-| Test coverage gap analysis | `pr-review-toolkit:pr-test-analyzer` |
-| Doc / threat-model review | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`) |
-| Before declaring done | `superpowers:verification-before-completion` |
-| Commit + push + PR | `commit-commands:commit-push-pr` |
-
-**Apply**:
-
-- After every `Skill` invocation that returns useful guidance, invoke it AGAIN at the next task step (don't skip).
-- If a skill invocation feels redundant with manual approach, the redundancy IS the value — manual approach has unknown blind spots; skill approach has known workflow.
-- Negative example: in Task 1.5, I ran `cargo test + cargo clippy + cargo fmt` and declared done. `superpowers:verification-before-completion` would have surfaced "did you check security?" — manual checklist didn't.
-
-**Score-based re-evaluation (2026-08-07, after user asked "why these plugins?"):**
-
-Scored all 9 steps on 5 dimensions (description match / prior use / suite consistency / specificity / caveat awareness, 1-5 each, max 25). Compared L11 pick to score-based winner:
-
-| Step | L11 pick | Score | Score-based pick | Score | Winner | Reason for change |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1. Task pickup | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step | 21 + 15 | `domain-modeling` + `ce-plan` (same) | 21 + 15 | **Same** | Score-aligned. domain-modeling wins on specificity; ce-plan on multi-step structure. |
-| 2. TDD | `mattpocock-skills:tdd` | 17 | `superpowers:test-driven-development` | **19** | **CHANGE → superpowers:tdd** | superpowers suite is more rigorous + well-documented. "NOT manual" was gatekeeping dressed as recommendation. |
-| 3. Build error cascade | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`) | 17 | `superpowers:systematic-debugging` | **19** | **CHANGE → superpowers:systematic-debugging** | Same suite-rigor pattern as #2. systematic-debugging has structured engineering workflow. |
-| 4. Module interface | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) | 19 | `codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair) | 19 + 19 | **CHANGE → pair (per L13 Q4)** | Different lens: codebase-design = seam/deep-module; type-design-analyzer = type-level invariants. Rust-natural. Per L13 max 2 skills/step, pair them. |
-| 5. Pre-PR review | `pr-review-toolkit:code-review` | 20 | `pr-review-toolkit:code-review` (same) | 20 | **Same** | Unique parallel sub-agents (Standards + Spec). No competitor. |
-| 6. Coverage gap | `pr-review-toolkit:pr-test-analyzer` | 20 | `pr-test-analyzer` (same) | 20 | **Same** | Direct match. No competitor. |
-| 7. Doc / threat-model | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`) | 14 | `mattpocock-skills:domain-modeling` (re-invoke) | **18** | **CHANGE → domain-modeling re-invoke** | Threat model IS a domain artifact. The same skill that built it can review it. Generic doc-review lacks threat-model awareness. |
-| 8. Before declaring done | `superpowers:verification-before-completion` | 20 | `verification-before-completion` (same) | 20 | **Same** | Direct name match. (User rejected adding to L13 step 11 — L11 mapping still recommends it.) |
-| 9. Commit + push + PR | `commit-commands:commit-push-pr` | **22** | `commit-push-pr` (same) | 22 | **Same** | Validated 3x (Tasks 0/1/1.5). Only entry with prior-use evidence. |
-
-**Summary of changes:**
-
-| Step | Action | New pick |
-| --- | --- | --- |
-| 2 | CHANGE | `superpowers:test-driven-development` (was `mattpocock-skills:tdd`) |
-| 3 | CHANGE | `superpowers:systematic-debugging` (was `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)) |
-| 4 | CHANGE (add pair) | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) + `pr-review-toolkit:type-design-analyzer` (was just `codebase-design`) |
-| 7 | CHANGE | `mattpocock-skills:domain-modeling` (re-invoke; was `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`)) |
-
----
-
 ## L10 — Threat model is the answer key; read before writing code
 
 **Trigger**: Task 1.5 (PR #23) — 4 security findings (3 HIGH + 1 MEDIUM) caught only by post-push automated review. Original `atomic_write` + `permissions` implementation copied plan §Task 1.5 reference code verbatim without re-reading the threat model spec. The plan author had omitted `0o600`, symlink rejection, and RAII cleanup from the code template; the implementation inherited those omissions.
@@ -269,6 +211,80 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 
 ---
 
+## L11 — Scan skills list at session start, tag 3-5 relevant, invoke before doing
+
+**Trigger**: Session 2026-08-07 — 9 Matt Pocock skills (`mattpocock-skills:*`), ~15 superpowers, ~10 compound-engineering, ~10 pr-review-toolkit, ~20 compass/ecc skills were loaded. Used 3 total (karpathy-guidelines, commit-commands:commit-push-pr, pr-review-toolkit:review-pr). Said "I don't see Matt Pocock plugins" when they were loaded — only saw them after user repeated the question and SessionStart hook listed them again.
+
+**Rule**:
+
+1. **At every session start**, enumerate the skills list (`/skills` if listed, or the SessionStart hook output) and tag 3-5 skills that match the active task.
+2. **Before starting each task step** (pickup, TDD, verify, pre-PR, post-merge), invoke the relevant skill — don't rely on manual checklist.
+3. **If a skill exists for a step I'm doing manually, invoke it.** Manual checklist failure modes: blind spots, missing sub-agents, no parallel review.
+
+**Why**: 47 skills available. Skills encode battle-tested workflows (Pocock's TDD, superpowers:verification-before-completion, pr-review-toolkit:code-review with parallel sub-agents). Each one I skip is a workflow gap. Task 1.5's 4 security findings would have been caught by `pr-review-toolkit:code-review` invoked pre-PR instead of `security-guidance` invoked post-push.
+
+**Skill → task-step mapping** (use this as starting checklist):
+
+| Task step | Skill to invoke first |
+| --- | --- |
+| Task pickup (understand + plan) | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step |
+| TDD red-green-refactor | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`) |
+| Build/cargo error cascade | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`) |
+| Module interface design | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) |
+| Pre-PR review (security, tests, structure) | `pr-review-toolkit:code-review` (parallel sub-agents for Standards + Spec axes) |
+| Test coverage gap analysis | `pr-review-toolkit:pr-test-analyzer` |
+| Doc / threat-model review | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`) |
+| Document stage (per-task tech doc → PR body) | `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections) |
+| Before declaring done | `superpowers:verification-before-completion` |
+| Commit + push + PR | `commit-commands:commit-push-pr` |
+
+**Apply**:
+
+- After every `Skill` invocation that returns useful guidance, invoke it AGAIN at the next task step (don't skip).
+- If a skill invocation feels redundant with manual approach, the redundancy IS the value — manual approach has unknown blind spots; skill approach has known workflow.
+- Negative example: in Task 1.5, I ran `cargo test + cargo clippy + cargo fmt` and declared done. `superpowers:verification-before-completion` would have surfaced "did you check security?" — manual checklist didn't.
+
+**Score-based re-evaluation (2026-08-07, after user asked "why these plugins?"):**
+
+Scored all 9 steps on 5 dimensions (description match / prior use / suite consistency / specificity / caveat awareness, 1-5 each, max 25). Compared L11 pick to score-based winner:
+
+| Step | L11 pick | Score | Score-based pick | Score | Winner | Reason for change |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1. Task pickup | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step | 21 + 15 | `domain-modeling` + `ce-plan` (same) | 21 + 15 | **Same** | Score-aligned. domain-modeling wins on specificity; ce-plan on multi-step structure. |
+| 2. TDD | `mattpocock-skills:tdd` | 17 | `superpowers:test-driven-development` | **19** | **CHANGE → superpowers:tdd** | superpowers suite is more rigorous + well-documented. "NOT manual" was gatekeeping dressed as recommendation. |
+| 3. Build error cascade | `mattpocock-skills:diagnosing-bugs` | 17 | `superpowers:systematic-debugging` | **19** | **CHANGE → superpowers:systematic-debugging** | Same suite-rigor pattern as #2. systematic-debugging has structured engineering workflow. |
+| 4. Module interface | `mattpocock-skills:codebase-design` | 19 | `codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair) | 19 + 19 | **CHANGE → pair (per L13 Q4)** | Different lens: codebase-design = seam/deep-module; type-design-analyzer = type-level invariants. Rust-natural. Per L13 max 2 skills/step, pair them. |
+| 5. Pre-PR review | `pr-review-toolkit:code-review` | 20 | `pr-review-toolkit:code-review` (same) | 20 | **Same** | Unique parallel sub-agents (Standards + Spec). No competitor. |
+| 6. Coverage gap | `pr-review-toolkit:pr-test-analyzer` | 20 | `pr-test-analyzer` (same) | 20 | **Same** | Direct match. No competitor. |
+| 7. Doc / threat-model | `compound-engineering:ce-doc-review` | 14 | `mattpocock-skills:domain-modeling` (re-invoke) | **18** | **CHANGE → domain-modeling re-invoke** | Threat model IS a domain artifact. The same skill that built it can review it. Generic doc-review lacks threat-model awareness. |
+| 8. Before declaring done | `superpowers:verification-before-completion` | 20 | `verification-before-completion` (same) | 20 | **Same** | Direct name match. (User rejected adding to L13 step 11 — L11 mapping still recommends it.) |
+| 9. Commit + push + PR | `commit-commands:commit-push-pr` | **22** | `commit-push-pr` (same) | 22 | **Same** | Validated 3x (Tasks 0/1/1.5). Only entry with prior-use evidence. |
+
+**Summary of changes:**
+
+| Step | Action | New pick |
+| --- | --- | --- |
+| 2 | CHANGE | `superpowers:test-driven-development` (was `mattpocock-skills:tdd`) |
+| 3 | CHANGE | `superpowers:systematic-debugging` (was `mattpocock-skills:diagnosing-bugs`) |
+| 4 | CHANGE (add pair) | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4; was just `codebase-design`) |
+| 7 | CHANGE | `mattpocock-skills:domain-modeling` (re-invoke; was `compound-engineering:ce-doc-review`) |
+
+---
+
+---**Trigger**: Task 1.5 (PR #23) — 4 security findings (3 HIGH + 1 MEDIUM) caught by post-push automated review. Local verify gate (`cargo fmt --check && cargo clippy -- -D warnings && cargo test`) had already declared green. Pre-PR review would have caught the gaps before squash-merge.
+
+**Rule**: Run `pr-review-toolkit:code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer`) on the first commit on the branch, BEFORE the local verify gate. Output drives the fix commit. Verify gate then runs on the final fix, not the first pre-review pass.
+
+**Why**: Local verify tools (`cargo fmt`, `clippy`, `cargo test`) detect what compiles and what lints. They do not detect missing tests, wrong abstractions, or security gaps. Pre-PR review closes those gaps before merge becomes irreversible. Post-merge review = revert + hotfix cost.
+
+**Apply**:
+- First commit on branch → invoke review pair (`type-design-analyzer` + `code-reviewer`) in parallel → fix findings → THEN run verify gate → THEN PAUSE for commit.
+- L13 step 10 enforces this sequence; L15 trigger "L12 review (security + type-design) caught multiple CRITICAL/HIGH findings" refers to this same gate.
+- Sub-agent lens coverage: `type-design-analyzer` (encapsulation, invariant expression, type-level soundness) + `code-reviewer` (correctness, security, convention). Run concurrently, both perspectives land at once.
+- For `critical` complexity tier (per L13), add `pr-review-toolkit:security-auditor` as a third sub-agent (max 3 skills per step under Q4 carve-out).
+
+---
+
 ## L13 — Per-task pipeline spec (10 decisions, 2026-08-07 grill)
 
 **Trigger**: Session 2026-08-07. User invoked `mattpocock-skills:grilling` to stress-test the per-task pipeline template. 10 questions, 10 decisions. Output: revised pipeline spec.
@@ -291,12 +307,13 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 8. Domain-tag wins on conflict: security > correctness > simplicity
 
 ## Per task
-9. TDD red-green cycle (mattpocock-skills:tdd)
+9. TDD red-green cycle (superpowers:test-driven-development)
 10. L12: pre-PR code review FIRST — pr-review-toolkit:code-review
     - Parallel sub-agents: type-design-analyzer + code-reviewer
     - Run on first commit on branch
 11. Verify (double gate): cargo fmt + clippy -D warnings + test
     - Per-step AND task-end
+    - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
     - **Fixable now**: fix in current commit, re-verify, continue
     - **Small deferred** (cosmetic, follow-up): log in current session's backlogs list
@@ -314,9 +331,7 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
     - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
-    - Template at \`docs/templates/per-task-tech-doc.md\`
-    - For trivial tasks: 1-line goal + drift table + migration notes minimum
-    - Skill-tag pair (per L11): \`compass:docs-writer\` (primary, generates 10-section doc) + \`compass:api-designer\` (secondary, refines API surface + Drift sections)
+    - Skill-tag pair (per L11, Document stage): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill
@@ -339,8 +354,8 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 | 1 | Goals: A (correctness) + C (learning) — speed + reversibility deprioritized |
 | 2 | Skill-tag: per-task pickup (not session-start, not per-step) |
 | 3 | Skill-conflict resolution: domain-tag wins; security > correctness > simplicity |
-| 4 | Max 2 skills per pipeline step |
-| 5 | Fix-loop limit: 3 rounds then PAUSE; round = one review + one fix commit pair |
+| 4 | Max 2 skills per pipeline step (`critical` tier: max 3 — see complexity tier table) |
+| 5 | Fix-loop limit: 3 rounds per task then PAUSE; round = one review + one fix commit pair. Shared budget across pre-commit (step 12) and post-PR-review (step 15). Exceed → PAUSE + revert-to-last-green + follow-up issue + ledger entry (Q9). |
 | 6 | Verify: double-gate (per-step + task-end) |
 | 7 | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`) |
 | 8 | Review input: first commit on branch (not uncommitted, not squash-merge candidate) |
@@ -383,7 +398,7 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 
 ```text
 Pipeline
-task/5-encryption                                                       running
+task/5-encryption                                                       success
   ✓ Intent     (pick up #16, branch task/5-encryption from main, L10 threat model)
   ✓ Rebase     (branched from main; trunk-based, no rebase during task)
   ✓ Review     (L12: 3 parallel sub-agents — security-auditor + type-design + code-review)
@@ -404,10 +419,11 @@ Future tasks (Task 6 bip137 onward) must use this 6-stage format.
 **Rule**:
 
 - **Track progress in `.superpowers/sdd/<plan>/progress.md`** (gitignored locally — survives compaction, never pushes to remote).
-- **Update on three events**:
+- **Update on four events**:
   - **Pick up** (task start): record issue #, branch name, plan link
   - **Commit** (task progress): record commit SHA, drift notes
   - **Merge** (task complete): record merge commit, closing issue #, all commits
+  - **Grill** (per L13 step 16): record grill date, decisions altered, lessons captured. Resets the tasks-since-last-grill counter that triggers the re-grill loop.
 - **After compaction**: trust the ledger over session memory. If they conflict, ledger wins (it was written deliberately; session memory may be compacted and lose detail).
 - **Recovery pattern**: if you delete a rule from CLAUDE.md, add it to lessons.md in the same commit. Dedup requires two steps: remove + re-insert. One without the other is a silent rule loss.
 
