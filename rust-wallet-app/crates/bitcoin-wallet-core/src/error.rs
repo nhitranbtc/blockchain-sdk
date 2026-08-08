@@ -88,6 +88,14 @@ pub enum Error {
     /// verify).
     #[error("bip137: {0}")]
     Bip137(String),
+
+    /// SPKI pin parse/validation error (Task 7). Per F43 pattern
+    /// (per-protocol variant): kept distinct from `Esplora` (HTTP
+    /// runtime) so callers can distinguish "config is malformed"
+    /// (fix the file) from "chain backend is unreachable" (retry).
+    /// Defends F20 (SPKI pinning).
+    #[error("spki pin: {0}")]
+    SpkiPin(String),
 }
 
 /// Result alias used by every public function in this crate.
