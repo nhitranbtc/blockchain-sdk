@@ -16,7 +16,10 @@ license = "MIT"
 [workspace.dependencies]
 # Per-chain SDKs
 bitcoin-wallet-core = { path = "crates/bitcoin-wallet-core" }
-bitcoin = "0.32"
+bitcoin = { version = "0.32", features = ["serde"] }  # F20/TD-03: serde feature required by config::WalletConfig (Network: Serialize).
+# bdk_wallet enables it transitively today; declare directly so a bdk
+# minor bump can't silently break the build. Same pattern as bip39/zeroize
+# (CONTEXT.md hard rule #6).
 
 # Bitcoin (BDK 3.1 + fallback chain per F26)
 # Note: bdk_wallet 3.x pins bdk_chain 0.23.x and bdk_file_store 0.22.x.
@@ -66,6 +69,15 @@ base64 = "0.22"
 
 # Constant-time comparison (used by crypto::bip137 for hash160 verify per F50)
 subtle = "2"
+
+# TLS pinning (Task 7 — F20 SPKI pinning per threat model B2/U2).
+# Raw reqwest + custom ServerCertVerifier (CONTEXT.md hard rule #2:
+# no bdk_esplora; pulls rustls-webpki 0.101.7 RUSTSEC-2026-0106).
+rustls             = { version = "0.23", default-features = false, features = ["std", "tls12", "logging"] }
+rustls-native-certs = "0.7"  # Native system CA roots (Task 7 — F20 TLS pinning)
+sha2               = "0.10"
+webpki             = { version = "0.22", default-features = false, features = ["std"] }
+x509-parser        = "0.16"  # SPKI DER extraction (Task 7 — F20 TLS pinning)
 
 # Serde (config + Error serialization)
 serde = { version = "1", features = ["derive"] }
