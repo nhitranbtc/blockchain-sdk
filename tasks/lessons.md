@@ -331,7 +331,7 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
     - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
-    - Skill-tag pair (per L11, Document stage): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
+    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill
@@ -402,7 +402,7 @@ task/5-encryption                                                       success
   ✓ Intent     (pick up #16, branch task/5-encryption from main, L10 threat model)
   ✓ Rebase     (branched from main; trunk-based, no rebase during task)
   ✓ Review     (L12: 3 parallel sub-agents — security-auditor + type-design + code-review)
-  ✓ Test       (TDD + 85 tests passing; 20 new crypto tests)
+  ✓ Test       (TDD + 85 tests passing; 23 new crypto tests)
   ✓ Document   (module docs x4 + drift tables + PR body L9 v3 + lessons L17 + threat-model mapping)
   ✓ Lint       (cargo fmt + clippy -D warnings + cargo test + cargo geiger)
 ```
@@ -425,6 +425,7 @@ Future tasks (Task 6 bip137 onward) must use this 6-stage format.
   - **Merge** (task complete): record merge commit, closing issue #, all commits
   - **Grill** (per L13 step 16): record grill date, decisions altered, lessons captured. Resets the tasks-since-last-grill counter that triggers the re-grill loop.
 - **After compaction**: trust the ledger over session memory. If they conflict, ledger wins (it was written deliberately; session memory may be compacted and lose detail).
+- **Apply**: when re-grilling per L13 step 16, append a Grill event to the ledger with date, decisions altered, and lessons captured. Resets the counter that triggers the next re-grill (L13 step 16 = "5+ tasks since last grill").
 - **Recovery pattern**: if you delete a rule from CLAUDE.md, add it to lessons.md in the same commit. Dedup requires two steps: remove + re-insert. One without the other is a silent rule loss.
 
 **Why**: Workflow rules need a single source. CLAUDE.md is read on every session start, so duplicate rules are confusing ("which version wins?"). lessons.md is the project-local corrections ledger — versioned via L1-L14, append-only. Rules go in lessons.md; agent setup, plugin inventory, and visual templates stay in CLAUDE.md.
