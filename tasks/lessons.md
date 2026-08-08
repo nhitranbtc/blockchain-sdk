@@ -297,6 +297,13 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
     - Run on first commit on branch
 11. Verify (double gate): cargo fmt + clippy -D warnings + test
     - Per-step AND task-end
+11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
+    - **Fixable now**: fix in current commit, re-verify, continue
+    - **Small deferred** (cosmetic, follow-up): log in current session's backlogs list
+    - **Big task** (multi-PR, multi-week): create GitHub issue, label `backlog`, link to parent task
+    - **Future milestone** (v0.1.1, v0.2): log in current session's backlogs list with priority tag
+    - GitHub issue format: title `Backlog: <short description>`, body = acceptance criteria + priority + parent task ref, labels = `backlog` + `priority/p0|p1|p2|p3` + `week/N` (if applicable), milestone = parent task's milestone
+    - When in doubt: write the issue. Forgetting backlogs costs more than the 30-60s to file one.
 12. PAUSE for commit approval
     - Max 3 fix rounds; round = one review + one fix commit pair
 13. commit-commands:commit-push-pr
