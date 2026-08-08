@@ -310,6 +310,12 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 14. Flip issue checkboxes [ ]→[x]
 15. PR review (parallel sub-agents) + merge + close
     - If stuck 3 rounds: PAUSE then revert-to-last-green + follow-up issue + ledger entry
+15a. **Write technical document → enrich PR body** (before merge):
+    - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
+    - Append/replace existing PR body with the full doc
+    - Document lives with the commit (audit trail); no separate file to maintain
+    - Template at \`docs/templates/per-task-tech-doc.md\`
+    - For trivial tasks: 1-line goal + drift table + migration notes minimum
 
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill
