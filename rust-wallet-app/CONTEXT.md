@@ -60,6 +60,7 @@ project term, not the generic one, in code, comments, and PR text.
 3. **Never bump `bdk_wallet` / `bdk_chain` / `bdk_file_store` / `bdk_electrum` across major versions without a threat-model update in the same PR.** Pinned to 3.x / 0.23.x / 0.22.x / 0.24.x.
 4. **Never add `atty`.** Replaced by `IsTerminal` abstraction per F48.
 5. **Never commit secrets, test mnemonics, or addresses mapping to mainnet funds** — even on testnet, never reuse a published BIP-39 test vector.
+6. **Never drop the `bip39` `zeroize` feature.** Required for `Secret<bip39::Mnemonic>` to compile. `bdk_wallet`'s transitive `bip39` dep is declared without features, so `bitcoin-wallet-core` declares `bip39` directly in `[workspace.dependencies]` to force feature unification (Task 3, 2026-08-08). If a future maintainer tries to remove the direct dep, `Secret<Mnemonic>` will fail to compile with "the trait bound `bip39::Mnemonic: Zeroize` is not satisfied."
 
 (Rules for "never persist xprv", "never sign raw bytes", and "never write
 files outside `atomic_write`" are type-enforced via `Secret<T>`,

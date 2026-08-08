@@ -1,6 +1,9 @@
-//! Key material: mnemonic, BIP-32 derivation, secp256k1 signer, `Secret<T>` wrapper.
+//! Key material.
 //!
-//! Stub for Task 1, Step 13. Filled by Task 1.5 (Secret<T>) and Tasks 3-4 (mnemonic, derivation, signer).
+//! Filled by Tasks 1.5 (`Secret<T>`), 3 (`Mnemonic`), 4 (`Signer` + derivation).
 
+mod mnemonic;
 mod secret;
+
+pub use mnemonic::Mnemonic;
 pub use secret::Secret;
