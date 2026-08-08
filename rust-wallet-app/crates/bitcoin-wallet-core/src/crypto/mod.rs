@@ -1,3 +1,7 @@
-//! Cryptographic primitives: Argon2id, AES-256-GCM, BIP-137 message signing.
+//! Cryptographic primitives: Argon2id (KDF), AES-256-GCM (AEAD), BIP-137 (msg sig).
 //!
-//! Stub for Task 1, Step 13. Filled by Tasks 5-6 (argon2, aes_gcm, bip137).
+//! Filled by Task 5 (argon2, aes_gcm) and Task 6 (bip137).
+
+pub mod aes_gcm;
+pub mod argon2;
+pub mod bip137;

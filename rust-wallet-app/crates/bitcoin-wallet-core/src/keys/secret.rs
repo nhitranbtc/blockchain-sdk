@@ -15,6 +15,20 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 #[derive(ZeroizeOnDrop)]
 pub struct Secret<T: Zeroize>(T);
 
+/// Manual `Debug` impl that hides the inner value. Per L17:
+///
+/// - Auto-deriving `Debug` would leak the secret via `{:?}` formatting,
+///   defeating the whole point of the wrapper.
+/// - `finish_non_exhaustive()` renders as `Secret { .. }` (no field
+///   names). Per CONTEXT.md hard rule #7, this also avoids field-name
+///   collisions with the BIP-39 wordlist (e.g. "secret", "inner",
+///   "key" are all valid BIP-39 words).
+impl<T: Zeroize> std::fmt::Debug for Secret<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Secret").finish_non_exhaustive()
+    }
+}
+
 impl<T: Zeroize> Secret<T> {
     /// Wrap a value. The wrapper takes ownership and zeros on drop.
     pub fn new(value: T) -> Self {

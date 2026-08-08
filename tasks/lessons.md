@@ -26,6 +26,9 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge, gitignored locally
+- [L15] `Secret<T>` where T: Copy defeats zeroize-on-drop
+- [L16] `#[derive(ZeroizeOnDrop)]` requires ALL fields to impl Zeroize
+- [L17] `Secret<T>` (and any sensitive newtype) needs manual `Debug` impl using `finish_non_exhaustive()` — auto-derive leaks plaintext via `{:?}` formatting; manual impl also satisfies `Result::expect_err` ergonomics
 
 ---
 
@@ -363,3 +366,55 @@ Scored all 9 steps on 5 dimensions (description match / prior use / suite consis
 **Why**: Workflow rules need a single source. CLAUDE.md is read on every session start, so duplicate rules are confusing ("which version wins?"). lessons.md is the project-local corrections ledger — versioned via L1-L14, append-only. Rules go in lessons.md; agent setup, plugin inventory, and visual templates stay in CLAUDE.md.
 
 **Apply**: For every CLAUDE.md dedup, do a 2-step: (1) add rule to lessons.md in the same commit, (2) remove from CLAUDE.md. Verify with `grep <keyword> lessons.md` after the commit.
+
+---
+
+## L15 — `Secret<T>` where T: Copy defeats zeroize-on-drop
+
+**Trigger**: Tasks 3 + 4 (`Mnemonic::to_seed`, `Signer::secret_bytes`). L12 review (security + type-design) caught multiple CRITICAL/HIGH findings. `Secret<[u8; 32]>`, `Secret<Keypair>`, `Secret<SecretKey>` all wrap Copy types where `*secret.expose()` clones the secret to a fresh stack copy — zeroize-on-drop protects only the wrapper's copy, not the caller's clone.
+
+**Rule**: For secret material, prefer one of:
+- `Secret<Vec<u8>>` (heap, non-Copy) — direct storage; zeroize on drop works
+- `Secret<Box<T>>` (heap, non-Copy) — for non-Byte array types
+- `Zeroizing<T>` + manual `non_secure_erase` after each use — for FFI types where Drop doesn't exist (e.g., `secp256k1::SecretKey: Copy` has no Drop)
+
+For Crypto-style types where the library uses Copy + manual erase (e.g., secp256k1), accept that `Secret<Copy T>` won't compile (no Zeroize impl without `DefaultIsZeroes`); instead reconstruct the Copy type on demand and call `non_secure_erase()` immediately after each FFI use.
+
+**Why**: Zeroize-on-drop is a defense-in-depth mechanism, not a guarantee. It protects only the bytes that pass through the wrapper. Any caller copy, log, or `*` dereference escapes the protection. Copy types are escape hatches by design.
+
+**Apply**: When wrapping secret material, check `T: Copy` first. If yes, either wrap a non-Copy heap type (`Vec`, `Box`) or accept manual `non_secure_erase` per FFI call. Update CONTEXT.md hard rules when the rule applies to project-internal types only.
+
+---
+
+## L16 — `#[derive(ZeroizeOnDrop)]` requires ALL fields to impl Zeroize
+
+**Trigger**: Task 4 `Signer` — tried `#[derive(ZeroizeOnDrop)] struct Signer { secret_bytes: Secret<Vec<u8>>, secp: Secp256k1<All> }`. Compile failed: `Secp256k1<All>: Zeroize` not satisfied because `DefaultIsZeroes` not implemented (it's precomputed-table data, not zeroizable).
+
+**Rule**: When using `#[derive(ZeroizeOnDrop)]`, every field must impl `Zeroize`. If any field is a non-zeroizable type (FFI context, cached computation, precomputed table), either:
+1. Replace `#[derive]` with manual `impl Drop` that drops only the secret fields and ignores non-secret fields (e.g., `Secp256k1<All>` — it's not secret material)
+2. Wrap the non-secret field in `ManuallyDrop<T>` to suppress its Drop
+3. Hide the field behind a `Secret<()>` no-op (overkill)
+
+For `Signer`, manual `impl Drop` is correct: `Secret<Vec<u8>>` field's own `ZeroizeOnDrop` derive fires when `Signer` drops; the `Secp256k1<All>` field is precomputed-table data, not secret material.
+
+**Why**: The derive macro is "all or nothing." It silently skips fields that don't impl Zeroize (per the `ZeroizeOnDrop` derive source) but the type itself still doesn't impl Zeroize. The hidden no-op Drop is a footgun — type-level witness tests (e.g., `assert_zeroize_on_drop::<T>()`) pass, but the actual zeroize is incomplete.
+
+**Apply**: When deriving `ZeroizeOnDrop` on a struct, audit every field's `Zeroize` impl. For precomputed-table / FFI-context types, use manual `impl Drop` instead of derive. Add `// Compile-time witness: <type> drops via Secret<Vec<u8>>::drop` comment in the manual Drop impl.
+
+---
+
+## L17 — Manual `Debug` impl required for `Secret<T>` (and any sensitive newtype)
+
+**Trigger**: Task 5 — added `derive_key -> Result<Secret<Vec<u8>>>` and tests used `Result::expect_err(...)`. Compile failed: `expect_err` requires `T: Debug` where `T` is the `Ok` variant. `Secret<T>` has no `Debug` impl (intentionally — auto-derive would leak plaintext via `{:?}` formatting).
+
+**Rule**: For any newtype that wraps sensitive material (`Secret<T>`, `Mnemonic`, `XPrvHolder`, `Signer`, future `EncryptedBlob` etc.), provide a manual `impl Debug` that hides the inner value. Use `f.debug_struct("TypeName").finish_non_exhaustive()` — renders as `TypeName { .. }` with no field names (avoids field-name collisions with the BIP-39 wordlist per CONTEXT.md hard rule #7).
+
+**Why**:
+
+1. Auto-derive `Debug` defeats the wrapper's purpose: `format!("{secret:?}")` would print the plaintext key bytes.
+2. `Result::expect_err()`, `Result::unwrap()`, and most error-handling combinators require `T: Debug` on the `Ok` variant. Without it, tests can't write `expect_err(...)` for the negative path.
+3. `finish_non_exhaustive()` is the canonical pattern across `Mnemonic`, `XPrvHolder`, `Signer`, and now `Secret` — consistent project convention.
+
+**Apply**: At every new sensitive newtype, add the manual Debug impl at the same time as the type declaration (don't defer to the test-author to discover it). Caught early in Task 5 (post-write, compile-error on first test run). Preview for Task 6 `bip137` types and any future `EncryptedBlob` / `MnemonicCipher` newtypes.
+
+---
