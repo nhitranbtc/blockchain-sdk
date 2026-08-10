@@ -21,22 +21,20 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L7] pause before state-modifying actions (memory)
 - [L8] flip issue checkboxes before squash-merge (memory)
 - [L9] issue bodies = status, PR bodies = fix analysis (with table)
-- [L10] threat model is the answer key — read before writing code
 - [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
-- [L22] Fact-forcing gates: state facts, then retry
-- [L23] `git stash -u -- <path>` deletes untracked files matched by path
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog) + README "What's New"
 - [L25] On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it" instructions (edit on working branch + commit with the sub-task/code change — no separate process branch needed)
 - [L26] Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main). L21/L24/L25 doc updates travel WITH the sub-task PR on the working branch — no separate process branch.
-- [L27] Read API before assuming — grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
 - [L28] For client-facing work, explicitly flag deferred/stub work in CHANGELOG — don't present partial impl as completed features
 - [L29] Before declaring "ready / Try this / demo" — run `cargo check --examples`, `cargo test --examples`, and the example binary itself to catch compile errors before claiming it works
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
+>
+> **Audit (2026-08-10):** L10, L22, L23, L27 removed per user direction. L10 (threat-model re-read) — type-system invariants + L11/L12 review pair make the rule redundant. L22 (fact-forcing gate) — enforced at hook layer, captured in `~/.claude/CLAUDE.md` global memory instead. L23 (`git stash -u -- <path>` deletes untracked) — git-native behavior, covered by `git stash` docs. L27 (grep `#[derive(...)]` before using traits) — type-checker errors surface the assumption fast enough; pre-flight grep added latency without saving compile cycles.
 
 ---
 
@@ -193,32 +191,6 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ---
 
-## L10 — Threat model is the answer key; read before writing code
-
-**Trigger**: Task 1.5 (PR #23) — 4 security findings (3 HIGH + 1 MEDIUM) caught only by post-push automated review. Original `atomic_write` + `permissions` implementation copied plan §Task 1.5 reference code verbatim without re-reading the threat model spec. The plan author had omitted `0o600`, symlink rejection, and RAII cleanup from the code template; the implementation inherited those omissions.
-
-**Rule**: Before writing any code that touches signing / keys / network / secrets / persistence / permissions:
-
-1. **Read the threat model spec** — [`docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md`](../docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md) and [`rust-wallet-app/CONTEXT.md`](../../rust-wallet-app/CONTEXT.md). For each Adversary (A1-A8) and Abuse case (U1-U7), name which task defends against it.
-2. **List attacker-model inputs** for every new function: symlinks? umask? race window? caller-controlled path? Does this implementation actually defend?
-3. **Negative-path tests required.** For atomic_write-style code: "what if dest is symlink?", "what if parent is symlink?", "what if permission can't be read?" Each branch needs a test.
-4. **Verification = Security + Threat-model coverage**, not just Correctness + Test. L9 v3 per-dimension verdict enforces this; apply it.
-5. **At PR-creation time**, answer: "which A1-A8 / U1-U7 does this PR defend against?" If you can't answer, you haven't read the threat model.
-
-**Why**: The threat model IS the answer key. Plan code templates are drafts that may omit mitigations; copying a plan that doesn't enumerate attackers produces code that doesn't defend against them. Power-loss atomicity (U7) is not the same as attacker atomicity (A2) — both are required, neither is implied by the other.
-
-**Apply**:
-
-- Task pickup (per-task loop step 1): list which A/U each task defends. Write this in the per-task pipeline block.
-- Code-writing: for each function with security relevance, ask "attacker-controlled inputs: which?". Symlinks? Permissions? Path traversal? TOCTOU?
-- Test-writing: name each branch in the function; if no test exists, write one before declaring done.
-- Verification: per-dimension verdict (L9 v3) must include Security + Threat-model coverage.
-- PR-creation: include "Defends against: A2, U6, U7" in the body or drift table.
-
-**Anti-pattern (what I did)**: treat the plan's reference code as ground truth. It's a draft. Validate it.
-
----
-
 ## L11 — Scan skills list at session start, tag 3-5 relevant, invoke before doing
 
 **Trigger**: Session 2026-08-07 — 9 Matt Pocock skills (`mattpocock-skills:*`), ~15 superpowers, ~10 compound-engineering, ~10 pr-review-toolkit, ~20 compass/ecc skills were loaded. Used 3 total (karpathy-guidelines, commit-commands:commit-push-pr, pr-review-toolkit:review-pr). Said "I don't see Matt Pocock plugins" when they were loaded — only saw them after user repeated the question and SessionStart hook listed them again.
@@ -282,7 +254,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 2. (Self-detect complexity) → propose "trivial / normal / critical" → user confirms
 
 ## Per task
-3. Pick up issue; read threat model (L10); read CONTEXT.md hard rules
+3. Pick up issue; read threat model spec (`docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md`)
 4. karpathy-guidelines + branch checkout
 
 ## Per pipeline step
@@ -410,55 +382,6 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - Update the total fixed-fee on every merge — defeats the purpose of fixed-fee billing.
 - Skip update because "the bill is a snapshot" — the bill IS the source of truth for client; update it.
 - Update ai-cost-report without per-task token usage data — falls back to estimates; mark `~` qualified until measured.
-
----
-
-## L22 — Fact-forcing gates: state facts, then retry
-
-**Trigger**: Session 2026-08-10 (F21 typed Sighash work, process docs work). Multiple Write/Edit calls were denied by `pre:edit-write:gateguard-fact-force` requiring pre-tool facts:
-
-1. List ALL files that import/require the file (or its dependents).
-2. List public functions/classes affected by the change.
-3. If reads/writes data files, show field names, structure, date format.
-4. Quote the user's current instruction verbatim.
-
-**Rule**: When a Write/Edit call is denied by the gate:
-
-1. **State the 4 facts concisely** in plain text — under 10 lines. No preamble, no narrative.
-2. **Retry the same tool call** with `old_string`/`new_string` unchanged (or Write unchanged).
-3. **The gate is not personal** — it's a fact-checker. State, retry, continue. Don't argue or work around (e.g., use Bash to bypass).
-4. **For a new file**: importers = future-self readers; callers = functions that depend on it; affected API = types/functions in the new file; schemas = data shape; verbatim = current user message.
-5. **For an existing file edit**: importers = files that include/use it; callers = public API consumers; affected = changed function/struct surface; schemas = data shape; verbatim = current user message.
-
-**Why**: The gate enforces the principle "before changing X, know what depends on X and what changes." Bypassing it via Bash or different tools skips the consideration. State-the-facts also serves as a mental pre-flight check.
-
-**Apply**:
-
-- Hit a gate denial → state 4 facts, retry, don't waste turns explaining.
-- First edit of a new file = heaviest fact load (no existing context to reference).
-- Repeat edits to same file in a session = lighter fact load (already-stated facts may suffice; restate only the changed aspects).
-- Per-edit fact-statement overhead is real (~5-15 sec per edit). Budget accordingly in cost-sensitive work.
-
----
-
-## L23 — `git stash -u -- <path>` deletes untracked files matched by path
-
-**Trigger**: Session 2026-08-10. Attempted to isolate process docs (`docs/estimate-report.md`, `docs/ai-cost-report.md`) from `#31` branch via `git stash push -u -m "..." -- tasks/lessons.md docs/estimate-report.md docs/ai-cost-report.md`. The two `docs/` files were **untracked** (newly created, never committed). With `-u` (include untracked) + path matching, git **removed** the untracked files from working tree. The stash held them, but `git stash drop` later discarded the stash with no recovery path.
-
-**Rule**:
-
-- `git stash push -u -- <path>` (with `-u`) **removes** untracked files matched by `<path>` from working tree, stashing them. This is `git stash`'s documented behavior, but surprising if you expect stash to preserve files.
-- For **isolating work across branches**: use `git stash push -u -- <specific-tracked-paths>` — make sure the paths you pass are tracked files. Don't include untracked file paths unless you intend to delete them.
-- **Recovery**: stash reflog (`git stash list`) shows dropped stashes if you have it enabled. Default reflog retains dropped stashes for ~30 days (configurable via `gc.reflogExpire`).
-- **Better alternative**: stage the work, create a new branch (`git checkout -b`), commit on the new branch. Avoids the surprise-delete entirely.
-
-**Why**: Untracked files are first-class stash targets with `-u`. The `-- <path>` filter applies to BOTH tracked and untracked, but the deletion only affects untracked. Counterintuitive.
-
-**Apply**:
-
-- Before `git stash -u -- <paths>`, verify each path is tracked (`git ls-files --error-unmatch <path>`). For untracked paths, prefer branch-and-commit instead.
-- After accidental delete: check `git fsck --lost-found` + `git stash list` (reflog may have it).
-- For doc/process work that doesn't deserve its own branch yet: commit in-place on a fresh branch from main, not via stash.
 
 ---
 
@@ -611,37 +534,6 @@ Then re-merge sub-task onto parent (not main) per the rule.
 
 ---
 
-## L27 — Read API before assuming: grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
-
-**Trigger**: Session 2026-08-10. Multiple compile errors from incorrect API assumptions, all caught late (after impl was written, during TDD GREEN):
-
-1. `Secret<String> is Clone` — **false**. Only `ZeroizeOnDrop` derived. No `Clone` impl. Original `#19a` impl stored `Secret<String>` field via `mnemonic.clone()` which doesn't compile (`Mnemonic` wraps `Secret<bip39::Mnemonic>`, also not Clone).
-2. `Error::Mnemonic(String)` — **doesn't exist**. Actual variant is `Error::InvalidMnemonic(String)`. Caused 2+ minutes of compile-error back-and-forth.
-3. `static_assertions::assert_not_impl_all!` — crate **not in deps**. Tried to use as Default-impossible witness; had to fall back to compile-time absence comment.
-
-**Rule**: Before writing code that uses a type's traits or enum variants:
-
-1. **For derives**: `grep -A 5 'pub struct X' path/to/type.rs` or `cargo doc --document-private-items` — see the actual `#[derive(...)]` line. **Never** assume `Clone`, `Debug`, `Default`, `Eq`, or any other trait is implemented.
-2. **For enum variants**: `grep -E '^\s+[A-Z][a-zA-Z]+,?$' path/to/enum.rs` — list all variants. **Never** assume `MyEnum::MyVariant` exists; variants may be renamed, removed, or have different shape.
-3. **For external crates**: check `Cargo.toml` for the crate before using its types. `cargo tree --package <name>` confirms the version.
-
-**Why**: Each compile error costs ~2-5 min of round-trip + state-modifying attempts (gate denials, re-Reads, re-Edits). 3 errors in #19a = ~10-15 min wasted. Pre-flight grep costs ~30 sec. Net savings on every multi-error task.
-
-**Apply**:
-
-- Before writing a struct field of type `Secret<T>`: confirm `T: Zeroize + ZeroizeOnDrop` (required by `Secret<T>`'s generic bound). If T isn't `Zeroize`, wrap differently (per L15).
-- Before calling `Foo::default()`: confirm `Foo: Default` (grep `impl Default for Foo` or look for `#[derive(Default)]`).
-- Before matching `Enum::Variant`: `grep 'Variant,' path/to/enum.rs` or check the actual definition.
-- Before using an external crate's macro or type: confirm the crate is in `[dependencies]`.
-
-**Anti-patterns**:
-
-- Writing the impl, hitting a compile error, fixing, hitting another error, fixing, etc. — each iteration costs more than a single grep would have.
-- "I'll just try it and see if it compiles" — multiplies error rounds. Read once, write once.
-- Trusting LLM memory of crate APIs — crates change between versions; what's true for crate X v0.32 may not be true for v0.31.
-
----
-
 ## L28 — For client-facing work, explicitly flag deferred/stub work in CHANGELOG; do not present partial impl as completed features
 
 **Trigger**: Session 2026-08-10. I implemented `#19b` (`Wallet::sync`) as a URL-validation stub returning `Err("not yet implemented")`. Treated it as "minimal viable Option A" for fast iteration within fixed-fee budget. User feedback (same session): "we are developing client product, and support features, user cases for real users, so we need to choose the best implementation in technical." This is a course-correction — stubs are internal-only; client-facing work requires full impl.
@@ -723,5 +615,39 @@ If any of these fails, the claim is false — don't claim it. The example's "Try
 - "Try this — it should work" (without running it yourself) — violates trust.
 - "I tested in isolation" (without testing in the same state as the doc's claim) — drift.
 - "Tests pass, so the example works" — `cargo test` doesn't build examples unless `cargo test --examples` is used.
+
+---
+
+## [L30] For critical-tier code, invoke security-review BEFORE push; the post-push hook review is supplementary, not the primary gate
+
+**Trigger**: Session 2026-08-10 (#19b.2 → PR #55). Shipped full `Wallet::sync` + `Wallet::balance` impl (commit `ca85831`) without invoking `compass:security-auditor` pre-PR. Post-push automated security review surfaced **9 findings** (1 CRITICAL, 3 HIGH, 5 MEDIUM):
+
+1. **CRITICAL** tls-bypass: `TlsPolicy::SystemRoots` default in `sync`/`balance` (no caller-controlled TLS)
+2. **HIGH** cross-network-confusion: caller-supplied URL not pinned to `self.network`
+3. **HIGH** secret-exposure: `XPrvHolder::to_xprv_string` returned public non-zeroizing `String`
+4. **HIGH** sensitive-in-error-message: `Error::Bdk(format!("{e}"))` echoed bdk's descriptor (xprv leak)
+5. **MEDIUM** stale-zeroize-contract: `xprv` `String` widened zeroize window
+6. **MEDIUM** tainted-utxo-value: `u.value: u64` not capped against `Amount::MAX_MONEY` (DoS via malicious Esplora)
+7. **MEDIUM** trust-differential: Esplora response could mismatch wallet's scriptpubkey (mitigated by using wallet-derived `peek_address` script_pubkey)
+8. **MEDIUM** (related to #4): error-message xprv leak
+9. **MEDIUM** (related to #3): descriptor `String` retained after `bdk_wallet::Wallet::create`
+
+All caught AFTER push → forced a fix round (commit `27f8e32`) → forced a follow-up push. ~2× the round-trip cost vs catching them pre-PR.
+
+**Rule**: For critical-tier work (L13 complexity tier — signing / keys / encryption / network / persistence), invoke `compass:security-auditor` (or equivalent) **before** `gh pr create`. Post-push hook review is supplementary feedback, not a replacement for pre-PR review. Per L13 Q5: max 3 fix rounds per task, shared pre-commit + post-PR.
+
+**Why**: Post-push review fires on the same wall-clock path as merge with no opportunity to amend before squash. Pre-PR review fixes cheaply (one local commit). Post-push review requires fix round + push + re-review — ~3× the wall-clock cost.
+
+**Apply**:
+- Critical-tier PR ready → invoke `compass:security-auditor` on the working branch diff BEFORE `gh pr create`.
+- Post-push hook fires HIGH/CRITICAL → count toward L13 Q5 budget.
+- Skip-the-L12 cost-discipline is acceptable only for code structurally identical to a recently-reviewed branch.
+
+**Anti-patterns**:
+- "I'll skip the security subagent to save cost" — fine for trivial refactors, NOT for new code touching signing/network/persistence.
+- "Tests + clippy pass → safe to merge" — tests cover behavior, not security gaps.
+- Push first, react to review later — fix round + push is more expensive than pre-PR review.
+
+**Related**: L12 (review BEFORE local verify gate), L13 Q5 (3-round budget).
 
 ---
