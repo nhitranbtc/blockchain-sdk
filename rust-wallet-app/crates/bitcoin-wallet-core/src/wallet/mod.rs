@@ -34,6 +34,7 @@
 //! - bdk error wrapping: `Error::Bdk` carries a fixed string, not
 //!   the raw bdk error which may echo the descriptor.
 
+use std::str::FromStr;
 use std::sync::Mutex;
 
 use bdk_wallet::bitcoin::{Amount, Network, OutPoint, TxOut};
@@ -42,7 +43,7 @@ use bdk_wallet::{KeychainKind, Wallet as BdkWallet};
 use crate::chain::esplora::{EsploraClient, EsploraUtxo};
 use crate::chain::network::coin_type_for;
 use crate::error::Error;
-use crate::keys::{address_type_to_path, AddressType, Mnemonic, Secret, XPrvHolder};
+use crate::keys::{AddressType, Mnemonic, Secret, XPrvHolder};
 
 /// Gap limit for full chain scan (v0.1 demo). BIP-44 default is 20;
 /// 5 keeps `Wallet::sync` quick while still finding any recent
@@ -168,12 +169,19 @@ impl Wallet {
         })?;
         let master = XPrvHolder::master_from_seed(&seed_arr)?;
         let coin = coin_type_for(self.network);
-        let path = address_type_to_path(AddressType::NativeSegwit, coin, 0, 0)?;
+        // Derive only to BIP-44 account root (`m/84'/coin'/0'`).
+        // The descriptor template's `*/0/*` and `*/1/*` append the
+        // external/change chain + address index. Deriving to a
+        // specific index (e.g., `m/.../0/0`) then appending `*/0/*`
+        // would yield `m/.../0/0/0/*` — duplicate receive index.
+        let path_str = format!("m/{}h/{}h/0h", AddressType::NativeSegwit.purpose(), coin,);
+        let path = bip32::DerivationPath::from_str(&path_str)
+            .map_err(|e| Error::InvalidDerivationPath(e.to_string()))?;
         let derived = master.derive(&path)?;
 
         // Build descriptor from zeroizing Secret<String>. Drop
         // immediately after `create` returns.
-        let xprv_secret = derived.to_xprv_secret();
+        let xprv_secret = derived.to_xprv_secret(self.network);
         let external_descriptor = format!("wpkh({}/0/*)", xprv_secret.expose());
         let change_descriptor = format!("wpkh({}/1/*)", xprv_secret.expose());
         drop(xprv_secret);

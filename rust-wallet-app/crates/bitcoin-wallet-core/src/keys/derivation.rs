@@ -131,9 +131,22 @@ impl XPrvHolder {
     /// only `Wallet` (in the same crate) can build a descriptor
     /// template. The returned `Secret<String>` zeroizes its inner
     /// heap `String` on drop.
-    pub(crate) fn to_xprv_secret(&self) -> crate::keys::Secret<String> {
+    pub(crate) fn to_xprv_secret(
+        &self,
+        network: bdk_wallet::bitcoin::Network,
+    ) -> crate::keys::Secret<String> {
         use bip32::Prefix;
-        let s = self.0.to_string(Prefix::XPRV).to_string();
+        // bip32 0.5.3 ExtendedPrivateKey doesn't carry its own
+        // prefix; we must supply it based on the wallet's network.
+        // bdk's descriptor parser rejects the wrong prefix with
+        // Key(InvalidNetworkKind).
+        let prefix = match network {
+            bdk_wallet::bitcoin::Network::Bitcoin => Prefix::XPRV,
+            bdk_wallet::bitcoin::Network::Testnet => Prefix::TPRV,
+            // regtest/signet use mainnet xprv prefix per BIP-32
+            _ => Prefix::XPRV,
+        };
+        let s = self.0.to_string(prefix).to_string();
         crate::keys::Secret::new(s)
     }
 }

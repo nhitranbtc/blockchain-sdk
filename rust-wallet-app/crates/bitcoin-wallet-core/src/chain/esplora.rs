@@ -163,13 +163,21 @@ impl EsploraClient {
     /// - `base_url` is not an `https://` URL.
     /// - The `reqwest::Client` builder fails (root store, etc.).
     pub fn new(base_url: &str, tls: TlsPolicy) -> Result<Self> {
-        let url = reqwest::Url::parse(base_url)
+        let mut url = reqwest::Url::parse(base_url)
             .map_err(|e| Error::Esplora(format!("invalid esplora url: {e}")))?;
         if url.scheme() != "https" {
             return Err(Error::Esplora(format!(
                 "esplora url must use https:// scheme, got: {}",
                 url.scheme()
             )));
+        }
+        // `reqwest::Url::join("path")` replaces the last path
+        // segment when base doesn't end with `/`. Force a trailing
+        // `/` so `join("address/{addr}/utxo")` produces the right
+        // path. Without this, `https://host.com/api` + `address/x`
+        // becomes `https://host.com/address/x`.
+        if !url.path().ends_with('/') {
+            url.set_path(&format!("{}/", url.path()));
         }
         let client = Self::build_http_client(&tls)?;
         Ok(Self {
@@ -238,9 +246,26 @@ impl EsploraClient {
             .send()
             .await
             .map_err(|e| Error::Esplora(format!("address_utxos request: {e}")))?;
-        resp.json::<Vec<EsploraUtxo>>()
+        let status = resp.status();
+        let body = resp
+            .text()
             .await
-            .map_err(|e| Error::Esplora(format!("address_utxos parse: {e}")))
+            .map_err(|e| Error::Esplora(format!("address_utxos read body: {e}")))?;
+        if !status.is_success() {
+            return Err(Error::Esplora(format!(
+                "address_utxos HTTP {}: {}",
+                status,
+                &body[..body.len().min(200)]
+            )));
+        }
+        serde_json::from_str::<Vec<EsploraUtxo>>(&body).map_err(|e| {
+            Error::Esplora(format!(
+                "address_utxos parse (status {}): {}; body: {}",
+                e,
+                status,
+                &body[..body.len().min(300)]
+            ))
+        })
     }
 
     /// Fetch a full transaction by txid via Esplora's `/tx/{txid}`
@@ -452,7 +477,9 @@ mod tests {
     fn new_accepts_https_with_system_roots() {
         init_crypto();
         let c = EsploraClient::new("https://blockstream.info/api", TlsPolicy::SystemRoots).unwrap();
-        assert_eq!(c.base_url.as_str(), "https://blockstream.info/api");
+        // Trailing slash enforced by `new` so `Url::join("path")`
+        // does not strip `/api`.
+        assert_eq!(c.base_url.as_str(), "https://blockstream.info/api/");
         assert!(matches!(c.tls, TlsPolicy::SystemRoots));
     }
 
@@ -499,7 +526,7 @@ mod tests {
         init_crypto();
         let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db");
         let c = EsploraClient::from_config(&cfg).unwrap();
-        assert_eq!(c.base_url.as_str(), "https://blockstream.info/testnet/api");
+        assert_eq!(c.base_url.as_str(), "https://blockstream.info/testnet/api/");
     }
 
     #[test]
