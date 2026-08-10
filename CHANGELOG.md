@@ -78,11 +78,11 @@ Each story is a user-facing capability. Once checked, the feature is **playaroun
 | 7 | [x] Compile-time-pinned crypto constants (L20 audit) | done (PR #38) | see `docs/audit/2026-08-09-l20-constant-audit.md` |
 | 8 | [x] Refuse mainnet default (CONTEXT.md hard rule #1) | done (PR #42; `bitcoin::Network` has no `Default` impl, so callers must explicitly choose) | see `rust-wallet-app/CONTEXT.md` hard rule #1 |
 | 9 | [x] Refuse transaction sighash as message (F21 type-level) | done (PR #39) | `cargo test -p bitcoin-wallet-core --doc threat::MessageHash` |
-| 10 | [ ] **Create wallet from mnemonic** | gated (Issue #19, Task 9) | will land with `Wallet::from_mnemonic` |
-| 11 | [ ] **Sync wallet (full chain scan)** | gated (Issue #46, Task 9b) | partial: URL validation + coin_type_for; `Wallet::start_full_scan` deferred. Will land fully with #19b.2 follow-up. |
-| 12 | [ ] **Get wallet balance** | gated (Issue #47, Task 9c) | partial: URL validation + coin_type_for; UTXO aggregation deferred. Will land fully with #19c.2 follow-up. |
+| 10 | [x] **Create wallet from mnemonic** | done (PR #48, Task 9a) | `cargo test -p bitcoin-wallet-core wallet` |
+| 11 | [ ] **Sync wallet (full chain scan)** | partial (PR #51, Task 9b) | URL validation + `coin_type_for` only; `Wallet::start_full_scan` deferred. Will land fully with #19b.2 follow-up. |
+| 12 | [ ] **Get wallet balance** | partial (PR #52, Task 9c) | URL validation + `coin_type_for` only; UTXO aggregation deferred. Will land fully with #19c.2 follow-up. |
 | 13 | [ ] **Use btc CLI subcommand** | gated (Task 9 + CLI subcommands) | `cargo run -p btc --help` (currently placeholder) |
 
-**Progress:** 9 of 13 stories playaround-able. 4 gated on Task 9 (#19).
+**Progress:** 10 of 13 stories playaround-able. 3 still gated (#11 sync, #12 balance partial impl; #13 CLI subcommand full work).
 
 > **L25 maintenance:** After every PR merge, check if the merged PR completes any unchecked story → flip the box to `[x]` + update the "Try it" column if needed. Drift between docs and actual state is the failure mode this rule prevents (per L14).
