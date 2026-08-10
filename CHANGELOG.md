@@ -16,12 +16,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
-- **`[user-facing]`** `Wallet::sync(esplora_url)` (Task 9b, F12) — partial: URL validation + `coin_type_for` derivation + descriptor path. Full `start_full_scan` deferred (requires xprv expansion). PR #51
-- **`[user-facing]`** `Wallet::balance(esplora_url) -> Result<u64>` (Task 9c, F13) — partial: URL validation + `coin_type_for`. Full UTXO aggregation deferred (requires `bdk_wallet::Wallet` construction). PR #52
+- **`[user-facing]`** `Wallet::sync(&EsploraClient)` (Task 9 #19b.2, F12) — full chain scan via Esplora `/address/{addr}/utxo` + `bdk_wallet::Wallet::insert_txout`. Caller builds `EsploraClient` with explicit `TlsPolicy` (F20 SPKI pinning). PR #55
+- **`[user-facing]`** `Wallet::balance(&EsploraClient) -> Result<u64>` (Task 9 #19b.2, F13) — confirmed-only UTXO aggregation. Lazily syncs on first call; reuses cached `bdk_wallet::Wallet` thereafter. PR #55
+- **`[user-facing]`** `Wallet::sync` / `Wallet::balance` API breaking change: now take `&EsploraClient` (was `&str esplora_url`). Caller must build `EsploraClient::from_config(&WalletConfig)` (which carries network + optional SPKI pin). PR #55
+- **`[user-facing]`** `EsploraClient::address_utxos(&Address) -> Result<Vec<EsploraUtxo>>` + `EsploraClient::get_tx(&Txid) -> Result<bitcoin::Transaction>` — additive API used by `Wallet::sync` for F12 chain scan. PR #55
 
 ### Security
 
-- **`[internal]`** F13 / F14 (balance consistency / persistence) — defense-in-depth tripwires in the partial sync/balance impls return honest "partial impl" errors. Full UTXO-sum + `bdk_file_store` deferred.
+- **`[internal]`** F12 / F13: full implementation in `Wallet::sync` / `Wallet::balance`. F14 (`bdk_file_store` SQLite persistence) + F15 (interrupted-sync recovery) deferred to v0.1.1 — in-memory UTXO state only.
+- **`[internal]`** `XPrvHolder::to_xprv_secret() -> Secret<String>` (replaces `to_xprv_string`; `pub(crate)`; zeroize-on-drop) — closes xprv zeroize window in descriptor construction. PR #55
+- **`[internal]`** `Error::Bdk` carries fixed message; raw bdk error dropped (avoids xprv leak via descriptor echo). PR #55
+- **`[internal]`** `Wallet::sync` UTXO value capped against `Amount::MAX_MONEY`; reject on overflow (DoS mitigation against malicious Esplora response). PR #55
+- **`[internal]`** `Wallet::sync` / `Wallet::balance` take `&EsploraClient` (no internal `TlsPolicy::SystemRoots` default); caller is responsible for `TlsPolicy::Pinned` for production endpoints. PR #55
+- **`[cleanup]`** `CONTEXT.md` deleted per audit 2026-08-10. Type-system invariants (`Secret<T>`, `bip39` `zeroize` feature, `finish_non_exhaustive()` for mnemonic types) carry the security load. PR #55
 
 ## [v0.1.0] — 2026-08-10
 
