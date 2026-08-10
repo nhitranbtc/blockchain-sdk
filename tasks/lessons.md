@@ -34,6 +34,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L26] Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main). L21/L24/L25 doc updates travel WITH the sub-task PR on the working branch — no separate process branch.
 - [L27] Read API before assuming — grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
 - [L28] For client-facing work, explicitly flag deferred/stub work in CHANGELOG — don't present partial impl as completed features
+- [L29] Before declaring "ready / Try this / demo" — run `cargo check --examples`, `cargo test --examples`, and the example binary itself to catch compile errors before claiming it works
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 
@@ -684,6 +685,43 @@ Then re-merge sub-task onto parent (not main) per the rule.
 
 - ✅ PR #48 (`Wallet::from_mnemonic`) — full impl, all tests pass, real capability. Story #10 flipped to `[x]`.
 - ❌ PR #50 (`Wallet::sync stub`) — stub returning `Err("not yet implemented")`. **Story #11 should NOT be flipped**. PR #50 must NOT be merged without full impl replacing the stub.
-- ❌ (anticipated) PR #52 (`Wallet::balance stub`) — same trap if I default to stub.
+- � (anticipated) PR #52 (`Wallet::balance stub`) — same trap if I default to stub.
+
+---
+
+## L29 — Before declaring "ready / Try this / demo" — run `cargo check --examples`, `cargo test --examples`, and the example binary itself
+
+**Trigger**: Session 2026-08-10. I wrote `examples/wallet_demo.rs` to demonstrate `Wallet::from_mnemonic`, then ran `cargo run --example wallet_demo` to verify. Got two compile errors in sequence (Network not re-exported from `bitcoin_wallet_core`; `WordCount` path wrong in example context). Fixed each, re-ran, fixed the other, re-ran, succeeded. ~10 min of round-trip waste + loss of client confidence ("you must test all cases before merge").
+
+**Rule**: Before declaring any of:
+- "Try this command"
+- "Story #N is now playaround-able"
+- "Demo is ready"
+- "Example works"
+
+…run the full check chain:
+
+```bash
+cargo check --examples -p <crate>           # compile errors catch (fast)
+cargo test --examples -p <crate>            # runtime errors catch
+cargo run --example <name> -p <crate>        # actual binary runs end-to-end
+```
+
+If any of these fails, the claim is false — don't claim it. The example's "Try it" in CHANGELOG is a contract with the client.
+
+**Why**: For client products, every command in CHANGELOG is a promise. If "Try this" doesn't work, the client tries it, it fails, trust erodes. Tests + examples must pass *before* the docs say they do.
+
+**Apply**:
+
+- New example file → `cargo check --examples` first (catches type/import errors).
+- Update to existing example → `cargo check --examples` first (catches regressions).
+- Claim a "Try it" command → run the command yourself + paste the output in PR description as evidence.
+- Add "Try it" to CHANGELOG → before merging, paste the actual output into a comment in the example's source as evidence it works.
+
+**Anti-patterns**:
+
+- "Try this — it should work" (without running it yourself) — violates trust.
+- "I tested in isolation" (without testing in the same state as the doc's claim) — drift.
+- "Tests pass, so the example works" — `cargo test` doesn't build examples unless `cargo test --examples` is used.
 
 ---
