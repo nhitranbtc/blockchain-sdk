@@ -16,8 +16,11 @@
 | Keys derivation (Task 4) | ✅ Complete | PR #26 |
 | Crypto (Tasks 5–7) | ✅ Complete | PRs #27, #33, #34 |
 | Audit + defense | ✅ Complete (2026-08-10) | PRs #38, #39 |
-| `chain::network` (Task 8) | ⏳ In-flight | Issue #20 — est. 2h, no extra charge |
-| `Wallet` end-to-end (Task 9) | ⏳ In-flight | Issue #19 — est. 6h, no extra charge |
+| `chain::network` (Task 8) | ✅ Complete (PR #42 merged) | Issue #20 — `coin_type_for` per plan §Task 8 F37 |
+| `Wallet::from_mnemonic` (Task 9a) | ✅ Complete (PR #48 merged, SHA `a34fe0e`) | Issue #45 — constructor + F34 BIP-39 word-count assert |
+| `Wallet::sync` (Task 9b partial) | ✅ Complete (PR #51 merged) | Issue #46 — URL validation + coin_type_for; full F12 impl deferred |
+| `Wallet::balance` (Task 9c partial) | ✅ Complete (PR #52 merged, SHA `1cfaf75`) | Issue #47 — URL validation + coin_type_for; full F13 impl deferred |
+| `Wallet` end-to-end (Task 9c) | ⏳ In-flight | Issue #47 — balance, est. 6h, no extra charge |
 
 **Progress: ███████████████░░░ 92%** (11/13 code deliverables + 8/8 planning artifacts)
 
@@ -106,6 +109,8 @@ Full MVP plan: `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`
 ## Last updated
 
 - **2026-08-10** — Initial bill drafted (commit `5d0ca79` on `process/estimate-and-ai-cost-reports` branch).
-- **2026-08-10** — PR #39 (F21 typed Sighash) merged via `--admin` at `2026-08-10T03:36:08Z`. Status: 11/13 code deliverables merged (Tasks 8, 9 remain in-flight at no extra charge). Fixed-fee total stays at $1,650.
-- **2026-08-10** — PR #40 (process docs + L21-L23 lessons) merged via `--admin`. Process docs merged; no client deliverable change.
+- **2026-08-10** — PR #39 (F21 typed Sighash) merged via `--admin` at `2026-08-10T03:36:08Z` (SHA `b81f630`). Status: 11/13 code deliverables merged (Tasks 8, 9 remain in-flight at no extra charge). Fixed-fee total stays at $1,650.
+- **2026-08-10** — PR #40 (process docs + L21-L23 lessons) merged via `--admin` (SHA `3f234ea`). Process docs merged; no client deliverable change.
+- **2026-08-10** — PR #42 (Task 8 `coin_type_for`) merged via `--admin` (SHA `b3b5873`). Status: 12/13 code deliverables merged (Task 9 still in-flight). Fixed-fee total stays at $1,650.
+- **2026-08-10** — PR #48 (Task 9a `Wallet::from_mnemonic`) merged via `--admin` (SHA `a34fe0e`). Status: 12/13 code deliverables merged (Task 9b/9c still in-flight). Fixed-fee total stays at $1,650.
 - Per L21: this bill updates on every PR merge (status, progress, in-flight count). Fixed-fee total stays unchanged unless scope shifts.

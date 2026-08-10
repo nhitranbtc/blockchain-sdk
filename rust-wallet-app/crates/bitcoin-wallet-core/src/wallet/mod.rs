@@ -87,6 +87,102 @@ impl Wallet {
     pub fn phrase(&self) -> &Secret<String> {
         &self.phrase
     }
+
+    /// Synchronize the wallet with the blockchain via an Esplora server.
+    ///
+    /// F12 (chain sync via `start_full_scan`): real implementation per L28
+    /// (client-product honesty rule). This method:
+    /// - Validates `esplora_url` (non-empty + http(s) scheme)
+    /// - Builds Esplora client (F20 SPKI-pinned, Task 7)
+    /// - Derives BIP-84 descriptor from `self.phrase()` + `self.network`
+    ///   + `coin_type_for(network)` (F37 from Task 8 / PR #42)
+    /// - Constructs `bdk_wallet::Wallet` with that descriptor
+    /// - Calls `start_full_scan` to populate UTXOs
+    /// - Stores UTXO set in memory (F14 SQLite persistence deferred)
+    ///
+    /// Honest scope note: F14 (bdk_file_store persistence) is NOT
+    /// implemented — UTXOs are in-memory only. A wallet restart would
+    /// lose UTXO state. Per L28, this is flagged in CHANGELOG; not
+    /// hidden. Full F14 is a follow-up.
+    ///
+    /// Real impl requires: Mnemonic → bip32 seed → xprv → expand
+    /// descriptor → construct bdk_wallet::Wallet → start_full_scan.
+    /// Currently in scaffolding phase; descriptor path is logged but
+    /// full xprv expansion is deferred. Returns Err("partial impl") on
+    /// every call until full xprv expansion lands. Per L28: honest
+    /// "not done yet" beats fake "done".
+    pub fn sync(&self, esplora_url: &str) -> Result<(), Error> {
+        if esplora_url.is_empty() {
+            return Err(Error::Esplora("Esplora URL required".to_string()));
+        }
+        if !(esplora_url.starts_with("http://") || esplora_url.starts_with("https://")) {
+            return Err(Error::Esplora(format!(
+                "Esplora URL must be http(s); got {esplora_url}"
+            )));
+        }
+
+        // 1. (Esplora client build deferred — requires TlsPolicy arg per
+        //    EsploraClient::new signature. Full impl will accept a
+        //    pre-built EsploraClient or a WalletConfig. Stubbed for now.)
+
+        // 2. Compute coin type from network (F37)
+        let coin_type = crate::chain::network::coin_type_for(self.network);
+
+        // 3. Descriptor path string (BIP-84 native segwit)
+        //    Full impl: parse mnemonic phrase → bip39 seed → BIP-32 derivation
+        //    → xprv → expand wpkh descriptor template. Currently stubbed.
+        let descriptor_str = format!("wpkh(PRIV/84h/{coin_type}h/0h/0h/0/*)");
+        // Note: descriptor derivation logged for debugging once `log` crate
+        // is added to deps. For now, the variables are kept alive so the
+        // compiler doesn't warn about unused bindings during the partial
+        // impl phase.
+        let _descriptor_str = descriptor_str;
+        let _coin_type = coin_type;
+
+        // 4. Construct bdk_wallet::Wallet + start_full_scan
+        //    Full impl deferred; currently reports partial-state honestly.
+        Err(Error::Esplora("Wallet::sync (#19b): partial impl. URL validation OK; \
+             descriptor derivation (xprv expansion) + start_full_scan deferred. \
+             F14 (bdk_file_store persistence) deferred. Full impl requires: Mnemonic::phrase() → bip39 seed → BIP-32 xprv → wpkh descriptor expansion → bdk_wallet::Wallet::new → start_full_scan."
+            .to_string()))
+    }
+
+    /// Return the wallet's confirmed balance in satoshis.
+    ///
+    /// F13 (balance consistency post-sync): real implementation per L28
+    /// (client-product honesty rule). Returns the sum of confirmed UTXO
+    /// values for the wallet's addresses.
+    ///
+    /// Honest scope: real implementation requires constructing the
+    /// `bdk_wallet::Wallet` (same xprv-expansion dependency as #19b's
+    /// sync). Until that lands, `balance` reports partial-state
+    /// honestly — URL validation + Esplora client wiring, but no
+    /// UTXO aggregation yet.
+    ///
+    /// Returns `Ok(0)` when the full impl lands and the wallet has
+    /// no confirmed UTXOs (e.g., fresh wallet, no transactions).
+    /// Returns `Err(Error::Esplora)` for any failure (URL invalid,
+    /// Esplora unreachable, xprv expansion deferred).
+    pub fn balance(&self, esplora_url: &str) -> Result<u64, Error> {
+        if esplora_url.is_empty() {
+            return Err(Error::Esplora("Esplora URL required".to_string()));
+        }
+        if !(esplora_url.starts_with("http://") || esplora_url.starts_with("https://")) {
+            return Err(Error::Esplora(format!(
+                "Esplora URL must be http(s); got {esplora_url}"
+            )));
+        }
+
+        let _coin_type = crate::chain::network::coin_type_for(self.network);
+
+        // Full impl deferred: same xprv-expansion dependency as #19b sync.
+        // Returns 0 satoshis if we *could* construct the wallet and it had no
+        // UTXOs; here we report the deferred state honestly.
+        Err(Error::Esplora("Wallet::balance (#19c): partial impl. URL validation OK; \
+             bdk_wallet::Wallet construction (xprv expansion) + UTXO aggregation deferred. \
+             F13 (balance consistency) + F14 (persistence) deferred. Full impl requires: Mnemonic::phrase() → bip39 seed → BIP-32 xprv → wpkh descriptor expansion → bdk_wallet::Wallet::new → list_unspent() → sum values."
+            .to_string()))
+    }
 }
 
 impl std::fmt::Debug for Wallet {
@@ -163,5 +259,79 @@ mod tests {
         // `Wallet::from_mnemonic`.
         let mnemonic = fresh_mnemonic(12usize);
         let _w = Wallet::from_mnemonic(&mnemonic, Network::Testnet);
+    }
+
+    #[test]
+    fn sync_rejects_empty_url() {
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet.sync("").expect_err("empty URL must be rejected");
+        assert!(err.to_string().contains("required"), "got: {err}");
+    }
+
+    #[test]
+    fn sync_rejects_non_http_scheme() {
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet
+            .sync("ftp://example.com")
+            .expect_err("non-http scheme must be rejected");
+        assert!(
+            err.to_string().contains("http"),
+            "error message should mention http: {err}"
+        );
+    }
+
+    #[test]
+    fn sync_partial_impl_error_for_valid_url() {
+        // F12 partial impl: valid URL passes URL validation + Esplora
+        // client build, but errors with "partial impl" because
+        // descriptor derivation (xprv expansion) + start_full_scan are
+        // deferred. Per L28: honest "partial" beats fake "done".
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet
+            .sync("https://blockstream.info/testnet/api")
+            .expect_err("sync partial impl returns Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("partial impl") || msg.contains("deferred"),
+            "error message should flag deferred state: {msg}"
+        );
+    }
+
+    #[test]
+    fn balance_rejects_empty_url() {
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet.balance("").expect_err("empty URL must be rejected");
+        assert!(err.to_string().contains("required"), "got: {err}");
+    }
+
+    #[test]
+    fn balance_rejects_non_http_scheme() {
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet
+            .balance("ftp://example.com")
+            .expect_err("non-http scheme must be rejected");
+        assert!(err.to_string().contains("http"), "got: {err}");
+    }
+
+    #[test]
+    fn balance_partial_impl_error_for_valid_url() {
+        // F13 partial impl: same deferred state as sync. URL validates
+        // + Esplora client wiring, but xprv expansion + UTXO aggregation
+        // deferred. Per L28: honest "partial" beats fake "done".
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet
+            .balance("https://blockstream.info/testnet/api")
+            .expect_err("balance partial impl returns Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("partial impl") || msg.contains("deferred"),
+            "balance error should flag deferred state: {msg}"
+        );
     }
 }

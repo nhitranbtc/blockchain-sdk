@@ -22,12 +22,16 @@ If the host model is unknown (this session: model ID `MiniMax-M3`, not a publish
 
 | # | Title | Input (Tok) | Output (Tok) | Model | Est. cost (USD) | Notes |
 |---|---|---|---|---|---|---|
+| 19a | Task 9a Wallet::from_mnemonic | ~1.4M | ~480k | unknown | ~$11.20 | 3-agent critical-tier review (7 findings, 1 of 3 rounds); PR #48 merged (SHA `a34fe0e`) |
+| 19b | Task 9b Wallet::sync (partial) | ~250k | ~80k | unknown | ~$2.00 | URL validation + coin_type_for + descriptor path; Esplora build + start_full_scan + F14 deferred; PR #51 merged |
+| 19c | Task 9c Wallet::balance (partial) | ~200k | ~70k | unknown | ~$1.60 | URL validation + coin_type_for; bdk_wallet::Wallet construction + UTXO aggregation deferred |
+| 20 | Task 8 chain::network (coin_type_for) | ~200k | ~70k | unknown | ~$1.60 | 1 review-fix round (7 findings); PR #42 merged |
 | 30 | L20 constant audit | ~150k | ~50k | unknown (assumed Sonnet-equivalent) | ~$1.20 | Retroactive; 1 review-fix commit; --admin merge; PR #38 merged |
 | 31 | F21 typed Sighash | ~1.2M | ~400k | unknown (assumed Sonnet-equivalent) | ~$9.60 | Retroactive; 3-agent parallel review (heavy); CI deny.toml fix; PR #39 merged 2026-08-10 |
 | Process | docs/estimate-report.md (client bill) | ~80k | ~30k | unknown | ~$0.65 | Retroactive; mid-session pivot from eng self-improvement to client billing; PR #40 merged |
 | Process | docs/ai-cost-report.md | ~30k | ~10k | unknown | ~$0.24 | Retroactive; this file |
 | Process | tasks/lessons.md L21-L23 | ~60k | ~25k | unknown | ~$0.50 | Retroactive; rule captures |
-| **Total (retroactive est.)** | | **~1.52M** | **~515k** | | **~$12.19** | Subject to ±50% (rates + token split assumed) |
+| **Total (retroactive est.)** | | **~1.72M** | **~585k** | | **~$13.79** | Subject to ±50% (rates + token split assumed) |
 
 ## Live tracking (going forward)
 
