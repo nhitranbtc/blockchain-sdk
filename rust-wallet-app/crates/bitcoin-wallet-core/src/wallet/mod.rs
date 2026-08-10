@@ -87,6 +87,31 @@ impl Wallet {
     pub fn phrase(&self) -> &Secret<String> {
         &self.phrase
     }
+
+    /// Synchronize the wallet with the blockchain via an Esplora server.
+    ///
+    /// F12 (chain sync via `start_full_scan`): full implementation
+    /// deferred to next session. Currently a stub that:
+    /// - Validates `esplora_url` is non-empty + starts with `http(s)://`
+    /// - Returns `Err(Error::Esplora)` with a "not yet implemented"
+    ///   message otherwise
+    ///
+    /// #19b full scope: derive descriptor from `self.phrase()`,
+    /// construct `bdk_wallet::Wallet`, call `start_full_scan()` with
+    /// the Esplora client (Task 7), persist UTXO set (F14).
+    pub fn sync(&self, esplora_url: &str) -> Result<(), Error> {
+        if esplora_url.is_empty() {
+            return Err(Error::Esplora("Esplora URL required".to_string()));
+        }
+        if !(esplora_url.starts_with("http://") || esplora_url.starts_with("https://")) {
+            return Err(Error::Esplora(format!(
+                "Esplora URL must be http(s); got {esplora_url}"
+            )));
+        }
+        Err(Error::Esplora(
+            "Wallet::sync (#19b) not yet implemented; F12 deferred to next session".to_string(),
+        ))
+    }
 }
 
 impl std::fmt::Debug for Wallet {
@@ -163,5 +188,42 @@ mod tests {
         // `Wallet::from_mnemonic`.
         let mnemonic = fresh_mnemonic(12usize);
         let _w = Wallet::from_mnemonic(&mnemonic, Network::Testnet);
+    }
+
+    #[test]
+    fn sync_rejects_empty_url() {
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet.sync("").expect_err("empty URL must be rejected");
+        assert!(err.to_string().contains("required"), "got: {err}");
+    }
+
+    #[test]
+    fn sync_rejects_non_http_scheme() {
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet
+            .sync("ftp://example.com")
+            .expect_err("non-http scheme must be rejected");
+        assert!(
+            err.to_string().contains("http"),
+            "error message should mention http: {err}"
+        );
+    }
+
+    #[test]
+    fn sync_returns_not_implemented_for_valid_url() {
+        // F12 full impl deferred to next session. Current behavior:
+        // valid URL passes URL validation but errors with
+        // "not yet implemented" — honest about what the stub does.
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+        let err = wallet
+            .sync("https://blockstream.info/testnet/api")
+            .expect_err("sync stub returns not-yet-implemented");
+        assert!(
+            err.to_string().contains("not yet implemented"),
+            "error message should flag F12 deferral: {err}"
+        );
     }
 }
