@@ -26,7 +26,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
-- [L21] Update `docs/estimate-report.md` on every PR merge (status, progress, in-flight count)
+- [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L22] Fact-forcing gates: state facts, then retry
 - [L23] `git stash -u -- <path>` deletes untracked files matched by path
 
@@ -367,15 +367,17 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 
 ---
-## L21 — Update `docs/estimate-report.md` AND `docs/ai-cost-report.md` on every PR merge
+## L21 — Update estimate-report AND ai-cost-report on every PR merge
 
 **Trigger**: Session 2026-08-10. User asked: "Is estimate report file updated when every task completed?" + follow-up "you should update ai-cost report when every task completed" — current state: both reports are static snapshots, no update rule. Decided to capture as a lesson so future-self updates both reports as work progresses.
+
+> **File paths:** As of 2026-08-10, the reports live at `.superpowers/sdd/2026-08-05-rust-bitcoin-wallet/estimate-report.md` and `.superpowers/sdd/2026-08-05-rust-bitcoin-wallet/ai-cost-report.md` (same path as progress.md, gitignored per L14). Earlier in the session they were at `docs/`. The rule's principle is path-agnostic — only the file location matters; update wherever the files live.
 
 **Rule**: When a task-PR merges into `main`:
 
 **For `docs/estimate-report.md` (client-facing bill):**
 
-1. **Update the "Plan progress" section** — change the affected row's status from "In-flight" → "Complete", update the merged PR number reference, and update the merged-vs-pending count.
+1. **Update the "Plan progress" section** — change the affected row's status from "In-flight" → "Complete", update the merged PR number reference, and update the merged-vs-pending count. Include the merge commit SHA + timestamp in the per-PR row notes (e.g., `PR #N merged (SHA abc1234, 2026-08-10)`) — makes each row independently auditable.
 2. **Update the "Progress" line** — recalculate the percentage (e.g., 11/13 → 12/13 → 13/13) and update the progress bar characters.
 3. **Update "Last updated" footer** in estimate-report.md with merge commit SHA + date.
 4. **Excluded list** — if the merged work surfaced a new L-rule (e.g., from pre-PR review), add to the excluded list.
@@ -383,9 +385,9 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **For `docs/ai-cost-report.md` (internal AI spend):**
 
-1. **Move the merged task's row from "estimate" to "actual"** — replace `~` qualified retroactive figures with measured token counts from the session `usage` field.
+1. **Move the merged task's row from "estimate" to "actual"** — replace `~` qualified retroactive figures with measured token counts from the session `usage` field. Include merge commit SHA in the row's "Notes" column.
 2. **Recompute "Total (retroactive est.)"** row — drop the `retroactive est.` qualifier as more rows have actuals.
-3. **Add any new tasks / process work** that emerged during the merge (e.g., review-fix commits, CI-blocker fixes).
+3. **Add any new tasks / process work** that emerged during the merge (e.g., review-fix commits, CI-blocker fixes) with their merge SHAs.
 
 **Why**: A static invoice misrepresents progress. Client expects the bill to track deliverable completion; a bill that says "11/13" a week after the 12th task merged looks stale. Same principle for AI cost tracking — token spend is a real ledger item, not a one-time estimate.
 
