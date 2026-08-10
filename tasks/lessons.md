@@ -659,3 +659,62 @@ All caught AFTER push → forced a fix round (commit `27f8e32`) → forced a fol
 **Related**: L12 (review BEFORE local verify gate), L13 Q5 (3-round budget).
 
 ---
+
+## L32 — For client-product code, run the example binary end-to-end against real deps (network/fs) before claiming "Try it" works
+
+**Trigger**: Session 2026-08-10 (#19b.2 round-3). Built `Wallet::sync` + `Wallet::balance` full impl (PR #55), 164 tests pass, clippy clean, `cargo check --examples` clean, `cargo run --example wallet_demo` clean (the existing from_mnemonic demo). Demo worked. Then user said "demo on main" — I wrote a NEW `sync_demo.rs` example exercising `sync`/`balance` against live blockstream.info testnet. **3 semantic bugs surfaced** that all 164 unit tests + clippy missed: receive path double-indexed, xprv prefix hardcoded to XPRV (testnet needs TPRV), `reqwest::Url::join` dropped `/api` because base URL lacked trailing `/`.
+
+**Rule**: L29 covers `cargo check --examples` (compile) + `cargo test --examples` (test binary) + `cargo run --example wallet_demo` (the existing demo runs). L32 extends L29: **for any new example, run the binary end-to-end against real deps** (network for chain backends, fs for persistence, db for queries). "Try this command works" is a contract with the client; the binary must actually run.
+
+**Why**: Unit tests + clippy + L29 compile/test all pass when the function *type-checks* + has correct types + correct shapes. They do NOT exercise:
+- Third-party parser semantics (bdk's `Key(InvalidNetworkKind)` for wrong prefix; bdk's `InvalidHdKeyPath` for double-indexed paths)
+- URL composition semantics (`reqwest::Url::join` drops last segment without trailing `/`)
+- Live API responses (HTML 200 instead of JSON 404 from a wrong path)
+
+These three failure modes share a property: they only surface when the binary actually calls the third-party code against a real input. A `#[ignore]` integration test or a `cargo run --example` against a live dep catches them; unit tests don't.
+
+**Apply**:
+- New `Wallet::*` method that composes `bdk`, `Esplora`, `bip32`, `reqwest` → write an example that calls it against live testnet + run it before declaring done.
+- Existing example under change → re-run with the change.
+- `cargo test --lib` + clippy passing is NOT a green light for "Try this" — add the demo run to the verify gate.
+- "Looks like it works" / "compiles cleanly" / "164 tests pass" — not sufficient. The binary must run, against real deps, end-to-end.
+
+**Anti-patterns**:
+- "Tests pass, the example compiles — we're good" (without running the example against real deps).
+- Declaring "playaround-able" on a `#[ignore]` test that's never run.
+- Skipping the demo for "trivial" methods — even `Wallet::sync` is non-trivial when it composes bdk + Esplora + bip32.
+
+**Related**: L29 (compile + run the example), L10 removed (threat-model re-read), L30 (security review pre-PR), L33 (unit vs integration smoke).
+
+---
+
+## L33 — Unit tests cover shape; integration smoke covers semantics — when wrapping third-party APIs, the unit-test mock stops at the boundary
+
+**Trigger**: Session 2026-08-10 (#19b.2 round-3). Same 3 bugs from L32. All 3 passed `cargo test --lib` (164 tests) + `cargo clippy --all-targets -- -D warnings` because:
+
+1. **Path double-index**: `address_type_to_path(addr, coin, 0, 0)` returns `m/.../0/0` — valid path string. `format!("wpkh({}/0/*)", xprv)` — valid descriptor string. Both compile, both return Ok from bdk's `create`, but bdk's *internal* parser sees `m/.../0/0/0/*` and fails on first scan. Unit test never reached the parse step (test constructed wallet, asserted `Ok`, didn't scan).
+2. **xprv prefix**: `to_string(Prefix::XPRV)` returned a valid base58 string ending in `xprv...`. Test only checked `assert!(c.base_url.as_str().contains("blockstream.info"))` shape. bdk's descriptor parser checks prefix-against-network and fails with `Key(InvalidNetworkKind)`. Test never deserialized into bdk.
+3. **URL trailing slash**: `reqwest::Url::parse("https://host/api")` succeeded. `join("address/x")` succeeded. Test only asserted shape, never sent the request. Live server returned HTML 200.
+
+**Rule**: When a function composes third-party APIs (bdk, bip32, reqwest, sqlx, etc.), unit tests that mock the boundary verify shape but not semantics. To catch semantic misuse of those APIs, you need a test that:
+
+1. **Constructs the actual third-party value** (real `BdkWallet`, real `bitcoin::Transaction`, real `Url::parse(...).join(...)`)
+2. **Calls the actual third-party operation** (real `.create_wallet_no_persist()`, real HTTP request, real `bip32::XPrv::derive`)
+3. **Asserts on the actual return** (not just `Ok`, but the resulting state)
+
+This is L32's smoke test, scoped to a unit test where possible: `#[test]` for in-process third-party libs (bdk, bip32, sqlx); `#[tokio::test]` or example-binary smoke for network third-party libs (reqwest).
+
+**Why**: Every third-party API has an opinion about what counts as valid input. `bdk::BdkWallet::create` is happy to parse the descriptor string at construction but unhappy with it at scan time. `bitcoin::Txid` deserializes from a 64-char hex but bdk checks prefix-against-network on the deserialized xprv. These are deep checks that the type system can't enforce. Tests that stop at construction miss them.
+
+**Apply**:
+- For each new wrapper around a third-party API, add ONE test that exercises the full chain to the third-party operation: `assert!(bdk_wallet.start_full_scan().await.is_ok())`, not just `assert!(bdk_wallet.create(...).is_ok())`.
+- For URL composition: at least one test should send a real request (or `assert_eq!(url.as_str(), "expected/path")`).
+- For cryptographic primitives: at least one test should exercise the actual encode/decode round-trip (e.g., `to_string` then `FromStr` round-trip).
+- `Ok(_)` is not "it works" — assert on the actual return value.
+
+**Anti-patterns**:
+- `assert!(client.new(url).is_ok())` without sending a request.
+- `assert!(bdk_wallet.create(desc).is_ok())` without scanning.
+- "Tests pass" → ship. Tests + smoke + clippy + example-binary run = ship.
+
+**Related**: L29 (cargo run --example), L32 (run the binary against real deps), L13 (verify gate is per-step AND task-end).
