@@ -217,10 +217,34 @@ impl EsploraClient {
     /// from `cfg.esplora_spki_pin` (TD-08: carries the network so it
     /// travels with the endpoint; the runtime network check is Task 9).
     ///
+    /// **F20 enforcement** (per issue #37, L12 H-1): on non-regtest
+    /// networks (mainnet / testnet / signet), `TlsPolicy::SystemRoots`
+    /// is rejected — every cert chain must be checked against an SPKI
+    /// pin. Regtest retains the lenient behavior because local dev
+    /// servers typically use self-signed certs that the system CA
+    /// store does not trust.
+    ///
+    /// Escape hatch: callers that genuinely need `SystemRoots` on a
+    /// public network should use [`EsploraClient::new`] directly and
+    /// accept the bypass. Tests in `wallet::tests` do this for the
+    /// `#[ignore]`d live-testnet fixtures.
+    ///
     /// # Errors
     ///
-    /// See [`EsploraClient::new`].
+    /// Returns [`Error::Esplora`] if:
+    /// - The config network is non-regtest AND no SPKI pin is set
+    ///   (F20 enforcement).
+    /// - See [`EsploraClient::new`] for URL/TLS errors.
     pub fn from_config(cfg: &WalletConfig) -> Result<Self> {
+        // F20 enforcement: non-regtest requires a pin. Regtest stays
+        // permissive (local dev with self-signed certs).
+        if cfg.network != bitcoin::Network::Regtest && cfg.esplora_spki_pin.is_none() {
+            return Err(Error::Esplora(format!(
+                "F20 SPKI pin required for {:?} network (regtest exempt); \
+                 set esplora_spki_pin in WalletConfig",
+                cfg.network
+            )));
+        }
         let policy = TlsPolicy::from_config(cfg);
         Self::new(&cfg.esplora_url, policy)
     }
@@ -658,16 +682,23 @@ mod tests {
     }
 
     #[test]
-    fn tls_policy_from_config_without_pin() {
-        let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db");
+    fn tls_policy_from_config_without_pin_regtest() {
+        // TlsPolicy::from_config is infallible; SystemRoots is the
+        // policy it produces when no pin is set. F20 enforcement
+        // happens one layer up in EsploraClient::from_config.
+        let cfg = WalletConfig::regtest("https://regtest.example/api", "/tmp/db");
         let policy = TlsPolicy::from_config(&cfg);
         assert!(matches!(policy, TlsPolicy::SystemRoots));
     }
 
     #[test]
-    fn from_config_builds_client() {
+    #[ignore = "requires native system certs on host (rustls-native-certs load)"]
+    fn from_config_builds_client_with_pin() {
         init_crypto();
-        let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db");
+        // F20 requires a pin on testnet.
+        let pin = SpkiPin::from_bytes([0xaau8; 32]);
+        let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db")
+            .with_esplora_spki_pin(pin);
         let c = EsploraClient::from_config(&cfg).unwrap();
         assert_eq!(c.base_url.as_str(), "https://blockstream.info/testnet/api/");
     }
@@ -675,12 +706,86 @@ mod tests {
     #[test]
     fn from_config_rejects_http() {
         init_crypto();
+        // Use regtest (F20 exempt) so the http:// scheme is the
+        // failure cause, not the missing-pin check.
         let cfg = WalletConfig {
             esplora_url: "http://blockstream.info/testnet/api".to_string(),
-            ..WalletConfig::testnet("https://placeholder.example/api", "/tmp/db")
+            ..WalletConfig::regtest("https://placeholder.example/api", "/tmp/db")
         };
         let err = EsploraClient::from_config(&cfg).unwrap_err();
         assert!(matches!(err, Error::Esplora(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("https://"), "msg = {msg}");
+    }
+
+    // F20 enforcement tests (issue #37).
+    #[test]
+    fn from_config_requires_pin_on_mainnet() {
+        init_crypto();
+        let cfg = WalletConfig::mainnet("https://blockstream.info/api", "/tmp/db");
+        let err = EsploraClient::from_config(&cfg).unwrap_err();
+        assert!(matches!(err, Error::Esplora(_)));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("F20") && msg.contains("pin"),
+            "msg should name F20 + pin: {msg}"
+        );
+    }
+
+    #[test]
+    fn from_config_requires_pin_on_testnet() {
+        init_crypto();
+        let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db");
+        let err = EsploraClient::from_config(&cfg).unwrap_err();
+        assert!(matches!(err, Error::Esplora(_)));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("F20") && msg.contains("pin"),
+            "msg should name F20 + pin: {msg}"
+        );
+    }
+
+    #[test]
+    fn from_config_requires_pin_on_signet() {
+        init_crypto();
+        let cfg = WalletConfig::signet("https://signet.example/api", "/tmp/db");
+        let err = EsploraClient::from_config(&cfg).unwrap_err();
+        assert!(matches!(err, Error::Esplora(_)));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("F20") && msg.contains("pin"),
+            "msg should name F20 + pin: {msg}"
+        );
+    }
+
+    #[test]
+    fn from_config_allows_no_pin_on_regtest() {
+        init_crypto();
+        let cfg = WalletConfig::regtest("https://regtest.example/api", "/tmp/db");
+        // No pin → SystemRoots is acceptable on regtest.
+        EsploraClient::from_config(&cfg).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires native system certs on host (rustls-native-certs load)"]
+    fn from_config_accepts_pin_on_testnet() {
+        init_crypto();
+        let pin = SpkiPin::from_bytes([0x42u8; 32]);
+        let cfg = WalletConfig::testnet("https://blockstream.info/testnet/api", "/tmp/db")
+            .with_esplora_spki_pin(pin);
+        let c = EsploraClient::from_config(&cfg).unwrap();
+        assert!(matches!(c.tls, TlsPolicy::Pinned(_)));
+    }
+
+    #[test]
+    #[ignore = "requires native system certs on host (rustls-native-certs load)"]
+    fn from_config_accepts_pin_on_mainnet() {
+        init_crypto();
+        let pin = SpkiPin::from_bytes([0x42u8; 32]);
+        let cfg = WalletConfig::mainnet("https://blockstream.info/api", "/tmp/db")
+            .with_esplora_spki_pin(pin);
+        let c = EsploraClient::from_config(&cfg).unwrap();
+        assert!(matches!(c.tls, TlsPolicy::Pinned(_)));
     }
 
     #[test]
