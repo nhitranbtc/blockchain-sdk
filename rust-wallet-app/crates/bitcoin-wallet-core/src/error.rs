@@ -96,6 +96,15 @@ pub enum Error {
     /// Defends F20 (SPKI pinning).
     #[error("spki pin: {0}")]
     SpkiPin(String),
+
+    /// Mnemonic encryption/decryption error (Task 5 / issue #28). Per
+    /// F43 pattern (per-protocol variant): kept distinct from
+    /// `Encryption` (the underlying KDF/AEAD primitives) so callers can
+    /// distinguish "blob malformed or wrong password" (caller error)
+    /// from "KDF/AEAD library bug". Defends F5 (Argon2id KDF) + F6
+    /// (AES-256-GCM AEAD) + F47 (zeroize-on-drop of the phrase).
+    #[error("mnemonic cipher: {0}")]
+    MnemonicCipher(String),
 }
 
 /// Result alias used by every public function in this crate.

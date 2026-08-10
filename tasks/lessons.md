@@ -718,3 +718,33 @@ This is L32's smoke test, scoped to a unit test where possible: `#[test]` for in
 - "Tests pass" → ship. Tests + smoke + clippy + example-binary run = ship.
 
 **Related**: L29 (cargo run --example), L32 (run the binary against real deps), L13 (verify gate is per-step AND task-end).
+
+---
+
+## L34 — L12 review is load-bearing for any change touching crypto / parsing / TLS code paths; the parallel 3-agent form (security + type-design + code-reviewer) finds what a single reviewer misses
+
+**Trigger**: Session 2026-08-10 (#28 MnemonicCipher). Initial implementation looked clean — 9 tests, fmt + clippy clean, `cargo test --lib` green. L12 review cycle (mandated by issue #28 acceptance criteria: "Pass L12 review (security-auditor + type-design-analyzer + code-reviewer parallel)") surfaced 12+ findings:
+
+- **type-design NEEDS-WORK** (3/5 on encapsulation): bare `Vec<u8>` blob type let callers accidentally pass a raw AES-GCM blob or a raw Argon2id salt where a mnemonic cipher blob was expected. Module-doc-only invariant. → Applied: `MnemonicCipherBlob(Vec<u8>)` newtype + `pub const MIN_LEN: usize` + `TryFrom<&[u8]>` lifts the format invariant into the type system.
+- **security 2 MED**: `String::from_utf8(phrase_bytes)` happy path allocates a `Vec<u8>` not in a `Secret` wrapper (transient plaintext bytes linger on heap); same on the error path. → Applied: `Secret::into_inner()` instead of `.expose().clone() + drop()`.
+- **code-reviewer 3 MED**: `Error::Encryption` overload (no per-protocol variant — same flaw as L33's "shape vs semantics"); unidiomatic `drop(key)` (Rust drops at end of scope anyway); missing tests (salt-region tamper, nonce-region tamper, max-sized BIP-39, empty password, newtype short-slice rejection).
+- **3 LOW** (drop-order doc, log-leak doc, redundant test) + **3 INFO** (threat-model block, calibration note, cross-module const-eval) — all applied.
+
+**Rule**: For any change that touches crypto primitives (KDF, AEAD, signing), URL parsing, TLS, or F43 per-protocol error variants, the L12 review cycle is load-bearing. Skip it and you ship the bug. Single-reviewer L12 misses what 3-agent parallel catches (security saw the memory hygiene, type-design saw the blob-type weakness, code-reviewer saw the missing tests + F43 overload — none of these overlap).
+
+**Why**: Crypto/parsing/TLS changes are the highest-blast-radius work in the codebase. A subtle flaw (e.g., a plaintext `Vec<u8>` dropped without zeroize on the error path) is invisible to tests + clippy + a single reviewer's eye. The 3-agent form (security-auditor + type-design-analyzer + code-reviewer) covers different orthogonal surfaces: memory hygiene, type-shape, and idiomatic-Rust + tests respectively. Without parallel review the same flaw would survive to merge.
+
+**Apply**:
+- For crypto / KDF / AEAD / signing changes: L12 review is mandatory. Don't ship without it.
+- For URL parsing / TLS / F43 error variants: same — 3-agent parallel.
+- Use the 3-agent form by default (issue #28 acceptance criteria; L13 Q4 critical-tier review is 3-agent).
+- Apply ALL findings, even LOWs. Each LOW is usually 1-2 lines and prevents a future regression. The reviewer's marginal-cost call.
+- When type-design says "needs work on encapsulation", wrap the newtype — don't talk yourself out of it ("it's only used in one place").
+
+**Anti-patterns**:
+- "Tests pass + clippy clean = ship" (L29/L32/L33 already cover this for shape; L34 covers it for the security + type-design surfaces).
+- L12 review done by single agent (security OR code-reviewer, not both) — orthogonal findings get missed.
+- "MED finding is a std-lib footgun, not our bug" — yes, but the helper is the right place to mitigate it (e.g., wrap in `Secret`).
+- Ignoring type-design scores below 4/5 on encapsulation or invariant expression. Those axes are the design-quality floor.
+
+**Related**: L30 (pre-PR security-review for critical-tier), L13 (L13 Q4 3-agent critical-tier), L33 (unit vs integration), L29 (run the binary), L32 (demo before ready), L11 (skill enumeration — includes `compass:security-auditor` + `pr-review-toolkit:type-design-analyzer` + `pr-review-toolkit:code-reviewer`).

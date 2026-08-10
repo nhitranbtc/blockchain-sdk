@@ -1,10 +1,14 @@
 //! Cryptographic primitives: Argon2id (KDF), AES-256-GCM (AEAD), BIP-137 (msg sig).
 //!
 //! Filled by Task 5 (argon2, aes_gcm) and Task 6 (bip137).
+//!
+//! `mnemonic_cipher` (issue #28) bundles argon2 + aes_gcm into a 2-line
+//! encrypt/decrypt API for at-rest mnemonic encryption.
 
 pub mod aes_gcm;
 pub mod argon2;
 pub mod bip137;
+pub mod mnemonic_cipher;
 
 /// Cross-module invariant: the Argon2id-derived key length must equal
 /// the AES-256 key length. Both constants now pin themselves to 32 via
