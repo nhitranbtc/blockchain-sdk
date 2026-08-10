@@ -106,4 +106,6 @@ Full MVP plan: `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`
 ## Last updated
 
 - **2026-08-10** — Initial bill drafted (commit `5d0ca79` on `process/estimate-and-ai-cost-reports` branch).
+- **2026-08-10** — PR #39 (F21 typed Sighash) merged via `--admin` at `2026-08-10T03:36:08Z`. Status: 11/13 code deliverables merged (Tasks 8, 9 remain in-flight at no extra charge). Fixed-fee total stays at $1,650.
+- **2026-08-10** — PR #40 (process docs + L21-L23 lessons) merged via `--admin`. Process docs merged; no client deliverable change.
 - Per L21: this bill updates on every PR merge (status, progress, in-flight count). Fixed-fee total stays unchanged unless scope shifts.
