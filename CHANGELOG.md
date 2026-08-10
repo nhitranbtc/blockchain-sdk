@@ -14,7 +14,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-_No pending changes. Future entries land under [Unreleased] until next version cut._
+### Added
+
+- **`[user-facing]`** `Wallet::sync(esplora_url)` (Task 9b, F12) — partial: URL validation + `coin_type_for` derivation + descriptor path. Full `start_full_scan` deferred (requires xprv expansion). PR #51
+- **`[user-facing]`** `Wallet::balance(esplora_url) -> Result<u64>` (Task 9c, F13) — partial: URL validation + `coin_type_for`. Full UTXO aggregation deferred (requires `bdk_wallet::Wallet` construction). PR #52
+
+### Security
+
+- **`[internal]`** F13 / F14 (balance consistency / persistence) — defense-in-depth tripwires in the partial sync/balance impls return honest "partial impl" errors. Full UTXO-sum + `bdk_file_store` deferred.
 
 ## [v0.1.0] — 2026-08-10
 
