@@ -30,7 +30,10 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L22] Fact-forcing gates: state facts, then retry
 - [L23] `git stash -u -- <path>` deletes untracked files matched by path
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog) + README "What's New"
-- [L25] On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it" instructions
+- [L25] On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it" instructions (edit on working branch + commit with the sub-task/code change — no separate process branch needed)
+- [L26] Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main). L21/L24/L25 doc updates travel WITH the sub-task PR on the working branch — no separate process branch.
+- [L27] Read API before assuming — grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
+- [L28] For client-facing work, explicitly flag deferred/stub work in CHANGELOG — don't present partial impl as completed features
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 
@@ -519,5 +522,168 @@ The user-story view answers the client question "is feature X ready to use?" wit
 - Forgetting to update "Try it" — the column is the value; checkbox flips without command examples is just busywork.
 - Flipping the box speculatively before the merge ("I'll merge it later") — same drift problem L24 solves for changelog entries.
 - Marking a story "done" when the implementation is partial (e.g., "Create wallet from mnemonic" works but doesn't yet sync) — split into smaller stories instead.
+- Fabricating "Try it" commands without verifying the path exists. Story #8 (`default_is_testnet_per_hard_rule_1`) on session 2026-08-10 had a test name that no longer existed after the wrapper refactor — caught by review. **Maintenance caveat:** before v0.2, add a CI step that runs `cargo test --no-run` for each "Try it" module path and fails the build if the path resolves to zero tests. Without automation, the column goes stale silently.
+
+## L26 — Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main)
+
+**Trigger**: Session 2026-08-10. Task 9 (`Wallet::from_mnemonic` + sync + balance) was too large for one PR. User directed: "complete all sub-tasks in task 9, then call merge" + "I have a tree for sub-task handling: task/19 is main task branch, check from main task branch for sub-task" + "we only merge by order number, complete task 19a merge into main task branch 19, then create new branch from 19 for task 19b".
+
+**Rule**: For a task that you split into 3+ sub-tasks:
+
+1. **Create a parent task branch** as the integration point:
+   ```bash
+   git checkout -b task/<N>-<slug>   # e.g. task/19-wallet-end-to-end
+   ```
+   The parent branch is empty initially (no code) — it's a ref branch for sub-task rebases, not a PR target.
+
+2. **Merge sub-tasks into the parent by order**:
+   ```bash
+   git checkout task/<N>-<slug>
+   git merge <sub-task-1-commit> --no-ff -m "Merge PR #X (#Na): <sub-task>"
+   ```
+   Each merge is `--no-ff` (merge commit preserved) so history shows the integration.
+
+3. **Branch each subsequent sub-task from the parent** (NOT from main):
+   ```bash
+   git checkout task/<N>-<slug>
+   git checkout -b task/<N>b-<sub-task-slug>   # e.g. task/19b-sync
+   ```
+   This way the sub-task branch inherits all prior sub-tasks' code; rebases onto parent as siblings land.
+
+4. **Sub-task PRs target the parent branch** (NOT main):
+   ```bash
+   gh pr create --base task/<N>-<slug> --head task/<N>b-<sub-task>
+   gh pr merge <PR> --squash --admin
+   ```
+   The parent accumulates sub-tasks as you go.
+
+5. **Final cut to main** happens once all sub-tasks are merged into the parent:
+   ```bash
+   git checkout main
+   git merge task/<N>-<slug> --no-ff -m "Task <N>: <slug> complete (sub-tasks #Na/#Nb/#Nc)"
+   git push origin main
+   ```
+   Single cut to main = one merge commit = clean main history.
+
+**Why**:
+
+- **Main stays releasable** throughout the work — bug fixes, hot patches, and other tasks can land on main while the large task is in flight.
+- **Sub-task integration happens on parent** — each merge is a checkpoint where sub-tasks combine. Easier to bisect and roll back individual sub-tasks than rolling back a mega-PR.
+- **PR reviews are scoped** — each sub-task PR targets parent; reviewers see one sub-task at a time, not the whole feature.
+- **Audit trail** — git history shows the parent as the integration lineage; future-self can trace sub-task → parent → main.
+
+**When to apply** (decision criteria):
+
+- **≥3 sub-tasks**: use parent + rebase (this rule). Clean integration tree.
+- **2 sub-tasks**: borderline. Direct-from-main is acceptable if sub-tasks share no files.
+- **1 task / 0 sub-tasks**: don't apply. Single branch + PR to main.
+
+**Anti-patterns**:
+
+- Sub-task branches rebase on `main` instead of the parent — defeats the parent's purpose.
+- Sub-task PRs target `main` directly — defeats integration.
+- Skip the `--no-ff` flag — flattens merge history; you lose the parent line.
+- Parent branch stays empty after all sub-tasks land (the final cut is a fast-forward instead of a merge) — the parent becomes a dead branch with no audit trail.
+
+**Recovery pattern** if a sub-task was merged to `main` accidentally:
+
+```bash
+git checkout main
+git revert -m 1 <commit-sha>   # revert the merge
+git push origin main
+git checkout task/<N>-<slug>
+git cherry-pick <commit-sha>   # or git merge <commit-sha>
+```
+
+Then re-merge sub-task onto parent (not main) per the rule.
+
+**Examples in this session** (2026-08-10):
+
+- Task 9 split into #19a / #19b / #19c (issues #45 / #46 / #47)
+- Parent branch: `task/19-wallet-end-to-end` (empty stub at creation)
+- #19a implemented on `task/19a-from-mnemonic`, merged to main via PR #48
+- After #48 merged: `git merge a34fe0e --no-ff` into `task/19-wallet-end-to-end` (parent now has #19a)
+- `task/19b-sync` branched from parent — inherits #19a's code
+- #19b will PR to parent, not main
+- After #19b merged into parent: branch `task/19c-balance` from parent
+- Final cut: `task/19-wallet-end-to-end` → main as single merge commit when all 3 sub-tasks are integrated
+
+---
+
+## L27 — Read API before assuming: grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
+
+**Trigger**: Session 2026-08-10. Multiple compile errors from incorrect API assumptions, all caught late (after impl was written, during TDD GREEN):
+
+1. `Secret<String> is Clone` — **false**. Only `ZeroizeOnDrop` derived. No `Clone` impl. Original `#19a` impl stored `Secret<String>` field via `mnemonic.clone()` which doesn't compile (`Mnemonic` wraps `Secret<bip39::Mnemonic>`, also not Clone).
+2. `Error::Mnemonic(String)` — **doesn't exist**. Actual variant is `Error::InvalidMnemonic(String)`. Caused 2+ minutes of compile-error back-and-forth.
+3. `static_assertions::assert_not_impl_all!` — crate **not in deps**. Tried to use as Default-impossible witness; had to fall back to compile-time absence comment.
+
+**Rule**: Before writing code that uses a type's traits or enum variants:
+
+1. **For derives**: `grep -A 5 'pub struct X' path/to/type.rs` or `cargo doc --document-private-items` — see the actual `#[derive(...)]` line. **Never** assume `Clone`, `Debug`, `Default`, `Eq`, or any other trait is implemented.
+2. **For enum variants**: `grep -E '^\s+[A-Z][a-zA-Z]+,?$' path/to/enum.rs` — list all variants. **Never** assume `MyEnum::MyVariant` exists; variants may be renamed, removed, or have different shape.
+3. **For external crates**: check `Cargo.toml` for the crate before using its types. `cargo tree --package <name>` confirms the version.
+
+**Why**: Each compile error costs ~2-5 min of round-trip + state-modifying attempts (gate denials, re-Reads, re-Edits). 3 errors in #19a = ~10-15 min wasted. Pre-flight grep costs ~30 sec. Net savings on every multi-error task.
+
+**Apply**:
+
+- Before writing a struct field of type `Secret<T>`: confirm `T: Zeroize + ZeroizeOnDrop` (required by `Secret<T>`'s generic bound). If T isn't `Zeroize`, wrap differently (per L15).
+- Before calling `Foo::default()`: confirm `Foo: Default` (grep `impl Default for Foo` or look for `#[derive(Default)]`).
+- Before matching `Enum::Variant`: `grep 'Variant,' path/to/enum.rs` or check the actual definition.
+- Before using an external crate's macro or type: confirm the crate is in `[dependencies]`.
+
+**Anti-patterns**:
+
+- Writing the impl, hitting a compile error, fixing, hitting another error, fixing, etc. — each iteration costs more than a single grep would have.
+- "I'll just try it and see if it compiles" — multiplies error rounds. Read once, write once.
+- Trusting LLM memory of crate APIs — crates change between versions; what's true for crate X v0.32 may not be true for v0.31.
+
+---
+
+## L28 — For client-facing work, explicitly flag deferred/stub work in CHANGELOG; do not present partial impl as completed features
+
+**Trigger**: Session 2026-08-10. I implemented `#19b` (`Wallet::sync`) as a URL-validation stub returning `Err("not yet implemented")`. Treated it as "minimal viable Option A" for fast iteration within fixed-fee budget. User feedback (same session): "we are developing client product, and support features, user cases for real users, so we need to choose the best implementation in technical." This is a course-correction — stubs are internal-only; client-facing work requires full impl.
+
+**Rule**: For any client-facing deliverable (library public API, CLI subcommand, anything in CHANGELOG `[Unreleased]` → next release):
+
+1. **Stub vs full impl is a binary choice, not a gradient.** A method that returns `Err("not yet implemented")` is NOT a partial impl — it is **no impl**. The CHANGELOG must reflect reality, not optimistic intent.
+
+2. **Three states per feature, not two:**
+   - **`[x] done`** — fully implemented + tested; user can rely on it.
+   - **`[ ] gated`** — explicitly listed in CHANGELOG User Stories but marked as not-yet-implemented; user knows not to expect it.
+   - **(not listed)** — feature doesn't exist yet; don't tease.
+
+   Do NOT introduce a third implicit state: "merged but doesn't actually work."
+
+3. **PR title + body** must state the implementation state honestly:
+   - `feat(wallet): Wallet::sync stub (Task 9 #19b)` ← explicit "stub" in title
+   - `feat(wallet): Wallet::sync implementation (Task 9 #19b)` ← only when real impl lands
+
+   Both are accurate; the user (client, reviewer, future-self) knows exactly what's shipping.
+
+4. **L25 (`User Stories` checkbox flip)** is gated on real impl, not "merged". Story #11 (`Sync wallet`) stays `[ ]` until `Wallet::sync` actually syncs. The L25 rule explicitly says: "Flipping the box speculatively before the merge" is an anti-pattern. Extending that principle: flipping after a stub-merge is also anti-pattern.
+
+5. **L21 (`estimate-report`) scope flagging:** if a work item is a stub, the bill must say so. Don't bill the client for a feature that doesn't work. The fixed-fee `$1,650` was sized for the agreed scope; if scope expands to full impl, the bill may need re-negotiation.
+
+**Why**: Client trust is built by honest scope communication, not by inflating delivered-features counts. A CHANGELOG that says "Sync wallet ✓ done" when it actually returns "not yet implemented" loses client trust when the client tries the feature.
+
+**Apply**:
+
+- Before merging any PR that introduces a public API: ask "is the API actually functional end-to-end, or does it return Err/TODO/unimplemented?"
+- Before flipping any CHANGELOG User Story checkbox: ask "can a client call this API today and get a real result?"
+- Before billing for an item: ask "does the shipped artifact actually deliver the billed capability?"
+
+**Anti-patterns**:
+
+- "I'll add the full impl later; ship the stub now and flip the box" — L25 anti-pattern extends to stub-merge scenarios.
+- "Internal placeholder for external feature" — stubs are fine for internal modules (e.g., a trait method placeholder); wrong for client-facing features.
+- Optimistic CHANGELOG: listing features as done when they're stubbed. The client reads the CHANGELOG and assumes capability.
+
+**Examples in this session** (2026-08-10):
+
+- ✅ PR #48 (`Wallet::from_mnemonic`) — full impl, all tests pass, real capability. Story #10 flipped to `[x]`.
+- ❌ PR #50 (`Wallet::sync stub`) — stub returning `Err("not yet implemented")`. **Story #11 should NOT be flipped**. PR #50 must NOT be merged without full impl replacing the stub.
+- ❌ (anticipated) PR #52 (`Wallet::balance stub`) — same trap if I default to stub.
 
 ---
