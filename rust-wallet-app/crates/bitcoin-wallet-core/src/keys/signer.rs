@@ -40,6 +40,7 @@ use zeroize::Zeroize;
 use crate::error::{Error, Result};
 use crate::keys::derivation::XPrvHolder;
 use crate::keys::secret::Secret;
+use crate::threat::MessageHash;
 
 /// secp256k1 signer. Holds the 32-byte secret scalar in heap-allocated
 /// `Secret<Vec<u8>>` so it zeroizes on drop (avoids L16 Copy-type defeat).
@@ -138,7 +139,13 @@ impl Signer {
             .expect("stored secret bytes are valid (set by from_secret_key/from_xprv)")
     }
 
-    /// Sign a 32-byte digest recoverably. Returns `(RecoveryId, [u8; 64])`.
+    /// Sign a typed 32-byte digest recoverably. Returns `(RecoveryId, [u8; 64])`.
+    ///
+    /// **F21 type-level defense (per threat model lines 109-122):**
+    /// the parameter type `&MessageHash<Bip137Message>` makes the
+    /// compiler refuse `MessageHash<Transaction>` or `MessageHash<Generic>`
+    /// at the call site. Caller cannot accidentally sign a transaction
+    /// sighash as a message.
     ///
     /// **Task 6 (BIP-137):** `pub(crate)` only — public callers must use
     /// `crypto::bip137::sign_message` so the narrow F7 API stays the
@@ -148,10 +155,14 @@ impl Signer {
     /// The local `SecretKey` is `non_secure_erase`-ed immediately after
     /// the FFI call returns. The returned `[u8; 64]` is the compact
     /// signature bytes (public material, not secret).
-    pub(crate) fn sign_recoverable(&self, hash: &[u8; 32]) -> Result<(RecoveryId, [u8; 64])> {
-        let msg = Message::from_digest(*hash);
+    pub(crate) fn sign_recoverable(
+        &self,
+        msg: &MessageHash<crate::threat::Bip137Message>,
+    ) -> Result<(RecoveryId, [u8; 64])> {
+        let hash = msg.hash();
+        let digest = Message::from_digest(*hash);
         let mut sk = self.secret_key();
-        let rec_sig: RecoverableSignature = self.secp.sign_ecdsa_recoverable(&msg, &sk);
+        let rec_sig: RecoverableSignature = self.secp.sign_ecdsa_recoverable(&digest, &sk);
         sk.non_secure_erase();
         Ok(rec_sig.serialize_compact())
     }
@@ -259,6 +270,20 @@ mod tests {
         // Signer itself is a no-op that lets the field's Drop run).
         fn assert_zod<T: zeroize::ZeroizeOnDrop>() {}
         assert_zod::<Secret<Vec<u8>>>();
+    }
+
+    #[test]
+    fn sign_recoverable_accepts_typed_message_hash() {
+        // F21: sign_recoverable must require MessageHash<Bip137Message>.
+        // This test fails to compile until MessageClass + MessageHash
+        // are added to threat.rs (RED). Once GREEN, this verifies the
+        // narrow typed API still produces a 64-byte compact sig.
+        use crate::threat::MessageHash;
+        let sk_bytes = [0x42u8; 32];
+        let signer = Signer::from_secret_bytes(Secret::new(sk_bytes.to_vec()));
+        let msg = MessageHash::bip137([0u8; 32]);
+        let (_rec_id, compact) = signer.sign_recoverable(&msg).expect("sign");
+        assert_eq!(compact.len(), 64);
     }
 
     #[test]
