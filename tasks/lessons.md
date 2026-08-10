@@ -29,6 +29,8 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L22] Fact-forcing gates: state facts, then retry
 - [L23] `git stash -u -- <path>` deletes untracked files matched by path
+- [L24] On PR merge: update CHANGELOG.md (Keep a Changelog) + README "What's New"
+- [L25] On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it" instructions
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 
@@ -453,5 +455,69 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - Before `git stash -u -- <paths>`, verify each path is tracked (`git ls-files --error-unmatch <path>`). For untracked paths, prefer branch-and-commit instead.
 - After accidental delete: check `git fsck --lost-found` + `git stash list` (reflog may have it).
 - For doc/process work that doesn't deserve its own branch yet: commit in-place on a fresh branch from main, not via stash.
+
+---
+
+## L24 — On PR merge: update CHANGELOG.md (Keep a Changelog) + README "What's New"
+
+**Trigger**: Session 2026-08-10. After merging PR #42 (Task 8 coin_type_for), user said: "I have a feebacks are add changlog, after merged PR need to update user facing that handled". Two artifacts captured the feedback: a CHANGELOG.md for cumulative release history, and a README "What's New" section for at-a-glance user visibility.
+
+**Rule**: After every PR merge into `main`:
+
+1. **`CHANGELOG.md`** (top-level, Keep a Changelog format): append an entry to the `[Unreleased]` section under one of `### Added` / `### Changed` / `### Fixed` / `### Security` / `### Deprecated` / `### Removed`. One bullet per user-visible change. Cite the PR number.
+2. **`rust-wallet-app/README.md`** "What's New" section: add a one-line summary of the merged PR. Format: `- **PR #N** (Task X) — <feature summary>`. Link to `CHANGELOG.md` for full history.
+3. **At release time**: cut a versioned section (e.g., `## [v0.1] — 2026-08-10`) by moving all `[Unreleased]` entries under the new version header. Then reset `[Unreleased]` to empty.
+
+**Why**: Two audiences for the same change:
+- **CHANGELOG.md**: cumulative record, machine-parseable, git-blame-friendly, future contributors ask "what changed between v0.1 and v0.2?" — answers without reading commit history.
+- **README "What's New"**: at-a-glance for users evaluating the project. Without it, the README doesn't reflect the current state.
+
+**Apply**:
+
+- After `gh pr merge <N>` succeeds (alongside L21 reports update): append CHANGELOG entry + README line in the same commit on a fresh branch (e.g., `docs/changelog-update-pr-N`), then push + PR.
+- README "What's New" rolls up the most recent 5-10 PRs; older entries stay in CHANGELOG only.
+- CHANGELOG entries are terse — one line per change, PR number, no prose.
+- For breaking changes: use `### Changed` with a `**BREAKING**:` prefix on the bullet.
+
+**Anti-patterns**:
+
+- Updating only README (loses cumulative record) OR only CHANGELOG (loses at-a-glance surface).
+- Long CHANGELOG prose paragraphs — bullets only, terse.
+- Forgetting to bump `[Unreleased]` to a versioned section at release — leaves history unreleased forever.
+- Committing CHANGELOG/README updates in the same PR as the code change (couples release notes to feature commit; harder to amend notes independently).
+
+---
+
+## L25 — On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it"
+
+**Trigger**: Session 2026-08-10. User feedback: "Read user stories, check list boxes after merged, update what user cases finished and we can playaround with them". The Keep a Changelog format (L24) tracks per-PR changes; this rule tracks per-**user-story** capabilities — a separate lens. User stories = what users *can do* with the codebase, distinct from what *changed*.
+
+**Rule**: `CHANGELOG.md` has a **User Stories** section: a table with columns `#`, `Story`, `Status`, `Try it`. After every PR merge:
+
+1. **If the merged PR completes a user story** (adds a public API, ships a CLI command, makes a previously-gated feature testable): flip the corresponding checkbox from `[ ]` to `[x]` in the Status column.
+2. **Update the "Try it" column** with a one-line instruction — `cargo test -p bitcoin-wallet-core <module>` for library demos, `<subcommand>` for CLI commands, etc.
+3. **Drift detection**: if the merged PR doesn't complete any story but introduces a defense-in-depth change (compile-time check, audit, lint), it doesn't get a user-story checkbox — but it should still get a per-PR entry under the regular `[Unreleased]` section.
+
+**Why**: Three audiences for the same change:
+
+- **Per-PR changelog** (L24): cumulative record, machine-parseable, "what changed between v0.1 and v0.2?"
+- **Per-story changelog** (L25): at-a-glance for clients, "what can I do with this codebase today?"
+- **README "What's New"** (L24): top-of-funnel visibility, "what's new since I last looked?"
+
+The user-story view answers the client question "is feature X ready to use?" without reading git history.
+
+**Apply**:
+
+- After `gh pr merge <N>` succeeds (alongside L21 reports update + L24 changelog update): check the User Stories table for any story completed by the PR.
+- Each story has 3 attributes: descriptive title, status checkbox, "Try it" command. Update in the same commit on a fresh branch.
+- Story titles use user-facing verbs: "Sign messages", "Encrypt with password", "Sync wallet" — not implementation details.
+- For Task 9 (Wallet end-to-end) stories (#10–#13 in the User Stories table), the stories get flipped when Issue #19 merges. No need to flip them per-task during #19 work — the merge is the trigger.
+
+**Anti-patterns**:
+
+- One user story per commit / per PR line — confuses "feature" with "commit." Group multi-commit features under one story.
+- Forgetting to update "Try it" — the column is the value; checkbox flips without command examples is just busywork.
+- Flipping the box speculatively before the merge ("I'll merge it later") — same drift problem L24 solves for changelog entries.
+- Marking a story "done" when the implementation is partial (e.g., "Create wallet from mnemonic" works but doesn't yet sync) — split into smaller stories instead.
 
 ---
