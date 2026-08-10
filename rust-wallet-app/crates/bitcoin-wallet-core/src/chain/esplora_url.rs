@@ -33,8 +33,23 @@ use crate::error::Error;
 /// Wraps `reqwest::Url` after applying the validation rules documented
 /// on the module. The inner field is private; use [`Self::as_url`] to
 /// get a reference.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EsploraUrl(reqwest::Url);
+
+// Manual Debug impl that runs `redact_userinfo` on the inner URL
+// string before formatting. The derived Debug would delegate to
+// `reqwest::Url::Debug` and leak any embedded userinfo verbatim —
+// today `EsploraUrl::new` rejects userinfo so this is a no-op, but
+// if the newtype's invariants ever loosen, Debug would silently
+// leak credentials. Belt-and-braces matches the pattern on
+// `EsploraClient::Debug` (see `chain::esplora`).
+impl std::fmt::Debug for EsploraUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("EsploraUrl")
+            .field(&redact_userinfo(self.0.as_str()))
+            .finish()
+    }
+}
 
 impl EsploraUrl {
     /// Build an `EsploraUrl` from a raw string, applying all
