@@ -72,8 +72,8 @@ Each story is a user-facing capability. Once checked, the feature is **playaroun
 | 8 | [x] Refuse mainnet default (CONTEXT.md hard rule #1) | done (PR #42; `bitcoin::Network` has no `Default` impl, so callers must explicitly choose) | see `rust-wallet-app/CONTEXT.md` hard rule #1 |
 | 9 | [x] Refuse transaction sighash as message (F21 type-level) | done (PR #39) | `cargo test -p bitcoin-wallet-core --doc threat::MessageHash` |
 | 10 | [ ] **Create wallet from mnemonic** | gated (Issue #19, Task 9) | will land with `Wallet::from_mnemonic` |
-| 11 | [ ] **Sync wallet (full chain scan)** | gated (Issue #19, Task 9) | will land with `Wallet::sync` (F12) |
-| 12 | [ ] **Get wallet balance** | gated (Issue #19, Task 9) | will land with `Wallet::balance` |
+| 11 | [ ] **Sync wallet (full chain scan)** | gated (Issue #46, Task 9b) | partial: URL validation + coin_type_for; `Wallet::start_full_scan` deferred. Will land fully with #19b.2 follow-up. |
+| 12 | [ ] **Get wallet balance** | gated (Issue #47, Task 9c) | partial: URL validation + coin_type_for; UTXO aggregation deferred. Will land fully with #19c.2 follow-up. |
 | 13 | [ ] **Use btc CLI subcommand** | gated (Task 9 + CLI subcommands) | `cargo run -p btc --help` (currently placeholder) |
 
 **Progress:** 9 of 13 stories playaround-able. 4 gated on Task 9 (#19).
