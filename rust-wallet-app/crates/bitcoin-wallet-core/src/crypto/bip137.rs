@@ -35,6 +35,7 @@ use subtle::ConstantTimeEq;
 
 use crate::error::{Error, Result};
 use crate::keys::Signer;
+use crate::threat::MessageHash;
 
 /// BIP-137 magic prefix: `0x18` (= 24, length of "Bitcoin Signed Message:\n") +
 /// "Bitcoin Signed Message:\n". 25 bytes total. Per BIP-137 spec.
@@ -149,7 +150,12 @@ impl AsRef<str> for SignedMessage {
 /// Non-P2PKH addresses (P2WPKH, P2SH, P2TR) return `Error::Bip137`.
 pub fn sign_message(message: &str, signer: &Signer, address: &Address) -> Result<SignedMessage> {
     let hash = bip137_hash(message);
-    let (rec_id, compact) = signer.sign_recoverable(&hash)?;
+    // F21: wrap the BIP-137 message digest in a typed MessageHash so
+    // the compiler enforces the U5 mitigation (signer refuses any other
+    // MessageClass variant). The wrapping is internal; callers see
+    // only the narrow &str sign_message signature.
+    let msg_hash = MessageHash::bip137(hash);
+    let (rec_id, compact) = signer.sign_recoverable(&msg_hash)?;
     let secp = Secp256k1::new();
     let rec_sig = RecoverableSignature::from_compact(&compact, rec_id)
         .map_err(|e| Error::Bip137(format!("recover signature: {e}")))?;
@@ -405,7 +411,10 @@ mod tests {
     fn verify_accepts_bitcoin_core_uncompressed_header() {
         let (signer, address) = test_signer_and_p2pkh();
         let hash = bip137_hash("interop test");
-        let (rec_id, compact) = signer.sign_recoverable(&hash).expect("sign recoverable");
+        let msg_hash = MessageHash::bip137(hash);
+        let (rec_id, compact) = signer
+            .sign_recoverable(&msg_hash)
+            .expect("sign recoverable");
         let secp = Secp256k1::new();
         let recovered = secp
             .recover_ecdsa(

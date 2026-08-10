@@ -5,7 +5,10 @@ all-features = true
 version = 2
 # bincode 1.x is unmaintained; bdk_file_store 0.22.0 pins it. No safe upgrade
 # in current dep tree. Track upstream for bdk_file_store bincode-2 bump.
-ignore = ["RUSTSEC-2025-0141"]
+# rustls-pemfile 2.x is unmaintained (transitive via rustls-native-certs →
+# bitcoin-wallet-core). Advisory says "no safe upgrade"; migration to
+# rustls-pki-types is a separate change. Track upstream rustls.
+ignore = ["RUSTSEC-2025-0141", "RUSTSEC-2025-0134"]
 
 [licenses]
 allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "MIT-0", "MITNFA", "CC0-1.0", "CDLA-Permissive-2.0", "Zlib", "OpenSSL", "MPL-2.0"]
