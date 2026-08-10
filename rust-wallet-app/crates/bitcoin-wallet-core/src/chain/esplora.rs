@@ -43,6 +43,7 @@ use rustls::DigitallySignedStruct;
 use rustls::SignatureScheme;
 use sha2::{Digest, Sha256};
 
+use crate::chain::esplora_url::EsploraUrl;
 use crate::chain::spki::SpkiPinSet;
 use crate::config::WalletConfig;
 use crate::error::{Error, Result};
@@ -135,8 +136,15 @@ pub struct EsploraClient {
 
 impl fmt::Debug for EsploraClient {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Defensively redact userinfo on Debug too, in case a future
+        // refactor ever permits a raw `reqwest::Url` into `base_url`.
+        // Today the only path into `base_url` is `EsploraUrl::into_inner()`,
+        // and `EsploraUrl::new` rejects userinfo at construction.
         f.debug_struct("EsploraClient")
-            .field("base_url", &self.base_url.as_str())
+            .field(
+                "base_url",
+                &crate::chain::esplora_url::redact_userinfo(self.base_url.as_str()),
+            )
             .field("tls", &self.tls)
             .finish_non_exhaustive()
     }
@@ -154,60 +162,19 @@ impl Clone for EsploraClient {
 }
 
 impl EsploraClient {
-    /// Build a new client from a base URL and TLS policy.
+    /// Build a new client from a pre-validated `EsploraUrl` and TLS
+    /// policy. URL validation (https-only, no userinfo, valid parse,
+    /// trailing-slash normalization) lives in [`EsploraUrl::new`] —
+    /// callers must construct an `EsploraUrl` first.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Esplora`] if:
-    /// - `base_url` is not a valid URL.
-    /// - `base_url` carries userinfo (`user`/`user:password`); reqwest
-    ///   would send those as `Authorization: Basic …` to the Esplora
-    ///   server, which has no business knowing the operator's creds.
-    /// - `base_url` is not an `https://` URL.
-    /// - The `reqwest::Client` builder fails (root store, etc.).
-    pub fn new(base_url: &str, tls: TlsPolicy) -> Result<Self> {
-        let mut url = reqwest::Url::parse(base_url)
-            .map_err(|e| Error::Esplora(format!("invalid esplora url: {e}")))?;
-        // Reject embedded credentials. `reqwest::Url` exposes both
-        // `username()` and `password()` for `user@host` and
-        // `user:password@host` syntax; reqwest would silently send
-        // `Authorization: Basic …` for the latter. Esplora servers don't
-        // use HTTP basic auth, so any URL with userinfo is either a
-        // typo or an attempt to leak creds into the wire. Fail closed
-        // on any of: non-empty username, non-empty password, or a bare
-        // `@` between `://` and the first `/` (the `https://@host/`
-        // form where both username and password are empty — the WHATWG
-        // parser yields empty strings and `None`, but the URL still
-        // carries authority-segment delimiter and is almost certainly a
-        // typo).
-        let has_userinfo = !url.username().is_empty()
-            || url.password().is_some()
-            || base_url_after_scheme_has_at(base_url);
-        if has_userinfo {
-            // Redact userinfo before formatting so the err string does
-            // NOT echo credentials back via Display/Log.
-            let redacted = redact_url_userinfo(base_url);
-            return Err(Error::Esplora(format!(
-                "esplora url must not contain userinfo (username/password): {redacted}"
-            )));
-        }
-        if url.scheme() != "https" {
-            return Err(Error::Esplora(format!(
-                "esplora url must use https:// scheme, got: {}",
-                url.scheme()
-            )));
-        }
-        // `reqwest::Url::join("path")` replaces the last path
-        // segment when base doesn't end with `/`. Force a trailing
-        // `/` so `join("address/{addr}/utxo")` produces the right
-        // path. Without this, `https://host.com/api` + `address/x`
-        // becomes `https://host.com/address/x`.
-        if !url.path().ends_with('/') {
-            url.set_path(&format!("{}/", url.path()));
-        }
+    /// Returns [`Error::Esplora`] if the `reqwest::Client` builder
+    /// fails (root store load, etc.).
+    pub fn new(esplora_url: EsploraUrl, tls: TlsPolicy) -> Result<Self> {
         let client = Self::build_http_client(&tls)?;
         Ok(Self {
-            base_url: url,
+            base_url: esplora_url.into_inner(),
             tls,
             client,
         })
@@ -246,7 +213,8 @@ impl EsploraClient {
             )));
         }
         let policy = TlsPolicy::from_config(cfg);
-        Self::new(&cfg.esplora_url, policy)
+        let esplora_url = EsploraUrl::new(&cfg.esplora_url)?;
+        Self::new(esplora_url, policy)
     }
 
     /// Fetch fee estimates from Esplora's `/fee-estimates` endpoint.
@@ -374,44 +342,6 @@ impl EsploraClient {
 /// and `password() == None` for that form, which would otherwise slip
 /// past `username().is_empty() || password().is_some()`.
 ///
-/// Conservative: returns true on any `@` in the authority segment,
-/// including those inside IPv6 brackets — IPv6 with userinfo is not a
-/// real-world Esplora pattern and rejecting it is the safe side.
-fn base_url_after_scheme_has_at(base_url: &str) -> bool {
-    // Find `://` end.
-    let Some(scheme_end) = base_url.find("://") else {
-        return false;
-    };
-    let after_scheme = &base_url[scheme_end + 3..];
-    // Authority segment ends at first `/`, `?`, or `#` (path/query/fragment).
-    let auth_end = after_scheme
-        .find(['/', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    after_scheme[..auth_end].contains('@')
-}
-
-/// Redact userinfo from a URL string for safe inclusion in error
-/// messages. Replaces the `user[:password]@` segment (if any) with
-/// `***@`. If no userinfo is present, returns the input unchanged.
-///
-/// Conservative: operates on the raw string (not the parsed
-/// `reqwest::Url`), so percent-encoded forms are also caught.
-fn redact_url_userinfo(base_url: &str) -> String {
-    let Some(scheme_end) = base_url.find("://") else {
-        return base_url.to_string();
-    };
-    let after_scheme = &base_url[scheme_end + 3..];
-    let auth_end = after_scheme
-        .find(['/', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    if !after_scheme[..auth_end].contains('@') {
-        return base_url.to_string();
-    }
-    let prefix = &base_url[..scheme_end + 3];
-    let suffix = &base_url[scheme_end + 3 + auth_end..];
-    format!("{prefix}***{suffix}")
-}
-
 /// Custom TLS server cert verifier that adds SPKI pinning on top of
 /// standard CA chain validation. Used by `TlsPolicy::Pinned`.
 ///
@@ -544,108 +474,10 @@ mod tests {
     }
 
     #[test]
-    fn new_rejects_invalid_url() {
-        init_crypto();
-        let err = EsploraClient::new("not a url", TlsPolicy::SystemRoots).unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-        assert!(err.to_string().contains("invalid esplora url"));
-    }
-
-    #[test]
-    fn new_rejects_http_scheme() {
-        init_crypto();
-        let err =
-            EsploraClient::new("http://blockstream.info/api", TlsPolicy::SystemRoots).unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-        assert!(err.to_string().contains("https://"));
-    }
-
-    #[test]
-    fn new_rejects_url_with_password() {
-        init_crypto();
-        // reqwest would send `Authorization: Basic …` for `user:password@`.
-        let err = EsploraClient::new(
-            "https://attacker:p4ssw0rd@blockstream.info/api",
-            TlsPolicy::SystemRoots,
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-        let msg = err.to_string();
-        // Branch-specific keyword: this case must trip the password branch.
-        assert!(msg.contains("password"), "msg = {msg}");
-        // Redaction: the literal password must NOT appear in the err.
-        assert!(!msg.contains("p4ssw0rd"), "password leaked into err: {msg}");
-        assert!(!msg.contains("attacker"), "username leaked into err: {msg}");
-    }
-
-    #[test]
-    fn new_rejects_url_with_user_only() {
-        init_crypto();
-        // `username@` (no password) — reqwest still treats as userinfo
-        // in URL serialization; reject conservatively.
-        let err = EsploraClient::new("https://user@blockstream.info/api", TlsPolicy::SystemRoots)
-            .unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-        let msg = err.to_string();
-        // Branch-specific keyword: this case must trip the username branch.
-        assert!(msg.contains("username"), "msg = {msg}");
-        assert!(!msg.contains("user@"), "username leaked into err: {msg}");
-    }
-
-    #[test]
-    fn new_rejects_bare_at_in_authority() {
-        init_crypto();
-        // `https://@host/` — empty userinfo but `@` is present. The
-        // belt-and-braces raw-string check catches this; the parser
-        // would otherwise yield username="" / password=None.
-        let err = EsploraClient::new("https://@blockstream.info/api", TlsPolicy::SystemRoots)
-            .unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-        let msg = err.to_string();
-        assert!(msg.contains("userinfo"), "msg = {msg}");
-    }
-
-    #[test]
-    fn new_rejects_percent_encoded_userinfo() {
-        init_crypto();
-        // `%40` is `@`. WHATWG URL parser decodes inside userinfo,
-        // so the parsed username/password checks should fire; the
-        // raw-string check is a belt.
-        let err = EsploraClient::new(
-            "https://attacker%40evil.example:p4ssw0rd@blockstream.info/api",
-            TlsPolicy::SystemRoots,
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-        let msg = err.to_string();
-        // Redaction must scrub the encoded form too.
-        assert!(!msg.contains("p4ssw0rd"), "password leaked: {msg}");
-    }
-
-    #[test]
-    fn new_rejects_ipv6_authority_with_userinfo() {
-        init_crypto();
-        // IPv6 brackets + userinfo: pathological, reject.
-        let err = EsploraClient::new("https://user:pass@[::1]:443/api", TlsPolicy::SystemRoots)
-            .unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-        let msg = err.to_string();
-        assert!(!msg.contains(":pass@"), "password leaked: {msg}");
-    }
-
-    #[test]
-    fn new_rejects_ftp_scheme() {
-        init_crypto();
-        let err = EsploraClient::new("ftp://example.com/api", TlsPolicy::SystemRoots).unwrap_err();
-        assert!(matches!(err, Error::Esplora(_)));
-    }
-
-    #[test]
     fn new_accepts_https_with_system_roots() {
         init_crypto();
-        let c = EsploraClient::new("https://blockstream.info/api", TlsPolicy::SystemRoots).unwrap();
-        // Trailing slash enforced by `new` so `Url::join("path")`
-        // does not strip `/api`.
+        let url = EsploraUrl::new("https://blockstream.info/api").unwrap();
+        let c = EsploraClient::new(url, TlsPolicy::SystemRoots).unwrap();
         assert_eq!(c.base_url.as_str(), "https://blockstream.info/api/");
         assert!(matches!(c.tls, TlsPolicy::SystemRoots));
     }
@@ -657,19 +489,23 @@ mod tests {
         init_crypto();
         let pin = SpkiPin::from_bytes([0x42u8; 32]);
         let policy = TlsPolicy::Pinned(SpkiPinSet::from_one(pin));
-        let c = EsploraClient::new("https://blockstream.info/api", policy).unwrap();
+        let url = EsploraUrl::new("https://blockstream.info/api").unwrap();
+        let c = EsploraClient::new(url, policy).unwrap();
         assert!(matches!(c.tls, TlsPolicy::Pinned(_)));
     }
 
     #[test]
     fn new_handles_trailing_slash() {
         init_crypto();
-        let c =
-            EsploraClient::new("https://blockstream.info/api/", TlsPolicy::SystemRoots).unwrap();
-        // Both forms should normalize to the same URL (no trailing slash
-        // mismatch when joined with the endpoint).
-        let url = c.base_url.join("fee-estimates").unwrap();
-        assert_eq!(url.as_str(), "https://blockstream.info/api/fee-estimates");
+        // URL validation lives in EsploraUrl::new; trailing-slash
+        // normalization is exercised by chain::esplora_url::tests.
+        let url = EsploraUrl::new("https://blockstream.info/api/").unwrap();
+        let c = EsploraClient::new(url, TlsPolicy::SystemRoots).unwrap();
+        let joined = c.base_url.join("fee-estimates").unwrap();
+        assert_eq!(
+            joined.as_str(),
+            "https://blockstream.info/api/fee-estimates"
+        );
     }
 
     #[test]
@@ -794,7 +630,8 @@ mod tests {
         init_crypto();
         let pin = SpkiPin::from_bytes([0x77u8; 32]);
         let policy = TlsPolicy::Pinned(SpkiPinSet::from_one(pin));
-        let c = EsploraClient::new("https://blockstream.info/api", policy).unwrap();
+        let url = EsploraUrl::new("https://blockstream.info/api").unwrap();
+        let c = EsploraClient::new(url, policy).unwrap();
         let c2 = c.clone();
         assert_eq!(c.base_url.as_str(), c2.base_url.as_str());
     }
@@ -802,7 +639,8 @@ mod tests {
     #[test]
     fn debug_hides_root_certs_but_shows_url() {
         init_crypto();
-        let c = EsploraClient::new("https://blockstream.info/api", TlsPolicy::SystemRoots).unwrap();
+        let url = EsploraUrl::new("https://blockstream.info/api").unwrap();
+        let c = EsploraClient::new(url, TlsPolicy::SystemRoots).unwrap();
         let dbg = format!("{c:?}");
         assert!(dbg.contains("EsploraClient"));
         assert!(dbg.contains("blockstream.info"));
