@@ -122,6 +122,19 @@ impl XPrvHolder {
         let bytes: Vec<u8> = self.0.to_bytes().to_vec();
         Secret::new(bytes)
     }
+
+    /// Returns the inner xprv as a base58-encoded string (BIP-32
+    /// standard serialization, prefixed `xprv…`).
+    ///
+    /// **Used by `Wallet::sync` to build a `wpkh(xprv…/84h/…)`
+    /// descriptor string.** The inner `XPrv` stays inside this
+    /// `XPrvHolder` and zeroizes via our custom `Drop`; this method
+    /// returns a transient heap String (the caller is responsible for
+    /// not stashing it).
+    pub fn to_xprv_string(&self) -> String {
+        use bip32::Prefix;
+        self.0.to_string(Prefix::XPRV).to_string()
+    }
 }
 
 impl Drop for XPrvHolder {
@@ -146,8 +159,6 @@ impl Drop for XPrvHolder {
     }
 }
 
-/// Build a BIP-32 derivation path for an address type + coin + account + index.
-///
 /// Standard pattern: `m/<purpose>'/<coin_type>'/<account>'/0/<index>`.
 ///
 /// **Range checks** (per type-design review): hardened derivation

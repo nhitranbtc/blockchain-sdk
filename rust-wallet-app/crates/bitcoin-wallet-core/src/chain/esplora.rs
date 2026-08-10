@@ -56,6 +56,39 @@ use crate::error::{Error, Result};
 /// named in the public API (TD-10).
 pub type RawFeeEstimates = std::collections::HashMap<String, f64>;
 
+/// Single UTXO from Esplora `/address/{addr}/utxo`.
+///
+/// Field names match the Esplora REST contract (per blockstream.info).
+/// `status.confirmed == false` means the UTXO is in the mempool and
+/// is *not* counted by `Wallet::balance` (F13 confirmed-only).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EsploraUtxo {
+    /// Outpoint txid.
+    pub txid: bitcoin::Txid,
+    /// Output index within the spending tx.
+    pub vout: u32,
+    /// Value in satoshis.
+    pub value: u64,
+    /// Confirmation status (`confirmed` flag + chain position).
+    pub status: EsploraStatus,
+}
+
+/// `EsploraUtxo.status` — confirmation metadata.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EsploraStatus {
+    /// True iff the tx is in a confirmed block.
+    pub confirmed: bool,
+    /// Block height (only set when `confirmed`).
+    #[serde(default)]
+    pub block_height: u32,
+    /// Block hash (hex). Empty when `!confirmed`.
+    #[serde(default)]
+    pub block_hash: String,
+    /// Block time (unix seconds). Zero when `!confirmed`.
+    #[serde(default)]
+    pub block_time: u64,
+}
+
 /// TLS verification policy for the Esplora client. The variant choice
 /// is the security policy: `Pinned` enforces F20; `SystemRoots` falls
 /// back to CA trust (intended for local dev only; not the default).
@@ -177,6 +210,64 @@ impl EsploraClient {
         resp.json()
             .await
             .map_err(|e| Error::Esplora(format!("fee_estimate parse: {e}")))
+    }
+
+    /// Fetch confirmed UTXOs for a single address via Esplora's
+    /// `/address/{addr}/utxo` endpoint.
+    ///
+    /// Returns the JSON shape Esplora publishes (per blockstream.info
+    /// REST contract): `[{ "txid": "..", "vout": N, "value": sat,
+    /// "status": { ... } }]`. Used by [`crate::wallet::Wallet::sync`]
+    /// for full chain scan (F12). Per CONTEXT.md hard rule #2 + F20:
+    /// this is the `reqwest`-only path (no `bdk_esplora`) because the
+    /// upstream crate pulls in `rustls-webpki 0.101.7`
+    /// (RUSTSEC-2026-0106).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Esplora`] on HTTP, parse, or transport error.
+    pub async fn address_utxos(&self, addr: &bitcoin::Address) -> Result<Vec<EsploraUtxo>> {
+        let path = format!("address/{}/utxo", addr);
+        let url = self
+            .base_url
+            .join(&path)
+            .map_err(|e| Error::Esplora(format!("url join: {e}")))?;
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::Esplora(format!("address_utxos request: {e}")))?;
+        resp.json::<Vec<EsploraUtxo>>()
+            .await
+            .map_err(|e| Error::Esplora(format!("address_utxos parse: {e}")))
+    }
+
+    /// Fetch a full transaction by txid via Esplora's `/tx/{txid}`
+    /// endpoint. Returns the raw `bitcoin::Transaction` (Esplora
+    /// decodes hex → JSON, then we re-deserialize). Used for full
+    /// chain scan (F12): once a UTXO is found, the containing tx must
+    /// be in the tx graph so `bdk_wallet::Wallet::balance` aggregates
+    /// correctly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Esplora`] on HTTP, parse, or transport error.
+    pub async fn get_tx(&self, txid: &bitcoin::Txid) -> Result<bitcoin::Transaction> {
+        let path = format!("tx/{txid}");
+        let url = self
+            .base_url
+            .join(&path)
+            .map_err(|e| Error::Esplora(format!("url join: {e}")))?;
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::Esplora(format!("get_tx request: {e}")))?;
+        resp.json::<bitcoin::Transaction>()
+            .await
+            .map_err(|e| Error::Esplora(format!("get_tx parse: {e}")))
     }
 
     /// Build the underlying `reqwest::Client` with the configured TLS
