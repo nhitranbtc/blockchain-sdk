@@ -275,10 +275,7 @@ mod tests {
     #[test]
     fn sign_recoverable_accepts_typed_message_hash() {
         // F21: sign_recoverable must require MessageHash<Bip137Message>.
-        // This test fails to compile until MessageClass + MessageHash
-        // are added to threat.rs (RED). Once GREEN, this verifies the
-        // narrow typed API still produces a 64-byte compact sig.
-        use crate::threat::MessageHash;
+        // Verifies the narrow typed API still produces a 64-byte compact sig.
         let sk_bytes = [0x42u8; 32];
         let signer = Signer::from_secret_bytes(Secret::new(sk_bytes.to_vec()));
         let msg = MessageHash::bip137([0u8; 32]);
