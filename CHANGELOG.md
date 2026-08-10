@@ -14,13 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
-### Added
-
-- **`[user-facing]`** `Wallet::from_mnemonic(&Mnemonic, Network) -> Result<Wallet>` (Task 9a, F34) — typed wallet constructor that rejects non-standard BIP-39 word counts (12/15/18/21/24 only) and requires explicit `Network` per CONTEXT.md hard rule #1. PR #48
-
-### Security
-
-- **`[internal]`** F34 (concrete mnemonic assertion) — defense-in-depth tripwire re-asserts BIP-39 word count after `Mnemonic::from_phrase` accepts. Public API cannot exercise it (Mnemonic rejects upstream); load-bearing F34 test lives in `keys::mnemonic`. PR #48
+_No pending changes. Future entries land under [Unreleased] until next version cut._
 
 ## [v0.1.0] — 2026-08-10
 
@@ -77,9 +71,9 @@ Each story is a user-facing capability. Once checked, the feature is **playaroun
 | 7 | [x] Compile-time-pinned crypto constants (L20 audit) | done (PR #38) | see `docs/audit/2026-08-09-l20-constant-audit.md` |
 | 8 | [x] Refuse mainnet default (CONTEXT.md hard rule #1) | done (PR #42; `bitcoin::Network` has no `Default` impl, so callers must explicitly choose) | see `rust-wallet-app/CONTEXT.md` hard rule #1 |
 | 9 | [x] Refuse transaction sighash as message (F21 type-level) | done (PR #39) | `cargo test -p bitcoin-wallet-core --doc threat::MessageHash` |
-| 10 | [x] **Create wallet from mnemonic** | done (PR #48, Task 9a) | `cargo test -p bitcoin-wallet-core wallet` |
-| 11 | [ ] **Sync wallet (full chain scan)** | gated (Issue #19, Task 9) | will land with `Wallet::sync` (F12) |
-| 12 | [ ] **Get wallet balance** | gated (Issue #19, Task 9) | will land with `Wallet::balance` |
+| 10 | [ ] **Create wallet from mnemonic** | gated (Issue #19, Task 9) | will land with `Wallet::from_mnemonic` |
+| 11 | [ ] **Sync wallet (full chain scan)** | gated (Issue #46, Task 9b) | partial: URL validation + coin_type_for; `Wallet::start_full_scan` deferred. Will land fully with #19b.2 follow-up. |
+| 12 | [ ] **Get wallet balance** | gated (Issue #47, Task 9c) | partial: URL validation + coin_type_for; UTXO aggregation deferred. Will land fully with #19c.2 follow-up. |
 | 13 | [ ] **Use btc CLI subcommand** | gated (Task 9 + CLI subcommands) | `cargo run -p btc --help` (currently placeholder) |
 
 **Progress:** 9 of 13 stories playaround-able. 4 gated on Task 9 (#19).
