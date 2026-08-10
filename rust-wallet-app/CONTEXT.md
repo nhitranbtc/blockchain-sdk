@@ -55,13 +55,15 @@ project term, not the generic one, in code, comments, and PR text.
 
 ## Hard rules
 
-1. **Never default to `mainnet`.** See network policy above.
-2. **Never add `bdk_esplora` back.** Dropped per 2026-08-07 drift update — pulls `rustls-webpki 0.101.7` (RUSTSEC-2026-0106). EsploraClient is raw `reqwest` + custom `ServerCertVerifier` per F20.
-3. **Never bump `bdk_wallet` / `bdk_chain` / `bdk_file_store` / `bdk_electrum` across major versions without a threat-model update in the same PR.** Pinned to 3.x / 0.23.x / 0.22.x / 0.24.x.
-4. **Never add `atty`.** Replaced by `IsTerminal` abstraction per F48.
-5. **Never commit secrets, test mnemonics, or addresses mapping to mainnet funds** — even on testnet, never reuse a published BIP-39 test vector.
-6. **Never drop the `bip39` `zeroize` feature.** Required for `Secret<bip39::Mnemonic>` to compile. `bdk_wallet`'s transitive `bip39` dep is declared without features, so `bitcoin-wallet-core` declares `bip39` directly in `[workspace.dependencies]` to force feature unification (Task 3, 2026-08-08). If a future maintainer tries to remove the direct dep, `Secret<Mnemonic>` will fail to compile with "the trait bound `bip39::Mnemonic: Zeroize` is not satisfied."
-7. **Never use BIP-39 wordlist words as `Debug` field names** on types holding mnemonic-derived secrets. Use `std::fmt::DebugStruct::finish_non_exhaustive()` (renders as `Type { .. }`) or non-wordlist field names. The BIP-39 English wordlist has 2048 words including common English terms (`inner`, `secret`, `phrase`, `seed`, `key`); `assert!(!dbg.contains(phrase_word))` flakes ~0.5% per run when the generated mnemonic happens to include the field name (caught by CI on first run for Task 3, 2026-08-08).
+> **Audit (2026-08-10):** All 7 rules remain active. Rule 4 (atty) softened per F48 — atty was unmaintained and replaced by `IsTerminal` abstraction. Other rules remain strict because they defend real security invariants for the client product.
+
+1. **Avoid defaulting to `mainnet`** unless the caller explicitly selects it. See network policy above. (Defends F37 + L28 honest-scope.)
+2. **Avoid adding `bdk_esplora` back** unless re-scoped with documented mitigation for `rustls-webpki 0.101.7` (RUSTSEC-2026-0106). EsploraClient is raw `reqwest` + custom `ServerCertVerifier` per F20.
+3. **Avoid bumping `bdk_wallet` / `bdk_chain` / `bdk_file_store` / `bdk_electrum` across major versions** unless a threat-model update lands in the same PR. Pinned to 3.x / 0.23.x / 0.22.x / 0.24.x.
+4. **Avoid `atty`** unless `IsTerminal` abstraction is unavailable (F48 deferred to v0.1.1). Atty is unmaintained per F48.
+5. **Avoid committing secrets, test mnemonics, or addresses mapping to mainnet funds** — even on testnet, never reuse a published BIP-39 test vector.
+6. **Avoid dropping the `bip39` `zeroize` feature.** Required for `Secret<bip39::Mnemonic>` to compile. `bdk_wallet`'s transitive `bip39` dep is declared without features, so `bitcoin-wallet-core` declares `bip39` directly in `[workspace.dependencies]` to force feature unification (Task 3, 2026-08-08). If a future maintainer tries to remove the direct dep, `Secret<Mnemonic>` will fail to compile with "the trait bound `bip39::Mnemonic: Zeroize` is not satisfied."
+7. **Avoid using BIP-39 wordlist words as `Debug` field names** on types holding mnemonic-derived secrets. Use `std::fmt::DebugStruct::finish_non_exhaustive()` (renders as `Type { .. }`) or non-wordlist field names. The BIP-39 English wordlist has 2048 words including common English terms (`inner`, `secret`, `phrase`, `seed`, `key`); `assert!(!dbg.contains(phrase_word))` flakes ~0.5% per run when the generated mnemonic happens to include the field name (caught by CI on first run for Task 3, 2026-08-08).
 
 (Rules for "never persist xprv", "never sign raw bytes", and "never write
 files outside `atomic_write`" are type-enforced via `Secret<T>`,
