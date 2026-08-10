@@ -13,6 +13,7 @@
 
 use bdk_wallet::bitcoin::Network;
 use bitcoin_wallet_core::chain::esplora::{EsploraClient, TlsPolicy};
+use bitcoin_wallet_core::chain::esplora_url::EsploraUrl;
 use bitcoin_wallet_core::keys::Mnemonic;
 use bitcoin_wallet_core::wallet::Wallet;
 
@@ -39,8 +40,11 @@ async fn main() {
     //    for v0.1; production code should pass TlsPolicy::Pinned
     //    with a real SPKI pin via EsploraClient::from_config).
     let esplora_url = "https://blockstream.info/testnet/api";
-    let client =
-        EsploraClient::new(esplora_url, TlsPolicy::SystemRoots).expect("esplora client build");
+    let client = EsploraClient::new(
+        EsploraUrl::new(esplora_url).expect("esplora url"),
+        TlsPolicy::SystemRoots,
+    )
+    .expect("esplora client build");
     println!("Esplora client built: {esplora_url}");
     println!();
 

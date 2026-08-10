@@ -278,7 +278,8 @@ mod tests {
     /// endpoints are public + trusted CA chain).
     fn testnet_client() -> EsploraClient {
         EsploraClient::new(
-            "https://blockstream.info/testnet/api",
+            crate::chain::esplora_url::EsploraUrl::new("https://blockstream.info/testnet/api")
+                .expect("testnet esplora url"),
             TlsPolicy::SystemRoots,
         )
         .expect("testnet Esplora client")
@@ -329,13 +330,15 @@ mod tests {
     fn sync_rejects_invalid_client_url() {
         let mnemonic = fresh_mnemonic(12usize);
         let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
-        // http:// scheme is rejected by EsploraClient::new.
-        let bad = EsploraClient::new(
-            "http://blockstream.info/testnet/api",
-            TlsPolicy::SystemRoots,
-        );
+        // http:// scheme is rejected by EsploraUrl::new (issue #36:
+        // URL validation consolidated into the EsploraUrl newtype).
+        let bad = crate::chain::esplora_url::EsploraUrl::new("http://blockstream.info/testnet/api");
         let err = match bad {
-            Ok(c) => block(wallet.sync(&c)).expect_err("http must be rejected"),
+            Ok(url) => {
+                let c = EsploraClient::new(url, TlsPolicy::SystemRoots)
+                    .expect("client build after url validation");
+                block(wallet.sync(&c)).expect_err("http must be rejected")
+            }
             Err(e) => e,
         };
         let msg = err.to_string();
