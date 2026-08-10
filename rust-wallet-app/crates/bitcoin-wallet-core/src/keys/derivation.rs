@@ -123,17 +123,18 @@ impl XPrvHolder {
         Secret::new(bytes)
     }
 
-    /// Returns the inner xprv as a base58-encoded string (BIP-32
-    /// standard serialization, prefixed `xprv…`).
+    /// Returns the inner xprv as a base58-encoded string wrapped in a
+    /// zeroizing `Secret<String>` (BIP-32 standard serialization,
+    /// prefixed `xprv…`).
     ///
-    /// **Used by `Wallet::sync` to build a `wpkh(xprv…/84h/…)`
-    /// descriptor string.** The inner `XPrv` stays inside this
-    /// `XPrvHolder` and zeroizes via our custom `Drop`; this method
-    /// returns a transient heap String (the caller is responsible for
-    /// not stashing it).
-    pub fn to_xprv_string(&self) -> String {
+    /// `pub(crate)` so external callers cannot extract the xprv —
+    /// only `Wallet` (in the same crate) can build a descriptor
+    /// template. The returned `Secret<String>` zeroizes its inner
+    /// heap `String` on drop.
+    pub(crate) fn to_xprv_secret(&self) -> crate::keys::Secret<String> {
         use bip32::Prefix;
-        self.0.to_string(Prefix::XPRV).to_string()
+        let s = self.0.to_string(Prefix::XPRV).to_string();
+        crate::keys::Secret::new(s)
     }
 }
 
