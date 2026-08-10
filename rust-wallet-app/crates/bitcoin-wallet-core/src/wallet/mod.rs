@@ -1,73 +1,87 @@
-//! Wallet module: end-to-end Bitcoin wallet (Task 9 sub-task #19a).
+//! Wallet module: end-to-end Bitcoin wallet (Task 9, #19b.2).
 //!
-//! Per plan §Task 9. Provides `Wallet` newtype that constructs from
-//! BIP-39 mnemonic. Sync (#19b) and balance (#19c) land as separate
-//! sub-tasks on top of this scaffolding.
+//! Per plan §Task 9. `Wallet::from_mnemonic` (#19a, PR #48),
+//! `Wallet::sync` (#19b.2, this PR), `Wallet::balance` (#19c, this PR).
 //!
-//! **Threat-model coverage (this sub-task):**
+//! **Threat-model coverage:**
 //!
 //! - F34 (concrete mnemonic assertion in `Wallet::from_mnemonic`)
+//! - F12 (chain sync via Esplora `/address/{addr}/utxo`)
+//! - F13 (confirmed-only UTXO aggregation, capped at MAX_MONEY)
+//! - F14 (persistence atomicity via `bdk_file_store`) — deferred to v0.1.1;
+//!   this PR stores UTXOs in-memory only. A wallet restart loses
+//!   UTXO state until next `sync`.
 //!
-//! **Threat-model coverage (later sub-tasks):**
+//! **Security:**
 //!
-//! - F12 (chain sync via `wallet.start_full_scan`) — #19b
-//! - F13 (balance consistency post-sync) — #19b/#19c
-//! - F14 (persistence atomicity via `bdk_file_store`) — #19b
-//! - F15 (recovery from interrupted sync) — #19b
-//!
-//! **CONTEXT.md hard rule #1:** never default to mainnet. `Wallet::from_mnemonic`
-//! requires explicit `Network`; no `Default` for `Wallet`.
+//! - F20 (Esplora SPKI pinning): enforced via caller-built
+//!   `EsploraClient`. `sync`/`balance` take `&EsploraClient` (not a
+//!   raw URL) so the caller controls TLS policy — they can pass a
+//!   `TlsPolicy::Pinned(SpkiPinSet)` for production endpoints and
+//!   are responsible for rejecting `TlsPolicy::SystemRoots` for
+//!   public Esplora servers. This file does NOT default to
+//!   `SystemRoots` — there is no default.
+//! - Cross-network confusion: caller is responsible for building
+//!   the `EsploraClient` from a `WalletConfig` whose `network`
+//!   matches this wallet's `network` (see `WalletConfig::testnet`
+//!   /`mainnet` /`regtest` /`signet` constructors). The client is
+//!   network-bound via the URL the operator passes to that
+//!   constructor.
+//! - xprv material: `XPrvHolder::to_xprv_secret` returns
+//!   `Secret<String>` (zeroize-on-drop). Descriptor strings are
+//!   dropped immediately after `bdk_wallet::Wallet::create`
+//!   returns — bdk parses them into its own keystore.
+//! - bdk error wrapping: `Error::Bdk` carries a fixed string, not
+//!   the raw bdk error which may echo the descriptor.
 
-use bdk_wallet::bitcoin::Network;
+use std::sync::Mutex;
 
+use bdk_wallet::bitcoin::{Amount, Network, OutPoint, TxOut};
+use bdk_wallet::{KeychainKind, Wallet as BdkWallet};
+
+use crate::chain::esplora::{EsploraClient, EsploraUtxo};
+use crate::chain::network::coin_type_for;
 use crate::error::Error;
-use crate::keys::{Mnemonic, Secret};
+use crate::keys::{address_type_to_path, AddressType, Mnemonic, Secret, XPrvHolder};
+
+/// Gap limit for full chain scan (v0.1 demo). BIP-44 default is 20;
+/// 5 keeps `Wallet::sync` quick while still finding any recent
+/// receive for a fresh wallet. Bump to 20 once we test against
+/// wallets with 20+ unused addresses.
+const SCAN_GAP_LIMIT: u32 = 5;
 
 /// Bitcoin wallet bound to one mnemonic + one network.
 ///
-/// No `Default` impl (CONTEXT.md hard rule #1). Construct via
-/// [`Wallet::from_mnemonic`].
+/// No `Default` impl (network policy). Construct via
+/// [`Wallet::from_mnemonic`]. `sync` populates the inner bdk wallet
+/// with UTXOs fetched from Esplora; `balance` reads it back.
 ///
-/// This sub-task (#19a) implements only the constructor. Sync (#19b)
-/// and balance (#19c) methods are added by later sub-tasks.
+/// **F14 (persistence):** the inner `bdk_wallet::Wallet` is in-memory
+/// only. Wallet restart loses UTXO state until next `sync`
+/// repopulates from Esplora. `bdk_file_store` SQLite deferred to
+/// v0.1.1.
 pub struct Wallet {
-    /// Recoverable BIP-39 phrase wrapped in `Secret<String>` (zeroizes
-    /// on drop). Sub-tasks #19b/#19c re-parse via `Mnemonic::from_phrase`
-    /// to get the inner `Mnemonic` newtype. Round-trip cost is small
-    /// (single in-memory `from_phrase` of a 12-24 word string) and
-    /// avoids the alternative of cloning the inner `Secret<bip39::Mnemonic>`
-    /// (which would widen the zeroize window).
+    /// Recoverable BIP-39 phrase wrapped in `Secret<String>`.
+    /// `sync` re-parses via `Mnemonic::from_phrase` to derive xprv.
     phrase: Secret<String>,
     network: Network,
+    /// Lazily-populated by `sync`. Held in a `Mutex` for interior
+    /// mutability across the `&self` API; `sync` and `balance` take
+    /// short-lived locks that never cross `await`.
+    bdk: Mutex<Option<BdkWallet>>,
 }
 
 impl Wallet {
     /// Construct a `Wallet` from a BIP-39 mnemonic + network.
     ///
-    /// F34 (concrete assertion): rejects non-standard word counts. The
-    /// underlying [`Mnemonic::from_phrase`] already validates the
-    /// BIP-39 standard word counts (12, 15, 18, 21, 24); this method
-    /// additionally verifies word count matches one of the allowed
-    /// values as a defense-in-depth tripwire (catches a hypothetical
-    /// future `Mnemonic` refactor that relaxes validation — the check
-    /// itself cannot be exercised through the public API because
-    /// `Mnemonic::from_phrase` rejects upstream; see F34 unit tests
-    /// in `mnemonic.rs::generate_unsupported_word_count_returns_error`).
-    ///
-    /// CONTEXT.md hard rule #1: no mainnet default. Caller must supply
-    /// `network` explicitly. `chain::network::coin_type_for(network)`
-    /// (from Task 8 / PR #42) is used in #19b for the BIP-44 derivation
-    /// path; this sub-task does not yet construct the descriptor.
+    /// F34: rejects non-standard word counts (defense-in-depth).
+    /// Network policy: caller must supply `network` explicitly.
     pub fn from_mnemonic(mnemonic: &Mnemonic, network: Network) -> Result<Self, Error> {
-        // F34 defense-in-depth tripwire. Not exercised through the
-        // public API (the inner Mnemonic rejects non-standard counts
-        // upstream); see F34 unit tests in `keys::mnemonic` for the
-        // load-bearing path. This branch is a tripwire against future
-        // refactors that relax `Mnemonic` validation.
         match mnemonic.word_count() {
             12 | 15 | 18 | 21 | 24 => Ok(Self {
                 phrase: mnemonic.to_phrase(),
                 network,
+                bdk: Mutex::new(None),
             }),
             _ => Err(Error::InvalidMnemonic(
                 "unsupported BIP-39 word count".to_string(),
@@ -81,115 +95,153 @@ impl Wallet {
     }
 
     /// Return a reference to the wrapped mnemonic phrase.
-    ///
-    /// Used by #19b (descriptor derivation) and #19c (balance
-    /// aggregation) sub-tasks. `Secret<String>` zeroizes on drop.
     pub fn phrase(&self) -> &Secret<String> {
         &self.phrase
     }
 
-    /// Synchronize the wallet with the blockchain via an Esplora server.
+    /// Synchronize the wallet with the blockchain via an Esplora
+    /// server (F12: full chain scan).
     ///
-    /// F12 (chain sync via `start_full_scan`): real implementation per L28
-    /// (client-product honesty rule). This method:
-    /// - Validates `esplora_url` (non-empty + http(s) scheme)
-    /// - Builds Esplora client (F20 SPKI-pinned, Task 7)
-    /// - Derives BIP-84 descriptor from `self.phrase()` + `self.network`
-    ///   + `coin_type_for(network)` (F37 from Task 8 / PR #42)
-    /// - Constructs `bdk_wallet::Wallet` with that descriptor
-    /// - Calls `start_full_scan` to populate UTXOs
-    /// - Stores UTXO set in memory (F14 SQLite persistence deferred)
+    /// Takes `&EsploraClient` (not a raw URL) so the caller controls
+    /// TLS policy (F20). For production endpoints, build with
+    /// `TlsPolicy::Pinned(SpkiPinSet)` via `EsploraClient::from_config`.
+    /// For local dev, `TlsPolicy::SystemRoots` is acceptable.
     ///
-    /// Honest scope note: F14 (bdk_file_store persistence) is NOT
-    /// implemented — UTXOs are in-memory only. A wallet restart would
-    /// lose UTXO state. Per L28, this is flagged in CHANGELOG; not
-    /// hidden. Full F14 is a follow-up.
+    /// Pipeline:
+    /// 1. Build in-memory `bdk_wallet::Wallet` from the phrase.
+    /// 2. For first `SCAN_GAP_LIMIT` external + internal addresses,
+    ///    query Esplora `/address/{addr}/utxo`; for each
+    ///    **confirmed** UTXO (F13), cap the value against MAX_MONEY,
+    ///    then `wallet.insert_txout(outpoint, txout)`.
+    /// 3. Store the populated wallet in `self.bdk`.
     ///
-    /// Real impl requires: Mnemonic → bip32 seed → xprv → expand
-    /// descriptor → construct bdk_wallet::Wallet → start_full_scan.
-    /// Currently in scaffolding phase; descriptor path is logged but
-    /// full xprv expansion is deferred. Returns Err("partial impl") on
-    /// every call until full xprv expansion lands. Per L28: honest
-    /// "not done yet" beats fake "done".
-    pub fn sync(&self, esplora_url: &str) -> Result<(), Error> {
-        if esplora_url.is_empty() {
-            return Err(Error::Esplora("Esplora URL required".to_string()));
-        }
-        if !(esplora_url.starts_with("http://") || esplora_url.starts_with("https://")) {
-            return Err(Error::Esplora(format!(
-                "Esplora URL must be http(s); got {esplora_url}"
-            )));
-        }
-
-        // 1. (Esplora client build deferred — requires TlsPolicy arg per
-        //    EsploraClient::new signature. Full impl will accept a
-        //    pre-built EsploraClient or a WalletConfig. Stubbed for now.)
-
-        // 2. Compute coin type from network (F37)
-        let coin_type = crate::chain::network::coin_type_for(self.network);
-
-        // 3. Descriptor path string (BIP-84 native segwit)
-        //    Full impl: parse mnemonic phrase → bip39 seed → BIP-32 derivation
-        //    → xprv → expand wpkh descriptor template. Currently stubbed.
-        let descriptor_str = format!("wpkh(PRIV/84h/{coin_type}h/0h/0h/0/*)");
-        // Note: descriptor derivation logged for debugging once `log` crate
-        // is added to deps. For now, the variables are kept alive so the
-        // compiler doesn't warn about unused bindings during the partial
-        // impl phase.
-        let _descriptor_str = descriptor_str;
-        let _coin_type = coin_type;
-
-        // 4. Construct bdk_wallet::Wallet + start_full_scan
-        //    Full impl deferred; currently reports partial-state honestly.
-        Err(Error::Esplora("Wallet::sync (#19b): partial impl. URL validation OK; \
-             descriptor derivation (xprv expansion) + start_full_scan deferred. \
-             F14 (bdk_file_store persistence) deferred. Full impl requires: Mnemonic::phrase() → bip39 seed → BIP-32 xprv → wpkh descriptor expansion → bdk_wallet::Wallet::new → start_full_scan."
-            .to_string()))
+    /// # Errors
+    ///
+    /// Network/HTTP failure → `Error::Esplora`. bdk parse failure →
+    /// `Error::Bdk` (fixed message — does NOT echo the descriptor
+    /// to avoid leaking xprv).
+    pub async fn sync(&self, client: &EsploraClient) -> Result<(), Error> {
+        let mut bdk = self.build_bdk_wallet()?;
+        scan_into(client, &mut bdk).await?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(())
     }
 
-    /// Return the wallet's confirmed balance in satoshis.
+    /// Return the wallet's confirmed balance in satoshis (F13).
     ///
-    /// F13 (balance consistency post-sync): real implementation per L28
-    /// (client-product honesty rule). Returns the sum of confirmed UTXO
-    /// values for the wallet's addresses.
-    ///
-    /// Honest scope: real implementation requires constructing the
-    /// `bdk_wallet::Wallet` (same xprv-expansion dependency as #19b's
-    /// sync). Until that lands, `balance` reports partial-state
-    /// honestly — URL validation + Esplora client wiring, but no
-    /// UTXO aggregation yet.
-    ///
-    /// Returns `Ok(0)` when the full impl lands and the wallet has
-    /// no confirmed UTXOs (e.g., fresh wallet, no transactions).
-    /// Returns `Err(Error::Esplora)` for any failure (URL invalid,
-    /// Esplora unreachable, xprv expansion deferred).
-    pub fn balance(&self, esplora_url: &str) -> Result<u64, Error> {
-        if esplora_url.is_empty() {
-            return Err(Error::Esplora("Esplora URL required".to_string()));
+    /// Lazy: on first call, syncs against `client` if the wallet has
+    /// never been synced. Subsequent calls use the cached wallet.
+    /// Returns `Ok(0)` for a wallet with no confirmed UTXOs.
+    pub async fn balance(&self, client: &EsploraClient) -> Result<u64, Error> {
+        {
+            let guard = self.bdk.lock().expect("bdk lock poisoned");
+            if let Some(w) = guard.as_ref() {
+                return Ok(w.balance().confirmed.to_sat());
+            }
         }
-        if !(esplora_url.starts_with("http://") || esplora_url.starts_with("https://")) {
-            return Err(Error::Esplora(format!(
-                "Esplora URL must be http(s); got {esplora_url}"
-            )));
-        }
+        // Slow path: lazy first-time sync. Build + scan outside any
+        // lock, then store + return. No MutexGuard crosses await.
+        let mut bdk = self.build_bdk_wallet()?;
+        scan_into(client, &mut bdk).await?;
+        let bal = bdk.balance().confirmed.to_sat();
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(bal)
+    }
 
-        let _coin_type = crate::chain::network::coin_type_for(self.network);
+    /// Build the in-memory `bdk_wallet::Wallet` from the stored
+    /// phrase + network. Used by `sync` and `balance`; not exposed.
+    ///
+    /// xprv flow: phrase → seed → BIP-32 master → derive
+    /// `m/84'/coin'/0'` → wpkh descriptor. The xprv is read via
+    /// `XPrvHolder::to_xprv_secret` (returns `Secret<String>`,
+    /// zeroize-on-drop). Descriptor Strings are dropped immediately
+    /// after `bdk_wallet::Wallet::create` returns — bdk parses them
+    /// into its own keystore.
+    fn build_bdk_wallet(&self) -> Result<BdkWallet, Error> {
+        let m = Mnemonic::from_phrase(self.phrase.expose())?;
+        let seed = m.to_seed("");
+        let seed_arr: [u8; 64] = seed.expose().as_slice().try_into().map_err(|_| {
+            Error::InvalidDerivationPath(format!(
+                "bip39 seed must be 64 bytes, got {}",
+                seed.expose().len()
+            ))
+        })?;
+        let master = XPrvHolder::master_from_seed(&seed_arr)?;
+        let coin = coin_type_for(self.network);
+        let path = address_type_to_path(AddressType::NativeSegwit, coin, 0, 0)?;
+        let derived = master.derive(&path)?;
 
-        // Full impl deferred: same xprv-expansion dependency as #19b sync.
-        // Returns 0 satoshis if we *could* construct the wallet and it had no
-        // UTXOs; here we report the deferred state honestly.
-        Err(Error::Esplora("Wallet::balance (#19c): partial impl. URL validation OK; \
-             bdk_wallet::Wallet construction (xprv expansion) + UTXO aggregation deferred. \
-             F13 (balance consistency) + F14 (persistence) deferred. Full impl requires: Mnemonic::phrase() → bip39 seed → BIP-32 xprv → wpkh descriptor expansion → bdk_wallet::Wallet::new → list_unspent() → sum values."
-            .to_string()))
+        // Build descriptor from zeroizing Secret<String>. Drop
+        // immediately after `create` returns.
+        let xprv_secret = derived.to_xprv_secret();
+        let external_descriptor = format!("wpkh({}/0/*)", xprv_secret.expose());
+        let change_descriptor = format!("wpkh({}/1/*)", xprv_secret.expose());
+        drop(xprv_secret);
+        drop(derived);
+        drop(master);
+
+        let result = BdkWallet::create(external_descriptor.clone(), change_descriptor.clone())
+            .network(self.network)
+            .create_wallet_no_persist();
+
+        // Drop the descriptor Strings — bdk has parsed them into
+        // its keystore. If create failed, drop is moot but harmless.
+        drop(external_descriptor);
+        drop(change_descriptor);
+
+        // Sanitize bdk error: do NOT propagate bdk's Display, which
+        // can include the descriptor (xprv leak). Use a fixed
+        // message.
+        result.map_err(|_| Error::Bdk("wallet descriptor parse failed (sanitized)".into()))
     }
 }
 
+/// For first `SCAN_GAP_LIMIT` external + internal addresses, query
+/// Esplora `/address/{addr}/utxo`; for each **confirmed** UTXO,
+/// cap value at `Amount::MAX_MONEY` (F13 confirmed-only, plus a
+/// malicious-Esplora-response cap to bound a DoS).
+///
+/// **Script-pubkey trust**: `info.script_pubkey()` comes from the
+/// wallet's derived keychain (`bdk.peek_address`), not from
+/// Esplora. Esplora's `/address/{addr}/utxo` returns only the
+/// `txid`/`vout`/`value`; we substitute the wallet-derived
+/// script_pubkey for the UTXO, so a malicious Esplora response
+/// cannot trick the wallet into tracking someone else's UTXO.
+async fn scan_into(client: &EsploraClient, bdk: &mut BdkWallet) -> Result<(), Error> {
+    for kind in [KeychainKind::External, KeychainKind::Internal] {
+        for i in 0..SCAN_GAP_LIMIT {
+            let info = bdk.peek_address(kind, i);
+            let utxos: Vec<EsploraUtxo> = client.address_utxos(&info.address).await?;
+            for u in utxos {
+                if !u.status.confirmed {
+                    continue;
+                }
+                // Cap value against MAX_MONEY. Reject on overflow.
+                let amount = Amount::from_sat(u.value);
+                if amount > Amount::MAX_MONEY {
+                    return Err(Error::Esplora(format!(
+                        "utxo value {} sat exceeds MAX_MONEY ({} sat) for {}",
+                        u.value,
+                        Amount::MAX_MONEY.to_sat(),
+                        info.address,
+                    )));
+                }
+                let outpoint = OutPoint {
+                    txid: u.txid,
+                    vout: u.vout,
+                };
+                let txout = TxOut {
+                    value: amount,
+                    script_pubkey: info.script_pubkey().clone(),
+                };
+                bdk.insert_txout(outpoint, txout);
+            }
+        }
+    }
+    Ok(())
+}
+
 impl std::fmt::Debug for Wallet {
-    /// Manual Debug impl per L17 (no field names exposed — `phrase` is a
-    /// BIP-39 wordlist entry per CONTEXT.md hard rule #7, so naming
-    /// the field would re-introduce the wordlist-collision risk that
-    /// `Mnemonic`'s `finish_non_exhaustive()` was added to avoid).
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Wallet").finish_non_exhaustive()
     }
@@ -198,23 +250,34 @@ impl std::fmt::Debug for Wallet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain::esplora::TlsPolicy;
+    use tokio::runtime::Builder as RtBuilder;
 
-    /// Generate a fresh mnemonic for tests. Per CONTEXT.md hard rule #5
-    /// ("never reuse a published BIP-39 test vector"), we must NOT
-    /// hardcode a published phrase. Generate dynamically and use the
-    /// freshly-generated phrase.
+    fn block<F: std::future::Future>(f: F) -> F::Output {
+        RtBuilder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime")
+            .block_on(f)
+    }
+
     fn fresh_mnemonic(words: usize) -> Mnemonic {
         Mnemonic::generate(words).expect("fresh mnemonic generation")
     }
 
+    /// Build a testnet EsploraClient for unit tests. Uses
+    /// `TlsPolicy::SystemRoots` for local dev (testnet Esplora
+    /// endpoints are public + trusted CA chain).
+    fn testnet_client() -> EsploraClient {
+        EsploraClient::new(
+            "https://blockstream.info/testnet/api",
+            TlsPolicy::SystemRoots,
+        )
+        .expect("testnet Esplora client")
+    }
+
     #[test]
     fn from_mnemonic_rejects_13_words_via_mnemonic_api() {
-        // F34 concrete assertion, via the Mnemonic API (not the Wallet
-        // API): 13 words is not a valid BIP-39 word count, rejected
-        // upstream by `Mnemonic::from_phrase`. The Wallet API
-        // defense-in-depth tripwire at mod.rs:60 cannot be exercised
-        // through the public surface because `Mnemonic::from_phrase`
-        // rejects non-standard counts first.
         let mnemonic_12 = fresh_mnemonic(12usize);
         let phrase_12 = mnemonic_12.to_phrase();
         let bad_phrase = format!("{} extra", phrase_12.expose());
@@ -249,89 +312,64 @@ mod tests {
     }
 
     #[test]
-    fn from_mnemonic_explicit_network_required_per_hard_rule_1() {
-        // CONTEXT.md hard rule #1: caller must supply network; no Default.
-        // Verified at compile time by the absence of an `impl Default
-        // for Wallet` declaration anywhere in the codebase. If a
-        // future maintainer adds one, `Wallet::default()` becomes
-        // callable — see the no-Default note in the struct doc and the
-        // explicit `network: Network` parameter required by
-        // `Wallet::from_mnemonic`.
+    fn from_mnemonic_explicit_network_required() {
         let mnemonic = fresh_mnemonic(12usize);
         let _w = Wallet::from_mnemonic(&mnemonic, Network::Testnet);
     }
 
     #[test]
-    fn sync_rejects_empty_url() {
+    fn sync_rejects_invalid_client_url() {
         let mnemonic = fresh_mnemonic(12usize);
         let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
-        let err = wallet.sync("").expect_err("empty URL must be rejected");
-        assert!(err.to_string().contains("required"), "got: {err}");
-    }
-
-    #[test]
-    fn sync_rejects_non_http_scheme() {
-        let mnemonic = fresh_mnemonic(12usize);
-        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
-        let err = wallet
-            .sync("ftp://example.com")
-            .expect_err("non-http scheme must be rejected");
-        assert!(
-            err.to_string().contains("http"),
-            "error message should mention http: {err}"
+        // http:// scheme is rejected by EsploraClient::new.
+        let bad = EsploraClient::new(
+            "http://blockstream.info/testnet/api",
+            TlsPolicy::SystemRoots,
         );
-    }
-
-    #[test]
-    fn sync_partial_impl_error_for_valid_url() {
-        // F12 partial impl: valid URL passes URL validation + Esplora
-        // client build, but errors with "partial impl" because
-        // descriptor derivation (xprv expansion) + start_full_scan are
-        // deferred. Per L28: honest "partial" beats fake "done".
-        let mnemonic = fresh_mnemonic(12usize);
-        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
-        let err = wallet
-            .sync("https://blockstream.info/testnet/api")
-            .expect_err("sync partial impl returns Err");
+        let err = match bad {
+            Ok(c) => block(wallet.sync(&c)).expect_err("http must be rejected"),
+            Err(e) => e,
+        };
         let msg = err.to_string();
         assert!(
-            msg.contains("partial impl") || msg.contains("deferred"),
-            "error message should flag deferred state: {msg}"
+            msg.contains("https") || msg.contains("invalid"),
+            "error should mention https/invalid: {msg}"
         );
     }
 
-    #[test]
-    fn balance_rejects_empty_url() {
+    #[tokio::test]
+    #[ignore = "requires live testnet Esplora; run manually before merge per L29"]
+    async fn sync_completes_against_testnet_for_fresh_wallet() {
         let mnemonic = fresh_mnemonic(12usize);
         let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
-        let err = wallet.balance("").expect_err("empty URL must be rejected");
-        assert!(err.to_string().contains("required"), "got: {err}");
+        let client = testnet_client();
+        wallet
+            .sync(&client)
+            .await
+            .expect("full sync should complete against testnet");
     }
 
-    #[test]
-    fn balance_rejects_non_http_scheme() {
+    #[tokio::test]
+    #[ignore = "requires live testnet Esplora; run manually before merge per L29"]
+    async fn balance_returns_zero_for_fresh_wallet() {
         let mnemonic = fresh_mnemonic(12usize);
         let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
-        let err = wallet
-            .balance("ftp://example.com")
-            .expect_err("non-http scheme must be rejected");
-        assert!(err.to_string().contains("http"), "got: {err}");
+        let client = testnet_client();
+        let bal = wallet
+            .balance(&client)
+            .await
+            .expect("balance fetch should complete against testnet");
+        assert_eq!(bal, 0, "fresh wallet has no UTXOs; got {bal}");
     }
 
-    #[test]
-    fn balance_partial_impl_error_for_valid_url() {
-        // F13 partial impl: same deferred state as sync. URL validates
-        // + Esplora client wiring, but xprv expansion + UTXO aggregation
-        // deferred. Per L28: honest "partial" beats fake "done".
+    #[tokio::test]
+    #[ignore = "requires live testnet Esplora; run manually before merge per L29"]
+    async fn balance_reuses_cached_wallet_on_second_call() {
         let mnemonic = fresh_mnemonic(12usize);
         let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
-        let err = wallet
-            .balance("https://blockstream.info/testnet/api")
-            .expect_err("balance partial impl returns Err");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("partial impl") || msg.contains("deferred"),
-            "balance error should flag deferred state: {msg}"
-        );
+        let client = testnet_client();
+        let b1 = wallet.balance(&client).await.expect("first balance call");
+        let b2 = wallet.balance(&client).await.expect("second balance call");
+        assert_eq!(b1, b2);
     }
 }

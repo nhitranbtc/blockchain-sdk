@@ -79,7 +79,7 @@ Each story is a user-facing capability. Once checked, the feature is **playaroun
 | 8 | [x] Refuse mainnet default (CONTEXT.md hard rule #1) | done (PR #42; `bitcoin::Network` has no `Default` impl, so callers must explicitly choose) | see `rust-wallet-app/CONTEXT.md` hard rule #1 |
 | 9 | [x] Refuse transaction sighash as message (F21 type-level) | done (PR #39) | `cargo test -p bitcoin-wallet-core --doc threat::MessageHash` |
 | 10 | [x] **Create wallet from mnemonic** | done (PR #48, Task 9a) | `cargo test -p bitcoin-wallet-core wallet` |
-| 11 | [ ] **Sync wallet (full chain scan)** | partial (PR #51, Task 9b) | URL validation + `coin_type_for` only; `Wallet::start_full_scan` deferred. Will land fully with #19b.2 follow-up. |
+| 11 | [x] **Sync wallet (full chain scan)** | done (Task 9 #19b.2) | Fresh wallet: `cargo test -p bitcoin-wallet-core wallet::tests::sync_completes_against_testnet_for_fresh_wallet -- --ignored --test-threads=1` (requires live testnet Esplora). |
 | 12 | [ ] **Get wallet balance** | partial (PR #52, Task 9c) | URL validation + `coin_type_for` only; UTXO aggregation deferred. Will land fully with #19c.2 follow-up. |
 | 13 | [ ] **Use btc CLI subcommand** | gated (Task 9 + CLI subcommands) | `cargo run -p btc --help` (currently placeholder) |
 

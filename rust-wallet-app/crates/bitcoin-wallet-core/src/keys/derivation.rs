@@ -122,6 +122,20 @@ impl XPrvHolder {
         let bytes: Vec<u8> = self.0.to_bytes().to_vec();
         Secret::new(bytes)
     }
+
+    /// Returns the inner xprv as a base58-encoded string wrapped in a
+    /// zeroizing `Secret<String>` (BIP-32 standard serialization,
+    /// prefixed `xprv…`).
+    ///
+    /// `pub(crate)` so external callers cannot extract the xprv —
+    /// only `Wallet` (in the same crate) can build a descriptor
+    /// template. The returned `Secret<String>` zeroizes its inner
+    /// heap `String` on drop.
+    pub(crate) fn to_xprv_secret(&self) -> crate::keys::Secret<String> {
+        use bip32::Prefix;
+        let s = self.0.to_string(Prefix::XPRV).to_string();
+        crate::keys::Secret::new(s)
+    }
 }
 
 impl Drop for XPrvHolder {
@@ -146,8 +160,6 @@ impl Drop for XPrvHolder {
     }
 }
 
-/// Build a BIP-32 derivation path for an address type + coin + account + index.
-///
 /// Standard pattern: `m/<purpose>'/<coin_type>'/<account>'/0/<index>`.
 ///
 /// **Range checks** (per type-design review): hardened derivation
