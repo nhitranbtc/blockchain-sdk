@@ -50,6 +50,7 @@ cargo test --workspace
 
 Recent merges (full history in [`CHANGELOG.md`](../../CHANGELOG.md)):
 
+- **PR #48** (Task 9a) — `Wallet::from_mnemonic(&Mnemonic, Network) -> Result<Wallet>`. F34 BIP-39 word-count assertion; no `Default` impl per CONTEXT.md hard rule #1.
 - **PR #42** (Task 8) — `chain::network::coin_type_for(Network) → u32`. BIP-44 coin-type lookup; hard rule #1 (no mainnet default) enforced at compile time via exhaustive match.
 - **PR #39** (Task 6 / F21 follow-up) — `MessageHash<C>` phantom-typed wrapper. `sign_recoverable` requires `MessageHash<Bip137Message>`; U5 (arbitrary-hash phishing) defended at the type level.
 - **PR #38** (audit) — L20 constant audit. All crypto constants (`ARGON2_M/T/P_COST`, `SALT_LEN`, `KEY_LEN`, `MAGIC_PREFIX`, etc.) compile-time pinned.
