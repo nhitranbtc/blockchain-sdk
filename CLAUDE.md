@@ -10,6 +10,7 @@ Focus: Bitcoin wallet SDKs (rust-bitcoin, BDK), Lightning,
 stablecoin integration, wallet security comparisons.
 
 Two coexisting layers:
+
 - **Docs/research layer** (`docs/`) — pure prose, markdown only
 - **Code layer** (`rust-wallet-app/`) — Rust workspace containing `bitcoin-wallet-core/` (v0.1 library) + `btc/` (v0.1 CLI) + `chain-traits/` (umbrella v0.2 scaffold, exists)
 
@@ -23,104 +24,11 @@ Project-local vocabulary and threat-model hard rules live in [`rust-wallet-app/C
 
 ## Operational rules
 
-**Single source of truth: [`tasks/lessons.md`](tasks/lessons.md)** — L1 through L13 cover all workflow rules (workspace path consistency, config validation, never-auto-commit, pause-before-state-modifying, issue-checkbox flip, threat model, skill enumeration, code-review-before-verify, per-task pipeline spec, etc.). Read at every task pickup per L11.
+**Single source of truth: [`tasks/lessons.md`](tasks/lessons.md)** — L1 through L17 cover all workflow rules (workspace path consistency, config validation, never-auto-commit, pause-before-state-modifying, issue-checkbox flip, threat model, skill enumeration, code-review-before-verify, per-task pipeline spec, etc.). Read at every task pickup per L11.
 
 MEMORY.md (auto-loaded via SessionStart hook) holds the same durable rules for cross-project consistency; the project-specific form lives in lessons.md.
 
 Current execution target: v0.1 `bitcoin-wallet-core` library inside `rust-wallet-app/crates/` per active plan.
-
-## Task display rule
-
-Whenever tasks are shown or tracked in this project — including the
-internal TodoWrite list, status updates, pipeline summaries, and any
-ad-hoc enumeration of work items — use the **pipeline format** below.
-This format matches the project's task-display convention (see the
-pipeline screenshot: header, branch, status, and per-task icons with
-durations).
-
-### Required workflow order
-
-Every work pipeline must use these stages in this exact order unless the
-user explicitly overrides it:
-
-1. **Intent**
-2. **Rebase**
-3. **Review**
-4. **Test**
-5. **Document**
-6. **Lint**
-
-### Layout
-
-```text
-Pipeline
-<branch-or-context>                              <status>
-  ✓ Task A   12.3s
-  ✓ Task B    2.4s
-  ⋮ Task C    4.1s         <progress info>
-  ○ Task D
-  ○ Task E
-```
-
-### Required visual states
-
-Every task must carry exactly one of these three status icons:
-
-| Icon | Meaning     | When to use                                    | Shows duration? |
-| ---- | ----------- | ---------------------------------------------- | --------------- |
-| `✓`  | completed   | The task has finished and succeeded.           | Yes             |
-| `⋮`  | in-progress | The task is currently running (one at a time). | Yes             |
-| `○`  | pending     | The task has not started yet.                  | No              |
-
-### Rules
-
-1. **One in-progress at a time.** Exactly zero or one task may carry
-   the `⋮` icon at any moment. Mark the previous task `✓` or back to
-   `○` before promoting the next task to `⋮`.
-2. **Duration.** Record the elapsed time next to a task as soon as it
-   finishes (`✓`) or while it is running (`⋮`). Pending tasks (`○`)
-   carry no duration.
-3. **Header.** When presenting more than one task as a pipeline, prefix
-   the block with a header line (`Pipeline`) and a context line that
-   names the branch / workspace on the left and the overall status
-   (`running`, `success`, `failed`) on the right.
-4. **Progress detail.** When a task has a partial counter (e.g. "0 of 1
-   fixes applied"), append it to the right of that task's row, not as
-   a separate line.
-5. **No invented states.** Do not introduce a fourth icon (✗, ⚠, ✕, …)
-   for failures or skips; if a task fails, replace its icon with `○`
-   and add a short note in the same row, prefixed with `failed:`.
-
-### Examples
-
-**Planning an implementation** (TodoWrite-style) — use a feature-branch
-name on the left so the example matches how real work moves:
-
-```text
-Pipeline
-fix/left-rail-master-toggle                running
-  ✓ Intent     1.2s
-  ✓ Rebase     2.4s
-  ⋮ Review     2.1s
-  ○ Test
-  ○ Document
-  ○ Lint
-```
-
-**Reporting progress to the user** — when the pipeline finishes,
-retitle the status from `running` to `success` or `failed`; a stale
-`running` header is a bug in the report, not a stylistic choice.
-
-```text
-Pipeline
-fix/left-rail-master-toggle             success
-  ✓ Intent       1.2s
-  ✓ Rebase       2.4s
-  ✓ Review       5.6s
-  ✓ Test         6.3s
-  ✓ Document     2.1s
-  ✓ Lint         4.0s
-```
 
 ## Conventions
 
@@ -146,14 +54,13 @@ fix/left-rail-master-toggle             success
 - [`docs/superpowers/specs/2026-08-06-rust-bitcoin-wallet-architecture.md`](docs/superpowers/specs/2026-08-06-rust-bitcoin-wallet-architecture.md) — Bitcoin v0.1 architecture
 - [`docs/superpowers/specs/2026-08-06-rust-wallet-app-architecture.md`](docs/superpowers/specs/2026-08-06-rust-wallet-app-architecture.md) — v0.2 multi-chain umbrella (future)
 
-
-**Workflow:**
+**Pipeline:**
 
 1. **Bulk-create GitHub issues first.** One issue per umbrella task.
    Title = `Task N: <name>`. Body = plan steps as checkbox list.
    Labels = `task`, `priority/p0|p1|p2`, `week/N`. Milestone = week.
    Use `gh` CLI. Verify `gh auth status` before bulk create.
-2. **Per-task loop** (consolidated — see "Per-task loop" section below).
+2. **Per-task loop** (consolidated — see `## Per-task loop` below).
 3. **PR granularity:** weekly batched (one PR per week, accumulates all tasks for that week).
 4. **Commit gate:** combined commit + push + PR into single approval pause.
 5. **Issue close:** close issue after PR merge. Update spec + plan if
@@ -165,16 +72,16 @@ fix/left-rail-master-toggle             success
 
 ### Plugins / skills
 
-Plugin **types** (intent) live here; exact plugin IDs change between sessions. Resolve at runtime via `Skill(skill="<type>", args="...")` or `Agent(subagent_type="...", ...)`. Fall back to inline equivalent if a plugin is missing (ask user first).
+Plugin **categories** (intent) live here; exact plugin IDs change between sessions. Resolve at runtime via `Skill(skill="<type>", args="...")` or `Agent(subagent_type="...", ...)`. Fall back to inline equivalent if a plugin is missing (ask user first).
 
-- karpathy-guidelines (behavioral anchor)
-- TDD: `superpowers:test-driven-development` / `ecc:tdd-workflow`
-- Cargo: `ecc:rust-build`, `ecc:rust-test`, `ecc:rust-review`
-- Security: `ecc:security-review`, `compass:security-auditor`
-- Verification: `superpowers:verification-before-completion`
-- Commit/PR: `commit-commands:commit`, `commit-commands:commit-push-pr`, `pr-review-toolkit:code-review`, `compound-engineering:ce-doc-review`
-- Branch: `superpowers:finishing-a-development-branch`
-- Matt Pocock: `grill-with-docs`, `triage`, `to-spec`, `to-tickets`, `wayfinder` (router: `ask-matt`)
+- Behavioural anchor (karpathy-guidelines)
+- TDD
+- Cargo (build / test / review)
+- Security (review / audit)
+- Verification (before completion)
+- Commit / PR (commit, commit-push-pr, code-review, doc-review)
+- Branch (finishing a development branch)
+- Matt Pocock (grill, triage, to-spec, to-tickets, wayfinder)
 
 ### Session-start rule
 
@@ -199,6 +106,5 @@ Success criteria: `git log -1` shows new commit with plan file changes.
 Scope: `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md` only.
 Pauses required: commit (per never-auto-commit).
 ```
-
 
 v0.1 deliverables per the merged plan: `rust-wallet-app/crates/bitcoin-wallet-core/` (library) + `rust-wallet-app/crates/btc/` (CLI), inside the umbrella `rust-wallet-app/` workspace. `chain-traits/` exists as the v0.2 umbrella scaffold.

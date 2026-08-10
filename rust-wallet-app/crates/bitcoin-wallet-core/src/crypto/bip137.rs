@@ -38,21 +38,58 @@ use crate::keys::Signer;
 
 /// BIP-137 magic prefix: `0x18` (= 24, length of "Bitcoin Signed Message:\n") +
 /// "Bitcoin Signed Message:\n". 25 bytes total. Per BIP-137 spec.
-pub const MAGIC_PREFIX: &[u8; 25] = b"\x18Bitcoin Signed Message:\n";
-
-/// Header byte offset for compressed P2PKH signatures (Trezor convention).
-/// Sign emits headers in range 31..=34. Verify accepts this range + 27..=30.
-pub const HEADER_OFFSET_COMPRESSED: u8 = 27 + 4;
+/// Compile-time pinned: length-byte drift is caught at build time
+/// (body content is checked by `magic_prefix_is_25_bytes` test).
+/// See Issue #30.
+pub const MAGIC_PREFIX: &[u8; 25] = {
+    const INNER: &[u8; 25] = b"\x18Bitcoin Signed Message:\n";
+    const BODY_LEN: usize = b"Bitcoin Signed Message:\n".len();
+    assert!(
+        INNER[0] as usize == BODY_LEN,
+        "MAGIC_PREFIX length byte must equal the body string length"
+    );
+    INNER
+};
 
 /// Header byte offset for uncompressed P2PKH signatures (Bitcoin Core convention).
 /// Verify-only range 27..=30. Sign never emits this range.
-pub const HEADER_OFFSET_UNCOMPRESSED: u8 = 27;
+/// Compile-time pinned — see Issue #30.
+pub const HEADER_OFFSET_UNCOMPRESSED: u8 = {
+    const INNER: u8 = 27;
+    assert!(
+        INNER == 27,
+        "HEADER_OFFSET_UNCOMPRESSED must be 27 per BIP-137"
+    );
+    INNER
+};
+
+/// Header byte offset for compressed P2PKH signatures (Trezor convention).
+/// Sign emits headers in range 31..=34. Verify accepts this range + 27..=30.
+/// Compile-time pinned — see Issue #30.
+pub const HEADER_OFFSET_COMPRESSED: u8 = {
+    const INNER: u8 = 27 + 4;
+    assert!(
+        INNER == 31,
+        "HEADER_OFFSET_COMPRESSED must be 31 (= 27 + 4) per BIP-137"
+    );
+    INNER
+};
 
 /// Full BIP-137 signature length: 1 header byte + 64 compact-sig bytes.
-pub const SIGNATURE_LEN: usize = 65;
+/// Compile-time pinned — see Issue #30.
+pub const SIGNATURE_LEN: usize = {
+    const INNER: usize = 65;
+    assert!(INNER == 65, "SIGNATURE_LEN must be 65 bytes per BIP-137");
+    INNER
+};
 
 /// Compact ECDSA signature length (excluding header byte).
-pub const COMPACT_SIG_LEN: usize = 64;
+/// Compile-time pinned — see Issue #30.
+pub const COMPACT_SIG_LEN: usize = {
+    const INNER: usize = 64;
+    assert!(INNER == 64, "COMPACT_SIG_LEN must be 64 bytes per BIP-137");
+    INNER
+};
 
 /// BIP-137 signed message: base64 of `header_byte (1) || compact_sig (64)` (65 bytes total).
 ///
