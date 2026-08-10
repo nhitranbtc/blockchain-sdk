@@ -45,6 +45,14 @@ jobs:
       - name: Test
         working-directory: rust-wallet-app
         run: cargo test --workspace
+      # L29 + L32: end-to-end demo of Wallet::sync + Wallet::balance
+      # against public testnet Esplora. Per L33 the unit tests cover
+      # shape; this exercises semantics (live reqwest + bdk scan path).
+      # Real network calls — flake risk on CI runner. Future enhancement:
+      # split into a separate non-blocking smoke job.
+      - name: Demo (sync_demo against live testnet)
+        working-directory: rust-wallet-app
+        run: cargo run -p bitcoin-wallet-core --example sync_demo
       - name: cargo-deny
         working-directory: rust-wallet-app
         run: |
