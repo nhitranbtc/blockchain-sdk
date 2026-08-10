@@ -17,8 +17,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L3] Major-version pins stay mutable; bump via Dependabot
 - [L4] Post-scaffold verify pass catches lint/doc issues
 - [L5] Workspace inheritance only when parent defines it
-- [L6] never auto-commit (memory)
-- [L7] pause before state-modifying actions (memory)
+- [L6] approval gates before persistent changes — `git commit` + remote ops (memory)
 - [L8] flip issue checkboxes before squash-merge (memory)
 - [L9] issue bodies = status, PR bodies = fix analysis (with table)
 - [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
@@ -35,6 +34,18 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
 > **Audit (2026-08-10):** L10, L22, L23, L27 removed per user direction. L10 (threat-model re-read) — type-system invariants + L11/L12 review pair make the rule redundant. L22 (fact-forcing gate) — enforced at hook layer, captured in `~/.claude/CLAUDE.md` global memory instead. L23 (`git stash -u -- <path>` deletes untracked) — git-native behavior, covered by `git stash` docs. L27 (grep `#[derive(...)]` before using traits) — type-checker errors surface the assumption fast enough; pre-flight grep added latency without saving compile cycles.
+
+### Domain map
+
+| Domain | Lessons |
+|---|---|
+| Build / Cargo hygiene | L1, L2, L3, L4, L5 |
+| Git workflow | L6 (approval gates), L8, L14 |
+| Issue/PR protocol | L9, L25 |
+| Skill + review pair | L11, L12, L13 |
+| Post-merge bookkeeping | L21, L24, L26 |
+| Client product | L28, L29 |
+| Security review | L30 |
 
 ---
 
@@ -102,23 +113,20 @@ before commit.
 
 ---
 
-## L6 — Never auto-commit (memory)
+## L6 — Approval gates before persistent changes (memory)
 
-**Rule**: Pause and ask before any `git commit`. User wants final say on history.
+**Rule**: Two related approval gates — both pause + describe intent, await "approved" before executing:
 
-**Why**: Commits = immutable public artifact. No easy undo without rewrite.
+1. **`git commit`** (incl. push, PR open, PR merge, branch delete) — `git commit` is irreversible; surface diff + test output, ask "commit?". Approval required for every commit (including post-merge bookkeeping).
+2. **`gh`/branch ops, file moves outside `docs/`, force-push, `--admin` bypass** — remote-surface actions hard to reverse cleanly; describe intent + alternative, await approval.
 
-**Apply**: Always STOP before `commit`. Report diff + test output. Ask: "commit?". Resume only after approval.
+**Why**: Commits + remote state mutations are immutable public artifacts. No easy undo without rewrite (commits) or coordinated rollback (remote state).
 
----
+**Apply**:
 
-## L7 — Pause before state-modifying actions (memory)
-
-**Rule**: Pause before: `gh` calls, branch ops, file moves outside `docs/`. Discuss first, execute after approval.
-
-**Why**: External surface actions (PR create, branch delete, issue close) hard to reverse cleanly.
-
-**Apply**: For any tool that mutates remote state — describe intent, await approval, then execute.
+- Before `git commit` → STOP. Show diff summary + test output. Ask "approved?".
+- Before `gh pr merge --admin` / `--force-push` / `gh issue close` → name the bypass explicitly ("merge with --admin, approved"). The auto-mode classifier requires literal phrasing for bypass authorization.
+- For post-merge bookkeeping commits (CHANGELOG/README/lessons) → still pause. User's "approved" message earlier in the session is for the prior action, not subsequent commits (per the never-auto-commit memory).
 
 ---
 
@@ -146,25 +154,25 @@ before commit.
 
 **Apply — required PR drift table schema (v3):**
 
-| Column | Content |
-| --- | --- |
-| `Area` | code area (`Secret`, `atomic_write`, `permissions`, etc.) — not "step N" |
-| `Drift` | what changed vs plan/spec |
-| `Sev` | LOW / MEDIUM / HIGH / CRITICAL — tagged by impact, not by review-tool severity |
-| `` File:line `` | code block (e.g. `` `keys/secret.rs:25` ``) — pin to current lines after fix |
-| `Result` | what was achieved after the improvement (concrete outcome) |
-| `Trade-off` | explicit cost the fix imposed (perf, complexity, API surface, deps) — required per antipattern 5 |
-| `Score` | `N/10 — <handle>` — honest self-score per row, with attribution |
-| `Note` | future improvements needed (or "None") |
+| Column          | Content                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------ |
+| `Area`          | code area (`Secret`, `atomic_write`, `permissions`, etc.) — not "step N"                         |
+| `Drift`         | what changed vs plan/spec                                                                        |
+| `Sev`           | LOW / MEDIUM / HIGH / CRITICAL — tagged by impact, not by review-tool severity                   |
+| `` File:line `` | code block (e.g. `` `keys/secret.rs:25` ``) — pin to current lines after fix                     |
+| `Result`        | what was achieved after the improvement (concrete outcome)                                       |
+| `Trade-off`     | explicit cost the fix imposed (perf, complexity, API surface, deps) — required per antipattern 5 |
+| `Score`         | `N/10 — <handle>` — honest self-score per row, with attribution                                  |
+| `Note`          | future improvements needed (or "None")                                                           |
 
 **Apply — required PR technical-details table (v3):**
 
-| Column | Content |
-| --- | --- |
-| `Tool / Plugin` | skill / hook / crate / stdlib function |
-| `Role` | `find` (caught the issue) / `resolve` (fixed it) / `review` (audited) |
-| `What it caught / fixed` | one-line summary |
-| `Used at step` | commit + file:line where applied |
+| Column                   | Content                                                               |
+| ------------------------ | --------------------------------------------------------------------- |
+| `Tool / Plugin`          | skill / hook / crate / stdlib function                                |
+| `Role`                   | `find` (caught the issue) / `resolve` (fixed it) / `review` (audited) |
+| `What it caught / fixed` | one-line summary                                                      |
+| `Used at step`           | commit + file:line where applied                                      |
 
 Plus, after the tables:
 
@@ -205,18 +213,18 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Skill → task-step mapping** (use this as starting checklist):
 
-| Task step | Skill to invoke first |
-| --- | --- |
-| Task pickup (understand + plan) | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step |
-| TDD red-green-refactor | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`) |
-| Build/cargo error cascade | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`) |
-| Module interface design | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4) |
-| Pre-PR review (security, tests, structure) | `pr-review-toolkit:code-review` (parallel sub-agents for Standards + Spec axes) |
-| Test coverage gap analysis | `pr-review-toolkit:pr-test-analyzer` |
-| Doc / threat-model review | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`) |
+| Task step                                    | Skill to invoke first                                                                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Task pickup (understand + plan)              | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                      |
+| TDD red-green-refactor                       | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`)                                              |
+| Build/cargo error cascade                    | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)                                     |
+| Module interface design                      | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4)                                     |
+| Pre-PR review (security, tests, structure)   | `pr-review-toolkit:code-review` (parallel sub-agents for Standards + Spec axes)                                                      |
+| Test coverage gap analysis                   | `pr-review-toolkit:pr-test-analyzer`                                                                                                 |
+| Doc / threat-model review                    | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`)         |
 | Document stage (per-task tech doc → PR body) | `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections) |
-| Before declaring done | `superpowers:verification-before-completion` |
-| Commit + push + PR | `commit-commands:commit-push-pr` |
+| Before declaring done                        | `superpowers:verification-before-completion`                                                                                         |
+| Commit + push + PR                           | `commit-commands:commit-push-pr`                                                                                                     |
 
 **Apply**:
 
@@ -254,7 +262,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 2. (Self-detect complexity) → propose "trivial / normal / critical" → user confirms
 
 ## Per task
-3. Pick up issue; read threat model spec (`docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md`)
+3. Pick up issue
 4. karpathy-guidelines + branch checkout
 
 ## Per pipeline step
@@ -298,26 +306,26 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Complexity tier → pipeline variation** (self-detect + user confirm):
 
-| Tier | Pipeline |
-| --- | --- |
-| `trivial` (doc-only / single-line) | doc-review only; skip pre-PR code review |
-| `normal` (typical feature) | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
-| `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`) |
+| Tier                                                                                         | Pipeline                                                                    |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review                                    |
+| `normal` (typical feature)                                                                   | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
+| `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`)             |
 
 **10 decisions (the grilling record)**:
 
-| Q | Decision |
-| --- | --- |
-| 1 | Goals: A (correctness) + C (learning) — speed + reversibility deprioritized |
-| 2 | Skill-tag: per-task pickup (not session-start, not per-step) |
-| 3 | Skill-conflict resolution: domain-tag wins; security > correctness > simplicity |
-| 4 | Max 2 skills per pipeline step (`critical` tier: max 3 — see complexity tier table) |
-| 5 | Fix-loop limit: 3 rounds per task then PAUSE; round = one review + one fix commit pair. Shared budget across pre-commit (step 12) and post-PR-review (step 15). Exceed → PAUSE + revert-to-last-green + follow-up issue + ledger entry (Q9). |
-| 6 | Verify: double-gate (per-step + task-end) |
-| 7 | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`) |
-| 8 | Review input: first commit on branch (not uncommitted, not squash-merge candidate) |
-| 9 | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry |
-| 10 | Complexity: self-detect + user confirm (hybrid of C + D) |
+| Q   | Decision                                                                                                                                                                                                                                     |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Goals: A (correctness) + C (learning) — speed + reversibility deprioritized                                                                                                                                                                  |
+| 2   | Skill-tag: per-task pickup (not session-start, not per-step)                                                                                                                                                                                 |
+| 3   | Skill-conflict resolution: domain-tag wins; security > correctness > simplicity                                                                                                                                                              |
+| 4   | Max 2 skills per pipeline step (`critical` tier: max 3 — see complexity tier table)                                                                                                                                                          |
+| 5   | Fix-loop limit: 3 rounds per task then PAUSE; round = one review + one fix commit pair. Shared budget across pre-commit (step 12) and post-PR-review (step 15). Exceed → PAUSE + revert-to-last-green + follow-up issue + ledger entry (Q9). |
+| 6   | Verify: double-gate (per-step + task-end)                                                                                                                                                                                                    |
+| 7   | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`)                                                                                                                                                                |
+| 8   | Review input: first commit on branch (not uncommitted, not squash-merge candidate)                                                                                                                                                           |
+| 9   | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry                                                                                                                                                         |
+| 10  | Complexity: self-detect + user confirm (hybrid of C + D)                                                                                                                                                                                     |
 
 **Apply**: every new task follows this spec literally. If a step doesn't apply, log why in the ledger. If a step fails, escalate per Q9. Re-grill the pipeline after 5 tasks (or when a pattern emerges that the spec doesn't cover).
 
