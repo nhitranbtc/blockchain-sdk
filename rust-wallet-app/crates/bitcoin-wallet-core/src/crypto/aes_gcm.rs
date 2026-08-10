@@ -28,14 +28,39 @@ use rand::RngCore;
 use crate::error::{Error, Result};
 use crate::keys::Secret;
 
-/// AES-GCM nonce length in bytes (96 bits, NIST SP 800-38D recommended).
-pub const NONCE_LEN: usize = 12;
+/// AES-GCM nonce length in bytes (96 bits, NIST SP 800-38D §5.2.1.1 recommended).
+/// Compile-time pinned: if the literal value drifts, the build fails here
+/// (see Issue #30 constant audit at `docs/audit/2026-08-09-l20-constant-audit.md`).
+pub const NONCE_LEN: usize = {
+    const INNER: usize = 12;
+    assert!(
+        INNER == 12,
+        "NONCE_LEN must be 12 bytes per NIST SP 800-38D §5.2.1.1 (got see source)"
+    );
+    INNER
+};
 
-/// AES-GCM tag length in bytes (GCM spec — 128 bits).
-pub const TAG_LEN: usize = 16;
+/// AES-GCM tag length in bytes (128 bits, NIST SP 800-38D §5.2.7).
+/// Compile-time pinned — see Issue #30.
+pub const TAG_LEN: usize = {
+    const INNER: usize = 16;
+    assert!(
+        INNER == 16,
+        "TAG_LEN must be 16 bytes per NIST SP 800-38D §5.2.7 (got see source)"
+    );
+    INNER
+};
 
-/// AES-256 key length in bytes (32 bytes = 256 bits).
-pub const KEY_LEN: usize = 32;
+/// AES-256 key length in bytes (256 bits, FIPS 197).
+/// Compile-time pinned — see Issue #30.
+pub const KEY_LEN: usize = {
+    const INNER: usize = 32;
+    assert!(
+        INNER == 32,
+        "KEY_LEN must be 32 bytes per FIPS 197 (got see source)"
+    );
+    INNER
+};
 
 /// Encrypt `plaintext` with `key`. Returns `nonce || ciphertext` blob.
 ///

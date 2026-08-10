@@ -24,29 +24,49 @@ use crate::error::{Error, Result};
 use crate::keys::Secret;
 
 /// Argon2id memory cost in KiB (256 MiB). Per F5.
-pub const ARGON2_M_COST_KIB: u32 = 256 * 1024;
-
-/// Argon2id time cost (iterations). Per F5.
-pub const ARGON2_T_COST: u32 = 10;
-
-/// Argon2id parallelism lanes. Per F5.
-pub const ARGON2_P_COST: u32 = 4;
-
-/// Compile-time bounds check on the Argon2id parameters. If any
-/// constant is changed to an out-of-range value, the build fails
-/// here instead of failing at runtime inside `Params::new`.
-const _: () = {
-    assert!(ARGON2_M_COST_KIB > 0, "argon2 m_cost must be > 0");
-    assert!(ARGON2_T_COST >= 1, "argon2 t_cost must be >= 1");
-    assert!(ARGON2_P_COST >= 1, "argon2 p_cost must be >= 1");
-    assert!(DERIVED_KEY_LEN >= 4, "argon2 output_len must be >= 4");
+/// Compile-time pinned: if the literal value drifts, the build fails
+/// here (see Issue #30 constant audit at
+/// `docs/audit/2026-08-09-l20-constant-audit.md`).
+pub const ARGON2_M_COST_KIB: u32 = {
+    const INNER: u32 = 256 * 1024;
+    assert!(
+        INNER == 256 * 1024,
+        "ARGON2_M_COST_KIB must be 256 MiB per F5"
+    );
+    INNER
 };
 
-/// Required salt length in bytes. Enforced at API boundary.
-pub const SALT_LEN: usize = 16;
+/// Argon2id time cost (iterations). Per F5.
+/// Compile-time pinned — see Issue #30.
+pub const ARGON2_T_COST: u32 = {
+    const INNER: u32 = 10;
+    assert!(INNER == 10, "ARGON2_T_COST must be 10 per F5");
+    INNER
+};
 
-/// AES-256 key length derived by Argon2id.
-pub const DERIVED_KEY_LEN: usize = 32;
+/// Argon2id parallelism lanes. Per F5.
+/// Compile-time pinned — see Issue #30.
+pub const ARGON2_P_COST: u32 = {
+    const INNER: u32 = 4;
+    assert!(INNER == 4, "ARGON2_P_COST must be 4 per F5");
+    INNER
+};
+
+/// Required salt length in bytes. Per F5.
+/// Compile-time pinned — see Issue #30.
+pub const SALT_LEN: usize = {
+    const INNER: usize = 16;
+    assert!(INNER == 16, "SALT_LEN must be 16 bytes per F5");
+    INNER
+};
+
+/// AES-256 key length derived by Argon2id. Per FIPS 197.
+/// Compile-time pinned — see Issue #30.
+pub const DERIVED_KEY_LEN: usize = {
+    const INNER: usize = 32;
+    assert!(INNER == 32, "DERIVED_KEY_LEN must be 32 bytes per FIPS 197");
+    INNER
+};
 
 /// Derive a 32-byte AES key from password + salt via Argon2id.
 ///
@@ -68,7 +88,7 @@ pub fn derive_key(password: &[u8], salt: &[u8]) -> Result<Secret<Vec<u8>>> {
             salt.len()
         )));
     }
-    // Constants are vetted at compile time by the const _ assert above.
+    // Constants are vetted at compile time by their own const-eval block.
     // Params::new error path is unreachable in production but the `?`
     // stays defensive.
     let params = Params::new(
