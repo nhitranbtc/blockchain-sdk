@@ -32,6 +32,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog) + README "What's New"
 - [L25] On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it" instructions (edit on working branch + commit with the sub-task/code change — no separate process branch needed)
 - [L26] Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main). L21/L24/L25 doc updates travel WITH the sub-task PR on the working branch — no separate process branch.
+- [L27] Read API before assuming — grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 
@@ -520,8 +521,7 @@ The user-story view answers the client question "is feature X ready to use?" wit
 - Forgetting to update "Try it" — the column is the value; checkbox flips without command examples is just busywork.
 - Flipping the box speculatively before the merge ("I'll merge it later") — same drift problem L24 solves for changelog entries.
 - Marking a story "done" when the implementation is partial (e.g., "Create wallet from mnemonic" works but doesn't yet sync) — split into smaller stories instead.
-
----
+- Fabricating "Try it" commands without verifying the path exists. Story #8 (`default_is_testnet_per_hard_rule_1`) on session 2026-08-10 had a test name that no longer existed after the wrapper refactor — caught by review. **Maintenance caveat:** before v0.2, add a CI step that runs `cargo test --no-run` for each "Try it" module path and fails the build if the path resolves to zero tests. Without automation, the column goes stale silently.
 
 ## L26 — Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main)
 
@@ -606,5 +606,36 @@ Then re-merge sub-task onto parent (not main) per the rule.
 - #19b will PR to parent, not main
 - After #19b merged into parent: branch `task/19c-balance` from parent
 - Final cut: `task/19-wallet-end-to-end` → main as single merge commit when all 3 sub-tasks are integrated
+
+---
+
+## L27 — Read API before assuming: grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
+
+**Trigger**: Session 2026-08-10. Multiple compile errors from incorrect API assumptions, all caught late (after impl was written, during TDD GREEN):
+
+1. `Secret<String> is Clone` — **false**. Only `ZeroizeOnDrop` derived. No `Clone` impl. Original `#19a` impl stored `Secret<String>` field via `mnemonic.clone()` which doesn't compile (`Mnemonic` wraps `Secret<bip39::Mnemonic>`, also not Clone).
+2. `Error::Mnemonic(String)` — **doesn't exist**. Actual variant is `Error::InvalidMnemonic(String)`. Caused 2+ minutes of compile-error back-and-forth.
+3. `static_assertions::assert_not_impl_all!` — crate **not in deps**. Tried to use as Default-impossible witness; had to fall back to compile-time absence comment.
+
+**Rule**: Before writing code that uses a type's traits or enum variants:
+
+1. **For derives**: `grep -A 5 'pub struct X' path/to/type.rs` or `cargo doc --document-private-items` — see the actual `#[derive(...)]` line. **Never** assume `Clone`, `Debug`, `Default`, `Eq`, or any other trait is implemented.
+2. **For enum variants**: `grep -E '^\s+[A-Z][a-zA-Z]+,?$' path/to/enum.rs` — list all variants. **Never** assume `MyEnum::MyVariant` exists; variants may be renamed, removed, or have different shape.
+3. **For external crates**: check `Cargo.toml` for the crate before using its types. `cargo tree --package <name>` confirms the version.
+
+**Why**: Each compile error costs ~2-5 min of round-trip + state-modifying attempts (gate denials, re-Reads, re-Edits). 3 errors in #19a = ~10-15 min wasted. Pre-flight grep costs ~30 sec. Net savings on every multi-error task.
+
+**Apply**:
+
+- Before writing a struct field of type `Secret<T>`: confirm `T: Zeroize + ZeroizeOnDrop` (required by `Secret<T>`'s generic bound). If T isn't `Zeroize`, wrap differently (per L15).
+- Before calling `Foo::default()`: confirm `Foo: Default` (grep `impl Default for Foo` or look for `#[derive(Default)]`).
+- Before matching `Enum::Variant`: `grep 'Variant,' path/to/enum.rs` or check the actual definition.
+- Before using an external crate's macro or type: confirm the crate is in `[dependencies]`.
+
+**Anti-patterns**:
+
+- Writing the impl, hitting a compile error, fixing, hitting another error, fixing, etc. — each iteration costs more than a single grep would have.
+- "I'll just try it and see if it compiles" — multiplies error rounds. Read once, write once.
+- Trusting LLM memory of crate APIs — crates change between versions; what's true for crate X v0.32 may not be true for v0.31.
 
 ---
