@@ -26,9 +26,11 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
-- [L15] `Secret<T>` where T: Copy defeats zeroize-on-drop
-- [L16] `#[derive(ZeroizeOnDrop)]` requires ALL fields to impl Zeroize
-- [L17] Manual `Debug` impl required for `Secret<T>` (and any sensitive newtype)
+- [L21] Update `docs/estimate-report.md` on every PR merge (status, progress, in-flight count)
+- [L22] Fact-forcing gates: state facts, then retry
+- [L23] `git stash -u -- <path>` deletes untracked files matched by path
+
+> **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 
 ---
 
@@ -311,7 +313,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 
 ## Per session
-16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill
+16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
 18. Add new lessons if user corrections or novel patterns (L9 schema)
 ```
@@ -363,54 +365,91 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Apply**: For every CLAUDE.md dedup, do a 2-step: (1) add rule to lessons.md in the same commit, (2) remove from CLAUDE.md. Verify with `grep <keyword> lessons.md` after the commit.
 
----
-
-## L15 — `Secret<T>` where T: Copy defeats zeroize-on-drop
-
-**Trigger**: Tasks 3 + 4 (`Mnemonic::to_seed`, `Signer::secret_bytes`). L12 review (security + type-design) caught multiple CRITICAL/HIGH findings. `Secret<[u8; 32]>`, `Secret<Keypair>`, `Secret<SecretKey>` all wrap Copy types where `*secret.expose()` clones the secret to a fresh stack copy — zeroize-on-drop protects only the wrapper's copy, not the caller's clone.
-
-**Rule**: For secret material, prefer one of:
-- `Secret<Vec<u8>>` (heap, non-Copy) — direct storage; zeroize on drop works
-- `Secret<Box<T>>` (heap, non-Copy) — for non-Byte array types
-- `Zeroizing<T>` + manual `non_secure_erase` after each use — for FFI types where Drop doesn't exist (e.g., `secp256k1::SecretKey: Copy` has no Drop)
-
-For Crypto-style types where the library uses Copy + manual erase (e.g., secp256k1), accept that `Secret<Copy T>` won't compile (no Zeroize impl without `DefaultIsZeroes`); instead reconstruct the Copy type on demand and call `non_secure_erase()` immediately after each FFI use.
-
-**Why**: Zeroize-on-drop is a defense-in-depth mechanism, not a guarantee. It protects only the bytes that pass through the wrapper. Any caller copy, log, or `*` dereference escapes the protection. Copy types are escape hatches by design.
-
-**Apply**: When wrapping secret material, check `T: Copy` first. If yes, either wrap a non-Copy heap type (`Vec`, `Box`) or accept manual `non_secure_erase` per FFI call. Update CONTEXT.md hard rules when the rule applies to project-internal types only.
 
 ---
+## L21 — Update `docs/estimate-report.md` AND `docs/ai-cost-report.md` on every PR merge
 
-## L16 — `#[derive(ZeroizeOnDrop)]` requires ALL fields to impl Zeroize
+**Trigger**: Session 2026-08-10. User asked: "Is estimate report file updated when every task completed?" + follow-up "you should update ai-cost report when every task completed" — current state: both reports are static snapshots, no update rule. Decided to capture as a lesson so future-self updates both reports as work progresses.
 
-**Trigger**: Task 4 `Signer` — tried `#[derive(ZeroizeOnDrop)] struct Signer { secret_bytes: Secret<Vec<u8>>, secp: Secp256k1<All> }`. Compile failed: `Secp256k1<All>: Zeroize` not satisfied because `DefaultIsZeroes` not implemented (it's precomputed-table data, not zeroizable).
+**Rule**: When a task-PR merges into `main`:
 
-**Rule**: When using `#[derive(ZeroizeOnDrop)]`, every field must impl `Zeroize`. If any field is a non-zeroizable type (FFI context, cached computation, precomputed table), either:
-1. Replace `#[derive]` with manual `impl Drop` that drops only the secret fields and ignores non-secret fields (e.g., `Secp256k1<All>` — it's not secret material)
-2. Wrap the non-secret field in `ManuallyDrop<T>` to suppress its Drop
-3. Hide the field behind a `Secret<()>` no-op (overkill)
+**For `docs/estimate-report.md` (client-facing bill):**
 
-For `Signer`, manual `impl Drop` is correct: `Secret<Vec<u8>>` field's own `ZeroizeOnDrop` derive fires when `Signer` drops; the `Secp256k1<All>` field is precomputed-table data, not secret material.
+1. **Update the "Plan progress" section** — change the affected row's status from "In-flight" → "Complete", update the merged PR number reference, and update the merged-vs-pending count.
+2. **Update the "Progress" line** — recalculate the percentage (e.g., 11/13 → 12/13 → 13/13) and update the progress bar characters.
+3. **Update "Last updated" footer** in estimate-report.md with merge commit SHA + date.
+4. **Excluded list** — if the merged work surfaced a new L-rule (e.g., from pre-PR review), add to the excluded list.
+5. **Total stays fixed-fee** — unless scope changes (new task added, new plan section), the total amount does NOT change. Fixed-fee invoices don't recalculate per task.
 
-**Why**: The derive macro is "all or nothing." It silently skips fields that don't impl Zeroize (per the `ZeroizeOnDrop` derive source) but the type itself still doesn't impl Zeroize. The hidden no-op Drop is a footgun — type-level witness tests (e.g., `assert_zeroize_on_drop::<T>()`) pass, but the actual zeroize is incomplete.
+**For `docs/ai-cost-report.md` (internal AI spend):**
 
-**Apply**: When deriving `ZeroizeOnDrop` on a struct, audit every field's `Zeroize` impl. For precomputed-table / FFI-context types, use manual `impl Drop` instead of derive. Add `// Compile-time witness: <type> drops via Secret<Vec<u8>>::drop` comment in the manual Drop impl.
+1. **Move the merged task's row from "estimate" to "actual"** — replace `~` qualified retroactive figures with measured token counts from the session `usage` field.
+2. **Recompute "Total (retroactive est.)"** row — drop the `retroactive est.` qualifier as more rows have actuals.
+3. **Add any new tasks / process work** that emerged during the merge (e.g., review-fix commits, CI-blocker fixes).
+
+**Why**: A static invoice misrepresents progress. Client expects the bill to track deliverable completion; a bill that says "11/13" a week after the 12th task merged looks stale. Same principle for AI cost tracking — token spend is a real ledger item, not a one-time estimate.
+
+**Apply**:
+
+- After `gh pr merge <N>` succeeds (per L13.15): pause, ask user whether to update both reports alongside the L13.17 ledger update.
+- Edit each report's relevant section (Plan progress for estimate-report; rows + totals for ai-cost-report) in a separate commit per file for clean audit trail.
+- For multi-task PRs (rare): one update per merge event.
+- When scope shifts (new task added to plan): update estimate-report.md "Scope" line + re-quote fixed-fee if scope growth is significant.
+
+**Anti-patterns**:
+
+- Update only the progress bar without updating individual rows (status drift).
+- Update the total fixed-fee on every merge — defeats the purpose of fixed-fee billing.
+- Skip update because "the bill is a snapshot" — the bill IS the source of truth for client; update it.
+- Update ai-cost-report without per-task token usage data — falls back to estimates; mark `~` qualified until measured.
 
 ---
 
-## L17 — Manual `Debug` impl required for `Secret<T>` (and any sensitive newtype)
+## L22 — Fact-forcing gates: state facts, then retry
 
-**Trigger**: Task 5 — added `derive_key -> Result<Secret<Vec<u8>>>` and tests used `Result::expect_err(...)`. Compile failed: `expect_err` requires `T: Debug` where `T` is the `Ok` variant. `Secret<T>` has no `Debug` impl (intentionally — auto-derive would leak plaintext via `{:?}` formatting).
+**Trigger**: Session 2026-08-10 (F21 typed Sighash work, process docs work). Multiple Write/Edit calls were denied by `pre:edit-write:gateguard-fact-force` requiring pre-tool facts:
 
-**Rule**: For any newtype that wraps sensitive material (`Secret<T>`, `Mnemonic`, `XPrvHolder`, `Signer`, future `EncryptedBlob` etc.), provide a manual `impl Debug` that hides the inner value. Use `f.debug_struct("TypeName").finish_non_exhaustive()` — renders as `TypeName { .. }` with no field names (avoids field-name collisions with the BIP-39 wordlist per CONTEXT.md hard rule #7).
+1. List ALL files that import/require the file (or its dependents).
+2. List public functions/classes affected by the change.
+3. If reads/writes data files, show field names, structure, date format.
+4. Quote the user's current instruction verbatim.
 
-**Why**:
+**Rule**: When a Write/Edit call is denied by the gate:
 
-1. Auto-derive `Debug` defeats the wrapper's purpose: `format!("{secret:?}")` would print the plaintext key bytes.
-2. `Result::expect_err()`, `Result::unwrap()`, and most error-handling combinators require `T: Debug` on the `Ok` variant. Without it, tests can't write `expect_err(...)` for the negative path.
-3. `finish_non_exhaustive()` is the canonical pattern across `Mnemonic`, `XPrvHolder`, `Signer`, and now `Secret` — consistent project convention.
+1. **State the 4 facts concisely** in plain text — under 10 lines. No preamble, no narrative.
+2. **Retry the same tool call** with `old_string`/`new_string` unchanged (or Write unchanged).
+3. **The gate is not personal** — it's a fact-checker. State, retry, continue. Don't argue or work around (e.g., use Bash to bypass).
+4. **For a new file**: importers = future-self readers; callers = functions that depend on it; affected API = types/functions in the new file; schemas = data shape; verbatim = current user message.
+5. **For an existing file edit**: importers = files that include/use it; callers = public API consumers; affected = changed function/struct surface; schemas = data shape; verbatim = current user message.
 
-**Apply**: At every new sensitive newtype, add the manual Debug impl at the same time as the type declaration (don't defer to the test-author to discover it). Caught early in Task 5 (post-write, compile-error on first test run). Preview for Task 6 `bip137` types and any future `EncryptedBlob` / `MnemonicCipher` newtypes.
+**Why**: The gate enforces the principle "before changing X, know what depends on X and what changes." Bypassing it via Bash or different tools skips the consideration. State-the-facts also serves as a mental pre-flight check.
+
+**Apply**:
+
+- Hit a gate denial → state 4 facts, retry, don't waste turns explaining.
+- First edit of a new file = heaviest fact load (no existing context to reference).
+- Repeat edits to same file in a session = lighter fact load (already-stated facts may suffice; restate only the changed aspects).
+- Per-edit fact-statement overhead is real (~5-15 sec per edit). Budget accordingly in cost-sensitive work.
+
+---
+
+## L23 — `git stash -u -- <path>` deletes untracked files matched by path
+
+**Trigger**: Session 2026-08-10. Attempted to isolate process docs (`docs/estimate-report.md`, `docs/ai-cost-report.md`) from `#31` branch via `git stash push -u -m "..." -- tasks/lessons.md docs/estimate-report.md docs/ai-cost-report.md`. The two `docs/` files were **untracked** (newly created, never committed). With `-u` (include untracked) + path matching, git **removed** the untracked files from working tree. The stash held them, but `git stash drop` later discarded the stash with no recovery path.
+
+**Rule**:
+
+- `git stash push -u -- <path>` (with `-u`) **removes** untracked files matched by `<path>` from working tree, stashing them. This is `git stash`'s documented behavior, but surprising if you expect stash to preserve files.
+- For **isolating work across branches**: use `git stash push -u -- <specific-tracked-paths>` — make sure the paths you pass are tracked files. Don't include untracked file paths unless you intend to delete them.
+- **Recovery**: stash reflog (`git stash list`) shows dropped stashes if you have it enabled. Default reflog retains dropped stashes for ~30 days (configurable via `gc.reflogExpire`).
+- **Better alternative**: stage the work, create a new branch (`git checkout -b`), commit on the new branch. Avoids the surprise-delete entirely.
+
+**Why**: Untracked files are first-class stash targets with `-u`. The `-- <path>` filter applies to BOTH tracked and untracked, but the deletion only affects untracked. Counterintuitive.
+
+**Apply**:
+
+- Before `git stash -u -- <paths>`, verify each path is tracked (`git ls-files --error-unmatch <path>`). For untracked paths, prefer branch-and-commit instead.
+- After accidental delete: check `git fsck --lost-found` + `git stash list` (reflog may have it).
+- For doc/process work that doesn't deserve its own branch yet: commit in-place on a fresh branch from main, not via stash.
 
 ---
