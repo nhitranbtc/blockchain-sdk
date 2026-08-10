@@ -33,6 +33,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L25] On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it" instructions (edit on working branch + commit with the sub-task/code change — no separate process branch needed)
 - [L26] Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main). L21/L24/L25 doc updates travel WITH the sub-task PR on the working branch — no separate process branch.
 - [L27] Read API before assuming — grep `#[derive(...)]` and variant names on the actual type before writing code that uses those traits
+- [L28] For client-facing work, explicitly flag deferred/stub work in CHANGELOG — don't present partial impl as completed features
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 
@@ -637,5 +638,52 @@ Then re-merge sub-task onto parent (not main) per the rule.
 - Writing the impl, hitting a compile error, fixing, hitting another error, fixing, etc. — each iteration costs more than a single grep would have.
 - "I'll just try it and see if it compiles" — multiplies error rounds. Read once, write once.
 - Trusting LLM memory of crate APIs — crates change between versions; what's true for crate X v0.32 may not be true for v0.31.
+
+---
+
+## L28 — For client-facing work, explicitly flag deferred/stub work in CHANGELOG; do not present partial impl as completed features
+
+**Trigger**: Session 2026-08-10. I implemented `#19b` (`Wallet::sync`) as a URL-validation stub returning `Err("not yet implemented")`. Treated it as "minimal viable Option A" for fast iteration within fixed-fee budget. User feedback (same session): "we are developing client product, and support features, user cases for real users, so we need to choose the best implementation in technical." This is a course-correction — stubs are internal-only; client-facing work requires full impl.
+
+**Rule**: For any client-facing deliverable (library public API, CLI subcommand, anything in CHANGELOG `[Unreleased]` → next release):
+
+1. **Stub vs full impl is a binary choice, not a gradient.** A method that returns `Err("not yet implemented")` is NOT a partial impl — it is **no impl**. The CHANGELOG must reflect reality, not optimistic intent.
+
+2. **Three states per feature, not two:**
+   - **`[x] done`** — fully implemented + tested; user can rely on it.
+   - **`[ ] gated`** — explicitly listed in CHANGELOG User Stories but marked as not-yet-implemented; user knows not to expect it.
+   - **(not listed)** — feature doesn't exist yet; don't tease.
+
+   Do NOT introduce a third implicit state: "merged but doesn't actually work."
+
+3. **PR title + body** must state the implementation state honestly:
+   - `feat(wallet): Wallet::sync stub (Task 9 #19b)` ← explicit "stub" in title
+   - `feat(wallet): Wallet::sync implementation (Task 9 #19b)` ← only when real impl lands
+
+   Both are accurate; the user (client, reviewer, future-self) knows exactly what's shipping.
+
+4. **L25 (`User Stories` checkbox flip)** is gated on real impl, not "merged". Story #11 (`Sync wallet`) stays `[ ]` until `Wallet::sync` actually syncs. The L25 rule explicitly says: "Flipping the box speculatively before the merge" is an anti-pattern. Extending that principle: flipping after a stub-merge is also anti-pattern.
+
+5. **L21 (`estimate-report`) scope flagging:** if a work item is a stub, the bill must say so. Don't bill the client for a feature that doesn't work. The fixed-fee `$1,650` was sized for the agreed scope; if scope expands to full impl, the bill may need re-negotiation.
+
+**Why**: Client trust is built by honest scope communication, not by inflating delivered-features counts. A CHANGELOG that says "Sync wallet ✓ done" when it actually returns "not yet implemented" loses client trust when the client tries the feature.
+
+**Apply**:
+
+- Before merging any PR that introduces a public API: ask "is the API actually functional end-to-end, or does it return Err/TODO/unimplemented?"
+- Before flipping any CHANGELOG User Story checkbox: ask "can a client call this API today and get a real result?"
+- Before billing for an item: ask "does the shipped artifact actually deliver the billed capability?"
+
+**Anti-patterns**:
+
+- "I'll add the full impl later; ship the stub now and flip the box" — L25 anti-pattern extends to stub-merge scenarios.
+- "Internal placeholder for external feature" — stubs are fine for internal modules (e.g., a trait method placeholder); wrong for client-facing features.
+- Optimistic CHANGELOG: listing features as done when they're stubbed. The client reads the CHANGELOG and assumes capability.
+
+**Examples in this session** (2026-08-10):
+
+- ✅ PR #48 (`Wallet::from_mnemonic`) — full impl, all tests pass, real capability. Story #10 flipped to `[x]`.
+- ❌ PR #50 (`Wallet::sync stub`) — stub returning `Err("not yet implemented")`. **Story #11 should NOT be flipped**. PR #50 must NOT be merged without full impl replacing the stub.
+- ❌ (anticipated) PR #52 (`Wallet::balance stub`) — same trap if I default to stub.
 
 ---
