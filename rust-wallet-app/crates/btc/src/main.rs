@@ -13,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 mod cli;
 mod handlers;
 
-use cli::{Cli, Commands, WalletAction, WalletActionKind};
+use cli::{Cli, Commands, MessageAction, WalletAction, WalletActionKind};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,6 +53,19 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+        },
+        Commands::Message(MessageAction { action }) => match action {
+            cli::MessageActionKind::Sign {
+                mnemonic,
+                network,
+                address,
+                message,
+            } => handlers::handle_message_sign(mnemonic, network, address, message),
+            cli::MessageActionKind::Verify {
+                address,
+                message,
+                signature,
+            } => handlers::handle_message_verify(address, message, signature),
         },
     }
 }
