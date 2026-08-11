@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
+- **`[user-facing]`** `btc wallet create` + `btc wallet show` CLI subcommands (Task 54d, PR-2 of #64) — clap 4 subcommands wired on top of the PR-1 lib (`create_wallet` + `show_wallet`). `create` persists an encrypted wallet to `$XDG_DATA_HOME/btc/wallets/<network>/<id>.enc` and prints `wallet_id` to STDOUT + mnemonic to STDERR (L28/F49 closure — mnemonic never on STDOUT). `show` loads + decrypts + syncs from Esplora + prints `{receive_addresses, change_addresses, balance_sat}` JSON. Manual `Debug` impls on `Cli`/`Commands`/`WalletAction` redact password (L12 CRITICAL #2). Threat-model coverage reuses PR-1 defenses: F19, U6, U7, A1, A2, N2, N5, N8 — all carried through. PR #70
 - **`[user-facing]`** `Wallet::sync(&EsploraClient)` (Task 9 #19b.2, F12) — full chain scan via Esplora `/address/{addr}/utxo` + `bdk_wallet::Wallet::insert_txout`. Caller builds `EsploraClient` with explicit `TlsPolicy` (F20 SPKI pinning). PR #55
 - **`[user-facing]`** `Wallet::balance(&EsploraClient) -> Result<u64>` (Task 9 #19b.2, F13) — confirmed-only UTXO aggregation. Lazily syncs on first call; reuses cached `bdk_wallet::Wallet` thereafter. PR #55
 - **`[user-facing]`** `Wallet::sync` / `Wallet::balance` API breaking change: now take `&EsploraClient` (was `&str esplora_url`). Caller must build `EsploraClient::from_config(&WalletConfig)` (which carries network + optional SPKI pin). PR #55
@@ -91,8 +92,8 @@ Each story is a user-facing capability. Once checked, the feature is **playaroun
 | 10 | [x] **Create wallet from mnemonic** | done (PR #48, Task 9a) | `cargo test -p bitcoin-wallet-core wallet` |
 | 11 | [x] **Sync wallet (full chain scan)** | done (Task 9 #19b.2) | Fresh wallet: `cargo test -p bitcoin-wallet-core wallet::tests::sync_completes_against_testnet_for_fresh_wallet -- --ignored --test-threads=1` (requires live testnet Esplora). |
 | 12 | [ ] **Get wallet balance** | partial (PR #52, Task 9c) | URL validation + `coin_type_for` only; UTXO aggregation deferred. Will land fully with #19c.2 follow-up. |
-| 13 | [ ] **Use btc CLI subcommand** | gated (Task 9 + CLI subcommands) | `cargo run -p btc --help` (currently placeholder) |
+| 13 | [x] **Use btc CLI subcommand** | done (PR #70, Task 54d) | `cargo run -p btc -- wallet create --words 12 --network testnet` then `cargo run -p btc -- wallet show <wallet_id> --network testnet` |
 
-**Progress:** 10 of 13 stories playaround-able. 3 still gated (#11 sync, #12 balance partial impl; #13 CLI subcommand full work).
+**Progress:** 11 of 13 stories playaround-able. 2 still gated (#12 balance partial impl; #13 now done).
 
 > **L25 maintenance:** After every PR merge, check if the merged PR completes any unchecked story → flip the box to `[x]` + update the "Try it" column if needed. Drift between docs and actual state is the failure mode this rule prevents (per L14).
