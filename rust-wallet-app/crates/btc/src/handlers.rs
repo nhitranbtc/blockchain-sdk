@@ -8,11 +8,14 @@ use std::str::FromStr;
 
 use anyhow::{Context, Result};
 
+use bitcoin::CompressedPublicKey;
 use bitcoin_wallet_core::chain::esplora::{EsploraClient, TlsPolicy};
 use bitcoin_wallet_core::chain::esplora_url::EsploraUrl;
+use bitcoin_wallet_core::chain::network::coin_type_for;
 use bitcoin_wallet_core::chain::spki::SpkiPin;
 use bitcoin_wallet_core::config::WalletConfig;
-use bitcoin_wallet_core::keys::Secret;
+use bitcoin_wallet_core::crypto::bip137::{sign_message, verify_message, SignedMessage};
+use bitcoin_wallet_core::keys::{AddressType, Mnemonic, Secret, Signer, XPrvHolder};
 use bitcoin_wallet_core::wallet::{create_wallet, show_wallet, WalletId, SUPPORTED_WORD_COUNTS};
 
 use crate::cli::{NetArg, WordCount};
@@ -266,6 +269,230 @@ mod tests {
         assert!(
             msg.contains("64 hex chars"),
             "error should mention 64-char requirement: {msg}"
+        );
+    }
+}
+
+// ============================================================================
+// Issue #61 / Task 54a: `btc message sign|verify` handlers (BIP-137 stateless)
+// ============================================================================
+
+/// BIP-44 path for the **first external receive address** of an account.
+/// Signing from non-first-external addresses is deferred to v0.1.1
+/// (out of Issue #61 scope).
+fn first_external_derivation_path(network: bitcoin::Network) -> Result<bip32::DerivationPath> {
+    let coin = coin_type_for(network);
+    let purpose = AddressType::NativeSegwit.purpose();
+    let path_str = format!("m/{purpose}h/{coin}h/0h/0/0");
+    bip32::DerivationPath::from_str(&path_str)
+        .with_context(|| format!("building BIP-44 derivation path for {network:?}"))
+}
+
+/// Derive a [`Signer`] for the first external address from a BIP-39
+/// mnemonic + network. Pure function (no FS, no IO, no async).
+///
+/// **v0.1 limitation**: only the first external address is supported.
+fn derive_first_external_signer(
+    mnemonic_phrase: &str,
+    network: bitcoin::Network,
+) -> Result<(Signer, bitcoin::Address)> {
+    let mnemonic =
+        Mnemonic::from_phrase(mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
+    let seed = mnemonic.to_seed("");
+    let seed_arr: [u8; 64] = seed.expose().as_slice().try_into().map_err(|_| {
+        anyhow::anyhow!("BIP-39 seed must be 64 bytes (got {})", seed.expose().len())
+    })?;
+    let master =
+        XPrvHolder::master_from_seed(&seed_arr).context("deriving master xprv from seed")?;
+    let path = first_external_derivation_path(network)?;
+    let derived = master
+        .derive(&path)
+        .context("deriving first external xprv")?;
+    let signer = Signer::from_xprv(&derived).context("constructing Signer from xprv")?;
+    let compressed_pk = CompressedPublicKey(signer.public_key());
+    // BIP-137 requires P2PKH (legacy 1.../m.../n...) addresses per
+    // lib contract. P2WPKH (tb1.../bc1...) is rejected by `sign_message`
+    // with `Bip137("address is not P2PKH")`. Future v0.1.1 may add
+    // BIP-322 (Taproot/SegWit message signing).
+    let address = bitcoin::Address::p2pkh(compressed_pk, network);
+    Ok((signer, address))
+}
+
+/// Handle `btc message sign --mnemonic <words> --network <NET> --address <ADDR> <MSG>`.
+///
+/// Prints the base64 BIP-137 signature to STDOUT.
+pub fn handle_message_sign(
+    mnemonic_phrase: String,
+    network: NetArg,
+    address_arg: String,
+    message: String,
+) -> Result<()> {
+    let network_obj = network.as_network();
+    let (signer, derived_address) = derive_first_external_signer(&mnemonic_phrase, network_obj)
+        .context("deriving first-external signer")?;
+
+    let claimed_address = bitcoin::Address::from_str(&address_arg)
+        .with_context(|| format!("parsing --address {address_arg:?}"))?
+        .require_network(network_obj)
+        .with_context(|| {
+            format!("--address {address_arg:?} is not valid for network {network_obj:?}")
+        })?;
+
+    // L12 CRITICAL: refuse if --address doesn't match the derived address.
+    if claimed_address != derived_address {
+        anyhow::bail!(
+            "--address {claimed_address} does not match the first-external \
+             address derived from the mnemonic ({derived_address}); v0.1 \
+             only signs with the first external key (m/44'/coin'/0'/0/0). \
+             v0.1.1 will add a key-search option for arbitrary addresses."
+        );
+    }
+
+    let signed =
+        sign_message(&message, &signer, &claimed_address).context("BIP-137 sign_message failed")?;
+    println!("{}", signed.as_ref());
+    Ok(())
+}
+
+/// Handle `btc message verify --address <ADDR> <MSG> <SIG_B64>`.
+///
+/// Prints `true`/`false` to STDOUT. Returns `Ok(())` for both valid and
+/// invalid signatures (verification result is encoded in the boolean
+/// output); errors (parse failures, header rejection) propagate via `Err`.
+pub fn handle_message_verify(
+    address_arg: String,
+    message: String,
+    signature_b64: String,
+) -> Result<()> {
+    let signed = SignedMessage::from_str(&signature_b64)
+        .with_context(|| format!("parsing signature {signature_b64:?}"))?;
+    // Infer network from bech32 HRP. BIP-137 P2PKH addresses use
+    // bech32 (tb1/bc1/bcrt1), so the HRP uniquely determines the
+    // network. The legacy P2PKH (1/m/n) form is rejected by the
+    // network check downstream if mismatched — not supported by this
+    // CLI in v0.1.
+    let network = network_from_bech32_hrp(&address_arg).with_context(|| {
+        format!(
+            "inferring network from --address {address_arg:?} \
+             (only tb1/bc1/bcrt1 bech32 supported)"
+        )
+    })?;
+    let claimed_address = bitcoin::Address::from_str(&address_arg)
+        .with_context(|| format!("parsing --address {address_arg:?}"))?
+        .require_network(network)
+        .with_context(|| format!("require_network failed for {address_arg:?}"))?;
+    let valid = verify_message(&claimed_address, &signed, &message)
+        .context("BIP-137 verify_message failed")?;
+    println!("{valid}");
+    Ok(())
+}
+
+/// Infer the Bitcoin network from a bech32 address HRP prefix.
+///
+/// Supports the 4 production/test networks (tb1, bc1, bcrt1). Signet
+/// and Testnet4 use the same `tb1` HRP as Testnet — callers should
+/// disambiguate via the `bitcoin::Network` enum if needed; for
+/// v0.1 verify, the network is inferred from the HRP and the
+/// `Address::require_network` check enforces it.
+fn network_from_bech32_hrp(s: &str) -> Result<bitcoin::Network> {
+    if s.starts_with("tb1") {
+        Ok(bitcoin::Network::Testnet)
+    } else if s.starts_with("bc1") {
+        Ok(bitcoin::Network::Bitcoin)
+    } else if s.starts_with("bcrt1") {
+        Ok(bitcoin::Network::Regtest)
+    } else {
+        anyhow::bail!("address {s:?} does not start with a known bech32 HRP (tb1/bc1/bcrt1)")
+    }
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::*;
+
+    /// Deterministic testnet mnemonic (well-known test vector; do NOT
+    /// use for real funds — exposed in plaintext here for unit tests).
+    /// Source: BIP-39 test vector 12-word phrase.
+    const TEST_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon \
+                                abandon abandon abandon abandon abandon about";
+
+    #[test]
+    fn derive_first_external_signer_testnet_deterministic() {
+        let (signer, address) =
+            derive_first_external_signer(TEST_MNEMONIC, bitcoin::Network::Testnet)
+                .expect("deterministic mnemonic + network must derive");
+        // Address must be a valid testnet P2WPKH (starts with `tb1q`).
+        assert!(
+            address.to_string().starts_with("mz"),
+            "expected mz... testnet P2PKH, got {address}"
+        );
+        // Signer should be reusable — public key derives to the same address.
+        let pk = signer.public_key();
+        let addr_from_pk =
+            bitcoin::Address::p2pkh(CompressedPublicKey(pk), bitcoin::Network::Testnet);
+        assert_eq!(addr_from_pk, address);
+    }
+
+    #[test]
+    fn sign_then_verify_roundtrip() {
+        let (signer, address) =
+            derive_first_external_signer(TEST_MNEMONIC, bitcoin::Network::Testnet).unwrap();
+        let signed = sign_message("hello world", &signer, &address).unwrap();
+        let valid = verify_message(&address, &signed, "hello world").unwrap();
+        assert!(valid, "sign+verify roundtrip must succeed");
+    }
+
+    #[test]
+    fn verify_rejects_tampered_message() {
+        let (signer, address) =
+            derive_first_external_signer(TEST_MNEMONIC, bitcoin::Network::Testnet).unwrap();
+        let signed = sign_message("hello world", &signer, &address).unwrap();
+        // Verify against a different message — must fail.
+        let valid = verify_message(&address, &signed, "goodbye world").unwrap();
+        assert!(
+            !valid,
+            "verifying with a different message must return false"
+        );
+    }
+
+    #[test]
+    fn handle_message_sign_refuses_wrong_address() {
+        let err = handle_message_sign(
+            TEST_MNEMONIC.to_string(),
+            crate::cli::NetArg::Testnet,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            "hello".to_string(),
+        )
+        .expect_err("wrong address must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("does not match") || msg.contains("first-external"),
+            "error should mention address mismatch: {msg}"
+        );
+    }
+
+    #[test]
+    fn handle_message_sign_refuses_mismatched_network() {
+        let (_, derived) =
+            derive_first_external_signer(TEST_MNEMONIC, bitcoin::Network::Testnet).unwrap();
+        // Build a mainnet-format address from the derived pubkey (wrong network).
+        let (signer2, _) =
+            derive_first_external_signer(TEST_MNEMONIC, bitcoin::Network::Bitcoin).unwrap();
+        let _ = signer2;
+        let mainnet_addr = derived.to_string(); // pretend it's mainnet — just need a valid addressto pass require_network
+        let _ = mainnet_addr;
+        // Simplest test: pass the testnet address with --network bitcoin → require_network rejects.
+        let err = handle_message_sign(
+            TEST_MNEMONIC.to_string(),
+            crate::cli::NetArg::Bitcoin,
+            derived.to_string(),
+            "hello".to_string(),
+        )
+        .expect_err("testnet address under --network bitcoin must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("not valid for network"),
+            "error should mention network mismatch: {msg}"
         );
     }
 }

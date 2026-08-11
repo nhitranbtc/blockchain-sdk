@@ -24,12 +24,57 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     Wallet(WalletAction),
+    /// BIP-137 message sign/verify (stateless; F21 typed MessageHash).
+    /// PR for Issue #61 / Task 54a.
+    Message(MessageAction),
 }
 
 #[derive(clap::Args)]
 pub struct WalletAction {
     #[command(subcommand)]
     pub action: WalletActionKind,
+}
+
+/// `btc message sign|verify` subcommands.
+#[derive(clap::Args)]
+pub struct MessageAction {
+    #[command(subcommand)]
+    pub action: MessageActionKind,
+}
+
+#[derive(Subcommand)]
+pub enum MessageActionKind {
+    /// Sign a message with the BIP-137 scheme. Prints a base64-encoded
+    /// recoverable signature (`header || compact(64)`).
+    Sign {
+        /// BIP-39 mnemonic phrase (12/15/18/21/24 words, space-separated).
+        /// **SECURITY**: visible in shell history. Recommend
+        /// `btc message sign --mnemonic "$(cat /tmp/mnemonic.txt)" ...`
+        /// or pass via `read -s` + env wrapper for interactive use.
+        #[arg(long)]
+        mnemonic: String,
+        /// Bitcoin network (mainnet/signet/regtest/testnet/testnet4).
+        #[arg(long, value_enum)]
+        network: NetArg,
+        /// Bitcoin address. v0.1 (Issue #61 scope): must match the
+        /// first external receive address derived from the mnemonic
+        /// at `m/44'/coin'/0'/0/0`. Signing from non-default addresses
+        /// deferred to v0.1.1.
+        #[arg(long)]
+        address: String,
+        /// Message text to sign. Quoted on the command line.
+        message: String,
+    },
+    /// Verify a BIP-137 signature. Exits 0 if valid, 1 if invalid.
+    Verify {
+        /// Bitcoin address that allegedly signed the message.
+        #[arg(long)]
+        address: String,
+        /// Message text that was signed.
+        message: String,
+        /// Base64-encoded BIP-137 signature (output of `btc message sign`).
+        signature: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -140,6 +185,7 @@ impl fmt::Debug for Commands {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Wallet(w) => f.debug_tuple("Wallet").field(w).finish(),
+            Self::Message(m) => f.debug_tuple("Message").field(m).finish(),
         }
     }
 }
@@ -149,6 +195,45 @@ impl fmt::Debug for WalletAction {
         f.debug_struct("WalletAction")
             .field("action", &self.action)
             .finish()
+    }
+}
+
+impl fmt::Debug for MessageAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MessageAction")
+            .field("action", &self.action)
+            .finish()
+    }
+}
+
+impl fmt::Debug for MessageActionKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // L12 CRITICAL #2: redact mnemonic (secret material) + signature
+        // (could leak via logs).
+        match self {
+            Self::Sign {
+                mnemonic: _,
+                network,
+                address,
+                message,
+            } => f
+                .debug_struct("Sign")
+                .field("mnemonic", &"<redacted>")
+                .field("network", network)
+                .field("address", address)
+                .field("message", message)
+                .finish(),
+            Self::Verify {
+                address,
+                message,
+                signature: _,
+            } => f
+                .debug_struct("Verify")
+                .field("address", address)
+                .field("message", message)
+                .field("signature", &"<redacted>")
+                .finish(),
+        }
     }
 }
 

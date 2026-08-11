@@ -50,6 +50,7 @@ cargo test --workspace
 
 Recent merges (full history in [`CHANGELOG.md`](../../CHANGELOG.md)):
 
+- **PR #61** (Issue #61 / Task 54a) — `btc message sign` + `btc message verify` subcommands (stateless BIP-137). `sign` derives first external address from BIP-39 mnemonic + signs message; `verify` returns `true`/`false`. Manual `Debug` redacts mnemonic + signature. v0.1: P2PKH only.
 - **PR #74** (Issue #74) — `btc wallet show --network <NET>` defaults to network-appropriate Esplora URL: mainnet (`blockstream.info/api`), testnet (`blockstream.info/testnet/api`), signet (`blockstream.info/signet/api`), testnet4 (`mempool.space/testnet4/api`). Regtest has no default — operator must pass `--esplora-url` (HTTPS-only per F20; regtest localhost needs stunnel).
 - **PR #73** (Issue #73, F20 enforcement) — `btc wallet show --esplora-spki-pin <HEX64>` + `BTC_ESPLORA_SPKI_PIN` env. Routes `EsploraClient` via `from_config` with `TlsPolicy::Pinned` when set; preserves PR-2 `SystemRoots` default when unset (testnet-suitable). Closes F20 gap on mainnet/signet/regtest production endpoints.
 - **PR #70** (Task 54d, PR-2 of #64) — `btc wallet create` + `btc wallet show` clap 4 subcommands on top of the PR-1 wallet-store lib. `create` persists encrypted wallet (mnemonic → STDERR; wallet_id → STDOUT per L28/F49). `show` decrypts + syncs + prints addresses + balance JSON. Manual `Debug` redaction on `Cli`/`Commands`/`WalletAction` (L12 CRITICAL #2). Closes Story #13.
