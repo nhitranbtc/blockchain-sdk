@@ -20,6 +20,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
+- [L18] ledger path collision — `.superpowers/sdd/` gitignored; canonical L21 record in PR body
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
@@ -329,6 +330,24 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Apply**: For every CLAUDE.md dedup, do a 2-step: (1) add rule to lessons.md in the same commit, (2) remove from CLAUDE.md. Verify with `grep <keyword> lessons.md` after the commit.
 
+---
+## L18 — Ledger path collision: `.superpowers/sdd/` gitignored; canonical L21 record lives in PR body
+
+**Trigger**: Session 2026-08-11 #64 retry. Working `ai-cost-report.md` at `.superpowers/sdd/2026-08-05-rust-bitcoin-wallet/` was modified locally; `git add` rejected by `.superpowers/sdd/.gitignore = "*"`. Prior sessions had committed this path (commits `4be98ac`, `f5ddbb2`) BEFORE the `*` rule was applied.
+
+**Rule**:
+
+- `.superpowers/sdd/<plan>/{progress,ai-cost,estimate}-report.md` = operator-local-only per L14. Do NOT force-add.
+- Canonical L21 record travels in the PR body (merge SHA + cost row + applied-findings table). Squash-merge = published ledger.
+- When a non-PR record is required (cumulative cost across PRs, retrospective cleanup), target `docs/{ai-cost,estimate}-report.md` — survives L14 gitignore.
+
+**Why**: L14 says ledger is gitignored for a reason (working-state churn out of public history). L21 says update on every merge — also valid. Without clarification, every session-end re-triages "force-add or skip?" — convention drift caused silent rule contradiction in this session.
+
+**Apply**:
+
+- `git add .superpowers/sdd/...` rejected by gitignore → `git restore --staged --worktree`. Working copy stays for next session; canonical record in PR body.
+- Path-aware L21 update → write to `docs/`, not `.superpowers/sdd/`.
+- L13 step 18 harvest: include this drift class in retrospectives.
 
 ---
 ## L21 — Update estimate-report AND ai-cost-report on every PR merge
