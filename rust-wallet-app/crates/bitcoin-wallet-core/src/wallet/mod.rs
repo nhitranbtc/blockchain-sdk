@@ -1,16 +1,7 @@
-//! Wallet module: end-to-end Bitcoin wallet (Task 9, #19b.2 + #64).
+//! Wallet module: end-to-end Bitcoin wallet (Task 9, #19b.2).
 //!
 //! Per plan §Task 9. `Wallet::from_mnemonic` (#19a, PR #48),
-//! `Wallet::sync` (#19b.2, PR #55), `Wallet::balance` (#19c, PR #55).
-//!
-//! **Issue #64 (Task 54d) — wallet persistence layer:**
-//!
-//! - [`id`] — `WalletId(Uuid)` newtype (v4-only, compile-time witness).
-//! - [`store`] — filesystem layout per ADR 0001 (`$XDG_DATA_HOME/btc/
-//!   wallets/<network>/<id>.enc`, `0o600` files, `0o700` dirs, atomic
-//!   write, symlink defense, constant-time padding).
-//! - [`ops`] — high-level `create_wallet` + `show_wallet` backing the
-//!   `btc wallet create` / `btc wallet show` CLI subcommands.
+//! `Wallet::sync` (#19b.2, this PR), `Wallet::balance` (#19c, this PR).
 //!
 //! **Threat-model coverage:**
 //!
@@ -18,13 +9,8 @@
 //! - F12 (chain sync via Esplora `/address/{addr}/utxo`)
 //! - F13 (confirmed-only UTXO aggregation, capped at MAX_MONEY)
 //! - F14 (persistence atomicity via `bdk_file_store`) — deferred to v0.1.1;
-//!   this module persists only `MnemonicCipherBlob` per ADR 0001. UTXO
-//!   state stays in-memory only. A wallet restart loses UTXO state
-//!   until next `sync`.
-//! - F19 (atomic write) — defended in `wallet::store`.
-//! - F49 (mnemonic echoes to STDOUT) — CLI routes mnemonic to STDERR;
-//!   the library returns the mnemonic to the caller so the CLI controls
-//!   the print destination.
+//!   this PR stores UTXOs in-memory only. A wallet restart loses
+//!   UTXO state until next `sync`.
 //!
 //! **Security:**
 //!
@@ -35,26 +21,18 @@
 //!   are responsible for rejecting `TlsPolicy::SystemRoots` for
 //!   public Esplora servers. This file does NOT default to
 //!   `SystemRoots` — there is no default.
-//! - Cross-network confusion: AAD binds `bitcoin::Network` discriminant
-//!   to the ciphertext (closes N5). The wallet store ALSO uses the
-//!   `<network>/` directory layout for defense-in-depth.
+//! - Cross-network confusion: caller is responsible for building
+//!   the `EsploraClient` from a `WalletConfig` whose `network`
+//!   matches this wallet's `network` (see `WalletConfig::testnet`
+//!   /`mainnet` /`regtest` /`signet` constructors). The client is
+//!   network-bound via the URL the operator passes to that
+//!   constructor.
 //! - xprv material: `XPrvHolder::to_xprv_secret` returns
 //!   `Secret<String>` (zeroize-on-drop). Descriptor strings are
 //!   dropped immediately after `bdk_wallet::Wallet::create`
 //!   returns — bdk parses them into its own keystore.
 //! - bdk error wrapping: `Error::Bdk` carries a fixed string, not
 //!   the raw bdk error which may echo the descriptor.
-//! - N2 (file-existence oracle): single indistinguishable error message
-//!   in `wallet::store::WALLET_NOT_ACCESSIBLE`.
-//! - N8 (timing oracle): constant-time padding on missing-file path.
-
-pub mod id;
-pub mod ops;
-pub mod store;
-
-pub use id::WalletId;
-pub use ops::{create_wallet, show_wallet, WalletInfo, SUPPORTED_WORD_COUNTS};
-pub use store::{data_dir, wallet_path};
 
 use std::str::FromStr;
 use std::sync::Mutex;
@@ -223,25 +201,6 @@ impl Wallet {
         // can include the descriptor (xprv leak). Use a fixed
         // message.
         result.map_err(|_| Error::Bdk("wallet descriptor parse failed (sanitized)".into()))
-    }
-
-    /// Peek the first `count` addresses on the given keychain
-    /// (external receive = 0, internal change = 1). Caller must have
-    /// invoked [`Wallet::sync`] first; panics if the bdk wallet has
-    /// not been populated. Used by [`crate::wallet::ops::show_wallet`]
-    /// to render the wallet's addresses after sync.
-    pub fn peek_addresses(
-        &self,
-        kind: KeychainKind,
-        count: u32,
-    ) -> Vec<bdk_wallet::bitcoin::Address> {
-        let guard = self.bdk.lock().expect("bdk lock poisoned");
-        let bdk = guard
-            .as_ref()
-            .expect("peek_addresses called before sync — caller bug");
-        (0..count)
-            .map(|i| bdk.peek_address(kind, i).address)
-            .collect()
     }
 }
 

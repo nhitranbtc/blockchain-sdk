@@ -16,10 +16,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Added
 
-- **`[user-facing]`** `btc wallet create --words <N> --network <NET> [--password <PWD>]` (Task 54d / Issue #64) — generate BIP-39 mnemonic + persist encrypted wallet to `$XDG_DATA_HOME/btc/wallets/<network>/<wallet_id>.enc` per ADR 0001. Prints `wallet_id` to STDOUT, mnemonic to STDERR (with banner). Windows in v0.1 surfaces a clear error rather than falling back to `~/btc/wallets`.
-- **`[user-facing]`** `btc wallet show <ID> --network <NET> [--password <PWD>] [--esplora-url <URL>]` (Issue #64) — load encrypted wallet, decrypt with password + network AAD, sync from Esplora, print `{receive_addresses, change_addresses, balance_sat}` JSON to STDOUT.
-- **`[user-facing]`** `WalletId(Uuid)` newtype (Issue #64, ADR 0001) — v4-only random UUIDs at the type boundary; `WalletId::new()` is the only public constructor (no `From<Uuid>`); `FromStr` rejects nil + non-v4 + non-RFC-4122 inputs. Compile-time v4 witness (L20 pattern) fails the build if `Uuid::new_v4`'s version discriminant ever drifts.
-- **`[user-facing]`** `wallet::create_wallet` / `wallet::show_wallet` / `WalletInfo` library API (Issue #64) — testable from `bitcoin-wallet-core` independent of the CLI binary. Functions take an explicit `base: &Path` so unit tests use `tempfile::tempdir()`; production callers resolve `base` via `wallet::store::data_dir()`.
 - **`[user-facing]`** `Wallet::sync(&EsploraClient)` (Task 9 #19b.2, F12) — full chain scan via Esplora `/address/{addr}/utxo` + `bdk_wallet::Wallet::insert_txout`. Caller builds `EsploraClient` with explicit `TlsPolicy` (F20 SPKI pinning). PR #55
 - **`[user-facing]`** `Wallet::balance(&EsploraClient) -> Result<u64>` (Task 9 #19b.2, F13) — confirmed-only UTXO aggregation. Lazily syncs on first call; reuses cached `bdk_wallet::Wallet` thereafter. PR #55
 - **`[user-facing]`** `Wallet::sync` / `Wallet::balance` API breaking change: now take `&EsploraClient` (was `&str esplora_url`). Caller must build `EsploraClient::from_config(&WalletConfig)` (which carries network + optional SPKI pin). PR #55
@@ -27,14 +23,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Security
 
-- **`[internal]`** F19 (`atomic_write`) defense for wallet blob persistence (Issue #64 / ADR 0001) — `tempfile::NamedTempFile` in same dir → `rename` over target + `fsync`; explicit `set_permissions(0o600)` on the final blob file; `ensure_secure_dir` walks the parent chain, refuses symlinks (TOCTOU window check), and sets `0o700` on every newly-created dir (closes umask-leak per F19).
-- **`[internal]`** N2 file-existence oracle collapsed (Issue #64 / ADR 0001): `Error::WalletStore("wallet not accessible (wrong password, wrong network, or corrupt blob)")` is the single indistinguishable error for 4 distinct failure modes (missing file, wrong password, wrong network AAD, corrupt blob). The wallet-store layer owns the collapse; the underlying primitives surface technical detail and this layer translates.
-- **`[internal]`** N8 timing oracle on missing-file path closed (Issue #64 / ADR 0001): `wallet::store::constant_time_padding()` runs a dummy Argon2id derive (~500ms) on the missing-file path so its wall-clock matches the wrong-password path.
-- **`[internal]`** Symlink-DoS defense on read path (Issue #64 / ADR 0001): `read_wallet_at` calls `symlink_metadata` before `read` and refuses if the blob resolves to a symlink. Symlinks in the parent-dir chain are also refused at `create_dir_all` time (A2 mitigation).
-- **`[internal]`** Cross-network footgun (N5) defended at the type layer + filesystem layer (Issue #64 / ADR 0001): `Aad::network(network)` binds the `bitcoin::Network` discriminant to the ciphertext; the `<network>/` directory layout provides defense-in-depth (CLI bug yields "no wallet found" not silent cross-network load).
-- **`[internal]`** L28 fix (Issue #64 acceptance): mnemonic NEVER appears on STDOUT in the `btc wallet create` flow — routes to STDERR with a banner (`WARNING: This mnemonic is shown ONCE ...`). Regression test enforces this: `wallet::tests::create_writes_mnemonic_to_stderr_not_stdout`.
-- **`[internal]`** `Error::WalletStore(String)` per F43 pattern (Issue #64 / ADR 0001) — distinct from generic `Storage` so callers can match wallet-persistence failures separately. The Display message is intentionally generic for failures that would otherwise leak whether a wallet exists (N2 oracle mitigation).
-- **`[internal]`** `Wallet::peek_addresses(kind, count)` — `pub` accessor for the first `count` external/internal addresses; panics if the bdk wallet is not synced (caller contract). Used by `wallet::ops::show_wallet` to render the wallet's addresses after sync.
 - **`[internal]`** F12 / F13: full implementation in `Wallet::sync` / `Wallet::balance`. F19 (`atomic_write`-backed persistence) deferred for UTXO state; encrypted mnemonic blob persistence lands in v0.1 via #54d per ADR 0001 (in-memory UTXO state until next `sync`).
 - **`[internal]`** `XPrvHolder::to_xprv_secret() -> Secret<String>` (replaces `to_xprv_string`; `pub(crate)`; zeroize-on-drop) — closes xprv zeroize window in descriptor construction. PR #55
 - **`[internal]`** `Error::Bdk` carries fixed message; raw bdk error dropped (avoids xprv leak via descriptor echo). PR #55
@@ -103,8 +91,8 @@ Each story is a user-facing capability. Once checked, the feature is **playaroun
 | 10 | [x] **Create wallet from mnemonic** | done (PR #48, Task 9a) | `cargo test -p bitcoin-wallet-core wallet` |
 | 11 | [x] **Sync wallet (full chain scan)** | done (Task 9 #19b.2) | Fresh wallet: `cargo test -p bitcoin-wallet-core wallet::tests::sync_completes_against_testnet_for_fresh_wallet -- --ignored --test-threads=1` (requires live testnet Esplora). |
 | 12 | [ ] **Get wallet balance** | partial (PR #52, Task 9c) | URL validation + `coin_type_for` only; UTXO aggregation deferred. Will land fully with #19c.2 follow-up. |
-| 13 | [x] **Use btc CLI subcommand** | done (PR #68, Issue #64 / Task 54d) | `cargo run -p btc -- wallet create --words 12 --network testnet --password <pwd>` prints wallet_id to STDOUT + mnemonic to STDERR; `cargo run -p btc -- wallet show <id> --network testnet --password <pwd>` prints `{receive_addresses, change_addresses, balance_sat}` JSON |
+| 13 | [ ] **Use btc CLI subcommand** | gated (Task 9 + CLI subcommands) | `cargo run -p btc --help` (currently placeholder) |
 
-**Progress:** 11 of 13 stories playaround-able. 2 still gated (#11 sync requires live testnet Esplora; #12 balance partial impl).
+**Progress:** 10 of 13 stories playaround-able. 3 still gated (#11 sync, #12 balance partial impl; #13 CLI subcommand full work).
 
 > **L25 maintenance:** After every PR merge, check if the merged PR completes any unchecked story → flip the box to `[x]` + update the "Try it" column if needed. Drift between docs and actual state is the failure mode this rule prevents (per L14).
