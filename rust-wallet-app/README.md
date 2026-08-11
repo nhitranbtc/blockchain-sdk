@@ -50,6 +50,9 @@ cargo test --workspace
 
 Recent merges (full history in [`CHANGELOG.md`](../../CHANGELOG.md)):
 
+- **PR #68** (Task 54d / Issue #64) — `btc wallet create` + `btc wallet show` subcommands backed by `wallet::create_wallet` / `wallet::show_wallet`. Per ADR 0001: `$XDG_DATA_HOME/btc/wallets/<network>/<wallet_id>.enc` with `0o600` files + `0o700` parent dirs, atomic write, `O_NOFOLLOW` symlink defense on read, constant-time padding on missing-file path. Network discriminant bound via AES-GCM AAD (closes N5). Indistinguishable error message collapses 4 failure modes (N2). Mnemonic routes to STDERR (L28).
+- **PR #67** (Issue #66 / ADR 0001 precursor) — `Aad<'a>` newtype + `MnemonicCipherBlob` AAD extension. Typed AAD closes plaintext/AAD positional swap; exhaustive `Network` match prevents silent on-disk blob remapping when `bitcoin::Network` gains a variant.
+- **PR #65** (Task 54-precursor / Issue #60) — ADR 0001 (`docs/superpowers/adrs/2026-08-11-adr-0001-btc-wallet-store.md`). Path B: keep F19-deferred UTXO snapshot, persist only `MnemonicCipherBlob`. Unblocked #64.
 - **PR #55** (Task 9 #19b.2) — `Wallet::sync(&EsploraClient)` + `Wallet::balance(&EsploraClient)`. Full chain scan via Esplora `/address/{addr}/utxo` + `bdk_wallet::Wallet::insert_txout`. F12 + F13 defended; F14 persistence deferred to v0.1.1. Caller builds `EsploraClient` with explicit `TlsPolicy` for F20 SPKI pinning.
 - **PR #48** (Task 9a) — `Wallet::from_mnemonic(&Mnemonic, Network) -> Result<Wallet>`. F34 BIP-39 word-count assertion; no `Default` impl per CONTEXT.md hard rule #1.
 - **PR #42** (Task 8) — `chain::network::coin_type_for(Network) → u32`. BIP-44 coin-type lookup; hard rule #1 (no mainnet default) enforced at compile time via exhaustive match.
