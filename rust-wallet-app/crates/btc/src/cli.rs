@@ -53,11 +53,12 @@ pub struct MessageAction {
 /// `btc encrypt` args — Issue #62 / Task 54b.
 #[derive(clap::Args)]
 pub struct EncryptAction {
-    /// Encryption password. **SECURITY**: visible in shell history.
-    /// Recommend `btc encrypt --password "$(cat /tmp/pwd.txt)" ...` or
-    /// pass via `read -s` + env wrapper for interactive use.
-    #[arg(long)]
-    pub password: String,
+    /// Encryption password. If omitted, prompts via `/dev/tty` (uses
+    /// `rpassword`). **SECURITY**: `--password <PWD>` is visible in
+    /// shell history, `ps`, and `/proc/<pid>/cmdline`. Prefer omitting
+    /// the flag for interactive use, or set `BTC_ENCRYPT_PASSWORD`.
+    #[arg(long, env = "BTC_ENCRYPT_PASSWORD")]
+    pub password: Option<String>,
     /// Input file (UTF-8 plaintext).
     #[arg(long)]
     pub r#in: PathBuf,
@@ -70,8 +71,10 @@ pub struct EncryptAction {
 #[derive(clap::Args)]
 pub struct DecryptAction {
     /// Decryption password (must match the value used at encrypt time).
-    #[arg(long)]
-    pub password: String,
+    /// If omitted, prompts via `/dev/tty`. See `EncryptAction::password`
+    /// for the security caveats of the `--password` flag form.
+    #[arg(long, env = "BTC_DECRYPT_PASSWORD")]
+    pub password: Option<String>,
     /// Input file (binary blob).
     #[arg(long)]
     pub r#in: PathBuf,
@@ -248,9 +251,14 @@ impl fmt::Debug for MessageAction {
 
 impl fmt::Debug for EncryptAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // L12 CRITICAL #2: redact password (secret material).
+        // L12 CRITICAL #2: redact password (secret material) — None or Some.
+        let pwd_display = if self.password.is_some() {
+            "<redacted>"
+        } else {
+            "<unset — will prompt>"
+        };
         f.debug_struct("EncryptAction")
-            .field("password", &"<redacted>")
+            .field("password", &pwd_display)
             .field("in", &self.r#in)
             .field("out", &self.out)
             .finish()
@@ -260,8 +268,13 @@ impl fmt::Debug for EncryptAction {
 impl fmt::Debug for DecryptAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // L12 CRITICAL #2: redact password (secret material).
+        let pwd_display = if self.password.is_some() {
+            "<redacted>"
+        } else {
+            "<unset — will prompt>"
+        };
         f.debug_struct("DecryptAction")
-            .field("password", &"<redacted>")
+            .field("password", &pwd_display)
             .field("in", &self.r#in)
             .field("out", &self.out)
             .finish()
