@@ -371,10 +371,10 @@ pub fn handle_message_verify(
     // network. The legacy P2PKH (1/m/n) form is rejected by the
     // network check downstream if mismatched — not supported by this
     // CLI in v0.1.
-    let network = network_from_bech32_hrp(&address_arg).with_context(|| {
+    let network = network_from_address_prefix(&address_arg).with_context(|| {
         format!(
             "inferring network from --address {address_arg:?} \
-             (only tb1/bc1/bcrt1 bech32 supported)"
+             (tb1/m/n testnet, bc1/1 mainnet, bcrt1 regtest)"
         )
     })?;
     let claimed_address = bitcoin::Address::from_str(&address_arg)
@@ -387,22 +387,28 @@ pub fn handle_message_verify(
     Ok(())
 }
 
-/// Infer the Bitcoin network from a bech32 address HRP prefix.
+/// Infer the Bitcoin network from an address prefix (bech32 HRP OR
+/// legacy P2PKH base58 prefix). BIP-137 signs legacy P2PKH per lib
+/// caller contract, so the CLI accepts both formats:
+/// - bech32 (P2WPKH): `tb1` (testnet), `bc1` (mainnet), `bcrt1` (regtest)
+/// - base58 P2PKH: `m`/`n` (testnet), `1` (mainnet)
 ///
-/// Supports the 4 production/test networks (tb1, bc1, bcrt1). Signet
-/// and Testnet4 use the same `tb1` HRP as Testnet — callers should
-/// disambiguate via the `bitcoin::Network` enum if needed; for
-/// v0.1 verify, the network is inferred from the HRP and the
-/// `Address::require_network` check enforces it.
-fn network_from_bech32_hrp(s: &str) -> Result<bitcoin::Network> {
-    if s.starts_with("tb1") {
+/// Signet + Testnet4 use the same `tb1` HRP as Testnet; callers
+/// disambiguate via the `bitcoin::Network` enum if needed. For v0.1
+/// verify, the network is inferred from the prefix and
+/// `Address::require_network` enforces it.
+fn network_from_address_prefix(s: &str) -> Result<bitcoin::Network> {
+    if s.starts_with("tb1") || s.starts_with('m') || s.starts_with('n') {
         Ok(bitcoin::Network::Testnet)
-    } else if s.starts_with("bc1") {
+    } else if s.starts_with("bc1") || s.starts_with('1') {
         Ok(bitcoin::Network::Bitcoin)
     } else if s.starts_with("bcrt1") {
         Ok(bitcoin::Network::Regtest)
     } else {
-        anyhow::bail!("address {s:?} does not start with a known bech32 HRP (tb1/bc1/bcrt1)")
+        anyhow::bail!(
+            "address {s:?} does not match a known prefix \
+             (tb1/m/n testnet, bc1/1 mainnet, bcrt1 regtest)"
+        )
     }
 }
 
@@ -431,6 +437,55 @@ mod message_tests {
         let addr_from_pk =
             bitcoin::Address::p2pkh(CompressedPublicKey(pk), bitcoin::Network::Testnet);
         assert_eq!(addr_from_pk, address);
+    }
+
+    /// Parametrized sign + verify roundtrip across all 5 networks.
+    /// `bitcoin` (coin type 0) derives a unique key; the 4 testnet-family
+    /// networks (testnet / signet / testnet4 / regtest) all share coin
+    /// type 1 → identical key + signature. The test asserts each
+    /// network's full path: derive signer → sign → verify roundtrip.
+    #[test]
+    fn sign_then_verify_roundtrip_all_networks() {
+        for net in [
+            bitcoin::Network::Bitcoin,
+            bitcoin::Network::Testnet,
+            bitcoin::Network::Testnet4,
+            bitcoin::Network::Signet,
+            bitcoin::Network::Regtest,
+        ] {
+            let (signer, address) = derive_first_external_signer(TEST_MNEMONIC, net)
+                .unwrap_or_else(|e| panic!("derive failed for {net:?}: {e:?}"));
+            let sig = sign_message("hello", &signer, &address)
+                .unwrap_or_else(|e| panic!("sign failed for {net:?}: {e:?}"));
+            let valid = verify_message(&address, &sig, "hello")
+                .unwrap_or_else(|e| panic!("verify failed for {net:?}: {e:?}"));
+            assert!(valid, "sign+verify roundtrip must return true for {net:?}");
+        }
+    }
+
+    /// Parametrized tamper-detection across all 5 networks. The same
+    /// signature is verified against a different message → must return
+    /// `false` for every network (BIP-137 message-binding property).
+    #[test]
+    fn verify_tampered_message_all_networks() {
+        for net in [
+            bitcoin::Network::Bitcoin,
+            bitcoin::Network::Testnet,
+            bitcoin::Network::Testnet4,
+            bitcoin::Network::Signet,
+            bitcoin::Network::Regtest,
+        ] {
+            let (signer, address) = derive_first_external_signer(TEST_MNEMONIC, net)
+                .unwrap_or_else(|e| panic!("derive failed for {net:?}: {e:?}"));
+            let sig = sign_message("hello", &signer, &address)
+                .unwrap_or_else(|e| panic!("sign failed for {net:?}: {e:?}"));
+            let valid = verify_message(&address, &sig, "goodbye")
+                .unwrap_or_else(|e| panic!("verify failed for {net:?}: {e:?}"));
+            assert!(
+                !valid,
+                "verify with tampered message must return false for {net:?}"
+            );
+        }
     }
 
     #[test]
