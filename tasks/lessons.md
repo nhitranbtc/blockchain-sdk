@@ -20,6 +20,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
+- [L18] ledger path collision — `.superpowers/sdd/` gitignored; canonical L21 record in PR body
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
@@ -259,11 +260,30 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Document lives with the commit (audit trail); no separate file to maintain
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command + README "What's New" one-liner landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
-    - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
-    - Append/replace existing PR body with the full doc
-    - Document lives with the commit (audit trail); no separate file to maintain
-    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
-15c. **Merge code + close** (separate gate from review — explicit PAUSE before the bypass arms):
+15c. **Review all L13 steps 1-15b completed** (broader pre-merge gate — widens 15d's PR-body checklist to all L13 steps):
+    - **Walk each L13 step 1 through 15b** and confirm artifact exists before merging:
+        - Step 1 (L11 skill tag — recorded in branch commits or PR body)
+        - Step 2 (complexity tier self-detected + user-confirmed)
+        - Steps 3-4 (issue picked up, branch checked out)
+        - Steps 5-8 (skill pair invoked per L11 map, domain-tag wins on conflict)
+        - Step 9 (TDD red-green cycle: failing test first, then GREEN pass)
+        - Step 10 (L12 pre-PR review findings applied — commit references each fix)
+        - Step 11 (verify gate clean: `cargo fmt --check` + `clippy -- -D warnings` + `cargo test` output captured)
+        - Step 11a (backlog triage done; follow-up issues filed for any deferred work)
+        - Step 11b (L24 cascade on local branch BEFORE merge — CHANGELOG + Story flip + README in commits that travel with the feature PR)
+        - Step 12 (commit approval PAUSE honored — user said "approved" or "commit" before each `git commit`)
+        - Step 13 (commit-push-pr executed — branch pushed + PR opened)
+        - Step 14 (issue checkboxes flipped with artifact evidence per L13 step 14 rules)
+        - Step 15 (PR review by parallel sub-agents per L13 step 15)
+        - Step 15a (10-section tech doc appended to PR body — Goal, Drift, API surface, Threat-model, Implementation, Tests, L12 review, Lessons, Backlog, Migration)
+        - Step 15b (L24 cascade verified in merged code path)
+    - **Why a separate gate**: 15d's PR-body checklist is narrow (boxes in PR body only). 15c widens to all L13 steps — catches gaps in TDD evidence, L12 review, verify gate, L24 cascade, skill-tag pair, etc. that the PR body doesn't necessarily surface.
+    - **Output**: either (a) all steps verified → proceed to 15d merge gate, or (b) gaps found → fix (commit amend, follow-up issue, or PR body update) before merge.
+    - **Anti-patterns**:
+        - Skipping the walk because "I did it all" — the walk is what proves you did it all. This is the documented gap from #64/#66/#68 PRs (unchecked boxes in merged PRs without deferral notes).
+        - Speculatively flipping boxes "to clean up the body" — L28 honesty violation.
+        - Confusing 15c with 15d — 15c is broad L13 audit; 15d is narrow PR-body checklist. Both run.
+15d. **Merge code + close** (separate gate from review — explicit PAUSE before the bypass arms):
     - **Verify the PR body checklist is fully resolved BEFORE the merge PAUSE** (per L9 + L24). Every `[ ]` / `[x]` box in the PR body must be either:
         - **`[x]`** with the artifact behind it (test name, file:line, commit SHA, PR number) — same evidence standard as step 14.
         - **`[ ]` left unchecked with explicit deferral note** (e.g., `<!-- TODO: L29 manual smoke pending operator action -->`) — external gates that can't be satisfied before merge.
@@ -274,6 +294,10 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **Verify issue closed:** `gh issue view <N> --json state` should report `CLOSED`. Squash-merge commit messages containing `Closes #N` / `Fixes #N` auto-close; otherwise `gh issue close <N>` explicitly.
     - **Verify main updated:** `git fetch origin main && git log --oneline origin/main -1` shows the merge SHA at HEAD. Branch protection + admin merge can be silent — verify explicitly per L28.
     - **No rollback:** if merge landed in a wrong state, use `git revert -m 1 <merge-sha>` rather than `git reset --hard`. Merges are immutable public artifacts (per L6).
+    - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
+    - Append/replace existing PR body with the full doc
+    - Document lives with the commit (audit trail); no separate file to maintain
+    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
@@ -329,6 +353,24 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Apply**: For every CLAUDE.md dedup, do a 2-step: (1) add rule to lessons.md in the same commit, (2) remove from CLAUDE.md. Verify with `grep <keyword> lessons.md` after the commit.
 
+---
+## L18 — Ledger path collision: `.superpowers/sdd/` gitignored; canonical L21 record lives in PR body
+
+**Trigger**: Session 2026-08-11 #64 retry. Working `ai-cost-report.md` at `.superpowers/sdd/2026-08-05-rust-bitcoin-wallet/` was modified locally; `git add` rejected by `.superpowers/sdd/.gitignore = "*"`. Prior sessions had committed this path (commits `4be98ac`, `f5ddbb2`) BEFORE the `*` rule was applied.
+
+**Rule**:
+
+- `.superpowers/sdd/<plan>/{progress,ai-cost,estimate}-report.md` = operator-local-only per L14. Do NOT force-add.
+- Canonical L21 record travels in the PR body (merge SHA + cost row + applied-findings table). Squash-merge = published ledger.
+- When a non-PR record is required (cumulative cost across PRs, retrospective cleanup), target `docs/{ai-cost,estimate}-report.md` — survives L14 gitignore.
+
+**Why**: L14 says ledger is gitignored for a reason (working-state churn out of public history). L21 says update on every merge — also valid. Without clarification, every session-end re-triages "force-add or skip?" — convention drift caused silent rule contradiction in this session.
+
+**Apply**:
+
+- `git add .superpowers/sdd/...` rejected by gitignore → `git restore --staged --worktree`. Working copy stays for next session; canonical record in PR body.
+- Path-aware L21 update → write to `docs/`, not `.superpowers/sdd/`.
+- L13 step 18 harvest: include this drift class in retrospectives.
 
 ---
 ## L21 — Update estimate-report AND ai-cost-report on every PR merge
