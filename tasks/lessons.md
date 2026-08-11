@@ -174,6 +174,13 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Before declaring done                        | `superpowers:verification-before-completion`                                                                                         |
 | Commit + push + PR                           | `commit-commands:commit-push-pr`                                                                                                     |
 
+> **Skill-pair wrappers (2026-08-11):** `pr-review-toolkit:code-review` is the
+> toolkit; the superpowers meta-skills wrap its invocation. Pre-PR (L13 step 10)
+> pairs `superpowers:requesting-code-review` with the toolkit. PR feedback
+> (L13 step 15, the 3-round fix loop) pairs `superpowers:receiving-code-review`
+> with the toolkit. Treat the superpowers skill as the entry point; the toolkit
+> is the parallel-sub-agent driver inside it.
+
 **Apply**:
 
 - After every `Skill` invocation that returns useful guidance, invoke it AGAIN at the next task step (don't skip).
@@ -221,7 +228,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ## Per task
 9. TDD red-green cycle (superpowers:test-driven-development)
-10. L12: pre-PR code review FIRST — pr-review-toolkit:code-review
+10. L12: pre-PR code review FIRST — `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`
     - Parallel sub-agents: type-design-analyzer + code-reviewer
     - Run on first commit on branch
 11. Verify (double gate): cargo fmt + clippy -D warnings + test
@@ -252,7 +259,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - Bulk-flipping without per-box evidence — audit trail collapses.
         - Flipping external-gate boxes (L29, L28 Gate B) before operator confirmation — false-positive completion.
         - Editing the issue body incrementally via partial updates — risks body drift vs commit reality.
-15. PR review (parallel sub-agents)
+15. PR review (parallel sub-agents) — `superpowers:receiving-code-review` wrapping the toolkit
     - If stuck 3 rounds: PAUSE then revert-to-last-green + follow-up issue + ledger entry
 15a. **Write technical document → enrich PR body** (before merge):
     - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
