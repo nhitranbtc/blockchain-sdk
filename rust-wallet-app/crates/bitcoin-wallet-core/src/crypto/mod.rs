@@ -1,10 +1,13 @@
-//! Cryptographic primitives: Argon2id (KDF), AES-256-GCM (AEAD), BIP-137 (msg sig).
+//! Cryptographic primitives: Argon2id (KDF), AES-256-GCM (AEAD), BIP-137 (msg sig),
+//! and the AAD newtype for context binding.
 //!
-//! Filled by Task 5 (argon2, aes_gcm) and Task 6 (bip137).
-//!
-//! `mnemonic_cipher` (issue #28) bundles argon2 + aes_gcm into a 2-line
-//! encrypt/decrypt API for at-rest mnemonic encryption.
+//! Filled by Task 5 (argon2, aes_gcm) and Task 6 (bip137). Issue #28 added
+//! `mnemonic_cipher` (single-call encrypt/decrypt for at-rest mnemonic
+//! encryption). Issue #66 (precursor to ADR 0001) adds `aad` — the typed
+//! context that binds `bitcoin::Network` discriminant to the ciphertext
+//! and closes the cross-network-footgun vulnerability (N5).
 
+pub mod aad;
 pub mod aes_gcm;
 pub mod argon2;
 pub mod bip137;
