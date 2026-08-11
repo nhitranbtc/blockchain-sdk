@@ -41,7 +41,18 @@ async fn main() -> Result<()> {
                 network,
                 password,
                 esplora_url,
-            } => handlers::handle_show(id, network, password, esplora_url, &data_dir).await,
+                esplora_spki_pin,
+            } => {
+                handlers::handle_show(
+                    id,
+                    network,
+                    password,
+                    esplora_url,
+                    esplora_spki_pin,
+                    &data_dir,
+                )
+                .await
+            }
         },
     }
 }

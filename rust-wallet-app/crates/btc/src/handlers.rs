@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 
 use bitcoin_wallet_core::chain::esplora::{EsploraClient, TlsPolicy};
 use bitcoin_wallet_core::chain::esplora_url::EsploraUrl;
+use bitcoin_wallet_core::chain::spki::SpkiPin;
+use bitcoin_wallet_core::config::WalletConfig;
 use bitcoin_wallet_core::keys::Secret;
 use bitcoin_wallet_core::wallet::{create_wallet, show_wallet, WalletId, SUPPORTED_WORD_COUNTS};
 
@@ -58,6 +60,37 @@ fn secret_password(plaintext: String) -> Secret<Vec<u8>> {
     Secret::new(plaintext.into_bytes())
 }
 
+/// Parse a 64-char hex SPKI pin string into `SpkiPin`.
+///
+/// **Format**: SHA-256 of the leaf cert's SubjectPublicKeyInfo, as 64
+/// lowercase or uppercase hex chars. The CLI accepts this format
+/// (operator-friendly) and converts to 32 raw bytes internally; the
+/// library's `SpkiPin::from_base64` would require base64 encoding
+/// instead — we deliberately use hex for CLI ergonomics (operators
+/// copy SPKI hashes from TLS inspection tools that typically render
+/// hex).
+///
+/// # Errors
+///
+/// `anyhow::Error` with `context` on:
+/// - wrong length (not 64 chars)
+/// - non-hex characters
+pub fn parse_spki_pin_hex(s: &str) -> Result<SpkiPin> {
+    if s.len() != 64 {
+        anyhow::bail!(
+            "SPKI pin must be 64 hex chars (SHA-256 of SubjectPublicKeyInfo); got {} chars",
+            s.len()
+        );
+    }
+    let mut bytes = [0u8; 32];
+    for (i, chunk) in s.as_bytes().chunks(2).enumerate() {
+        let pair = std::str::from_utf8(chunk).context("SPKI pin contains non-ASCII byte")?;
+        bytes[i] = u8::from_str_radix(pair, 16)
+            .with_context(|| format!("SPKI pin contains non-hex pair {pair:?} at position {i}"))?;
+    }
+    Ok(SpkiPin::from_bytes(bytes))
+}
+
 pub async fn handle_create(
     words: WordCount,
     network: NetArg,
@@ -91,6 +124,7 @@ pub async fn handle_show(
     network: NetArg,
     password: Option<String>,
     esplora_url: Option<String>,
+    esplora_spki_pin: Option<String>,
     data_dir: &Path,
 ) -> Result<()> {
     let pwd_plain = password_or_prompt(password)?;
@@ -101,13 +135,33 @@ pub async fn handle_show(
     let esplora_url_typed =
         EsploraUrl::new(url).with_context(|| format!("invalid --esplora-url {url:?}"))?;
 
-    // L29 + F20: caller controls TLS policy. CLI default is
-    // SystemRoots for the public testnet endpoint; production
-    // deployments override with `EsploraClient::from_config` +
-    // `TlsPolicy::Pinned` (CLI does not yet expose this — tracked
-    // as v0.1.1 follow-up).
-    let client = EsploraClient::new(esplora_url_typed, TlsPolicy::SystemRoots)
-        .context("build Esplora client")?;
+    // F20 enforcement: when the operator passes `--esplora-spki-pin`
+    // (or `BTC_ESPLORA_SPKI_PIN` env), route through
+    // `EsploraClient::from_config` which applies `TlsPolicy::Pinned`.
+    // When unset, fall back to `EsploraClient::new(url, SystemRoots)`
+    // (PR-2 default — testnet-suitable; mainnet/signet/regtest without
+    // a pin will fail at network level per ADR 0001 / F20).
+    let client = match esplora_spki_pin {
+        Some(pin_hex) => {
+            let pin = parse_spki_pin_hex(&pin_hex)
+                .with_context(|| format!("parsing --esplora-spki-pin ({pin_hex:?})"))?;
+            // `db_path` is unused for show (only the lib's bdk_file_store
+            // integration needs it, deferred per F14). Use a placeholder
+            // path so the WalletConfig builds cleanly. Show does not
+            // touch the sidecar DB.
+            let mut cfg = WalletConfig::testnet(url, data_dir.join("placeholder.sqlite"))
+                .with_esplora_spki_pin(pin);
+            // Override the testnet default with the actual requested
+            // network. WalletConfig has dedicated constructors for
+            // Bitcoin/Signet/Regtest but not Testnet4, so we mutate
+            // the pub `network` field (allowed despite
+            // `#[non_exhaustive]`).
+            cfg.network = network_obj;
+            EsploraClient::from_config(&cfg).context("build pinned Esplora client")?
+        }
+        None => EsploraClient::new(esplora_url_typed, TlsPolicy::SystemRoots)
+            .context("build Esplora client (SystemRoots)")?,
+    };
 
     let info = show_wallet(data_dir, network_obj, wallet_id, &pwd, &client)
         .await

@@ -59,6 +59,13 @@ pub enum WalletActionKind {
         /// Esplora base URL (default: blockstream.info testnet).
         #[arg(long)]
         esplora_url: Option<String>,
+        /// Esplora leaf cert SPKI pin (64-char hex, SHA-256 of the
+        /// SubjectPublicKeyInfo). When set, the Esplora client is built
+        /// via `EsploraClient::from_config` with `TlsPolicy::Pinned`
+        /// (F20 enforcement). Required for mainnet/signet/regtest
+        /// production endpoints. Env: `BTC_ESPLORA_SPKI_PIN`.
+        #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
+        esplora_spki_pin: Option<String>,
     },
 }
 
@@ -166,12 +173,14 @@ impl fmt::Debug for WalletActionKind {
                 network,
                 password: _,
                 esplora_url,
+                esplora_spki_pin,
             } => f
                 .debug_struct("Show")
                 .field("id", id)
                 .field("network", network)
                 .field("password", &"<redacted>")
                 .field("esplora_url", esplora_url)
+                .field("esplora_spki_pin", esplora_spki_pin)
                 .finish(),
         }
     }
@@ -231,6 +240,65 @@ mod tests {
         let cli =
             Cli::try_parse_from(["btc", "wallet", "show", "abc-uuid", "--password", "hunter2"]);
         assert!(cli.is_err(), "missing --network should fail to parse");
+    }
+
+    #[test]
+    fn parse_show_accepts_spki_pin_flag() {
+        let pin_hex = "0".repeat(64);
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "show",
+            "abc-uuid",
+            "--network",
+            "testnet",
+            "--password",
+            "hunter2",
+            "--esplora-spki-pin",
+            &pin_hex,
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    #[test]
+    fn parse_show_accepts_spki_pin_env() {
+        let pin_hex = "f".repeat(64);
+        // env-vars + try_parse_from: clap reads env when the flag is
+        // not present on the command line. Set via std::env::set_var;
+        // restore after to avoid leaking across tests.
+        // SAFETY: tests run single-threaded under cargo test by
+        // default for binary crates. If run with --test-threads>1,
+        // env races are possible but each test sets+unsets its own
+        // var.
+        // SAFETY: env mutation in tests is a known pattern; cargo
+        // test defaults to --test-threads=1 unless overridden.
+        unsafe {
+            std::env::set_var("BTC_ESPLORA_SPKI_PIN", &pin_hex);
+        }
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "show",
+            "abc-uuid",
+            "--network",
+            "testnet",
+            "--password",
+            "hunter2",
+        ]);
+        unsafe {
+            std::env::remove_var("BTC_ESPLORA_SPKI_PIN");
+        }
+        assert!(cli.is_ok(), "expected parse ok via env, got: {cli:?}");
+        let cli = cli.unwrap();
+        let Commands::Wallet(WalletAction {
+            action: WalletActionKind::Show {
+                esplora_spki_pin, ..
+            },
+        }) = cli.command
+        else {
+            panic!("expected Show subcommand");
+        };
+        assert_eq!(esplora_spki_pin.as_deref(), Some(pin_hex.as_str()));
     }
 
     /// L12 CRITICAL #2: password MUST NOT appear in Debug output
