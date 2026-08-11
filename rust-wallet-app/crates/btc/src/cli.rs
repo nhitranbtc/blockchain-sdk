@@ -27,6 +27,14 @@ pub enum Commands {
     /// BIP-137 message sign/verify (stateless; F21 typed MessageHash).
     /// PR for Issue #61 / Task 54a.
     Message(MessageAction),
+    /// Encrypt a UTF-8 file with a password (F5 Argon2id + F6 AES-256-GCM).
+    /// Output is a `MnemonicCipherBlob` (salt(16) || nonce(12) || ct || tag(16)).
+    /// PR for Issue #62 / Task 54b.
+    Encrypt(EncryptAction),
+    /// Decrypt a `MnemonicCipherBlob` produced by `btc encrypt`.
+    /// Errors on wrong password / tampered / truncated blob / non-UTF8
+    /// plaintext (all surface as `Error::MnemonicCipher`).
+    Decrypt(DecryptAction),
 }
 
 #[derive(clap::Args)]
@@ -40,6 +48,36 @@ pub struct WalletAction {
 pub struct MessageAction {
     #[command(subcommand)]
     pub action: MessageActionKind,
+}
+
+/// `btc encrypt` args — Issue #62 / Task 54b.
+#[derive(clap::Args)]
+pub struct EncryptAction {
+    /// Encryption password. **SECURITY**: visible in shell history.
+    /// Recommend `btc encrypt --password "$(cat /tmp/pwd.txt)" ...` or
+    /// pass via `read -s` + env wrapper for interactive use.
+    #[arg(long)]
+    pub password: String,
+    /// Input file (UTF-8 plaintext).
+    #[arg(long)]
+    pub r#in: PathBuf,
+    /// Output file (binary blob).
+    #[arg(long)]
+    pub out: PathBuf,
+}
+
+/// `btc decrypt` args — Issue #62 / Task 54b.
+#[derive(clap::Args)]
+pub struct DecryptAction {
+    /// Decryption password (must match the value used at encrypt time).
+    #[arg(long)]
+    pub password: String,
+    /// Input file (binary blob).
+    #[arg(long)]
+    pub r#in: PathBuf,
+    /// Output file (UTF-8 plaintext).
+    #[arg(long)]
+    pub out: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -186,6 +224,8 @@ impl fmt::Debug for Commands {
         match self {
             Self::Wallet(w) => f.debug_tuple("Wallet").field(w).finish(),
             Self::Message(m) => f.debug_tuple("Message").field(m).finish(),
+            Self::Encrypt(e) => f.debug_tuple("Encrypt").field(e).finish(),
+            Self::Decrypt(d) => f.debug_tuple("Decrypt").field(d).finish(),
         }
     }
 }
@@ -202,6 +242,28 @@ impl fmt::Debug for MessageAction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MessageAction")
             .field("action", &self.action)
+            .finish()
+    }
+}
+
+impl fmt::Debug for EncryptAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // L12 CRITICAL #2: redact password (secret material).
+        f.debug_struct("EncryptAction")
+            .field("password", &"<redacted>")
+            .field("in", &self.r#in)
+            .field("out", &self.out)
+            .finish()
+    }
+}
+
+impl fmt::Debug for DecryptAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // L12 CRITICAL #2: redact password (secret material).
+        f.debug_struct("DecryptAction")
+            .field("password", &"<redacted>")
+            .field("in", &self.r#in)
+            .field("out", &self.out)
             .finish()
     }
 }
@@ -425,6 +487,96 @@ mod tests {
             "testnet",
             "--password",
             "hunter2",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("hunter2"),
+            "password leaked in Debug: {debug}"
+        );
+    }
+
+    #[test]
+    fn parse_encrypt_accepts_required_args() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password",
+            "hunter2",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    #[test]
+    fn parse_decrypt_accepts_required_args() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "decrypt",
+            "--password",
+            "hunter2",
+            "--in",
+            "/tmp/cipher.enc",
+            "--out",
+            "/tmp/recovered.txt",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    #[test]
+    fn parse_encrypt_rejects_missing_in() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password",
+            "hunter2",
+            "--out",
+            "/tmp/cipher.enc",
+        ]);
+        assert!(cli.is_err(), "missing --in should fail to parse");
+    }
+
+    /// L12 CRITICAL #2: password MUST NOT appear in Debug output
+    /// for encrypt/decrypt subcommands. Tracing / log capture is the
+    /// most likely leak vector.
+    #[test]
+    fn debug_redacts_password_in_encrypt() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password",
+            "hunter2",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("hunter2"),
+            "password leaked in Debug: {debug}"
+        );
+        assert!(
+            debug.contains("redacted"),
+            "redaction marker missing: {debug}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_password_in_decrypt() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "decrypt",
+            "--password",
+            "hunter2",
+            "--in",
+            "/tmp/cipher.enc",
+            "--out",
+            "/tmp/recovered.txt",
         ])
         .unwrap();
         let debug = format!("{cli:?}");
