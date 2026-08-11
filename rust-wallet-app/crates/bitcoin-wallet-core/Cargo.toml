@@ -36,6 +36,8 @@ sha2 = { workspace = true }
 webpki = { workspace = true }
 x509-parser = { workspace = true }
 tempfile = { workspace = true }
+uuid = { workspace = true }
+directories = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
