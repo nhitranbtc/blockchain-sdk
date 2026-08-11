@@ -13,7 +13,9 @@ use tracing_subscriber::EnvFilter;
 mod cli;
 mod handlers;
 
-use cli::{Cli, Commands, MessageAction, WalletAction, WalletActionKind};
+use cli::{
+    Cli, Commands, DecryptAction, EncryptAction, MessageAction, WalletAction, WalletActionKind,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -67,5 +69,15 @@ async fn main() -> Result<()> {
                 signature,
             } => handlers::handle_message_verify(address, message, signature),
         },
+        Commands::Encrypt(EncryptAction {
+            password,
+            r#in,
+            out,
+        }) => handlers::handle_encrypt(password, r#in, out),
+        Commands::Decrypt(DecryptAction {
+            password,
+            r#in,
+            out,
+        }) => handlers::handle_decrypt(password, r#in, out),
     }
 }

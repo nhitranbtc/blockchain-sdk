@@ -14,8 +14,13 @@ use bitcoin_wallet_core::chain::esplora_url::EsploraUrl;
 use bitcoin_wallet_core::chain::network::coin_type_for;
 use bitcoin_wallet_core::chain::spki::SpkiPin;
 use bitcoin_wallet_core::config::WalletConfig;
+use bitcoin_wallet_core::crypto::aad::Aad;
 use bitcoin_wallet_core::crypto::bip137::{sign_message, verify_message, SignedMessage};
+use bitcoin_wallet_core::crypto::mnemonic_cipher::{
+    decrypt_mnemonic, encrypt_mnemonic, MnemonicCipherBlob,
+};
 use bitcoin_wallet_core::keys::{AddressType, Mnemonic, Secret, Signer, XPrvHolder};
+use bitcoin_wallet_core::util::atomic_write::atomic_write;
 use bitcoin_wallet_core::wallet::{create_wallet, show_wallet, WalletId, SUPPORTED_WORD_COUNTS};
 
 use crate::cli::{NetArg, WordCount};
@@ -412,6 +417,122 @@ fn network_from_address_prefix(s: &str) -> Result<bitcoin::Network> {
     }
 }
 
+// ============================================================================
+// Issue #62 / Task 54b: `btc encrypt|decrypt` handlers (stateless file ops)
+// ============================================================================
+//
+// **Threat-model coverage** (per issue #62 + `crypto::mnemonic_cipher`):
+// - **F5** (Argon2id KDF m=256 MiB / t=10 / p=4) — offline-cracker resistance.
+// - **F6** (AES-256-GCM AEAD, 96-bit random nonce per blob) — confidentiality + integrity.
+// - **F47** (zeroize on drop) — `Secret<Vec<u8>>` (password) + `Secret<String>` (plaintext).
+// - **N2 oracle mitigation**: wrong-password / tampered / truncated / non-UTF8
+//   all surface as a uniform "decrypt failed" message (handler collapses).
+// - **F19 atomic write**: `atomic_write` (write-to-temp + fsync + parent fsync
+//   + rename) for both `--out` paths — no partial ciphertext / plaintext
+//   on disk after a crash, 0o600 permissions, symlink destination rejected.
+//
+// **AAD choice (v0.1):** `Aad::NONE`. The encrypt/decrypt subcommands are
+// generic file ops with no caller-side context to bind. Future v0.1.1
+// may add `--aad <hex>` for caller-bound context (matches the wallet
+// store's `Aad::network(net)` per ADR 0001).
+
+/// Cap for `--in` plaintext size on encrypt (1 MiB). Library has
+/// `MAX_PLAINTEXT_LEN=256` for BIP-39 phrases; CLI accepts any UTF-8
+/// so we cap higher (1 MiB) for general file ops but still reject
+/// multi-GB inputs before allocating (N2 DoS mitigation).
+const ENCRYPT_PLAINTEXT_MAX_BYTES: u64 = 1024 * 1024;
+
+/// Guard: reject `--in == --out` (otherwise encrypt truncates its own input).
+fn reject_same_in_out(in_path: &Path, out_path: &Path) -> Result<()> {
+    if in_path == out_path {
+        anyhow::bail!("--in and --out must differ (refusing to overwrite source)");
+    }
+    Ok(())
+}
+
+/// Pre-check `--in` size before allocating. Library enforces
+/// `MAX_PLAINTEXT_LEN=256` for BIP-39 specifically; the CLI accepts any
+/// UTF-8 so we cap at `ENCRYPT_PLAINTEXT_MAX_BYTES` for encrypt and at
+/// `MAX_LEN` (300) for decrypt (the library cap minus headroom).
+/// Also rejects `--in` symlinks (no following — would encrypt whatever
+/// the symlink points to, possibly surprising the operator).
+fn check_input_size(in_path: &Path, max_bytes: u64) -> Result<()> {
+    let meta =
+        std::fs::symlink_metadata(in_path).with_context(|| format!("stat --in {in_path:?}"))?;
+    if meta.file_type().is_symlink() {
+        anyhow::bail!("--in must not be a symlink (refusing to follow)");
+    }
+    let len = meta.len();
+    if len > max_bytes {
+        anyhow::bail!(
+            "--in size {len} bytes exceeds cap {max_bytes} bytes; \
+             refusing to allocate (rejected before reading)"
+        );
+    }
+    Ok(())
+}
+
+/// Handle `btc encrypt --password <pwd> --in <file> --out <file>`.
+///
+/// Reads plaintext from `--in` (UTF-8), encrypts with `crypto::mnemonic_cipher`
+/// (F5 Argon2id KDF + F6 AES-256-GCM), atomically writes the
+/// `MnemonicCipherBlob` bytes to `--out`. No persistence outside the
+/// operator's chosen paths.
+pub fn handle_encrypt(password: Option<String>, in_path: PathBuf, out_path: PathBuf) -> Result<()> {
+    reject_same_in_out(&in_path, &out_path)?;
+    check_input_size(&in_path, ENCRYPT_PLAINTEXT_MAX_BYTES)?;
+    let plaintext_bytes =
+        std::fs::read(&in_path).with_context(|| format!("reading --in {in_path:?}"))?;
+    // UTF-8 boundary: MnemonicCipher requires `Secret<String>`. Non-UTF8
+    // is rejected here with a clear error (not silently corrupted).
+    let plaintext = String::from_utf8(plaintext_bytes)
+        .context("--in file is not valid UTF-8; convert to UTF-8 before encrypting")?;
+    if plaintext.is_empty() {
+        anyhow::bail!("--in file is empty; refusing to encrypt an empty plaintext");
+    }
+    // F47: wrap plaintext in zeroizing Secret<String>.
+    let phrase = Secret::new(plaintext);
+    let pwd = secret_password(password_or_prompt(password)?);
+    let blob = encrypt_mnemonic(&phrase, pwd.expose().as_slice(), Aad::NONE)
+        .context("encrypt_mnemonic failed")?;
+    // Zeroize plaintext Secret BEFORE atomic_write (which copies the
+    // ciphertext bytes into the temp file). After atomic_write returns
+    // the only on-disk artifact is the ciphertext.
+    drop(phrase);
+    atomic_write(&out_path, blob.as_bytes())
+        .with_context(|| format!("writing --out {out_path:?}"))?;
+    Ok(())
+}
+
+/// Handle `btc decrypt --password <pwd> --in <file> --out <file>`.
+///
+/// Reads `MnemonicCipherBlob` bytes from `--in`, decrypts, atomically
+/// writes the recovered UTF-8 plaintext to `--out`. Errors on wrong
+/// password / tampered blob / truncated blob / non-UTF8 plaintext — all
+/// surface as a **uniform** "decrypt failed" message (N2 oracle
+/// mitigation: caller can't probe which failure mode occurred).
+pub fn handle_decrypt(password: Option<String>, in_path: PathBuf, out_path: PathBuf) -> Result<()> {
+    reject_same_in_out(&in_path, &out_path)?;
+    // Library cap: MAX_LEN = 300 (44 overhead + 256 plaintext).
+    check_input_size(&in_path, MnemonicCipherBlob::MAX_LEN as u64)?;
+    let blob_bytes =
+        std::fs::read(&in_path).with_context(|| format!("reading --in {in_path:?}"))?;
+    // N2 oracle mitigation: collapse both truncated-blob AND decrypt-fail
+    // errors to a single uniform message. Caller cannot probe which
+    // failure mode occurred.
+    let blob = MnemonicCipherBlob::try_from(blob_bytes.as_slice())
+        .map_err(|_| anyhow::anyhow!("decrypt failed"))?;
+    let pwd = secret_password(password_or_prompt(password)?);
+    let phrase_secret = decrypt_mnemonic(&blob, pwd.expose().as_slice(), Aad::NONE)
+        .map_err(|_| anyhow::anyhow!("decrypt failed"))?;
+    // F47 fix: borrow directly from the zeroizing Secret (no .clone()
+    // into a non-zeroizing String). The Secret stays alive until end of
+    // scope and zeroizes on drop.
+    let plaintext_bytes = phrase_secret.expose().as_bytes();
+    atomic_write(&out_path, plaintext_bytes).map_err(|e| anyhow::anyhow!("decrypt failed: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod message_tests {
     use super::*;
@@ -550,4 +671,268 @@ mod message_tests {
             "error should mention network mismatch: {msg}"
         );
     }
+}
+
+// ============================================================================
+// Issue #62 / Task 54b: `btc encrypt|decrypt` handlers (stateless file ops)
+// ============================================================================
+
+/// Roundtrip: encrypt then decrypt recovers the exact plaintext bytes.
+/// Pure end-to-end test of the handler pair against the library's
+/// MnemonicCipher (F5 Argon2id KDF + F6 AES-256-GCM AEAD).
+#[test]
+fn encrypt_decrypt_roundtrip_recovers_phrase() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("plaintext.txt");
+    let blob_path = tmp.path().join("cipher.enc");
+    let recovered_path = tmp.path().join("recovered.txt");
+    std::fs::write(
+        &plaintext_path,
+        "abandon abandon abandon abandon abandon abandon about",
+    )
+    .expect("write plaintext");
+
+    handle_encrypt(
+        Some("test-password".to_string()),
+        plaintext_path.clone(),
+        blob_path.clone(),
+    )
+    .expect("encrypt");
+    handle_decrypt(
+        Some("test-password".to_string()),
+        blob_path,
+        recovered_path.clone(),
+    )
+    .expect("decrypt");
+
+    let recovered = std::fs::read_to_string(&recovered_path).expect("read recovered");
+    assert_eq!(
+        recovered,
+        "abandon abandon abandon abandon abandon abandon about"
+    );
+}
+
+/// Wrong password → decrypt must fail with MnemonicCipher error (N2
+/// oracle mitigation: error message doesn't reveal "wrong password"
+/// vs "tampered" — caller can't probe which).
+#[test]
+fn decrypt_with_wrong_password_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("plaintext.txt");
+    let blob_path = tmp.path().join("cipher.enc");
+    let recovered_path = tmp.path().join("recovered.txt");
+    std::fs::write(&plaintext_path, "secret mnemonic phrase here").expect("write");
+
+    handle_encrypt(
+        Some("correct-password".to_string()),
+        plaintext_path,
+        blob_path.clone(),
+    )
+    .expect("encrypt");
+    let err = handle_decrypt(
+        Some("wrong-password".to_string()),
+        blob_path,
+        recovered_path,
+    )
+    .expect_err("decrypt must reject wrong password");
+    let msg = format!("{err:?}");
+    // N2 oracle mitigation: caller cannot probe WHICH failure mode
+    // (wrong-password vs tampered vs truncated) — all collapsed to a
+    // single "decrypt failed" message.
+    assert!(
+        msg.contains("decrypt failed"),
+        "error should be uniform 'decrypt failed', got: {msg}"
+    );
+}
+
+/// Tampered blob → decrypt fails (AES-GCM tag mismatch surfaces as
+/// MnemonicCipher). Verifies integrity protection actually works.
+#[test]
+fn decrypt_tampered_blob_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("plaintext.txt");
+    let blob_path = tmp.path().join("cipher.enc");
+    let recovered_path = tmp.path().join("recovered.txt");
+    std::fs::write(&plaintext_path, "hello world").expect("write");
+
+    handle_encrypt(
+        Some("test-password".to_string()),
+        plaintext_path,
+        blob_path.clone(),
+    )
+    .expect("encrypt");
+    // Flip last byte (the GCM tag) — must cause AES-GCM verification to fail.
+    let mut bytes = std::fs::read(&blob_path).expect("read blob");
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+    std::fs::write(&blob_path, bytes).expect("rewrite tampered blob");
+
+    let err = handle_decrypt(Some("test-password".to_string()), blob_path, recovered_path)
+        .expect_err("decrypt must reject tampered blob");
+    let msg = format!("{err:?}");
+    // N2 oracle mitigation: same uniform message as wrong-password.
+    assert!(
+        msg.contains("decrypt failed"),
+        "error should be uniform 'decrypt failed', got: {msg}"
+    );
+}
+
+/// Tampered blob (first byte / salt region) → decrypt fails with same
+/// uniform message. Defense-in-depth — confirms tamper-detection works
+/// at the KDF boundary, not just the AEAD tag.
+#[test]
+fn decrypt_tampered_first_byte_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("plaintext.txt");
+    let blob_path = tmp.path().join("cipher.enc");
+    let recovered_path = tmp.path().join("recovered.txt");
+    std::fs::write(&plaintext_path, "hello world").expect("write");
+
+    handle_encrypt(
+        Some("test-password".to_string()),
+        plaintext_path,
+        blob_path.clone(),
+    )
+    .expect("encrypt");
+    let mut bytes = std::fs::read(&blob_path).expect("read blob");
+    bytes[0] ^= 0x01; // flip first byte (in salt region)
+    std::fs::write(&blob_path, bytes).expect("rewrite tampered blob");
+
+    let err = handle_decrypt(Some("test-password".to_string()), blob_path, recovered_path)
+        .expect_err("decrypt must reject salt-tampered blob");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("decrypt failed"),
+        "error should be uniform 'decrypt failed', got: {msg}"
+    );
+}
+
+/// Truncated blob → uniform "decrypt failed" (N2 oracle collapse).
+#[test]
+fn decrypt_truncated_blob_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let blob_path = tmp.path().join("truncated.enc");
+    let recovered_path = tmp.path().join("recovered.txt");
+    // MIN_LEN = 44 (SALT 16 + NONCE 12 + TAG 16). Write 10 bytes — well below.
+    std::fs::write(&blob_path, vec![0u8; 10]).expect("write truncated");
+
+    let err = handle_decrypt(Some("any-password".to_string()), blob_path, recovered_path)
+        .expect_err("decrypt must reject truncated blob");
+    let msg = format!("{err:?}");
+    // N2 oracle: same uniform message as wrong-password + tampered.
+    assert!(
+        msg.contains("decrypt failed"),
+        "error should be uniform 'decrypt failed', got: {msg}"
+    );
+}
+
+/// Non-UTF8 plaintext in encrypt → anyhow UTF-8 error before encryption.
+/// (MnemonicCipher rejects empty phrase; non-UTF8 doesn't have a direct
+/// path because we read as String. This test pins the UTF-8 boundary.)
+#[test]
+fn encrypt_rejects_non_utf8_plaintext() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("binary.bin");
+    let blob_path = tmp.path().join("cipher.enc");
+    // Invalid UTF-8 byte sequence (0xFF is never valid UTF-8 start byte).
+    std::fs::write(&plaintext_path, [0xFF, 0xFE, 0xFD, 0xFC]).expect("write");
+
+    let err = handle_encrypt(
+        Some("test-password".to_string()),
+        plaintext_path,
+        blob_path.clone(),
+    )
+    .expect_err("encrypt must reject non-UTF8 plaintext");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("UTF-8") || msg.contains("utf-8") || msg.contains("utf8"),
+        "error should mention UTF-8 rejection, got: {msg}"
+    );
+    // Side-effect isolation: encrypt must NOT have written a partial blob.
+    // (atomic_write only fires on the success path; UTF-8 rejection happens
+    // before any encryption or write — the output path must not exist.)
+    // Note: blob_path's parent dir exists; we just verify blob_path is absent.
+    assert!(
+        !blob_path.exists(),
+        "encrypt must not create --out on UTF-8 rejection"
+    );
+}
+
+/// Empty plaintext → encrypt refuses (defense-in-depth — library also
+/// rejects empty phrases at `encrypt_mnemonic`).
+#[test]
+fn encrypt_rejects_empty_input() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("empty.txt");
+    let blob_path = tmp.path().join("cipher.enc");
+    std::fs::write(&plaintext_path, "").expect("write empty");
+
+    let err = handle_encrypt(Some("test-password".to_string()), plaintext_path, blob_path)
+        .expect_err("encrypt must reject empty plaintext");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("empty"),
+        "error should mention empty rejection, got: {msg}"
+    );
+}
+
+/// `--in == --out` → refused (would overwrite source mid-encrypt, leaving
+/// truncated plaintext tail in the original file's inode blocks).
+#[test]
+fn encrypt_refuses_same_in_out() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("overlap.txt");
+    std::fs::write(&path, "secret phrase").expect("write");
+    let err = handle_encrypt(Some("test-password".to_string()), path.clone(), path)
+        .expect_err("encrypt must refuse --in == --out");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("must differ") || msg.contains("refusing to overwrite"),
+        "error should explain same-in/out refusal, got: {msg}"
+    );
+}
+
+/// `--in == --out` for decrypt → same refusal (avoids truncating
+/// the input blob mid-decrypt).
+#[test]
+fn decrypt_refuses_same_in_out() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("plaintext.txt");
+    let blob_path = tmp.path().join("cipher.enc");
+    std::fs::write(&plaintext_path, "secret phrase").expect("write");
+    handle_encrypt(
+        Some("test-password".to_string()),
+        plaintext_path,
+        blob_path.clone(),
+    )
+    .expect("encrypt");
+
+    let err = handle_decrypt(
+        Some("test-password".to_string()),
+        blob_path.clone(),
+        blob_path,
+    )
+    .expect_err("decrypt must refuse --in == --out");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("must differ"),
+        "error should explain same-in/out refusal, got: {msg}"
+    );
+}
+
+/// Missing input file → io::Error surfaces as anyhow error.
+/// (Don't panic on missing file; clean error.)
+#[test]
+fn encrypt_missing_input_file_fails() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let plaintext_path = tmp.path().join("does-not-exist.txt");
+    let blob_path = tmp.path().join("cipher.enc");
+
+    let err = handle_encrypt(Some("test-password".to_string()), plaintext_path, blob_path)
+        .expect_err("missing input must error");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("No such file") || msg.contains("not found") || msg.contains("os error"),
+        "error should be io-flavored, got: {msg}"
+    );
 }
