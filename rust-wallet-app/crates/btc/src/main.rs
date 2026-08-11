@@ -55,6 +55,18 @@ async fn main() -> Result<()> {
                 )
                 .await
             }
+            WalletActionKind::Sync {
+                mnemonic,
+                network,
+                esplora_url,
+                pin_spki,
+            } => handlers::handle_wallet_sync(mnemonic, network, esplora_url, pin_spki).await,
+            WalletActionKind::Balance {
+                mnemonic,
+                network,
+                esplora_url,
+                pin_spki,
+            } => handlers::handle_wallet_balance(mnemonic, network, esplora_url, pin_spki).await,
         },
         Commands::Message(MessageAction { action }) => match action {
             cli::MessageActionKind::Sign {

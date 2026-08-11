@@ -153,6 +153,46 @@ pub enum WalletActionKind {
         #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
         esplora_spki_pin: Option<String>,
     },
+    /// Statelessly sync a BIP-39 mnemonic against an Esplora server
+    /// (Issue #63 / Task 54c). Prints UTXO count + total sats. No
+    /// wallet persistence — mnemonic lives in process memory only.
+    Sync {
+        /// BIP-39 mnemonic phrase (12/15/18/21/24 words). **SECURITY**:
+        /// visible in shell history if passed as `--mnemonic "..."` —
+        /// prefer piping via `read -s` or env (`BTC_WALLET_MNEMONIC`).
+        #[arg(long, env = "BTC_WALLET_MNEMONIC")]
+        mnemonic: String,
+        /// Bitcoin network.
+        #[arg(long, value_enum)]
+        network: NetArg,
+        /// Esplora base URL (HTTPS-only per F36).
+        #[arg(long)]
+        esplora_url: String,
+        /// Esplora SPKI pin (64-char hex, SHA-256 of leaf cert).
+        /// Required for non-regtest networks (F20 enforcement). Regtest
+        /// localhost behind stunnel may pass `--pin-spki` to lock the
+        /// TLS path; or omit for `--network regtest` only.
+        #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
+        pin_spki: Option<String>,
+    },
+    /// Statelessly fetch the confirmed balance for a BIP-39 mnemonic
+    /// (Issue #63 / Task 54c). Prints sats to STDOUT. No wallet
+    /// persistence — mnemonic lives in process memory only.
+    Balance {
+        /// BIP-39 mnemonic phrase (12/15/18/21/24 words). **SECURITY**:
+        /// see `Sync::mnemonic` for shell-history caveats.
+        #[arg(long, env = "BTC_WALLET_MNEMONIC")]
+        mnemonic: String,
+        /// Bitcoin network.
+        #[arg(long, value_enum)]
+        network: NetArg,
+        /// Esplora base URL (HTTPS-only per F36).
+        #[arg(long)]
+        esplora_url: String,
+        /// Esplora SPKI pin. See `Sync::pin_spki` for F20 enforcement.
+        #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
+        pin_spki: Option<String>,
+    },
 }
 
 /// BIP-39 mnemonic word counts supported by the library
@@ -342,6 +382,32 @@ impl fmt::Debug for WalletActionKind {
                 .field("esplora_url", esplora_url)
                 .field("esplora_spki_pin", esplora_spki_pin)
                 .finish(),
+            // L12 CRITICAL #2 (Issue #63): mnemonic is secret material.
+            // Redact both `mnemonic` fields; show everything else.
+            Self::Sync {
+                mnemonic: _,
+                network,
+                esplora_url,
+                pin_spki,
+            } => f
+                .debug_struct("Sync")
+                .field("mnemonic", &"<redacted>")
+                .field("network", network)
+                .field("esplora_url", esplora_url)
+                .field("pin_spki", pin_spki)
+                .finish(),
+            Self::Balance {
+                mnemonic: _,
+                network,
+                esplora_url,
+                pin_spki,
+            } => f
+                .debug_struct("Balance")
+                .field("mnemonic", &"<redacted>")
+                .field("network", network)
+                .field("esplora_url", esplora_url)
+                .field("pin_spki", pin_spki)
+                .finish(),
         }
     }
 }
@@ -418,6 +484,168 @@ mod tests {
             &pin_hex,
         ]);
         assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    #[test]
+    fn parse_sync_accepts_required_args() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "sync",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    #[test]
+    fn parse_balance_accepts_required_args() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "balance",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    #[test]
+    fn parse_sync_rejects_missing_mnemonic() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "sync",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_err(), "missing --mnemonic should fail to parse");
+    }
+
+    #[test]
+    fn parse_balance_rejects_missing_mnemonic() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "balance",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_err(), "missing --mnemonic should fail to parse");
+    }
+
+    /// Issue #63 SPKI enforcement at parse layer: the `--pin-spki`
+    /// alias (`--esplora-spki-pin`) must be available on the new
+    /// subcommands. Surface-level parse test — runtime enforcement
+    /// (non-regtest + no pin = fail) is a handler-layer test.
+    #[test]
+    fn parse_sync_accepts_pin_spki_flag() {
+        let pin_hex = "0".repeat(64);
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "sync",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+            "--pin-spki",
+            &pin_hex,
+        ]);
+        assert!(
+            cli.is_ok(),
+            "expected parse ok with --pin-spki, got: {cli:?}"
+        );
+    }
+
+    #[test]
+    fn parse_balance_accepts_pin_spki_flag() {
+        let pin_hex = "0".repeat(64);
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "balance",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+            "--pin-spki",
+            &pin_hex,
+        ]);
+        assert!(
+            cli.is_ok(),
+            "expected parse ok with --pin-spki, got: {cli:?}"
+        );
+    }
+
+    /// Issue #62 L12 CRITICAL #2: mnemonic MUST NOT appear in Debug
+    /// output for sync/balance subcommands (same redaction policy as
+    /// `message sign`). Tracing / log capture is the most likely leak
+    /// vector.
+    #[test]
+    fn debug_redacts_mnemonic_in_sync() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "sync",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("abandon"),
+            "mnemonic leaked in Debug: {debug}"
+        );
+        assert!(
+            debug.contains("redacted"),
+            "redaction marker missing: {debug}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_mnemonic_in_balance() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "balance",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("abandon"),
+            "mnemonic leaked in Debug: {debug}"
+        );
+        assert!(
+            debug.contains("redacted"),
+            "redaction marker missing: {debug}"
+        );
     }
 
     #[test]

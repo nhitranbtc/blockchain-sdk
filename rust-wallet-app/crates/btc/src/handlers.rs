@@ -21,7 +21,9 @@ use bitcoin_wallet_core::crypto::mnemonic_cipher::{
 };
 use bitcoin_wallet_core::keys::{AddressType, Mnemonic, Secret, Signer, XPrvHolder};
 use bitcoin_wallet_core::util::atomic_write::atomic_write;
-use bitcoin_wallet_core::wallet::{create_wallet, show_wallet, WalletId, SUPPORTED_WORD_COUNTS};
+use bitcoin_wallet_core::wallet::{
+    create_wallet, show_wallet, KeychainKind, Wallet, WalletId, SUPPORTED_WORD_COUNTS,
+};
 
 use crate::cli::{NetArg, WordCount};
 
@@ -435,6 +437,145 @@ fn network_from_address_prefix(s: &str) -> Result<bitcoin::Network> {
 // generic file ops with no caller-side context to bind. Future v0.1.1
 // may add `--aad <hex>` for caller-bound context (matches the wallet
 // store's `Aad::network(net)` per ADR 0001).
+
+// ============================================================================
+// Issue #63 / Task 54c: `btc wallet sync|balance` handlers (stateless chain ops)
+// ============================================================================
+//
+// **Threat-model coverage** (per issue #63 body):
+// - **F12** (chain sync via Esplora `/address/{addr}/utxo`)
+// - **F13** (confirmed-only UTXO aggregation, MAX_MONEY cap)
+// - **F20** (Esplora SPKI pinning — required for non-regtest)
+// - **F36** (https-only URL — `EsploraUrl::new` rejects http:// per #36)
+//
+// **Stateless design**: these handlers do not touch the wallet store.
+// The mnemonic is parsed → wrapped in `Mnemonic` → passed to
+// `Wallet::from_mnemonic` → `wallet.sync` / `wallet.balance`. No
+// `WalletId`, no `MnemonicCipherBlob`, no `data_dir`. F14 (UTXO
+// persistence) explicitly out of scope; each invocation re-syncs.
+
+/// Scan window for `Wallet::sync` UTXO discovery (matches the
+/// library's `wallet::SCAN_GAP_LIMIT`). Duplicated here because the
+/// library constant is module-private. Both values must move
+/// together if the scan window ever changes.
+const SYNC_SCAN_GAP_LIMIT: u32 = 5;
+
+/// Build an `EsploraClient` for stateless sync/balance handlers.
+///
+/// **F20 enforcement**: non-regtest networks REQUIRE a SPKI pin (or
+/// the call fails with an anyhow error before any network IO).
+/// Regtest may omit the pin (operator's localhost may use SystemRoots
+/// during development). Mirrors `handle_show`'s construction (Issue #74).
+fn build_esplora_client_for(
+    network_obj: bitcoin::Network,
+    esplora_url: &str,
+    pin_spki: Option<&str>,
+    data_dir: &Path,
+) -> Result<EsploraClient> {
+    let esplora_url_typed = EsploraUrl::new(esplora_url)
+        .with_context(|| format!("invalid esplora url {esplora_url:?}"))?;
+    match pin_spki {
+        Some(pin_hex) => {
+            let pin = parse_spki_pin_hex(pin_hex)
+                .with_context(|| format!("parsing --pin-spki ({pin_hex:?})"))?;
+            let cfg = WalletConfig::testnet(esplora_url, data_dir.join("placeholder.sqlite"))
+                .with_esplora_spki_pin(pin);
+            // `cfg` is constructed via the testnet convenience ctor
+            // because it carries the SPKI-pin setter; mutate the
+            // `#[non_exhaustive]` `network` field to the actual
+            // requested network (same pattern as `handle_show`).
+            let mut cfg = cfg;
+            cfg.network = network_obj;
+            EsploraClient::from_config(&cfg).context("build pinned Esplora client")
+        }
+        None => {
+            // F20: non-regtest without a pin is unsafe (TLS chain is
+            // only as trusted as the system CA store, which the
+            // operator cannot pin for public Esplora servers). Refuse.
+            if network_obj != bitcoin::Network::Regtest {
+                anyhow::bail!(
+                    "--pin-spki is required for non-regtest networks (F20 enforcement); \
+                     pass --pin-spki <64-char hex SHA-256 of leaf SubjectPublicKeyInfo> \
+                     or use --network regtest for localhost development"
+                );
+            }
+            EsploraClient::new(esplora_url_typed, TlsPolicy::SystemRoots)
+                .context("build Esplora client (SystemRoots)")
+        }
+    }
+}
+
+/// Handle `btc wallet sync --mnemonic <words> --network <NET> --esplora-url <URL> [--pin-spki <hex64>]`.
+///
+/// Prints `n_utxos=<N> total_sat=<S>` to STDOUT (scriptable). The
+/// mnemonic lives only in process memory; nothing is persisted.
+pub async fn handle_wallet_sync(
+    mnemonic_phrase: String,
+    network: NetArg,
+    esplora_url: String,
+    pin_spki: Option<String>,
+) -> Result<()> {
+    let network_obj = network.as_network();
+    // Stateless: use a throwaway placeholder base so WalletConfig
+    // builds cleanly (EsploraClient::from_config requires a
+    // `db_path` even when no DB is written).
+    let tmp_base = std::env::temp_dir();
+    let client =
+        build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
+    let mnemonic =
+        Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
+    let wallet =
+        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+    wallet.sync(&client).await.context("Wallet::sync failed")?;
+    let balance = wallet
+        .balance(&client)
+        .await
+        .context("Wallet::balance failed")?;
+    // UTXO count: count all confirmed UTXOs across the first
+    // SCAN_GAP_LIMIT external addresses by querying Esplora directly
+    // (avoids reaching into bdk's internal UTXO set, which is
+    // private).
+    let addresses = wallet
+        .peek_addresses(KeychainKind::External, SYNC_SCAN_GAP_LIMIT)
+        .context("peek_addresses failed after sync")?;
+    let mut n_utxos = 0u64;
+    for addr in &addresses {
+        let utxos = client
+            .address_utxos(addr)
+            .await
+            .with_context(|| format!("address_utxos {addr}"))?;
+        n_utxos += utxos.len() as u64;
+    }
+    println!("n_utxos={n_utxos} total_sat={balance}");
+    Ok(())
+}
+
+/// Handle `btc wallet balance --mnemonic <words> --network <NET> --esplora-url <URL> [--pin-spki <hex64>]`.
+///
+/// Prints the confirmed balance in sats to STDOUT (single integer,
+/// scriptable). The mnemonic lives only in process memory; nothing
+/// is persisted.
+pub async fn handle_wallet_balance(
+    mnemonic_phrase: String,
+    network: NetArg,
+    esplora_url: String,
+    pin_spki: Option<String>,
+) -> Result<()> {
+    let network_obj = network.as_network();
+    let tmp_base = std::env::temp_dir();
+    let client =
+        build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
+    let mnemonic =
+        Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
+    let wallet =
+        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+    let balance = wallet
+        .balance(&client)
+        .await
+        .context("Wallet::balance failed")?;
+    println!("{balance}");
+    Ok(())
+}
 
 /// Cap for `--in` plaintext size on encrypt (1 MiB). Library has
 /// `MAX_PLAINTEXT_LEN=256` for BIP-39 phrases; CLI accepts any UTF-8
@@ -935,4 +1076,202 @@ fn encrypt_missing_input_file_fails() {
         msg.contains("No such file") || msg.contains("not found") || msg.contains("os error"),
         "error should be io-flavored, got: {msg}"
     );
+}
+
+// ============================================================================
+// Issue #63 / Task 54c: `build_esplora_client_for` unit tests
+// ============================================================================
+//
+// These tests cover the F20 (SPKI pin required for non-regtest) +
+// F36 (https-only URL) enforcement at the client-construction
+// layer. They are pure (no network IO) — we only assert that the
+// helper refuses bad inputs BEFORE constructing the client or
+// hitting the network. Live testnet coverage lives in
+// `tests/cli.rs` (operator-driven, `#[ignore]` per L29).
+
+#[cfg(test)]
+mod sync_balance_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn empty_data_dir() -> PathBuf {
+        std::env::temp_dir()
+    }
+
+    /// F36: http:// (not https://) must be rejected at URL parse.
+    /// `EsploraUrl::new` (consolidated by #36) is the canonical gate.
+    #[test]
+    fn build_esplora_client_for_rejects_http_url() {
+        let pin_hex = "0".repeat(64);
+        let err = build_esplora_client_for(
+            bitcoin::Network::Bitcoin,
+            "http://blockstream.info/api",
+            Some(&pin_hex),
+            &empty_data_dir(),
+        )
+        .expect_err("http:// must be rejected at URL parse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("https") || msg.contains("invalid"),
+            "error should mention https/invalid: {msg}"
+        );
+    }
+
+    /// F20: non-regtest network WITHOUT a SPKI pin must be rejected
+    /// BEFORE any network IO (refuse with a clear error). The
+    /// `EsploraUrl` parse succeeds (https://), but the missing pin
+    /// trips our explicit F20 check.
+    #[test]
+    fn build_esplora_client_for_requires_spki_for_mainnet() {
+        let err = build_esplora_client_for(
+            bitcoin::Network::Bitcoin,
+            "https://blockstream.info/api",
+            None,
+            &empty_data_dir(),
+        )
+        .expect_err("mainnet without --pin-spki must be refused (F20)");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("--pin-spki") && msg.contains("required"),
+            "error should explain --pin-spki is required: {msg}"
+        );
+    }
+
+    #[test]
+    fn build_esplora_client_for_requires_spki_for_testnet() {
+        let err = build_esplora_client_for(
+            bitcoin::Network::Testnet,
+            "https://blockstream.info/testnet/api",
+            None,
+            &empty_data_dir(),
+        )
+        .expect_err("testnet without --pin-spki must be refused (F20)");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("required"),
+            "error should mention required: {msg}"
+        );
+    }
+
+    #[test]
+    fn build_esplora_client_for_requires_spki_for_signet() {
+        let err = build_esplora_client_for(
+            bitcoin::Network::Signet,
+            "https://blockstream.info/signet/api",
+            None,
+            &empty_data_dir(),
+        )
+        .expect_err("signet without --pin-spki must be refused (F20)");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("required"), "error mentions required: {msg}");
+    }
+
+    /// F20 regtest exemption: localhost regtest often uses a
+    /// self-signed cert + SystemRoots, which is acceptable behind
+    /// stunnel. Operator may omit `--pin-spki`.
+    #[test]
+    fn build_esplora_client_for_accepts_regtest_without_spki() {
+        // This test will fail in environments where localhost Esplora
+        // is not configured. We only assert that the construction
+        // path is reachable (no F20 refusal); the actual TLS handshake
+        // is not exercised here.
+        let result = build_esplora_client_for(
+            bitcoin::Network::Regtest,
+            "https://localhost:50002",
+            None,
+            &empty_data_dir(),
+        );
+        assert!(
+            result.is_ok(),
+            "regtest without --pin-spki must be allowed (F20 exemption): {result:?}"
+        );
+    }
+
+    /// Regtest MAY also pass `--pin-spki` (operator choice). We
+    /// only assert the F20 gating is NOT triggered for regtest —
+    /// the actual `reqwest` client build depends on runtime TLS
+    /// state (CA bundle, platform native-certs) and is exercised
+    /// by live testnet smoke per L29, not unit tests.
+    #[test]
+    fn build_esplora_client_for_regtest_with_spki_skips_f20_refusal() {
+        let pin_hex = "0".repeat(64);
+        let err = build_esplora_client_for(
+            bitcoin::Network::Regtest,
+            "https://localhost:50002",
+            Some(&pin_hex),
+            &empty_data_dir(),
+        )
+        .err();
+        if let Some(e) = err {
+            // Must NOT be the F20 "required" refusal — anything else
+            // (TLS builder, CA bundle missing) is acceptable for unit.
+            let msg = format!("{e:?}");
+            assert!(
+                !msg.contains("--pin-spki") || !msg.contains("required"),
+                "regtest with pin must not trip F20 refusal: {msg}"
+            );
+        }
+    }
+
+    /// Mainnet WITH pin → F20 gate is satisfied; downstream
+    /// construction errors (reqwest TLS builder) are runtime-state
+    /// issues, not F20 violations. Assert the F20 gate is passed.
+    #[test]
+    fn build_esplora_client_for_mainnet_with_spki_skips_f20_refusal() {
+        let pin_hex = "0".repeat(64);
+        let err = build_esplora_client_for(
+            bitcoin::Network::Bitcoin,
+            "https://blockstream.info/api",
+            Some(&pin_hex),
+            &empty_data_dir(),
+        )
+        .err();
+        if let Some(e) = err {
+            let msg = format!("{e:?}");
+            assert!(
+                !msg.contains("--pin-spki") || !msg.contains("required"),
+                "mainnet with pin must not trip F20 refusal: {msg}"
+            );
+        }
+    }
+
+    /// Invalid SPKI pin (wrong length) → must fail at parse, not
+    /// silently fall through to construction.
+    #[test]
+    fn build_esplora_client_for_rejects_malformed_pin() {
+        let err = build_esplora_client_for(
+            bitcoin::Network::Bitcoin,
+            "https://blockstream.info/api",
+            Some("too-short"),
+            &empty_data_dir(),
+        )
+        .expect_err("malformed pin must be rejected");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("64 hex chars"),
+            "error should explain 64-char requirement: {msg}"
+        );
+    }
+
+    /// `handle_wallet_balance` and `handle_wallet_sync` both funnel
+    /// through `build_esplora_client_for`. End-to-end F20 check via
+    /// the public handler: mainnet + no pin + valid mnemonic must
+    /// fail before any wallet construction.
+    #[tokio::test]
+    async fn handle_wallet_balance_refuses_mainnet_without_pin() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string();
+        let err = handle_wallet_balance(
+            mnemonic,
+            crate::cli::NetArg::Bitcoin,
+            "https://blockstream.info/api".to_string(),
+            None,
+        )
+        .await
+        .expect_err("mainnet + no pin must refuse");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("--pin-spki") || msg.contains("required"),
+            "handler-level F20 refusal expected: {msg}"
+        );
+    }
 }
