@@ -532,19 +532,22 @@ pub async fn handle_wallet_sync(
         .await
         .context("Wallet::balance failed")?;
     // UTXO count: count all confirmed UTXOs across the first
-    // SCAN_GAP_LIMIT external addresses by querying Esplora directly
-    // (avoids reaching into bdk's internal UTXO set, which is
-    // private).
-    let addresses = wallet
-        .peek_addresses(KeychainKind::External, SYNC_SCAN_GAP_LIMIT)
-        .context("peek_addresses failed after sync")?;
+    // SYNC_SCAN_GAP_LIMIT addresses on BOTH external (receive) and
+    // internal (change) keychains — mirrors `scan_into` in the lib
+    // at `wallet/mod.rs`. Querying Esplora directly avoids reaching
+    // into bdk's private UTXO set.
     let mut n_utxos = 0u64;
-    for addr in &addresses {
-        let utxos = client
-            .address_utxos(addr)
-            .await
-            .with_context(|| format!("address_utxos {addr}"))?;
-        n_utxos += utxos.len() as u64;
+    for kind in [KeychainKind::External, KeychainKind::Internal] {
+        let addresses = wallet
+            .peek_addresses(kind, SYNC_SCAN_GAP_LIMIT)
+            .with_context(|| format!("peek_addresses failed for {kind:?} after sync"))?;
+        for addr in &addresses {
+            let utxos = client
+                .address_utxos(addr)
+                .await
+                .with_context(|| format!("address_utxos {addr}"))?;
+            n_utxos += utxos.len() as u64;
+        }
     }
     println!("n_utxos={n_utxos} total_sat={balance}");
     Ok(())
@@ -1166,6 +1169,27 @@ mod sync_balance_tests {
         assert!(msg.contains("required"), "error mentions required: {msg}");
     }
 
+    /// L12 review MINOR #3: testnet4 is the fourth non-regtest
+    /// network. The production code's `network_obj != Regtest`
+    /// comparison covers it via the same branch as the other three
+    /// (Bitcoin / Testnet / Signet), but pin the behavior here so a
+    /// future refactor to a `match` doesn't accidentally exempt it.
+    #[test]
+    fn build_esplora_client_for_requires_spki_for_testnet4() {
+        let err = build_esplora_client_for(
+            bitcoin::Network::Testnet4,
+            "https://mempool.space/testnet4/api",
+            None,
+            &empty_data_dir(),
+        )
+        .expect_err("testnet4 without --pin-spki must be refused (F20)");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("required"),
+            "testnet4 must also trigger F20 refusal: {msg}"
+        );
+    }
+
     /// F20 regtest exemption: localhost regtest often uses a
     /// self-signed cert + SystemRoots, which is acceptable behind
     /// stunnel. Operator may omit `--pin-spki`.
@@ -1272,6 +1296,28 @@ mod sync_balance_tests {
         assert!(
             msg.contains("--pin-spki") || msg.contains("required"),
             "handler-level F20 refusal expected: {msg}"
+        );
+    }
+
+    /// L12 review MINOR #3: empty mnemonic must be rejected at
+    /// `Mnemonic::from_phrase` (BIP-39 word-count assertion), not
+    /// silently fall through to wallet construction. Regtest path
+    /// (no F20 refusal) so the empty-mnemonic error is the dominant
+    /// failure mode.
+    #[tokio::test]
+    async fn handle_wallet_balance_rejects_empty_mnemonic() {
+        let err = handle_wallet_balance(
+            String::new(),
+            crate::cli::NetArg::Regtest,
+            "https://localhost:50002".to_string(),
+            None,
+        )
+        .await
+        .expect_err("empty mnemonic must fail");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("mnemonic") || msg.contains("BIP-39") || msg.contains("invalid"),
+            "empty mnemonic error should mention mnemonic/BIP-39: {msg}"
         );
     }
 }

@@ -149,6 +149,10 @@ banner() {
 #   - stored in $out_var (for validation / use in next step)
 #   - streamed to the terminal (preserves raw output + formatting)
 #   - stored in $BT_LAST_STDOUT_PATH for advanced callers
+#
+# Security: NO `eval`. Both the stdout-capture and exit-code assignment
+# use bash-native `printf -v` (var=%s) and direct assignment, which are
+# not subject to shell metacharacter injection. Fixes push-sweep MED #3.
 run_btc() {
     local out_var="$1"; shift
     local exit_var="$1"; shift
@@ -158,15 +162,16 @@ run_btc() {
     BT_LAST_STDOUT_PATH="${TMPDIR_DEMO}/btc-stdout.$$"
     local stderr_path="${TMPDIR_DEMO}/btc-stderr.$$"
     if "$@" >"${BT_LAST_STDOUT_PATH}" 2>"${stderr_path}"; then
-        eval "${out_var}=$(<"${BT_LAST_STDOUT_PATH}")"
-        eval "${exit_var}=0"
+        # printf -v VAR '%s' "$(<file)" — bash-native, no eval.
+        printf -v "${out_var}" '%s' "$(<"${BT_LAST_STDOUT_PATH}")"
+        printf -v "${exit_var}" '%s' "0"
         # Stream raw stdout to terminal (preserves formatting that
         # `$()` would strip — important for multi-line outputs like
         # Step 5's pretty JSON).
         cat "${BT_LAST_STDOUT_PATH}"
     else
         local rc=$?
-        eval "${exit_var}=${rc}"
+        printf -v "${exit_var}" '%s' "${rc}"
         cat "${stderr_path}" >&2
     fi
 }
@@ -189,7 +194,7 @@ else
 fi
 
 # --- Step 1: btc wallet create -----------------------------------------------
-banner "STEP 1/5: btc wallet create (12-word testnet)"
+banner "STEP 1/7: btc wallet create (12-word testnet)"
 WALLET_OUT=""
 WALLET_EXIT=0
 run_btc WALLET_OUT WALLET_EXIT \
@@ -211,7 +216,7 @@ else
 fi
 
 # --- Step 2: btc message sign -----------------------------------------------
-banner "STEP 2/5: btc message sign (BIP-137 with test-vector mnemonic)"
+banner "STEP 2/7: btc message sign (BIP-137 with test-vector mnemonic)"
 SIG=""
 SIG_EXIT=0
 run_btc SIG SIG_EXIT \
@@ -236,7 +241,7 @@ else
 fi
 
 # --- Step 3: btc message verify (valid) ------------------------------------
-banner "STEP 3/5: btc message verify (valid signature -> true)"
+banner "STEP 3/7: btc message verify (valid signature -> true)"
 RESULT=""
 RESULT_EXIT=0
 run_btc RESULT RESULT_EXIT \
@@ -259,7 +264,7 @@ else
 fi
 
 # --- Step 4: btc message verify (tampered) ---------------------------------
-banner "STEP 4/5: btc message verify (TAMPERED message -> false)"
+banner "STEP 4/7: btc message verify (TAMPERED message -> false)"
 RESULT=""
 RESULT_EXIT=0
 run_btc RESULT RESULT_EXIT \
@@ -282,7 +287,7 @@ else
 fi
 
 # --- Step 5: btc wallet show ------------------------------------------------
-banner "STEP 5/5: btc wallet show (JSON from live testnet Esplora)"
+banner "STEP 5/7: btc wallet show (JSON from live testnet Esplora)"
 printf '%s\n' "Note: requires network access to https://blockstream.info/testnet/api"
 printf '%s\n\n' "      (L29 operator smoke; may fail on isolated networks; this is OK)"
 
@@ -307,6 +312,117 @@ if [[ ${STEP5_EXIT} -eq 0 ]]; then
 else
     record_step 5 SKIP "btc wallet show (live Esplora sync)"
     print_step_result 5 "sync failed (offline or L29 deferred)"
+fi
+
+# --- Step 6: btc wallet balance (stateless, Issue #63) ----------------------
+# Demonstrates the new `wallet balance` subcommand (Task 54c). No wallet_id
+# required — uses the test-vector mnemonic directly. Expects a single
+# integer in sats on stdout. Network-dependent (same caveat as Step 5).
+#
+# F20: requires --pin-spki for non-regtest networks. Demo uses testnet;
+# the placeholder pin is set via BTC_DEMO_ESPLORA_SPKI_PIN env var
+# (operator must supply a real value for live smoke). Without it, the
+# F20 gate refuses the call with a non-zero exit — treated as SKIP
+# (operator-not-configured), not FAIL.
+banner "STEP 6/7: btc wallet balance (stateless, Issue #63 / Task 54c)"
+printf '%s\n' "Note: requires network access + BTC_DEMO_ESPLORA_SPKI_PIN=<64-hex>"
+printf '%s\n\n' "      (L29 operator smoke; non-regtest refuses without pin per F20)"
+
+BALANCE_OUT=""
+BALANCE_EXIT=0
+if [[ -z "${BTC_DEMO_ESPLORA_SPKI_PIN:-}" ]]; then
+    # No pin supplied — cannot hit testnet without tripping F20. Run against
+    # the F20-violation path (mainnet + no pin) to demonstrate the gate,
+    # which is also a useful UX check.
+    printf '$ %q' "${BT_BIN}" wallet balance \
+        --mnemonic "${MNEMONIC}" \
+        --network bitcoin \
+        --esplora-url https://blockstream.info/api
+    printf '\n'
+    set +e
+    "${BT_BIN}" wallet balance \
+        --mnemonic "${MNEMONIC}" \
+        --network bitcoin \
+        --esplora-url https://blockstream.info/api 2>&1
+    BALANCE_EXIT=$?
+    set -e
+    if [[ ${BALANCE_EXIT} -ne 0 ]]; then
+        # Expected outcome: F20 refusal error.
+        record_step 6 PASS "btc wallet balance (F20 gate demonstrated)"
+        print_step_result 6 "refused without --pin-spki as expected"
+    else
+        record_step 6 FAIL "btc wallet balance"
+        print_step_result 6 "expected F20 refusal, got exit 0"
+    fi
+else
+    # Pin supplied — run real testnet sync.
+    run_btc BALANCE_OUT BALANCE_EXIT \
+        "${BT_BIN}" wallet balance \
+            --mnemonic "${MNEMONIC}" \
+            --network testnet \
+            --esplora-url https://blockstream.info/testnet/api \
+            --pin-spki "${BTC_DEMO_ESPLORA_SPKI_PIN}"
+    if [[ ${BALANCE_EXIT} -ne 0 ]]; then
+        record_step 6 SKIP "btc wallet balance (live testnet)"
+        print_step_result 6 "exit ${BALANCE_EXIT} (offline or pin mismatch)"
+    elif [[ ! "${BALANCE_OUT}" =~ ^[0-9]+$ ]]; then
+        record_step 6 FAIL "btc wallet balance"
+        print_step_result 6 "expected integer sats, got: ${BALANCE_OUT}"
+    else
+        record_step 6 PASS "btc wallet balance (live testnet)"
+        print_step_result 6 "${BALANCE_OUT} sats"
+    fi
+fi
+
+# --- Step 7: btc wallet sync (stateless, Issue #63) ------------------------
+# Demonstrates the new `wallet sync` subcommand. Prints
+# `n_utxos=<N> total_sat=<S>` on stdout. Network + pin requirements
+# identical to Step 6.
+banner "STEP 7/7: btc wallet sync (stateless, Issue #63 / Task 54c)"
+printf '%s\n' "Note: requires network access + BTC_DEMO_ESPLORA_SPKI_PIN=<64-hex>"
+printf '%s\n' "      Output: n_utxos=<N> total_sat=<S>"
+printf '%s\n\n' "      (L29 operator smoke; sync + balance share the F20 gate)"
+
+SYNC_OUT=""
+SYNC_EXIT=0
+if [[ -z "${BTC_DEMO_ESPLORA_SPKI_PIN:-}" ]]; then
+    # Demonstrate the F20 refusal path (mirrors Step 6 fallback).
+    printf '$ %q' "${BT_BIN}" wallet sync \
+        --mnemonic "${MNEMONIC}" \
+        --network bitcoin \
+        --esplora-url https://blockstream.info/api
+    printf '\n'
+    set +e
+    "${BT_BIN}" wallet sync \
+        --mnemonic "${MNEMONIC}" \
+        --network bitcoin \
+        --esplora-url https://blockstream.info/api 2>&1
+    SYNC_EXIT=$?
+    set -e
+    if [[ ${SYNC_EXIT} -ne 0 ]]; then
+        record_step 7 PASS "btc wallet sync (F20 gate demonstrated)"
+        print_step_result 7 "refused without --pin-spki as expected"
+    else
+        record_step 7 FAIL "btc wallet sync"
+        print_step_result 7 "expected F20 refusal, got exit 0"
+    fi
+else
+    run_btc SYNC_OUT SYNC_EXIT \
+        "${BT_BIN}" wallet sync \
+            --mnemonic "${MNEMONIC}" \
+            --network testnet \
+            --esplora-url https://blockstream.info/testnet/api \
+            --pin-spki "${BTC_DEMO_ESPLORA_SPKI_PIN}"
+    if [[ ${SYNC_EXIT} -ne 0 ]]; then
+        record_step 7 SKIP "btc wallet sync (live testnet)"
+        print_step_result 7 "exit ${SYNC_EXIT} (offline or pin mismatch)"
+    elif [[ ! "${SYNC_OUT}" =~ ^n_utxos=[0-9]+\ total_sat=[0-9]+$ ]]; then
+        record_step 7 FAIL "btc wallet sync"
+        print_step_result 7 "expected 'n_utxos=<N> total_sat=<S>', got: ${SYNC_OUT}"
+    else
+        record_step 7 PASS "btc wallet sync (live testnet)"
+        print_step_result 7 "${SYNC_OUT}"
+    fi
 fi
 
 # --- Summary -----------------------------------------------------------------
@@ -372,6 +488,14 @@ Next:
       --esplora-spki-pin <64-hex> \\
       "<message>"
   - Verify:       btc message verify --address <ADDR> "<message>" <SIG>
+  - Stateless balance (Issue #63):
+      btc wallet balance --mnemonic "<12-word phrase>" --network testnet \\
+          --esplora-url https://blockstream.info/testnet/api \\
+          --pin-spki <64-hex>
+  - Stateless sync (Issue #63):
+      btc wallet sync --mnemonic "<12-word phrase>" --network testnet \\
+          --esplora-url https://blockstream.info/testnet/api \\
+          --pin-spki <64-hex>
 EOF
 
 exit ${EXIT_CODE}
