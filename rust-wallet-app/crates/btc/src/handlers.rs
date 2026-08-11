@@ -17,10 +17,34 @@ use bitcoin_wallet_core::wallet::{create_wallet, show_wallet, WalletId, SUPPORTE
 
 use crate::cli::{NetArg, WordCount};
 
-/// Default Esplora URL for `--network testnet` (L29 operator's
-/// reference endpoint). Production callers should override via
-/// `--esplora-url` with an SPKI-pinned URL per F20.
+/// Default Esplora URLs per Bitcoin network (Issue #74).
+///
+/// **Coverage rationale**:
+/// - `bitcoin` / `testnet` / `signet` — public blockstream.info endpoints
+///   (HTTPS by default; F20 SPKI pin optional for testnet, **required**
+///   for mainnet/signet per `EsploraClient::from_config`)
+/// - `testnet4` — public mempool.space endpoint (newer network;
+///   blockstream doesn't run testnet4)
+/// - `regtest` — **no default**. Local-only network; typical setup uses
+///   `http://localhost:50002` which is rejected by `EsploraUrl::new`
+///   (HTTPS-only per F20). Operators must pass `--esplora-url` with
+///   an HTTPS-terminating proxy or expose regtest behind stunnel.
+const DEFAULT_BITCOIN_ESPLORA: &str = "https://blockstream.info/api";
 const DEFAULT_TESTNET_ESPLORA: &str = "https://blockstream.info/testnet/api";
+const DEFAULT_TESTNET4_ESPLORA: &str = "https://mempool.space/testnet4/api";
+const DEFAULT_SIGNET_ESPLORA: &str = "https://blockstream.info/signet/api";
+
+/// Default Esplora URL for a given network, or `None` if no sensible
+/// default exists (currently: regtest).
+pub(crate) fn default_url_for(network: bitcoin::Network) -> Option<&'static str> {
+    match network {
+        bitcoin::Network::Bitcoin => Some(DEFAULT_BITCOIN_ESPLORA),
+        bitcoin::Network::Testnet => Some(DEFAULT_TESTNET_ESPLORA),
+        bitcoin::Network::Testnet4 => Some(DEFAULT_TESTNET4_ESPLORA),
+        bitcoin::Network::Signet => Some(DEFAULT_SIGNET_ESPLORA),
+        bitcoin::Network::Regtest => None,
+    }
+}
 
 /// Resolve the wallet data directory:
 ///   explicit `--data-dir` flag > `$BTC_DATA_DIR` env > `$XDG_DATA_HOME`.
@@ -131,9 +155,18 @@ pub async fn handle_show(
     let pwd = secret_password(pwd_plain);
     let wallet_id = WalletId::from_str(&id).with_context(|| format!("parsing wallet_id {id:?}"))?;
     let network_obj = network.as_network();
-    let url = esplora_url.as_deref().unwrap_or(DEFAULT_TESTNET_ESPLORA);
+    let url = esplora_url
+        .as_deref()
+        .or_else(|| default_url_for(network_obj))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--network regtest has no default Esplora URL; \
+                 pass --esplora-url <https://...> (regtest localhost behind \
+                 HTTPS-terminating proxy or stunnel is recommended per F20)"
+            )
+        })?;
     let esplora_url_typed =
-        EsploraUrl::new(url).with_context(|| format!("invalid --esplora-url {url:?}"))?;
+        EsploraUrl::new(url).with_context(|| format!("invalid esplora url {url:?}"))?;
 
     // F20 enforcement: when the operator passes `--esplora-spki-pin`
     // (or `BTC_ESPLORA_SPKI_PIN` env), route through
@@ -171,4 +204,68 @@ pub async fn handle_show(
     let json = serde_json::to_string_pretty(&info).context("serializing wallet info")?;
     println!("{json}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_url_for_bitcoin() {
+        assert_eq!(
+            default_url_for(bitcoin::Network::Bitcoin),
+            Some(DEFAULT_BITCOIN_ESPLORA)
+        );
+    }
+
+    #[test]
+    fn default_url_for_testnet() {
+        assert_eq!(
+            default_url_for(bitcoin::Network::Testnet),
+            Some(DEFAULT_TESTNET_ESPLORA)
+        );
+    }
+
+    #[test]
+    fn default_url_for_testnet4() {
+        assert_eq!(
+            default_url_for(bitcoin::Network::Testnet4),
+            Some(DEFAULT_TESTNET4_ESPLORA)
+        );
+    }
+
+    #[test]
+    fn default_url_for_signet() {
+        assert_eq!(
+            default_url_for(bitcoin::Network::Signet),
+            Some(DEFAULT_SIGNET_ESPLORA)
+        );
+    }
+
+    #[test]
+    fn default_url_for_regtest_is_none() {
+        assert!(
+            default_url_for(bitcoin::Network::Regtest).is_none(),
+            "regtest has no public Esplora endpoint; operator must pass --esplora-url"
+        );
+    }
+
+    #[test]
+    fn parse_spki_pin_hex_accepts_valid_64_lower_hex() {
+        let pin_hex = "0".repeat(64);
+        let pin = parse_spki_pin_hex(&pin_hex).expect("valid hex should parse");
+        let serialized = pin.to_string();
+        assert!(!serialized.is_empty(), "serialized pin should be non-empty");
+    }
+
+    #[test]
+    fn parse_spki_pin_hex_rejects_too_short() {
+        let pin_hex = "ab".repeat(20); // 40 chars — too short
+        let err = parse_spki_pin_hex(&pin_hex).expect_err("too short should reject");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("64 hex chars"),
+            "error should mention 64-char requirement: {msg}"
+        );
+    }
 }
