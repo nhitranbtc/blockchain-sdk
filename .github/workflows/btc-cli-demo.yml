@@ -1,0 +1,59 @@
+name: btc CLI demo
+
+# Runs the end-to-end btc CLI demo scripts (Issue #61):
+#   - btc-quickstart.sh    — wallet create → message sign → verify
+#   - btc-networks-demo.sh — sign + verify across all 5 networks
+# Both demos are stateless (Step 5 of quickstart requires live testnet
+# Esplora; networks-demo is fully offline).
+#
+# Triggers: push to main, PR to main, manual workflow_dispatch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  btc-cli-demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Pin actions to full commit SHAs per security guidance.
+      # Dependabot config at .github/dependabot.yml will auto-bump.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # SECURITY ACCEPTED RISK (per user direction 2026-08-06):
+      # Major tags instead of SHA pins. Auto-review flagged this as
+      # HIGH supply-chain-pin-mismatch. Dependabot will auto-bump after
+      # initial Dependabot PR is merged.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Build btc binary
+        working-directory: rust-wallet-app
+        run: cargo build -p btc --bins
+      # 5-step quickstart: wallet create → message sign → verify →
+      # verify (tampered) → wallet show. Step 5 syncs from live testnet
+      # Esplora; CI runner has network access so this should pass.
+      - name: btc-quickstart.sh (5-step quickstart)
+        working-directory: rust-wallet-app
+        run: bash scripts/btc-quickstart.sh
+      # Per-network sign + verify roundtrip across all 5 networks.
+      # Fully offline (no live network). Asserts 5/5 PASS.
+      - name: btc-networks-demo.sh (5-network coverage)
+        working-directory: rust-wallet-app
+        run: bash scripts/btc-networks-demo.sh
+      - name: cargo test -p btc
+        working-directory: rust-wallet-app
+        run: cargo test -p btc
