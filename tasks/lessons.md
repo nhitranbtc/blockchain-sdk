@@ -13,10 +13,6 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 ## Index
 
 - [L1] Workspace path consistency across docs + Cargo manifests
-- [L2] Schema-validate config keys before commit
-- [L3] Major-version pins stay mutable; bump via Dependabot
-- [L4] Post-scaffold verify pass catches lint/doc issues
-- [L5] Workspace inheritance only when parent defines it
 - [L6] approval gates before persistent changes — `git commit` + remote ops (memory)
 - [L8] flip issue checkboxes before squash-merge (memory)
 - [L9] issue bodies = status, PR bodies = fix analysis (with table)
@@ -25,13 +21,10 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
-- [L24] On PR merge: update CHANGELOG.md (Keep a Changelog) + README "What's New"
-- [L25] On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it" instructions (edit on working branch + commit with the sub-task/code change — no separate process branch needed)
-- [L26] Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main). L21/L24/L25 doc updates travel WITH the sub-task PR on the working branch — no separate process branch.
-- [L28] For client-facing work, explicitly flag deferred/stub work in CHANGELOG — don't present partial impl as completed features
-- [L29] Before declaring "ready / Try this / demo" — run `cargo check --examples`, `cargo test --examples`, and the example binary itself to catch compile errors before claiming it works
+- [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
+- [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 
-> **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were Secret<T> / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
+> **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
 > **Audit (2026-08-10):** L10, L22, L23, L27 removed per user direction. L10 (threat-model re-read) — type-system invariants + L11/L12 review pair make the rule redundant. L22 (fact-forcing gate) — enforced at hook layer, captured in `~/.claude/CLAUDE.md` global memory instead. L23 (`git stash -u -- <path>` deletes untracked) — git-native behavior, covered by `git stash` docs. L27 (grep `#[derive(...)]` before using traits) — type-checker errors surface the assumption fast enough; pre-flight grep added latency without saving compile cycles.
 
@@ -39,13 +32,13 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 
 | Domain | Lessons |
 |---|---|
-| Build / Cargo hygiene | L1, L2, L3, L4, L5 |
+| Build / Cargo hygiene | L1 |
 | Git workflow | L6 (approval gates), L8, L14 |
-| Issue/PR protocol | L9, L25 |
+| Issue/PR protocol | L9, L24 |
 | Skill + review pair | L11, L12, L13 |
-| Post-merge bookkeeping | L21, L24, L26 |
-| Client product | L28, L29 |
-| Security review | L30 |
+| Post-merge bookkeeping | L21, L24 |
+| Client product | L28 |
+| Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
 ---
 
@@ -58,58 +51,12 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 **Why**: 31 stale path references in plan file alone. Drift between docs and actual tree = wrong file edits, broken links, confused contributors.
 
 **Apply**: After any `mkdir` / `mv` / `cargo new` inside rust-wallet-app/, run:
-```
+
+```bash
 grep -rn "old-path" docs/ rust-wallet-app/ rust-wallet-app/crates/*/Cargo.toml
 ```
+
 before commit.
-
----
-
-## L2 — Schema-validate config keys before commit
-
-**Trigger**: `2a46af1 fix(deny): drop unused-allowed key (not in cargo-deny schema)`.
-
-**Rule**: For any tool config file (`deny.toml`, `Cargo.toml`, `ci.yml`), run the tool's dry-run/check before committing. Don't paste config from docs without verifying.
-
-**Why**: `cargo deny check` rejected `unused-allowed = warn` as unexpected key. CI failed. Reviewer caught it; CI caught it; should have caught at write time.
-
-**Apply**: After editing `deny.toml` → `cargo deny check`. After `ci.yml` → `act` or push to branch. After `Cargo.toml` → `cargo metadata --no-deps`.
-
----
-
-## L3 — Major-version pins stay mutable
-
-**Trigger**: `bd8499d ci: revert checkout to @v4 major tag` + `0e59e85 ci(deps): bump actions/checkout from 4.1.1 to 7.0.1`.
-
-**Rule**: Pin third-party GitHub Actions to MAJOR tag only (`@v4`, not `@v4.1.1`). Dependabot handles minor/patch. Bumps between majors require user approval.
-
-**Why**: Floating SHA = supply-chain risk. Frozen patch = no security updates. Major tag = auto-patch with manual major review. Dependabot config at `.github/dependabot.yml` covers the loop.
-
-**Apply**: When adding/updating CI action → use `@vN` form. Before bumping major → pause, ask user, document rationale in commit body.
-
----
-
-## L4 — Post-scaffold verify pass
-
-**Trigger**: `5943c84 fix(umbrella): post-verify polish` (cleanup chain-traits missing_docs, repository inheritance).
-
-**Rule**: After scaffolding a new crate/module, run full verify suite immediately: `cargo fmt --check && cargo clippy -- -D warnings && cargo test && cargo doc --no-deps`. Fix lint/doc warnings before declaring scaffold done.
-
-**Why**: `missing_docs` on `SolanaCluster` variants + `ChainError` variants surfaced only when `cargo doc` ran. Scooping these up post-merge = larger PR noise. Cleaning at scaffold origin = one atomic commit.
-
-**Apply**: After `cargo new` / `cargo init` → run verify in same commit. Use `cargo doc --no-deps` (not just `cargo build`) to catch doc-only warnings.
-
----
-
-## L5 — Workspace inheritance only when parent defines it
-
-**Trigger**: `5943c84 fix(umbrella): post-verify polish` — `chain-traits/Cargo.toml: remove repository.workspace (parent workspace doesn't define repository)`.
-
-**Rule**: `[workspace]` inheritance in member crates only inherits keys the parent WORKSPACE `[workspace]` table defines. If key lives in parent package, not allowed via `.workspace = true`.
-
-**Why**: Cargo error: `the workspace specified by ... does not have the field "repository"`. Field belongs on package, not workspace. Common confusion since `rust-version`, `edition`, `license` ARE workspace-allowed.
-
-**Apply**: Before adding `[field.workspace] true` to member → check parent `Cargo.toml` `[workspace]` table. Workspace-allowed: `package.*` subset (edition, version, authors, license, repository, homepage, rust-version, etc.) — see Cargo docs.
 
 ---
 
@@ -244,7 +191,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Apply**:
 - First commit on branch → invoke review pair (`type-design-analyzer` + `code-reviewer`) in parallel → fix findings → THEN run verify gate → THEN PAUSE for commit.
-- L13 step 10 enforces this sequence; L15 trigger "L12 review (security + type-design) caught multiple CRITICAL/HIGH findings" refers to this same gate.
+- L13 step 10 enforces this sequence; the L12 review-before-verify gate is the same one called out by the L34-trigger precedents (security + type-design + code-reviewer parallel).
 - Sub-agent lens coverage: `type-design-analyzer` (encapsulation, invariant expression, type-level soundness) + `code-reviewer` (correctness, security, convention). Run concurrently, both perspectives land at once.
 - For `critical` complexity tier (per L13), add `pr-review-toolkit:security-auditor` as a third sub-agent (max 3 skills per step under Q4 carve-out).
 
@@ -262,8 +209,8 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 2. (Self-detect complexity) → propose "trivial / normal / critical" → user confirms
 
 ## Per task
-3. Pick up issue
-4. karpathy-guidelines + branch checkout
+3. Pick up issue. Read body. Check if large task or sub-task — see [Sub-task workflow for large tasks](#sub-task-workflow-for-large-tasks) below.
+4. karpathy-guidelines + branch checkout (from integration branch if sub-task per step 3)
 
 ## Per pipeline step
 5. Step: pick skill pair (max 2) from L11 map
@@ -297,11 +244,17 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
+15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command + README "What's New" one-liner landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
+    - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
+    - Append/replace existing PR body with the full doc
+    - Document lives with the commit (audit trail); no separate file to maintain
+    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
 18. Add new lessons if user corrections or novel patterns (L9 schema)
+19. Apply L21 — update `estimate-report.md` (Plan-progress row + progress % + footer with merge SHA + date) + `ai-cost-report.md` (move row estimate→actual with measured tokens + recompute totals). Separate commits per file.
 ```
 
 **Complexity tier → pipeline variation** (self-detect + user confirm):
@@ -393,70 +346,49 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ---
 
-## L24 — On PR merge: update CHANGELOG.md (Keep a Changelog) + README "What's New"
+## L24 — On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column
 
-**Trigger**: Session 2026-08-10. After merging PR #42 (Task 8 coin_type_for), user said: "I have a feebacks are add changlog, after merged PR need to update user facing that handled". Two artifacts captured the feedback: a CHANGELOG.md for cumulative release history, and a README "What's New" section for at-a-glance user visibility.
+**Trigger**: Session 2026-08-10. Two user feedback moments: (1) after merging PR #42 (Task 8 coin_type_for), "I have a feebacks are add changlog, after merged PR need to update user facing that handled" — three artifacts: a CHANGELOG.md for cumulative release history, a README "What's New" section for at-a-glance user visibility, and a User Stories table for capability tracking. (2) "Read user stories, check list boxes after merged, update what user cases finished and we can playaround with them" — per-user-story lens separate from per-PR.
 
-**Rule**: After every PR merge into `main`:
+**Rule**: After every PR merge into `main`, update three surfaces in one commit on a fresh branch (e.g., `docs/changelog-update-pr-N`):
 
-1. **`CHANGELOG.md`** (top-level, Keep a Changelog format): append an entry to the `[Unreleased]` section under one of `### Added` / `### Changed` / `### Fixed` / `### Security` / `### Deprecated` / `### Removed`. One bullet per user-visible change. Cite the PR number.
-2. **`rust-wallet-app/README.md`** "What's New" section: add a one-line summary of the merged PR. Format: `- **PR #N** (Task X) — <feature summary>`. Link to `CHANGELOG.md` for full history.
-3. **At release time**: cut a versioned section (e.g., `## [v0.1] — 2026-08-10`) by moving all `[Unreleased]` entries under the new version header. Then reset `[Unreleased]` to empty.
+1. **`CHANGELOG.md` `[Unreleased]` section** (Keep a Changelog format): append an entry under one of `### Added` / `### Changed` / `### Fixed` / `### Security` / `### Deprecated` / `### Removed`. One bullet per user-visible change. Cite the PR number. For breaking changes: use `### Changed` with `**BREAKING**:` prefix.
+2. **`CHANGELOG.md` User Stories table** (columns `#`, `Story`, `Status`, `Try it`): if the merged PR completes a user story (adds public API, ships CLI command, makes a previously-gated feature testable), flip the corresponding checkbox `[ ]` → `[x]` AND update the "Try it" column with one-line instruction (`cargo test -p bitcoin-wallet-core <module>` for library demos, `<subcommand>` for CLI commands). Drift detection: defense-in-depth changes (compile-time check, audit, lint) don't flip story boxes but still get a per-PR `[Unreleased]` entry.
+3. **`rust-wallet-app/README.md` "What's New" section**: add one-line summary of the merged PR. Format: `- **PR #N** (Task X) — <feature summary>`. Link to `CHANGELOG.md` for full history. Rolls up most recent 5-10 PRs; older entries stay in CHANGELOG only.
 
-**Why**: Two audiences for the same change:
-- **CHANGELOG.md**: cumulative record, machine-parseable, git-blame-friendly, future contributors ask "what changed between v0.1 and v0.2?" — answers without reading commit history.
-- **README "What's New"**: at-a-glance for users evaluating the project. Without it, the README doesn't reflect the current state.
-
-**Apply**:
-
-- After `gh pr merge <N>` succeeds (alongside L21 reports update): append CHANGELOG entry + README line in the same commit on a fresh branch (e.g., `docs/changelog-update-pr-N`), then push + PR.
-- README "What's New" rolls up the most recent 5-10 PRs; older entries stay in CHANGELOG only.
-- CHANGELOG entries are terse — one line per change, PR number, no prose.
-- For breaking changes: use `### Changed` with a `**BREAKING**:` prefix on the bullet.
-
-**Anti-patterns**:
-
-- Updating only README (loses cumulative record) OR only CHANGELOG (loses at-a-glance surface).
-- Long CHANGELOG prose paragraphs — bullets only, terse.
-- Forgetting to bump `[Unreleased]` to a versioned section at release — leaves history unreleased forever.
-- Committing CHANGELOG/README updates in the same PR as the code change (couples release notes to feature commit; harder to amend notes independently).
-
----
-
-## L25 — On PR merge: flip CHANGELOG.md user-story checkboxes + update "Try it"
-
-**Trigger**: Session 2026-08-10. User feedback: "Read user stories, check list boxes after merged, update what user cases finished and we can playaround with them". The Keep a Changelog format (L24) tracks per-PR changes; this rule tracks per-**user-story** capabilities — a separate lens. User stories = what users *can do* with the codebase, distinct from what *changed*.
-
-**Rule**: `CHANGELOG.md` has a **User Stories** section: a table with columns `#`, `Story`, `Status`, `Try it`. After every PR merge:
-
-1. **If the merged PR completes a user story** (adds a public API, ships a CLI command, makes a previously-gated feature testable): flip the corresponding checkbox from `[ ]` to `[x]` in the Status column.
-2. **Update the "Try it" column** with a one-line instruction — `cargo test -p bitcoin-wallet-core <module>` for library demos, `<subcommand>` for CLI commands, etc.
-3. **Drift detection**: if the merged PR doesn't complete any story but introduces a defense-in-depth change (compile-time check, audit, lint), it doesn't get a user-story checkbox — but it should still get a per-PR entry under the regular `[Unreleased]` section.
+**At release time**: cut a versioned section (e.g., `## [v0.1] — 2026-08-10`) by moving all `[Unreleased]` entries under the new version header. Then reset `[Unreleased]` to empty.
 
 **Why**: Three audiences for the same change:
 
-- **Per-PR changelog** (L24): cumulative record, machine-parseable, "what changed between v0.1 and v0.2?"
-- **Per-story changelog** (L25): at-a-glance for clients, "what can I do with this codebase today?"
-- **README "What's New"** (L24): top-of-funnel visibility, "what's new since I last looked?"
-
-The user-story view answers the client question "is feature X ready to use?" without reading git history.
+- **Per-PR changelog**: cumulative record, machine-parseable, git-blame-friendly, future contributors ask "what changed between v0.1 and v0.2?" — answers without reading commit history.
+- **Per-story changelog**: at-a-glance for clients, "what can I do with this codebase today?" The user-story view answers "is feature X ready to use?" without reading git history.
+- **README "What's New"**: top-of-funnel visibility, "what's new since I last looked?"
 
 **Apply**:
 
-- After `gh pr merge <N>` succeeds (alongside L21 reports update + L24 changelog update): check the User Stories table for any story completed by the PR.
-- Each story has 3 attributes: descriptive title, status checkbox, "Try it" command. Update in the same commit on a fresh branch.
+- **Apply L24 on the local working branch BEFORE merging** — append CHANGELOG `[Unreleased]` bullet + User Stories row flip + README "What's New" line in commits that travel WITH the feature PR. The doc updates ride along with the code change as one PR to main.
+- Why local-branch-not-post-merge: keeps each feature self-contained (one PR = one feature + its docs). Reviewers see the user-facing change in the same review pass as the code. No "where's the doc for PR #N?" archeology.
+- L21 stays post-merge (needs the actual merge SHA in the footer); only L24 travels with the feature PR.
+- For sub-task workflows (≥3 sub-tasks per step 3 + sub-task section): L24 doc updates still travel with each sub-task PR on the integration branch — same principle, scoped to the integration branch.
+- CHANGELOG entries are terse — one line per change, PR number, no prose.
 - Story titles use user-facing verbs: "Sign messages", "Encrypt with password", "Sync wallet" — not implementation details.
 - For Task 9 (Wallet end-to-end) stories (#10–#13 in the User Stories table), the stories get flipped when Issue #19 merges. No need to flip them per-task during #19 work — the merge is the trigger.
+- Each User Stories row has 3 attributes: descriptive title, status checkbox, "Try it" command. All three must update together.
+- **Maintenance caveat:** before v0.2, add a CI step that runs `cargo test --no-run` for each "Try it" module path and fails the build if the path resolves to zero tests. Without automation, the column goes stale silently (Story #8 had a test name that no longer existed after the wrapper refactor on session 2026-08-10 — caught by review).
 
 **Anti-patterns**:
 
+- Updating only one of the three surfaces — losing cumulative record OR at-a-glance surface OR capability status.
+- Long CHANGELOG prose paragraphs — bullets only, terse.
+- Forgetting to bump `[Unreleased]` to a versioned section at release — leaves history unreleased forever.
+- Opening a separate `docs/changelog-update-pr-N` branch AFTER the feature PR merges — splits one feature into two PRs, forces reviewer to revisit completed work, breaks "one PR = one feature." Doc updates travel WITH the feature PR.
 - One user story per commit / per PR line — confuses "feature" with "commit." Group multi-commit features under one story.
 - Forgetting to update "Try it" — the column is the value; checkbox flips without command examples is just busywork.
-- Flipping the box speculatively before the merge ("I'll merge it later") — same drift problem L24 solves for changelog entries.
+- Flipping the box speculatively before the merge ("I'll merge it later") — drift problem.
 - Marking a story "done" when the implementation is partial (e.g., "Create wallet from mnemonic" works but doesn't yet sync) — split into smaller stories instead.
-- Fabricating "Try it" commands without verifying the path exists. Story #8 (`default_is_testnet_per_hard_rule_1`) on session 2026-08-10 had a test name that no longer existed after the wrapper refactor — caught by review. **Maintenance caveat:** before v0.2, add a CI step that runs `cargo test --no-run` for each "Try it" module path and fails the build if the path resolves to zero tests. Without automation, the column goes stale silently.
+- Fabricating "Try it" commands without verifying the path exists.
 
-## L26 — Sub-task workflow for large tasks: parent branch + sequential merge + PR-to-parent (not main)
+## Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
 
 **Trigger**: Session 2026-08-10. Task 9 (`Wallet::from_mnemonic` + sync + balance) was too large for one PR. User directed: "complete all sub-tasks in task 9, then call merge" + "I have a tree for sub-task handling: task/19 is main task branch, check from main task branch for sub-task" + "we only merge by order number, complete task 19a merge into main task branch 19, then create new branch from 19 for task 19b".
 
@@ -497,6 +429,8 @@ The user-story view answers the client question "is feature X ready to use?" wit
    ```
    Single cut to main = one merge commit = clean main history.
 
+6. **L21 + L24 doc updates travel WITH each sub-task PR** on the working branch — no separate process branch. Each sub-task PR carries its CHANGELOG bullet + User Stories flip + README line + estimate-report row update; the L13 post-merge cascade fires once at the final cut to main.
+
 **Why**:
 
 - **Main stays releasable** throughout the work — bug fixes, hot patches, and other tasks can land on main while the large task is in flight.
@@ -516,6 +450,7 @@ The user-story view answers the client question "is feature X ready to use?" wit
 - Sub-task PRs target `main` directly — defeats integration.
 - Skip the `--no-ff` flag — flattens merge history; you lose the parent line.
 - Parent branch stays empty after all sub-tasks land (the final cut is a fast-forward instead of a merge) — the parent becomes a dead branch with no audit trail.
+- Open a separate `docs/changelog-update-pr-N` branch for sub-task doc updates — defeats the working-branch-travel rule (step 6).
 
 **Recovery pattern** if a sub-task was merged to `main` accidentally:
 
@@ -542,209 +477,80 @@ Then re-merge sub-task onto parent (not main) per the rule.
 
 ---
 
-## L28 — For client-facing work, explicitly flag deferred/stub work in CHANGELOG; do not present partial impl as completed features
+## L28 — Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 
-**Trigger**: Session 2026-08-10. I implemented `#19b` (`Wallet::sync`) as a URL-validation stub returning `Err("not yet implemented")`. Treated it as "minimal viable Option A" for fast iteration within fixed-fee budget. User feedback (same session): "we are developing client product, and support features, user cases for real users, so we need to choose the best implementation in technical." This is a course-correction — stubs are internal-only; client-facing work requires full impl.
+**Trigger**: Session 2026-08-10 multi-PR churn on Task 9. Three distinct failures, each from skipping a different gate:
 
-**Rule**: For any client-facing deliverable (library public API, CLI subcommand, anything in CHANGELOG `[Unreleased]` → next release):
+- **Stub-vs-done gate**: implemented `#19b` (`Wallet::sync`) as URL-validation stub returning `Err("not yet implemented")`; treated as "minimal viable Option A". User course-corrected: "we are developing client product, and support features, user cases for real users, so we need to choose the best implementation in technical." Stubs are internal-only.
+- **Example-verify gate**: wrote `examples/wallet_demo.rs` to demonstrate `Wallet::from_mnemonic`, then ran `cargo run --example wallet_demo` — 2 compile errors caught only at run time (Network not re-exported; `WordCount` path wrong). ~10 min round-trip waste + client confidence loss.
+- **Real-deps gate**: built `Wallet::sync` + `Wallet::balance` full impl (PR #55). 164 tests pass, clippy clean, existing demo clean. Then user said "demo on main" — wrote NEW `sync_demo.rs` against live blockstream.info testnet. **3 semantic bugs surfaced** that all 164 unit tests + clippy missed: receive path double-indexed, xprv prefix hardcoded to XPRV (testnet needs TPRV), `reqwest::Url::join` dropped `/api` (no trailing `/` on base).
 
-1. **Stub vs full impl is a binary choice, not a gradient.** A method that returns `Err("not yet implemented")` is NOT a partial impl — it is **no impl**. The CHANGELOG must reflect reality, not optimistic intent.
+**Rule**: For any client-facing claim ("Try it works", "Story #N playaround-able", "Demo ready", "Feature X shipped"), three gates must pass in order:
 
-2. **Three states per feature, not two:**
-   - **`[x] done`** — fully implemented + tested; user can rely on it.
-   - **`[ ] gated`** — explicitly listed in CHANGELOG User Stories but marked as not-yet-implemented; user knows not to expect it.
-   - **(not listed)** — feature doesn't exist yet; don't tease.
+### Gate A — Stub honesty (CHANGELOG state)
 
-   Do NOT introduce a third implicit state: "merged but doesn't actually work."
+Stub vs full impl is binary, not gradient. `Err("not yet implemented")` is **no impl**, not partial.
 
-3. **PR title + body** must state the implementation state honestly:
-   - `feat(wallet): Wallet::sync stub (Task 9 #19b)` ← explicit "stub" in title
-   - `feat(wallet): Wallet::sync implementation (Task 9 #19b)` ← only when real impl lands
+Three states per feature:
 
-   Both are accurate; the user (client, reviewer, future-self) knows exactly what's shipping.
+- **`[x] done`** — fully implemented + tested; user can rely on it.
+- **`[ ] gated`** — listed in CHANGELOG User Stories but marked not-yet-implemented.
+- **(not listed)** — feature doesn't exist; don't tease.
 
-4. **L25 (`User Stories` checkbox flip)** is gated on real impl, not "merged". Story #11 (`Sync wallet`) stays `[ ]` until `Wallet::sync` actually syncs. The L25 rule explicitly says: "Flipping the box speculatively before the merge" is an anti-pattern. Extending that principle: flipping after a stub-merge is also anti-pattern.
+Do NOT introduce a third implicit state: "merged but doesn't actually work."
 
-5. **L21 (`estimate-report`) scope flagging:** if a work item is a stub, the bill must say so. Don't bill the client for a feature that doesn't work. The fixed-fee `$1,650` was sized for the agreed scope; if scope expands to full impl, the bill may need re-negotiation.
+**PR title honesty**: `feat(wallet): Wallet::sync stub (Task 9 #19b)` ← explicit "stub" in title; `feat(wallet): Wallet::sync implementation (Task 9 #19b)` ← only when real impl lands.
 
-**Why**: Client trust is built by honest scope communication, not by inflating delivered-features counts. A CHANGELOG that says "Sync wallet ✓ done" when it actually returns "not yet implemented" loses client trust when the client tries the feature.
+**L24 + L21 cascades**: User Story checkbox flip (L24) is gated on real impl, not merge. Estimate-report row update (L21) is gated on real capability — don't bill for a stub.
 
-**Apply**:
+### Gate B — Example verify (`cargo check --examples` + `test --examples` + run binary)
 
-- Before merging any PR that introduces a public API: ask "is the API actually functional end-to-end, or does it return Err/TODO/unimplemented?"
-- Before flipping any CHANGELOG User Story checkbox: ask "can a client call this API today and get a real result?"
-- Before billing for an item: ask "does the shipped artifact actually deliver the billed capability?"
+Before declaring any of: "Try this command" / "Story #N playaround-able" / "Demo ready" / "Example works" — run the full chain:
+
+```bash
+cargo check --examples -p <crate>           # compile errors catch (fast)
+cargo test --examples -p <crate>            # runtime errors catch
+cargo run --example <name> -p <crate>        # binary runs end-to-end
+```
+
+If any fails, the claim is false — don't claim it. CHANGELOG "Try it" is a contract with the client.
+
+### Gate C — Real-deps verify (run binary against live network/fs/db)
+
+For any new example or method that composes third-party APIs (bdk, Esplora, bip32, reqwest, sqlx): write an example that calls it against live testnet / real fs / real db, run it, paste output as evidence in PR description + add comment in example source.
+
+Unit tests + clippy + Gate B all pass when the function *type-checks* + has correct shapes. They do NOT exercise:
+
+- Third-party parser semantics (bdk's `Key(InvalidNetworkKind)` for wrong prefix; bdk's `InvalidHdKeyPath` for double-indexed paths)
+- URL composition semantics (`reqwest::Url::join` drops last segment without trailing `/`)
+- Live API responses (HTML 200 instead of JSON 404 from a wrong path)
+
+These only surface when the binary actually calls the third-party code against a real input.
+
+**Why**: Client trust is built by honest scope communication, not by inflating delivered-features counts. Each gate catches a distinct trust-erosion mode: Gate A = optimistic CHANGELOG; Gate B = "Try it" doesn't work; Gate C = feature works in test but not in real-world use. All three share the property: the claim was made before the verification ran.
+
+**Apply — per-claim checklist**:
+
+- Before merging any PR that introduces a public API → Gate A: is the API actually functional end-to-end, or does it return `Err/TODO/unimplemented`?
+- Before flipping any CHANGELOG User Story checkbox → Gate A: can a client call this API today and get a real result?
+- Before billing for an item → Gate A: does the shipped artifact actually deliver the billed capability?
+- Before declaring "Try it" in CHANGELOG → Gate B: did you run `cargo check --examples && cargo test --examples && cargo run --example <name>` and paste the output as evidence?
+- Before declaring a method "done" that composes bdk / Esplora / reqwest → Gate C: did you write an example calling it against live testnet and run it?
 
 **Anti-patterns**:
 
-- "I'll add the full impl later; ship the stub now and flip the box" — L25 anti-pattern extends to stub-merge scenarios.
-- "Internal placeholder for external feature" — stubs are fine for internal modules (e.g., a trait method placeholder); wrong for client-facing features.
-- Optimistic CHANGELOG: listing features as done when they're stubbed. The client reads the CHANGELOG and assumes capability.
+- "I'll add the full impl later; ship the stub now and flip the box" — Gate A.
+- "Internal placeholder for external feature" — stubs are fine for internal modules (trait method placeholder); wrong for client-facing features.
+- "Try this — it should work" (without running it yourself) — Gate B.
+- "Tests pass, so the example works" — `cargo test` doesn't build examples unless `--examples` flag used.
+- "Tests pass, the example compiles — we're good" (without running against real deps) — Gate C.
+- Declaring "playaround-able" on a `#[ignore]` test that's never run.
+- Skipping the demo for "trivial" methods — even `Wallet::sync` is non-trivial when it composes bdk + Esplora + bip32.
 
 **Examples in this session** (2026-08-10):
 
 - ✅ PR #48 (`Wallet::from_mnemonic`) — full impl, all tests pass, real capability. Story #10 flipped to `[x]`.
 - ❌ PR #50 (`Wallet::sync stub`) — stub returning `Err("not yet implemented")`. **Story #11 should NOT be flipped**. PR #50 must NOT be merged without full impl replacing the stub.
-- � (anticipated) PR #52 (`Wallet::balance stub`) — same trap if I default to stub.
+- ❌ PR #55 (`Wallet::sync` + `Wallet::balance` full impl) — gates A + B passed but Gate C missed; 3 semantic bugs caught only when "demo on main" ran against real testnet.
 
 ---
-
-## L29 — Before declaring "ready / Try this / demo" — run `cargo check --examples`, `cargo test --examples`, and the example binary itself
-
-**Trigger**: Session 2026-08-10. I wrote `examples/wallet_demo.rs` to demonstrate `Wallet::from_mnemonic`, then ran `cargo run --example wallet_demo` to verify. Got two compile errors in sequence (Network not re-exported from `bitcoin_wallet_core`; `WordCount` path wrong in example context). Fixed each, re-ran, fixed the other, re-ran, succeeded. ~10 min of round-trip waste + loss of client confidence ("you must test all cases before merge").
-
-**Rule**: Before declaring any of:
-- "Try this command"
-- "Story #N is now playaround-able"
-- "Demo is ready"
-- "Example works"
-
-…run the full check chain:
-
-```bash
-cargo check --examples -p <crate>           # compile errors catch (fast)
-cargo test --examples -p <crate>            # runtime errors catch
-cargo run --example <name> -p <crate>        # actual binary runs end-to-end
-```
-
-If any of these fails, the claim is false — don't claim it. The example's "Try it" in CHANGELOG is a contract with the client.
-
-**Why**: For client products, every command in CHANGELOG is a promise. If "Try this" doesn't work, the client tries it, it fails, trust erodes. Tests + examples must pass *before* the docs say they do.
-
-**Apply**:
-
-- New example file → `cargo check --examples` first (catches type/import errors).
-- Update to existing example → `cargo check --examples` first (catches regressions).
-- Claim a "Try it" command → run the command yourself + paste the output in PR description as evidence.
-- Add "Try it" to CHANGELOG → before merging, paste the actual output into a comment in the example's source as evidence it works.
-
-**Anti-patterns**:
-
-- "Try this — it should work" (without running it yourself) — violates trust.
-- "I tested in isolation" (without testing in the same state as the doc's claim) — drift.
-- "Tests pass, so the example works" — `cargo test` doesn't build examples unless `cargo test --examples` is used.
-
----
-
-## [L30] For critical-tier code, invoke security-review BEFORE push; the post-push hook review is supplementary, not the primary gate
-
-**Trigger**: Session 2026-08-10 (#19b.2 → PR #55). Shipped full `Wallet::sync` + `Wallet::balance` impl (commit `ca85831`) without invoking `compass:security-auditor` pre-PR. Post-push automated security review surfaced **9 findings** (1 CRITICAL, 3 HIGH, 5 MEDIUM):
-
-1. **CRITICAL** tls-bypass: `TlsPolicy::SystemRoots` default in `sync`/`balance` (no caller-controlled TLS)
-2. **HIGH** cross-network-confusion: caller-supplied URL not pinned to `self.network`
-3. **HIGH** secret-exposure: `XPrvHolder::to_xprv_string` returned public non-zeroizing `String`
-4. **HIGH** sensitive-in-error-message: `Error::Bdk(format!("{e}"))` echoed bdk's descriptor (xprv leak)
-5. **MEDIUM** stale-zeroize-contract: `xprv` `String` widened zeroize window
-6. **MEDIUM** tainted-utxo-value: `u.value: u64` not capped against `Amount::MAX_MONEY` (DoS via malicious Esplora)
-7. **MEDIUM** trust-differential: Esplora response could mismatch wallet's scriptpubkey (mitigated by using wallet-derived `peek_address` script_pubkey)
-8. **MEDIUM** (related to #4): error-message xprv leak
-9. **MEDIUM** (related to #3): descriptor `String` retained after `bdk_wallet::Wallet::create`
-
-All caught AFTER push → forced a fix round (commit `27f8e32`) → forced a follow-up push. ~2× the round-trip cost vs catching them pre-PR.
-
-**Rule**: For critical-tier work (L13 complexity tier — signing / keys / encryption / network / persistence), invoke `compass:security-auditor` (or equivalent) **before** `gh pr create`. Post-push hook review is supplementary feedback, not a replacement for pre-PR review. Per L13 Q5: max 3 fix rounds per task, shared pre-commit + post-PR.
-
-**Why**: Post-push review fires on the same wall-clock path as merge with no opportunity to amend before squash. Pre-PR review fixes cheaply (one local commit). Post-push review requires fix round + push + re-review — ~3× the wall-clock cost.
-
-**Apply**:
-- Critical-tier PR ready → invoke `compass:security-auditor` on the working branch diff BEFORE `gh pr create`.
-- Post-push hook fires HIGH/CRITICAL → count toward L13 Q5 budget.
-- Skip-the-L12 cost-discipline is acceptable only for code structurally identical to a recently-reviewed branch.
-
-**Anti-patterns**:
-- "I'll skip the security subagent to save cost" — fine for trivial refactors, NOT for new code touching signing/network/persistence.
-- "Tests + clippy pass → safe to merge" — tests cover behavior, not security gaps.
-- Push first, react to review later — fix round + push is more expensive than pre-PR review.
-
-**Related**: L12 (review BEFORE local verify gate), L13 Q5 (3-round budget).
-
----
-
-## L32 — For client-product code, run the example binary end-to-end against real deps (network/fs) before claiming "Try it" works
-
-**Trigger**: Session 2026-08-10 (#19b.2 round-3). Built `Wallet::sync` + `Wallet::balance` full impl (PR #55), 164 tests pass, clippy clean, `cargo check --examples` clean, `cargo run --example wallet_demo` clean (the existing from_mnemonic demo). Demo worked. Then user said "demo on main" — I wrote a NEW `sync_demo.rs` example exercising `sync`/`balance` against live blockstream.info testnet. **3 semantic bugs surfaced** that all 164 unit tests + clippy missed: receive path double-indexed, xprv prefix hardcoded to XPRV (testnet needs TPRV), `reqwest::Url::join` dropped `/api` because base URL lacked trailing `/`.
-
-**Rule**: L29 covers `cargo check --examples` (compile) + `cargo test --examples` (test binary) + `cargo run --example wallet_demo` (the existing demo runs). L32 extends L29: **for any new example, run the binary end-to-end against real deps** (network for chain backends, fs for persistence, db for queries). "Try this command works" is a contract with the client; the binary must actually run.
-
-**Why**: Unit tests + clippy + L29 compile/test all pass when the function *type-checks* + has correct types + correct shapes. They do NOT exercise:
-- Third-party parser semantics (bdk's `Key(InvalidNetworkKind)` for wrong prefix; bdk's `InvalidHdKeyPath` for double-indexed paths)
-- URL composition semantics (`reqwest::Url::join` drops last segment without trailing `/`)
-- Live API responses (HTML 200 instead of JSON 404 from a wrong path)
-
-These three failure modes share a property: they only surface when the binary actually calls the third-party code against a real input. A `#[ignore]` integration test or a `cargo run --example` against a live dep catches them; unit tests don't.
-
-**Apply**:
-- New `Wallet::*` method that composes `bdk`, `Esplora`, `bip32`, `reqwest` → write an example that calls it against live testnet + run it before declaring done.
-- Existing example under change → re-run with the change.
-- `cargo test --lib` + clippy passing is NOT a green light for "Try this" — add the demo run to the verify gate.
-- "Looks like it works" / "compiles cleanly" / "164 tests pass" — not sufficient. The binary must run, against real deps, end-to-end.
-
-**Anti-patterns**:
-- "Tests pass, the example compiles — we're good" (without running the example against real deps).
-- Declaring "playaround-able" on a `#[ignore]` test that's never run.
-- Skipping the demo for "trivial" methods — even `Wallet::sync` is non-trivial when it composes bdk + Esplora + bip32.
-
-**Related**: L29 (compile + run the example), L10 removed (threat-model re-read), L30 (security review pre-PR), L33 (unit vs integration smoke).
-
----
-
-## L33 — Unit tests cover shape; integration smoke covers semantics — when wrapping third-party APIs, the unit-test mock stops at the boundary
-
-**Trigger**: Session 2026-08-10 (#19b.2 round-3). Same 3 bugs from L32. All 3 passed `cargo test --lib` (164 tests) + `cargo clippy --all-targets -- -D warnings` because:
-
-1. **Path double-index**: `address_type_to_path(addr, coin, 0, 0)` returns `m/.../0/0` — valid path string. `format!("wpkh({}/0/*)", xprv)` — valid descriptor string. Both compile, both return Ok from bdk's `create`, but bdk's *internal* parser sees `m/.../0/0/0/*` and fails on first scan. Unit test never reached the parse step (test constructed wallet, asserted `Ok`, didn't scan).
-2. **xprv prefix**: `to_string(Prefix::XPRV)` returned a valid base58 string ending in `xprv...`. Test only checked `assert!(c.base_url.as_str().contains("blockstream.info"))` shape. bdk's descriptor parser checks prefix-against-network and fails with `Key(InvalidNetworkKind)`. Test never deserialized into bdk.
-3. **URL trailing slash**: `reqwest::Url::parse("https://host/api")` succeeded. `join("address/x")` succeeded. Test only asserted shape, never sent the request. Live server returned HTML 200.
-
-**Rule**: When a function composes third-party APIs (bdk, bip32, reqwest, sqlx, etc.), unit tests that mock the boundary verify shape but not semantics. To catch semantic misuse of those APIs, you need a test that:
-
-1. **Constructs the actual third-party value** (real `BdkWallet`, real `bitcoin::Transaction`, real `Url::parse(...).join(...)`)
-2. **Calls the actual third-party operation** (real `.create_wallet_no_persist()`, real HTTP request, real `bip32::XPrv::derive`)
-3. **Asserts on the actual return** (not just `Ok`, but the resulting state)
-
-This is L32's smoke test, scoped to a unit test where possible: `#[test]` for in-process third-party libs (bdk, bip32, sqlx); `#[tokio::test]` or example-binary smoke for network third-party libs (reqwest).
-
-**Why**: Every third-party API has an opinion about what counts as valid input. `bdk::BdkWallet::create` is happy to parse the descriptor string at construction but unhappy with it at scan time. `bitcoin::Txid` deserializes from a 64-char hex but bdk checks prefix-against-network on the deserialized xprv. These are deep checks that the type system can't enforce. Tests that stop at construction miss them.
-
-**Apply**:
-- For each new wrapper around a third-party API, add ONE test that exercises the full chain to the third-party operation: `assert!(bdk_wallet.start_full_scan().await.is_ok())`, not just `assert!(bdk_wallet.create(...).is_ok())`.
-- For URL composition: at least one test should send a real request (or `assert_eq!(url.as_str(), "expected/path")`).
-- For cryptographic primitives: at least one test should exercise the actual encode/decode round-trip (e.g., `to_string` then `FromStr` round-trip).
-- `Ok(_)` is not "it works" — assert on the actual return value.
-
-**Anti-patterns**:
-- `assert!(client.new(url).is_ok())` without sending a request.
-- `assert!(bdk_wallet.create(desc).is_ok())` without scanning.
-- "Tests pass" → ship. Tests + smoke + clippy + example-binary run = ship.
-
-**Related**: L29 (cargo run --example), L32 (run the binary against real deps), L13 (verify gate is per-step AND task-end).
-
----
-
-## L34 — L12 review is load-bearing for any change touching crypto / parsing / TLS code paths; the parallel 3-agent form (security + type-design + code-reviewer) finds what a single reviewer misses
-
-**Trigger**: Session 2026-08-10 (#28 MnemonicCipher). Initial implementation looked clean — 9 tests, fmt + clippy clean, `cargo test --lib` green. L12 review cycle (mandated by issue #28 acceptance criteria: "Pass L12 review (security-auditor + type-design-analyzer + code-reviewer parallel)") surfaced 12+ findings:
-
-- **type-design NEEDS-WORK** (3/5 on encapsulation): bare `Vec<u8>` blob type let callers accidentally pass a raw AES-GCM blob or a raw Argon2id salt where a mnemonic cipher blob was expected. Module-doc-only invariant. → Applied: `MnemonicCipherBlob(Vec<u8>)` newtype + `pub const MIN_LEN: usize` + `TryFrom<&[u8]>` lifts the format invariant into the type system.
-- **security 2 MED**: `String::from_utf8(phrase_bytes)` happy path allocates a `Vec<u8>` not in a `Secret` wrapper (transient plaintext bytes linger on heap); same on the error path. → Applied: `Secret::into_inner()` instead of `.expose().clone() + drop()`.
-- **code-reviewer 3 MED**: `Error::Encryption` overload (no per-protocol variant — same flaw as L33's "shape vs semantics"); unidiomatic `drop(key)` (Rust drops at end of scope anyway); missing tests (salt-region tamper, nonce-region tamper, max-sized BIP-39, empty password, newtype short-slice rejection).
-- **3 LOW** (drop-order doc, log-leak doc, redundant test) + **3 INFO** (threat-model block, calibration note, cross-module const-eval) — all applied.
-
-**Rule**: For any change that touches crypto primitives (KDF, AEAD, signing), URL parsing, TLS, or F43 per-protocol error variants, the L12 review cycle is load-bearing. Skip it and you ship the bug. Single-reviewer L12 misses what 3-agent parallel catches (security saw the memory hygiene, type-design saw the blob-type weakness, code-reviewer saw the missing tests + F43 overload — none of these overlap).
-
-**Why**: Crypto/parsing/TLS changes are the highest-blast-radius work in the codebase. A subtle flaw (e.g., a plaintext `Vec<u8>` dropped without zeroize on the error path) is invisible to tests + clippy + a single reviewer's eye. The 3-agent form (security-auditor + type-design-analyzer + code-reviewer) covers different orthogonal surfaces: memory hygiene, type-shape, and idiomatic-Rust + tests respectively. Without parallel review the same flaw would survive to merge.
-
-**Apply**:
-- For crypto / KDF / AEAD / signing changes: L12 review is mandatory. Don't ship without it.
-- For URL parsing / TLS / F43 error variants: same — 3-agent parallel.
-- Use the 3-agent form by default (issue #28 acceptance criteria; L13 Q4 critical-tier review is 3-agent).
-- Apply ALL findings, even LOWs. Each LOW is usually 1-2 lines and prevents a future regression. The reviewer's marginal-cost call.
-- When type-design says "needs work on encapsulation", wrap the newtype — don't talk yourself out of it ("it's only used in one place").
-
-**Anti-patterns**:
-- "Tests pass + clippy clean = ship" (L29/L32/L33 already cover this for shape; L34 covers it for the security + type-design surfaces).
-- L12 review done by single agent (security OR code-reviewer, not both) — orthogonal findings get missed.
-- "MED finding is a std-lib footgun, not our bug" — yes, but the helper is the right place to mitigate it (e.g., wrap in `Secret`).
-- Ignoring type-design scores below 4/5 on encapsulation or invariant expression. Those axes are the design-quality floor.
-
-**Related**: L30 (pre-PR security-review for critical-tier), L13 (L13 Q4 3-agent critical-tier), L33 (unit vs integration), L29 (run the binary), L32 (demo before ready), L11 (skill enumeration — includes `compass:security-auditor` + `pr-review-toolkit:type-design-analyzer` + `pr-review-toolkit:code-reviewer`).

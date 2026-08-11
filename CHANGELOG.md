@@ -23,11 +23,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Security
 
-- **`[internal]`** F12 / F13: full implementation in `Wallet::sync` / `Wallet::balance`. F14 (`bdk_file_store` SQLite persistence) + F15 (interrupted-sync recovery) deferred to v0.1.1 — in-memory UTXO state only.
+- **`[internal]`** F12 / F13: full implementation in `Wallet::sync` / `Wallet::balance`. F19 (`atomic_write`-backed persistence) deferred for UTXO state; encrypted mnemonic blob persistence lands in v0.1 via #54d per ADR 0001 (in-memory UTXO state until next `sync`).
 - **`[internal]`** `XPrvHolder::to_xprv_secret() -> Secret<String>` (replaces `to_xprv_string`; `pub(crate)`; zeroize-on-drop) — closes xprv zeroize window in descriptor construction. PR #55
 - **`[internal]`** `Error::Bdk` carries fixed message; raw bdk error dropped (avoids xprv leak via descriptor echo). PR #55
 - **`[internal]`** `Wallet::sync` UTXO value capped against `Amount::MAX_MONEY`; reject on overflow (DoS mitigation against malicious Esplora response). PR #55
 - **`[internal]`** `Wallet::sync` / `Wallet::balance` take `&EsploraClient` (no internal `TlsPolicy::SystemRoots` default); caller is responsible for `TlsPolicy::Pinned` for production endpoints. PR #55
+- **`[internal]`** ADR 0001 (`docs/superpowers/adrs/2026-08-11-adr-0001-btc-wallet-store.md`) — `btc` wallet-store layout decision: keep F19-deferred UTXO snapshot, persist only `MnemonicCipherBlob` at `$XDG_DATA_HOME/btc/wallets/<network>/<wallet_id>.enc` (XDG on Linux/macOS, Windows deferred). Network discriminant bound via AES-GCM AAD (closes cross-network footgun). Symlink-defense on read path; constant-time padding on missing-file path (closes file-existence + timing oracles). Unblocks #64 (Task 54d).
 - **`[cleanup]`** `CONTEXT.md` deleted per audit 2026-08-10. Type-system invariants (`Secret<T>`, `bip39` `zeroize` feature, `finish_non_exhaustive()` for mnemonic types) carry the security load. PR #55
 
 ## [v0.1.0] — 2026-08-10
