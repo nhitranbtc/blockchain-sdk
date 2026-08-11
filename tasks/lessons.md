@@ -236,8 +236,22 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 12. PAUSE for commit approval
     - Max 3 fix rounds; round = one review + one fix commit pair
 13. commit-commands:commit-push-pr
-14. Flip issue checkboxes [ ]→[x]
-15. PR review (parallel sub-agents) + merge + close
+14. **Flip issue checkboxes [ ]→[x] — only after verifying each box is actually completed** (before PR open, after commit-push-pr):
+    - **Walk the issue body before flipping** — for every `[ ]` box, confirm the acceptance criterion is actually met in the committed code (test passes, doc landed, dependency merged, etc.). Per L28 (verify-before-claim) + L24 anti-pattern "Flipping the box speculatively before the merge" — every flip must be backed by a verifiable artifact, not intent.
+    - **One-by-one audit** — read each checkbox, name the artifact that satisfies it (test name, file:line, commit SHA, PR number), then flip. Bulk-flipping without per-box evidence is the failure mode.
+    - **What "completed" means per L24:**
+        - **Code acceptance** (`X implemented`, `Y tested`) → run the test, paste the passing assertion.
+        - **Doc acceptance** (`CHANGELOG updated`, `README "What's New" line`) → grep the file, confirm the line landed in the committed code (not just the working tree).
+        - **Dependency acceptance** (`#N merged first`) → `git log origin/main | grep <#N commit subject>` to confirm.
+        - **External gate acceptance** (`L29 manual smoke`, `L28 Gate B macOS verification`) → KEEP UNCHECKED with a `<!-- TODO: <operator-action> -->` comment. These are operator-driven; mark `[x]` after the operator confirms, not before.
+    - **Edit issue body via `gh issue edit N --body "<full body with [x] marks>"`** (single command, not per-line) — preserves the rest of the body verbatim and produces one audit-trail entry.
+    - **Cross-check with the ledger** (L14) — the ledger's `progress.md` events table should match the issue body's checked boxes. Discrepancy = audit drift; resolve before opening PR.
+    - **Anti-patterns:**
+        - Flipping all boxes preemptively ("I'll do them later") — Gate A violation per L28.
+        - Bulk-flipping without per-box evidence — audit trail collapses.
+        - Flipping external-gate boxes (L29, L28 Gate B) before operator confirmation — false-positive completion.
+        - Editing the issue body incrementally via partial updates — risks body drift vs commit reality.
+15. PR review (parallel sub-agents)
     - If stuck 3 rounds: PAUSE then revert-to-last-green + follow-up issue + ledger entry
 15a. **Write technical document → enrich PR body** (before merge):
     - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
@@ -249,6 +263,17 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
+15c. **Merge code + close** (separate gate from review — explicit PAUSE before the bypass arms):
+    - **Verify the PR body checklist is fully resolved BEFORE the merge PAUSE** (per L9 + L24). Every `[ ]` / `[x]` box in the PR body must be either:
+        - **`[x]`** with the artifact behind it (test name, file:line, commit SHA, PR number) — same evidence standard as step 14.
+        - **`[ ]` left unchecked with explicit deferral note** (e.g., `<!-- TODO: L29 manual smoke pending operator action -->`) — external gates that can't be satisfied before merge.
+        - **Anti-pattern:** `[ ]` left unchecked without a deferral note = unfulfilled promise baked into the merged PR. Future-self audits the merged PR and finds the gap.
+        - Use `gh pr edit <N> --body "<full body with all boxes resolved>"` (single command) to update the PR body in one audit-trail entry, mirroring step 14's single-edit pattern.
+    - **PAUSE for explicit "admin bypass" / "force-push" / "delete-branch" authorization** before `gh pr merge --squash --admin --delete-branch` per L6. The auto-mode classifier requires literal phrasing for bypass arms; generic "approved" is insufficient (this is the documented gap from #64/#66/#68 PRs).
+    - **Run the merge:** `gh pr merge <N> --squash --admin --delete-branch`. The `--delete-branch` removes both local + remote task branch in one call.
+    - **Verify issue closed:** `gh issue view <N> --json state` should report `CLOSED`. Squash-merge commit messages containing `Closes #N` / `Fixes #N` auto-close; otherwise `gh issue close <N>` explicitly.
+    - **Verify main updated:** `git fetch origin main && git log --oneline origin/main -1` shows the merge SHA at HEAD. Branch protection + admin merge can be silent — verify explicitly per L28.
+    - **No rollback:** if merge landed in a wrong state, use `git revert -m 1 <merge-sha>` rather than `git reset --hard`. Merges are immutable public artifacts (per L6).
 
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
