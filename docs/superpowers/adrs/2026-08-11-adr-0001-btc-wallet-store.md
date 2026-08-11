@@ -255,11 +255,11 @@ This decision affects:
 - [ ] L29 manual smoke before merge
 - [ ] L9 v3 verdict at merge
 
-## L9 v3 verdict (TBD at merge)
+## L9 v3 verdict (filled at merge via PR #65)
 
 Per L9 v3 schema (per-dimension PASS / PARTIAL / FAIL rubric; from `tasks/lessons.md`):
 
-- **Correctness**: TBD
-- **Security**: TBD
-- **Test coverage**: TBD (this ADR has no tests — design only; #54d adds tests)
-- **Code simplicity**: TBD
+- **Correctness**: **PASS** — Path B reuses battle-tested primitives (#23 `atomic_write`, #28 `MnemonicCipherBlob`, F19 wiring); cross-links verified at `wallet/mod.rs:60-63`, `config.rs:50`, `util/atomic_write.rs:36-55`, `util/permissions.rs:18`. 25 L12 findings applied in round 1 (no round 2 needed).
+- **Security**: **PASS** — AES-GCM AAD binds `bitcoin::Network` to ciphertext (closes cross-network footgun, HIGH finding); constant-time padding on missing-file path closes timing oracle (MED); `0o600` files + `0o700` parents via explicit `set_permissions` after `create_dir_all` closes umask leak (NEEDS-WORK); symlink-defense on read path closes symlink-DoS (MED); file-existence/wrong-password/wrong-network/corrupt-blob collapsed into single indistinguishable `Error::WalletStore` message (NEEDS-WORK); mnemonic on STDERR (not STDOUT) closes F49 echo leak (LOW).
+- **Test coverage**: **N/A** — design-only PR; no tests added in this PR. #54d implementation PR adds tests (unit + live testnet `#[ignore]`). Acceptable per L21 since `Test coverage` for design-only work is by definition N/A, not FAIL.
+- **Code simplicity**: **PASS** — single ADR file (265 lines) + CHANGELOG entry; no new deps; no new crypto primitives; precursor PR flag for `MnemonicCipherBlob` AAD extension keeps scope tight. F14/F15 mapping corrected to F19 (NEEDS-WORK); L34 retired-lesson citation corrected to PR #28 pattern (NEEDS-WORK).
