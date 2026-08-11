@@ -105,6 +105,19 @@ pub enum Error {
     /// (AES-256-GCM AEAD) + F47 (zeroize-on-drop of the phrase).
     #[error("mnemonic cipher: {0}")]
     MnemonicCipher(String),
+
+    /// Wallet-store persistence error (Task 54d / Issue #64, ADR 0001).
+    /// Per F43 pattern (per-protocol variant): kept distinct from
+    /// `Storage` (generic IO) so callers can distinguish wallet-persistence
+    /// failures (filesystem layout, symlink defense, AAD verification)
+    /// from generic disk errors. The Display message is intentionally
+    /// generic for failures that would otherwise leak whether a wallet
+    /// exists (oracle-attack mitigation per N2): "wallet not accessible
+    /// (wrong password, wrong network, or corrupt blob)" collapses
+    /// file-not-found, wrong-password, wrong-network-AAD, and
+    /// corrupt-blob into one observable signature.
+    #[error("wallet store: {0}")]
+    WalletStore(String),
 }
 
 /// Result alias used by every public function in this crate.

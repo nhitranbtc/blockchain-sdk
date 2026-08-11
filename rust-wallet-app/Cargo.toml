@@ -67,6 +67,10 @@ tempfile = "3"
 # Encoding (used by crypto::bip137 for base64-encoded message signatures)
 base64 = "0.22"
 
+# Wallet ID + filesystem layout (Task 54d / Issue #64, ADR 0001)
+uuid = { version = "1", features = ["v4", "serde"] }
+directories = "5"
+
 # Constant-time comparison (used by crypto::bip137 for hash160 verify per F50)
 subtle = "2"
 
