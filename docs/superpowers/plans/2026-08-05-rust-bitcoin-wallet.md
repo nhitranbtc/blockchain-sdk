@@ -281,15 +281,15 @@ regtest-tests = []  # per F3
 [dependencies]
 bdk_wallet = { workspace = true, features = ["keys-bip39"] }
 bdk_chain = { workspace = true }
-bdk_esplora = { workspace = true }
 bdk_electrum = { workspace = true }
 bdk_file_store = { workspace = true }
 bitcoin = { workspace = true }
 bip32 = { workspace = true }
+bip39 = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 argon2 = { workspace = true }
@@ -297,11 +297,19 @@ aes-gcm = { workspace = true }
 rand = { workspace = true }
 zeroize = { workspace = true }
 base64 = { workspace = true }
+subtle = { workspace = true }
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+sha2 = { workspace = true }
+webpki = { workspace = true }
+x509-parser = { workspace = true }
+tempfile = { workspace = true }
+uuid = { workspace = true }
+directories = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 tokio = { workspace = true }
-tempfile = { workspace = true }
 ```
 
 - [ ] **Step 7: Create bitcoin-wallet-core/src/lib.rs**
