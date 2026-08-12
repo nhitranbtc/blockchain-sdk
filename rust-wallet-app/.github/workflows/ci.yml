@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: Format check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-wallet-app
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rust-toolchain
+        run: rustup show
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-wallet-app
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rust-toolchain
+        run: rustup show
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-wallet-app
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rust-toolchain
+        run: rustup show
+      - name: cargo test
+        # Live testnet test stays #[ignore] per L29; operator-driven, not CI
+        run: cargo test --workspace
+
+  geiger:
+    name: Unsafe audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-wallet-app/crates/bitcoin-wallet-core
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rust-toolchain
+        run: rustup show
+      - name: Install cargo-geiger
+        run: cargo install cargo-geiger --locked
+      - name: cargo geiger
+        # Own-code audit only; deps carry expected unsafe (ring, aes-gcm, nom)
+        run: cargo geiger --all-targets

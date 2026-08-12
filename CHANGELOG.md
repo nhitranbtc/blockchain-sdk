@@ -44,6 +44,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 - **`[internal]`** ADR 0001 (`docs/superpowers/adrs/2026-08-11-adr-0001-btc-wallet-store.md`) — `btc` wallet-store layout decision: keep F19-deferred UTXO snapshot, persist only `MnemonicCipherBlob` at `$XDG_DATA_HOME/btc/wallets/<network>/<wallet_id>.enc` (XDG on Linux/macOS, Windows deferred). Network discriminant bound via AES-GCM AAD (closes cross-network footgun). Symlink-defense on read path; constant-time padding on missing-file path (closes file-existence + timing oracles). Unblocks #64 (Task 54d).
 - **`[cleanup]`** `CONTEXT.md` deleted per audit 2026-08-10. Type-system invariants (`Secret<T>`, `bip39` `zeroize` feature, `finish_non_exhaustive()` for mnemonic types) carry the security load. PR #55
 
+### Infrastructure (Phase 1 closure)
+
+- **`[internal]`** GitHub Actions CI workflow (`rust-wallet-app/.github/workflows/ci.yml`) — 4-job gate mirroring L13 step 11 verify: `fmt` (rustfmt check), `clippy` (`-D warnings`), `test` (`cargo test --workspace`, L29 live-testnet `#[ignore]` preserved), `geiger` (unsafe audit). SHA-pinned `actions/checkout@v4`; cargo target dir at `rust-wallet-app/target`. Triggers on push to `main` + PR to `main`. Closes Task 1 Step 10 (final unchecked plan deliverable).
+- **`[internal]`** Plan-file drift sync (`docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`) — all 51 plan checkboxes flipped from `[ ]` to `[x]` per L30 drift fix, except Task 1 Step 10 (closes in this PR). Workspace version drift documented inline: workspace resolved to `0.2.0` after `chain-traits` umbrella scaffold was added as a workspace member predating the F33/F35 deferral decision. Resolution: accept `0.2.0`, Phase 2 plan formally adopts `chain-traits`.
+- **`[internal]`** Verification gate cleared (L28): `cargo fmt --check` exit 0, `cargo clippy --workspace --all-targets -- -D warnings` exit 0, `cargo test --workspace` 89 passed / 0 failed / 1 ignored (L29 live testnet), `cargo geiger` 0 unsafe fn/impl/trait in `bitcoin-wallet-core` (6 unsafe expressions, all `Secret::into_inner` pattern per F53).
+
 ## [v0.1.0] — 2026-08-10
 
 ### Added
