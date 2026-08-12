@@ -46,20 +46,144 @@ cargo build --workspace
 cargo test --workspace
 ```
 
-## What's New
+## `btc` CLI
 
-Recent merges (full history in [`CHANGELOG.md`](../../CHANGELOG.md)):
+The `btc` binary (crate `btc/`, subcommand of `bitcoin-wallet-core/`) is the
+command-line entry point for wallet operations. Source: `crates/btc/src/{main,cli,handlers}.rs`.
 
-- **PR #62** (Issue #62 / Task 54b) — `btc encrypt` + `btc decrypt` CLI subcommands (stateless file encryption). Wraps `crypto::mnemonic_cipher` (F5 Argon2id KDF m=256 MiB/t=10/p=4 + F6 AES-256-GCM). Output `MnemonicCipherBlob` (salt(16) || nonce(12) || ct || tag(16)). `--password` optional (env `BTC_ENCRYPT_PASSWORD`/`BTC_DECRYPT_PASSWORD` or `/dev/tty` prompt via `rpassword`). L12 critical-tier pre-PR review caught 5 must-fix issues (F47 clone, non-atomic write, N2 oracle leak, `--in == --out`, size cap) — all addressed in fix commit.
-- **PR #63** (Issue #63 / Task 54c) — `btc wallet sync` + `btc wallet balance` CLI subcommands (stateless chain ops). Takes `--mnemonic <words> --network <NET> --esplora-url <URL> [--pin-spki <hex64>]`. `sync` prints `n_utxos=<N> total_sat=<S>` (scriptable); `balance` prints a single sats integer. No wallet persistence — mnemonic lives in process memory only (F14 UTXO persistence deferred per ADR 0001; each invocation re-syncs). Threat-model: F12 (chain scan via Esplora `/address/{addr}/utxo`), F13 (confirmed-only UTXO aggregation, MAX_MONEY cap), F20 (SPKI pin required for non-regtest networks; regtest exempted for localhost dev), F36 (https-only URL enforced via `EsploraUrl::new` per #36). Manual `Debug` redacts the `mnemonic` field (L12 CRITICAL #2). 17 new unit tests cover parse + F20 + F36 + mnemonic redaction; live testnet smoke `#[ignore]` per L29.
-- **PR #84** — `btc encrypt` + `btc decrypt` accept `--password-file <PATH>` and `--password-stdin` (closes PR #62 backlog P1). Use cases: k8s secrets mounted as files, systemd `LoadCredential=`, vault-agent sidecar, CI pipelines. Priority: `--password` flag > `--password-file` > `--password-stdin` > `BTC_ENCRYPT_PASSWORD` env > `/dev/tty` prompt. Mutually exclusive at clap parse layer. `--password-file` rejects symlinks (F19 pattern) and world/group-readable files (`mode & 0o077 != 0`) — defense-in-depth for misconfigured k8s mounts. Manual `Debug` redacts both `password` and `password_file` paths (L12 CRITICAL #2). 19 new unit tests cover parse + mode check + symlink check + priority order + end-to-end roundtrip.
-- **PR #61** (Issue #61 / Task 54a) — `btc message sign` + `btc message verify` subcommands (stateless BIP-137). `sign` derives first external address from BIP-39 mnemonic + signs message; `verify` returns `true`/`false`. Manual `Debug` redacts mnemonic + signature. v0.1: P2PKH only.
-- **PR #74** (Issue #74) — `btc wallet show --network <NET>` defaults to network-appropriate Esplora URL: mainnet (`blockstream.info/api`), testnet (`blockstream.info/testnet/api`), signet (`blockstream.info/signet/api`), testnet4 (`mempool.space/testnet4/api`). Regtest has no default — operator must pass `--esplora-url` (HTTPS-only per F20; regtest localhost needs stunnel).
-- **PR #73** (Issue #73, F20 enforcement) — `btc wallet show --esplora-spki-pin <HEX64>` + `BTC_ESPLORA_SPKI_PIN` env. Routes `EsploraClient` via `from_config` with `TlsPolicy::Pinned` when set; preserves PR-2 `SystemRoots` default when unset (testnet-suitable). Closes F20 gap on mainnet/signet/regtest production endpoints.
-- **PR #70** (Task 54d, PR-2 of #64) — `btc wallet create` + `btc wallet show` clap 4 subcommands on top of the PR-1 wallet-store lib. `create` persists encrypted wallet (mnemonic → STDERR; wallet_id → STDOUT per L28/F49). `show` decrypts + syncs + prints addresses + balance JSON. Manual `Debug` redaction on `Cli`/`Commands`/`WalletAction` (L12 CRITICAL #2). Closes Story #13.
-- **PR #55** (Task 9 #19b.2) — `Wallet::sync(&EsploraClient)` + `Wallet::balance(&EsploraClient)`. Full chain scan via Esplora `/address/{addr}/utxo` + `bdk_wallet::Wallet::insert_txout`. F12 + F13 defended; F14 persistence deferred to v0.1.1. Caller builds `EsploraClient` with explicit `TlsPolicy` for F20 SPKI pinning.
-- **PR #48** (Task 9a) — `Wallet::from_mnemonic(&Mnemonic, Network) -> Result<Wallet>`. F34 BIP-39 word-count assertion; no `Default` impl per CONTEXT.md hard rule #1.
-- **PR #42** (Task 8) — `chain::network::coin_type_for(Network) → u32`. BIP-44 coin-type lookup; hard rule #1 (no mainnet default) enforced at compile time via exhaustive match.
-- **PR #39** (Task 6 / F21 follow-up) — `MessageHash<C>` phantom-typed wrapper. `sign_recoverable` requires `MessageHash<Bip137Message>`; U5 (arbitrary-hash phishing) defended at the type level.
-- **PR #38** (audit) — L20 constant audit. All crypto constants (`ARGON2_M/T/P_COST`, `SALT_LEN`, `KEY_LEN`, `MAGIC_PREFIX`, etc.) compile-time pinned.
-- **PRs #34 / #33 / #27 / #26** (Tasks 4–7) — Keys (BIP-32), Argon2id KDF + AES-256-GCM, BIP-137 message signing, WalletConfig + EsploraClient (F20 SPKI pinning).
+### Subcommands
+
+| Subcommand | Purpose | Source |
+|---|---|---|
+| `btc wallet create` | Generate BIP-39 mnemonic, persist encrypted wallet. Mnemonic → STDERR; wallet_id → STDOUT (L28/F49). | PR #70 |
+| `btc wallet show <id>` | Decrypt + sync + print addresses + balance JSON. `<id>` is positional (UUID v4 from `wallet create`). | PR #70 |
+| `btc wallet sync` | Stateless chain scan against an Esplora server. Prints `n_utxos=<N> total_sat=<S>`. | PR #63 |
+| `btc wallet balance` | Stateless balance query. Prints sats integer. | PR #63 |
+| `btc encrypt` | Encrypt a UTF-8 file with Argon2id + AES-256-GCM. Output is `MnemonicCipherBlob` (salt(16) \|\| nonce(12) \|\| ct \|\| tag(16)). | PR #62 |
+| `btc decrypt` | Decrypt a `MnemonicCipherBlob`. | PR #62 |
+| `btc message sign` | BIP-137 message signing. v0.1: P2PKH only. | PR #61 |
+| `btc message verify` | BIP-137 message verification. Exits 0 if valid, 1 if invalid. | PR #61 |
+
+### `btc wallet create` flags
+
+| Flag | Notes |
+|---|---|
+| `--words <N>` | Required. `N` ∈ {12, 15, 18, 21, 24}. |
+| `--network <NET>` | Required. `bitcoin` / `testnet` / `testnet4` / `signet` / `regtest`. |
+| `--password <PWD>` | Optional. If omitted, prompts via `/dev/tty` (`rpassword`). |
+
+### `btc wallet show <id>` flags
+
+| Flag | Notes |
+|---|---|
+| `<id>` | Positional. UUID v4 returned by `wallet create`. |
+| `--network <NET>` | Required. |
+| `--password <PWD>` | Optional. If omitted, prompts. |
+| `--esplora-url <URL>` | Optional. Default: `blockstream.info/<NET>/api` (PR #74). |
+| `--esplora-spki-pin <HEX64>` | Optional. 64-char hex (SHA-256 of leaf cert SubjectPublicKeyInfo). Routes `EsploraClient` via `TlsPolicy::Pinned`. Env: `BTC_ESPLORA_SPKI_PIN`. |
+
+### `btc wallet sync` / `btc wallet balance` flags
+
+| Flag | Notes |
+|---|---|
+| `--mnemonic <words>` | Required. 12/15/18/21/24 words. Visible in shell history — prefer piping. |
+| `--network <NET>` | Required. |
+| `--esplora-url <URL>` | Required. HTTPS-only (F36); regtest exempt for localhost. |
+| `--pin-spki <HEX64>` | Optional. 64-char hex. Required for non-regtest networks (F20). Alias: env `BTC_ESPLORA_SPKI_PIN`. |
+
+### `btc encrypt` / `btc decrypt` flags
+
+| Flag | Notes |
+|---|---|
+| `--in <PATH>` | Required. Input file (UTF-8 plaintext for encrypt, binary blob for decrypt). |
+| `--out <PATH>` | Required. Output file. |
+| `--password <PWD>` | Optional. Falls back to env or `/dev/tty` prompt. |
+| `--password-file <PATH>` | Optional. Reads password from file. Rejects symlinks + world/group-readable files. |
+| `--password-stdin` | Optional. Reads password from stdin. |
+
+The three password flags are **mutually exclusive** at the clap parse layer.
+
+### `btc message sign` flags
+
+| Arg | Notes |
+|---|---|
+| `--mnemonic <words>` | Required. |
+| `--network <NET>` | Required. |
+| `--address <ADDR>` | Required. v0.1: must match the first external receive address at `m/44'/coin'/0'/0/0`. |
+| `<message>` | Required. Positional (no `--message` flag). Quoted on the command line. |
+
+### `btc message verify` flags
+
+| Arg | Notes |
+|---|---|
+| `--address <ADDR>` | Required. Bitcoin address that allegedly signed the message. |
+| `<message>` | Required. Positional. Message text that was signed. |
+| `<signature>` | Required. Positional. Base64-encoded BIP-137 signature (output of `btc message sign`). |
+
+### Environment variables
+
+| Env var | Effect |
+|---|---|
+| `BTC_ENCRYPT_PASSWORD` | Fallback for `--password` on `btc encrypt` |
+| `BTC_DECRYPT_PASSWORD` | Fallback for `--password` on `btc decrypt` |
+| `BTC_ESPLORA_SPKI_PIN` | Fallback for `--esplora-spki-pin` (wallet show) and `--pin-spki` (wallet sync/balance) |
+| `BTC_WALLET_MNEMONIC` | Fallback for `--mnemonic` on wallet sync/balance |
+| `BTC_DATA_DIR` | Wallet storage location (default: `$XDG_DATA_HOME/btc`) |
+
+### Build + run
+
+```bash
+cd rust-wallet-app
+cargo build --release -p btc
+./target/release/btc --help
+```
+
+### Examples
+
+```bash
+# Create a new testnet wallet
+btc wallet create --words 12 --network testnet --password-stdin
+
+# Show a wallet by ID (load, decrypt, sync, print JSON)
+btc wallet show <UUID> --network testnet --esplora-spki-pin <HEX64>
+
+# Stateless sync (no wallet persistence)
+btc wallet sync \
+  --mnemonic "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" \
+  --network testnet \
+  --esplora-url https://blockstream.info/testnet/api \
+  --pin-spki <HEX64>
+
+# Stateless balance
+btc wallet balance \
+  --mnemonic "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" \
+  --network testnet \
+  --esplora-url https://blockstream.info/testnet/api
+
+# Encrypt a file
+btc encrypt --in secret.txt --out secret.enc --password-stdin
+
+# Decrypt a file
+btc decrypt --in secret.enc --out secret.txt --password-file /run/secrets/btc-pwd
+
+# Sign a message
+btc message sign \
+  --mnemonic "abandon abandon ... about" \
+  --network testnet \
+  --address mjQi1wx8Xg2tKbEKHW7KBcvz2kELnyfXD3 \
+  "hello world"
+
+# Verify a message
+btc message verify \
+  --address mjQi1wx8Xg2tKbEKHW7KBcvz2kELnyfXD3 \
+  "hello world" \
+  <BASE64>
+```
+
+### Security notes
+
+- **Mnemonic on STDERR**, wallet_id on STDOUT (L28/F49 separation).
+- **Manual `Debug` impls redact** `password` / `password_file` / `mnemonic` (L12 CRITICAL #2). See `crates/btc/src/cli.rs` lines 278-452.
+- **`--password-file` rejects** symlinks + world/group-readable files (F19 pattern).
+- **Three password flags are mutually exclusive** at the clap parse layer.
+- **Live testnet smoke tests are `#[ignore]`'d** (L29); run manually with `cargo test --workspace -- --ignored`.
