@@ -231,8 +231,10 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 10. L12: pre-PR code review FIRST — `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`
     - Parallel sub-agents: type-design-analyzer + code-reviewer
     - Run on first commit on branch
-11. Verify (double gate): cargo fmt + clippy -D warnings + test
+11. Verify (double gate): `cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace`
     - Per-step AND task-end
+    - **`cargo fmt --check` is a blocking gate**, not a convenience. Run it BEFORE every commit; CI's `Format check` job fails the PR if any line exceeds rustfmt's max-width.
+    - **Post-bulk-edit caveat (PR #85):** the Edit-tool hook auto-formats on save, but bulk-script edits (Python `cat <<EOF` / `sed` / `git checkout --`) bypass the hook. After ANY non-Edit-tool change to a `.rs` file, run `cargo fmt -p <crate>` explicitly before the verify gate. The hook is a safety net, not a guarantee.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
     - **Fixable now**: fix in current commit, re-verify, continue
