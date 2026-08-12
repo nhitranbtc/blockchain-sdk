@@ -288,35 +288,67 @@ else
     exit 1
 fi
 
-# --- Step 4: btc wallet import with --passphrase (testnet) ----------------
-# Network-agnostic behavior (passphrase not persisted); demonstrate on testnet.
-banner "STEP 4/7: btc wallet import --passphrase (derivation-time only, NOT persisted, testnet)"
-WALLET_ID_D=""
-set +e
-STDERR_PATH_4="${TMPDIR_DEMO}/import-stderr4.$$"
-"${BT_BIN}" wallet import \
-    --mnemonic "${MNEMONIC_12}" \
-    --network testnet \
-    --passphrase "demo-passphrase" \
-    --password demo-pwd > "${TMPDIR_DEMO}/import-stdout4.$$" 2> "${STDERR_PATH_4}"
-STEP4_EXIT=$?
-set -e
-WALLET_ID_D="$(head -1 "${TMPDIR_DEMO}/import-stdout4.$$" 2>/dev/null || true)"
-if [[ -z "${WALLET_ID_D}" || ! "${WALLET_ID_D}" =~ ^[0-9a-f]{8}- ]]; then
-    record_step 4 FAIL "btc wallet import (with passphrase)"
-    print_step_result 4 "expected wallet_id, got: ${WALLET_ID_D}"
-    exit 1
-fi
-# Verify the passphrase warning is on STDERR (per handle_import contract).
-STDERR_CONTENT="$(cat "${STDERR_PATH_4}" 2>/dev/null || true)"
-if [[ "${STDERR_CONTENT}" == *"BIP-39 passphrase is NOT persisted"* ]]; then
-    echo "wallet_id: ${WALLET_ID_D}"
-    echo "STDERR warning: 'BIP-39 passphrase is NOT persisted' (present)"
-    record_step 4 PASS "btc wallet import (with passphrase warning)"
+# --- Step 4: btc wallet import (all 5 BIP-39 word counts, testnet) -----------
+# All 5 standard BIP-39 mnemonic lengths must work. Network-agnostic so we
+# loop the word counts on testnet only. Entropy=0 test vectors from
+# Python's `mnemonic` library → generate valid checksum for each count.
+banner "STEP 4/7: btc wallet import (all 5 BIP-39 word counts, testnet)"
+# BIP-39 entropy=0 test vectors (12/15/18/21/24 words).
+MNEMONIC_12="abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon abandon abandon about"
+MNEMONIC_15="abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon abandon abandon abandon abandon abandon address"
+MNEMONIC_18="abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon agent"
+MNEMONIC_21="abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon abandon abandon abandon admit"
+MNEMONIC_24="abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon abandon abandon abandon abandon abandon \
+abandon abandon abandon abandon abandon abandon abandon abandon \
+abandon art"
+declare -A STEP4_NET_STATUS
+STEP4_FAILED=0
+# Loop over each BIP-39 word count; collect last wallet_id per count.
+declare -A WALLET_ID_BY_WORDS
+for words_label in "12:12:${MNEMONIC_12}" \
+                   "15:15:${MNEMONIC_15}" \
+                   "18:18:${MNEMONIC_18}" \
+                   "21:21:${MNEMONIC_21}" \
+                   "24:24:${MNEMONIC_24}"; do
+    label="${words_label%%:*}"           # "12", "15", "18", "21", "24"
+    rest="${words_label#*:}"             # "12:<phrase>"
+    count_int="${rest%%:*}"              # "12"
+    phrase="${rest#*:}"                  # "<phrase>"
+    IMPORT_OUT=""
+    IMPORT_EXIT=0
+    run_btc IMPORT_OUT IMPORT_EXIT \
+        "${BT_BIN}" wallet import \
+            --mnemonic "${phrase}" \
+            --network testnet \
+            --password demo-pwd
+    wid="$(echo "${IMPORT_OUT}" | head -1)"
+    if [[ ${IMPORT_EXIT} -ne 0 ]]; then
+        printf '        %s-word: FAIL (exit %d)\n' "${label}" "${IMPORT_EXIT}"
+        STEP4_NET_STATUS["${label}"]="FAIL"
+        STEP4_FAILED=$((STEP4_FAILED + 1))
+    elif [[ ! "${wid}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        printf '        %s-word: FAIL (no UUID, got: %s)\n' "${label}" "${wid}"
+        STEP4_NET_STATUS["${label}"]="FAIL"
+        STEP4_FAILED=$((STEP4_FAILED + 1))
+    else
+        printf '        %s-word: wallet_id=%s\n' "${label}" "${wid}"
+        STEP4_NET_STATUS["${label}"]="PASS"
+        WALLET_ID_BY_WORDS["${label}"]="${wid}"
+    fi
+done
+if [[ ${STEP4_FAILED} -eq 0 ]]; then
+    record_step 4 PASS "btc wallet import (all 5 BIP-39 word counts)"
     print_step_result 4 ""
 else
-    record_step 4 FAIL "btc wallet import (with passphrase warning)"
-    print_step_result 4 "expected STDERR passphrase warning, got: ${STDERR_CONTENT}"
+    record_step 4 FAIL "btc wallet import (all 5 BIP-39 word counts)"
+    print_step_result 4 "${STEP4_FAILED}/5 word counts failed"
     exit 1
 fi
 
@@ -480,8 +512,12 @@ Artifacts (Step 3, 24-word, all 5 networks):
   testnet4: ${WALLET_ID_24[testnet4]:-N/A}
   regtest:  ${WALLET_ID_24[regtest]:-N/A}
 
-Artifacts (Step 4, passphrase):
-  testnet: ${WALLET_ID_D}
+Artifacts (Step 4, all 5 BIP-39 word counts, testnet):
+  12-word: ${WALLET_ID_BY_WORDS[12]:-N/A}
+  15-word: ${WALLET_ID_BY_WORDS[15]:-N/A}
+  18-word: ${WALLET_ID_BY_WORDS[18]:-N/A}
+  21-word: ${WALLET_ID_BY_WORDS[21]:-N/A}
+  24-word: ${WALLET_ID_BY_WORDS[24]:-N/A}
 
 Temp data dir: ${TMPDIR_DEMO} (cleaned up on exit)
 
@@ -494,11 +530,9 @@ Next (operator):
       btc wallet show --id "${WALLET_ID_12[testnet]}" --network testnet \\
           --password demo-pwd --pin-spki <64-hex>
 
-  - With passphrase (must re-supply at show time):
-      btc wallet import --mnemonic "<12-word phrase>" --passphrase "<PB>" \\
-          --network testnet --password demo-pwd
-      btc wallet show --id "<wallet_id>" --passphrase "<PB>" \\
-          --network testnet --password demo-pwd --pin-spki <64-hex>
+  - All 5 BIP-39 word counts (12/15/18/21/24) supported:
+      btc wallet import --mnemonic "<24-word phrase>" --network bitcoin \\
+          --password <STRONG>
 EOF
 
 exit ${EXIT_CODE}

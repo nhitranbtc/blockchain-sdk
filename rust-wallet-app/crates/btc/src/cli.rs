@@ -157,16 +157,18 @@ pub enum WalletActionKind {
     /// Import an existing BIP-39 mnemonic, encrypt, persist to disk
     /// (Issue #99 / Story 2). Generates a new WalletId; the phrase
     /// is not echoed back (caller already has it).
+    ///
+    /// **Note:** BIP-39 passphrase support was removed (security review
+    /// found the flag accepted `--passphrase` but the lib hardcoded
+    /// empty passphrase at derivation — broken-security-control).
+    /// v0.1 stores mnemonic phrase only. Passphrase support is a
+    /// follow-up that threads through `import_wallet` → `build_bdk_wallet`.
     Import {
         /// BIP-39 mnemonic phrase (12/15/18/21/24 words, space-separated).
         /// **SECURITY**: visible in shell history if passed as
         /// `--mnemonic "..."` — prefer piping via `read -s` or env.
         #[arg(long, env = "BTC_WALLET_MNEMONIC")]
         mnemonic: String,
-        /// Optional BIP-39 passphrase (derivation-time only; not
-        /// persisted). Re-supply at `wallet show` time if used.
-        #[arg(long)]
-        passphrase: Option<String>,
         /// Bitcoin network.
         #[arg(long, value_enum)]
         network: NetArg,
@@ -429,13 +431,11 @@ impl fmt::Debug for WalletActionKind {
                 .finish(),
             Self::Import {
                 mnemonic: _,
-                passphrase: _,
                 network,
                 password: _,
             } => f
                 .debug_struct("Import")
                 .field("mnemonic", &"<redacted>")
-                .field("passphrase", &"<redacted>")
                 .field("network", network)
                 .field("password", &"<redacted>")
                 .finish(),

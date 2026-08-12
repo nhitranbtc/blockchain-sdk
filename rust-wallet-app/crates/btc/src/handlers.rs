@@ -224,10 +224,13 @@ pub async fn handle_create(
 /// blob (Issue #99 / Story 2). Generates a new WalletId; the phrase
 /// is NOT echoed back (caller already has it).
 ///
-/// BIP-39 passphrase is NOT persisted — derivation-time only.
+/// BIP-39 passphrase NOT supported in v0.1 — the flag was removed
+/// (security review found broken-security-control: lib hardcoded
+/// empty passphrase at derivation). Passphrase support is a v0.1.1
+/// follow-up that must thread through `import_wallet` →
+/// `Wallet::from_mnemonic` → `build_bdk_wallet` → `show_wallet`.
 pub async fn handle_import(
     mnemonic: String,
-    passphrase: Option<String>,
     network: NetArg,
     password: Option<String>,
     data_dir: &Path,
@@ -245,11 +248,6 @@ pub async fn handle_import(
 
     println!("{wallet_id_str}");
     eprintln!("Wallet imported successfully.");
-    if passphrase.is_some() {
-        eprintln!(
-            "Note: BIP-39 passphrase is NOT persisted; pass --passphrase again at `wallet show` time."
-        );
-    }
     // Drop the mnemonic from the stack ASAP. Note: caller still holds
     // the original String (from clap); this is best-effort defense
     // inside `handle_import` only.
