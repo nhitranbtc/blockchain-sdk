@@ -22,7 +22,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
 - [L18] ledger path collision — `.superpowers/sdd/` gitignored; canonical L21 record in PR body
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
-- [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
+- [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 - [L30] Verify plan-cited SHAs with `git log --all -- <path>` before trusting — drift detector for plan/spec headers
@@ -78,7 +78,7 @@ before commit.
 
 - Before `git commit` → STOP. Show diff summary + test output. Ask "approved?".
 - Before `gh pr merge --admin` / `--force-push` / `gh issue close` → name the bypass explicitly ("merge with --admin, approved"). The auto-mode classifier requires literal phrasing for bypass authorization.
-- For post-merge bookkeeping commits (CHANGELOG/README/lessons) → still pause. User's "approved" message earlier in the session is for the prior action, not subsequent commits (per the never-auto-commit memory).
+- For post-merge bookkeeping commits (CHANGELOG/lessons) → still pause. User's "approved" message earlier in the session is for the prior action, not subsequent commits (per the never-auto-commit memory).
 
 ---
 
@@ -261,7 +261,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **One-by-one audit** — read each checkbox, name the artifact that satisfies it (test name, file:line, commit SHA, PR number), then flip. Bulk-flipping without per-box evidence is the failure mode.
     - **What "completed" means per L24:**
         - **Code acceptance** (`X implemented`, `Y tested`) → run the test, paste the passing assertion.
-        - **Doc acceptance** (`CHANGELOG updated`, `README "What's New" line`) → grep the file, confirm the line landed in the committed code (not just the working tree).
+        - **Doc acceptance** (`CHANGELOG updated`, `User Stories table row flipped`) → grep the file, confirm the line landed in the committed code (not just the working tree).
         - **Dependency acceptance** (`#N merged first`) → `git log origin/main | grep <#N commit subject>` to confirm.
         - **External gate acceptance** (`L29 manual smoke`, `L28 Gate B macOS verification`) → KEEP UNCHECKED with a `<!-- TODO: <operator-action> -->` comment. These are operator-driven; mark `[x]` after the operator confirms, not before.
     - **Edit issue body via `gh issue edit N --body "<full body with [x] marks>"`** (single command, not per-line) — preserves the rest of the body verbatim and produces one audit-trail entry.
@@ -278,7 +278,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
-15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command + README "What's New" one-liner landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
+15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
 15c. **Review all L13 steps 1-15b completed** (broader pre-merge gate — widens 15d's PR-body checklist to all L13 steps):
     - **Walk each L13 step 1 through 15b** and confirm artifact exists before merging:
         - Step 1 (L11 skill tag — recorded in branch commits or PR body)
@@ -289,7 +289,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - Step 10 (L12 pre-PR review findings applied — commit references each fix)
         - Step 11 (verify gate clean: `cargo fmt --check` + `clippy -- -D warnings` + `cargo test` output captured)
         - Step 11a (backlog triage done; follow-up issues filed for any deferred work)
-        - Step 11b (L24 cascade on local branch BEFORE merge — CHANGELOG + Story flip + README in commits that travel with the feature PR)
+        - Step 11b (L24 cascade on local branch BEFORE merge — CHANGELOG + Story flip in commits that travel with the feature PR)
         - Step 12 (commit approval PAUSE honored — user said "approved" or "commit" before each `git commit`)
         - Step 13 (commit-push-pr executed — branch pushed + PR opened)
         - Step 14 (issue checkboxes flipped with artifact evidence per L13 step 14 rules)
@@ -432,27 +432,27 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ---
 
-## L24 — On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column
+## L24 — On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + "Try it" column
 
-**Trigger**: Session 2026-08-10. Two user feedback moments: (1) after merging PR #42 (Task 8 coin_type_for), "I have a feebacks are add changlog, after merged PR need to update user facing that handled" — three artifacts: a CHANGELOG.md for cumulative release history, a README "What's New" section for at-a-glance user visibility, and a User Stories table for capability tracking. (2) "Read user stories, check list boxes after merged, update what user cases finished and we can playaround with them" — per-user-story lens separate from per-PR.
+**Trigger**: Session 2026-08-10. Two user feedback moments: (1) after merging PR #42 (Task 8 coin_type_for), "I have a feebacks are add changlog, after merged PR need to update user facing that handled" — two artifacts: a CHANGELOG.md for cumulative release history and a User Stories table for capability tracking. (2) "Read user stories, check list boxes after merged, update what user cases finished and we can playaround with them" — per-user-story lens separate from per-PR.
 
-**Rule**: After every PR merge into `main`, update three surfaces in one commit on a fresh branch (e.g., `docs/changelog-update-pr-N`):
+**Revision 2026-08-12**: README "What's New" section removed. CHANGELOG is the single source of truth for release history. User Stories table remains for at-a-glance capability status. README updates are out of scope for L24 cascade.
+
+**Rule**: After every PR merge into `main`, update two surfaces in one commit on a fresh branch (e.g., `docs/changelog-update-pr-N`):
 
 1. **`CHANGELOG.md` `[Unreleased]` section** (Keep a Changelog format): append an entry under one of `### Added` / `### Changed` / `### Fixed` / `### Security` / `### Deprecated` / `### Removed`. One bullet per user-visible change. Cite the PR number. For breaking changes: use `### Changed` with `**BREAKING**:` prefix.
 2. **`CHANGELOG.md` User Stories table** (columns `#`, `Story`, `Status`, `Try it`): if the merged PR completes a user story (adds public API, ships CLI command, makes a previously-gated feature testable), flip the corresponding checkbox `[ ]` → `[x]` AND update the "Try it" column with one-line instruction (`cargo test -p bitcoin-wallet-core <module>` for library demos, `<subcommand>` for CLI commands). Drift detection: defense-in-depth changes (compile-time check, audit, lint) don't flip story boxes but still get a per-PR `[Unreleased]` entry.
-3. **`rust-wallet-app/README.md` "What's New" section**: add one-line summary of the merged PR. Format: `- **PR #N** (Task X) — <feature summary>`. Link to `CHANGELOG.md` for full history. Rolls up most recent 5-10 PRs; older entries stay in CHANGELOG only.
 
 **At release time**: cut a versioned section (e.g., `## [v0.1] — 2026-08-10`) by moving all `[Unreleased]` entries under the new version header. Then reset `[Unreleased]` to empty.
 
-**Why**: Three audiences for the same change:
+**Why**: Two audiences for the same change:
 
 - **Per-PR changelog**: cumulative record, machine-parseable, git-blame-friendly, future contributors ask "what changed between v0.1 and v0.2?" — answers without reading commit history.
 - **Per-story changelog**: at-a-glance for clients, "what can I do with this codebase today?" The user-story view answers "is feature X ready to use?" without reading git history.
-- **README "What's New"**: top-of-funnel visibility, "what's new since I last looked?"
 
 **Apply**:
 
-- **Apply L24 on the local working branch BEFORE merging** — append CHANGELOG `[Unreleased]` bullet + User Stories row flip + README "What's New" line in commits that travel WITH the feature PR. The doc updates ride along with the code change as one PR to main.
+- **Apply L24 on the local working branch BEFORE merging** — append CHANGELOG `[Unreleased]` bullet + User Stories row flip in commits that travel WITH the feature PR. The doc updates ride along with the code change as one PR to main.
 - Why local-branch-not-post-merge: keeps each feature self-contained (one PR = one feature + its docs). Reviewers see the user-facing change in the same review pass as the code. No "where's the doc for PR #N?" archeology.
 - L21 stays post-merge (needs the actual merge SHA in the footer); only L24 travels with the feature PR.
 - For sub-task workflows (≥3 sub-tasks per step 3 + sub-task section): L24 doc updates still travel with each sub-task PR on the integration branch — same principle, scoped to the integration branch.
@@ -464,7 +464,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Anti-patterns**:
 
-- Updating only one of the three surfaces — losing cumulative record OR at-a-glance surface OR capability status.
+- Updating only one of the two surfaces — losing cumulative record OR capability status.
 - Long CHANGELOG prose paragraphs — bullets only, terse.
 - Forgetting to bump `[Unreleased]` to a versioned section at release — leaves history unreleased forever.
 - Opening a separate `docs/changelog-update-pr-N` branch AFTER the feature PR merges — splits one feature into two PRs, forces reviewer to revisit completed work, breaks "one PR = one feature." Doc updates travel WITH the feature PR.
@@ -515,7 +515,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
    ```
    Single cut to main = one merge commit = clean main history.
 
-6. **L21 + L24 doc updates travel WITH each sub-task PR** on the working branch — no separate process branch. Each sub-task PR carries its CHANGELOG bullet + User Stories flip + README line + estimate-report row update; the L13 post-merge cascade fires once at the final cut to main.
+6. **L21 + L24 doc updates travel WITH each sub-task PR** on the working branch — no separate process branch. Each sub-task PR carries its CHANGELOG bullet + User Stories flip + estimate-report row update; the L13 post-merge cascade fires once at the final cut to main.
 
 **Why**:
 
