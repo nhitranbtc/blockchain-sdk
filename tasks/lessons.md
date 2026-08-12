@@ -168,6 +168,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Task step                                    | Skill to invoke first                                                                                                                |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Task pickup (understand + plan)              | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                      |
+| Task pickup (drift scan, per L30)            | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts. |
 | TDD red-green-refactor                       | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`)                                              |
 | Build/cargo error cascade                    | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)                                     |
 | Module interface design                      | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4)                                     |
@@ -223,6 +224,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 ## Per task
 3. Pick up issue. Read body. Check if large task or sub-task — see [Sub-task workflow for large tasks](#sub-task-workflow-for-large-tasks) below.
 4. karpathy-guidelines + branch checkout (from integration branch if sub-task per step 3)
+4a. **Drift scan (per L30):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap.
 
 ## Per pipeline step
 5. Step: pick skill pair (max 2) from L11 map
