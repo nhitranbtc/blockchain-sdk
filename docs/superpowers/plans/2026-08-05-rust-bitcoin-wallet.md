@@ -232,7 +232,7 @@ components = ["rustfmt", "clippy", "rust-src"]
 ```
 MIT License
 
-Copyright (c) 2026 [copyright holder]
+Copyright (c) 2026 The blockchain-sdk project contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -669,7 +669,7 @@ use crate::error::Error;
 
 pub fn generate(words: usize) -> Result<Mnemonic, Error> { todo!() }
 pub fn from_str(s: &str) -> Result<Mnemonic, Error> { todo!() }
-pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] { todo!() }
+pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] { m.to_seed(passphrase) }
 
 #[cfg(test)]
 mod tests {
@@ -1452,7 +1452,7 @@ The following user stories deferred until MVP ships:
 
 Tasks removed from this plan (deferred indefinitely, per F1, F27, F28, F29, F38):
 
-- Original Tasks 17, 17.5, 17.6, 18, 18.5, 18.6, 18.7 (CLI features beyond basic wallet/sync/balance)
+- Original Tasks 17, 17.5, 17.6, 18, 18.5, 18.6, 18.7 (CLI features beyond basic wallet/sync/balance — F22 TTY-only passphrase, F36 CLI smoke test, F41 `commands/mod.rs` subcommand wiring deferred to v0.1.1+)
 - Original Task 27 (`chain::explorer`)
 - Original Task 28 (`tx::sign_external`)
 - Original Task 29 (bump-fee + sign-message CLI) — merged into v0.1.2 Story 17+18
@@ -1470,7 +1470,7 @@ Tasks kept (post-spike only):
 
 1. **Spec coverage:** Spec referenced. Story coverage matrix shows MVP covers Stories 1, 2, 3, 4, 11, 12. Stories 5-10, 13-20 deferred. Coverage gap intentional per F35.
 
-2. **Placeholder scan:** No "TBD" / "TODO" / "implement later" / "similar to Task N" patterns. All step bodies contain concrete code or commands.
+2. **Placeholder scan:** No "TBD" / "TODO" / "implement later" / "similar to Task N" patterns. All step bodies contain concrete code or commands. (`[holder]` placeholder in LICENSE block removed per F32; `todo!()` stub in `to_seed` removed — body delegates to `bdk_wallet::bitcoin::Mnemonic::to_seed` per Task 3 reference implementation.)
 
 3. **Type consistency:**
    - `WalletConfig.db_path` is `PathBuf` (per F15 sidecar).
