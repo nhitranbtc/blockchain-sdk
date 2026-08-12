@@ -83,6 +83,7 @@ rust-wallet-app/
 ### Task 0a: Threat Model (per F24)
 
 **Files:**
+
 - Create: `docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md`
 
 **Content (template):**
@@ -144,6 +145,7 @@ rust-wallet-app/
 ### Task 1: Workspace + CI scaffold
 
 **Files:**
+
 - Create: `rust-wallet-app/Cargo.toml` (workspace manifest)
 - Create: `rust-wallet-app/rust-toolchain.toml` (1.85)
 - Create: `rust-wallet-app/LICENSE` (MIT + copyright per F32)
@@ -438,6 +440,7 @@ Expected: 1 pass.
 ### Task 1.5: v0.1 hygiene — Secret<T> + atomic_write + world-writable refusal (per F19, F47, F53)
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/secret.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/util/atomic_write.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/util/mod.rs`
@@ -589,6 +592,7 @@ pub use secret::Secret;
 ### Task 2: Error enum (thiserror)
 
 **Files:**
+
 - Modify: `rust-wallet-app/crates/bitcoin-wallet-core/src/error.rs`
 
 - [ ] **Step 1: Write failing tests**
@@ -659,6 +663,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 ### Task 3: keys::mnemonic (BIP-39) — entropy sized per word count
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/mnemonic.rs`
 
 - [ ] **Step 1: Write failing test**
@@ -744,6 +749,7 @@ pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] {
 ### Task 4: keys::derivation + keys::signer (BIP-32 + secp256k1) (per F44, F47)
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/derivation.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/signer.rs`
 
@@ -878,6 +884,7 @@ mod tests {
 ### Task 5: crypto::argon2 + crypto::aes_gcm (per F5, F6)
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/argon2.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/aes_gcm.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/mod.rs`
@@ -1002,6 +1009,7 @@ pub mod bip137;
 ### Task 6: crypto::bip137 (per F7, F9, F50, F21)
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/bip137.rs`
 
 - [ ] **Step 1: Write failing tests for BIP-137 (per F9 varint, F50 recovery byte, F7 narrow API, F21 Sighash wrapper)**
@@ -1101,6 +1109,7 @@ mod tests {
 ### Task 7: WalletConfig + EsploraClient (per F20 pinning, F15 sidecar)
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/config.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/mod.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/network.rs`
@@ -1226,6 +1235,7 @@ pub mod esplora;
 ### Task 8: chain::network helper (per F37 — replaces deleted Task 7 Step 3 stub)
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/network.rs`
 
 - [ ] **Step 1: Write failing test**
@@ -1262,6 +1272,7 @@ mod tests {
 **Predecessor:** Original Task 31 (BDK API spike) must complete first per F26. Spike validates `Wallet::create(...).create_wallet_no_persist()` + `bdk_esplora::EsploraExt::full_scan` + `bdk_wallet::bitcoin::FeeRate`.
 
 **Files:**
+
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/mod.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/builder.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/sync.rs`
