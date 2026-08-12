@@ -178,12 +178,29 @@ pub async fn handle_show(
     let esplora_url_typed =
         EsploraUrl::new(url).with_context(|| format!("invalid esplora url {url:?}"))?;
 
+    // F20 enforcement (push-sweep #2 fix): non-regtest networks REQUIRE
+    // a SPKI pin. Without a pin, the operator's TLS chain is only as
+    // trusted as the system CA store, which they cannot pin for
+    // public Esplora servers. Refuse BEFORE constructing any client
+    // or hitting the network.
+    //
+    // Regtest is exempted: localhost development often runs behind
+    // stunnel with a self-signed cert + SystemRoots. Operator can
+    // still pin if desired (the `Some(_)` branch below).
+    if esplora_spki_pin.is_none() && network_obj != bitcoin::Network::Regtest {
+        anyhow::bail!(
+            "--pin-spki is required for non-regtest networks (F20 enforcement); \
+             pass --pin-spki <64-char hex SHA-256 of leaf SubjectPublicKeyInfo> \
+             or use --network regtest for localhost development"
+        );
+    }
+
     // F20 enforcement: when the operator passes `--esplora-spki-pin`
     // (or `BTC_ESPLORA_SPKI_PIN` env), route through
     // `EsploraClient::from_config` which applies `TlsPolicy::Pinned`.
     // When unset, fall back to `EsploraClient::new(url, SystemRoots)`
-    // (PR-2 default — testnet-suitable; mainnet/signet/regtest without
-    // a pin will fail at network level per ADR 0001 / F20).
+    // (regtest-only after the F20 gate above; mainnet/signet/testnet
+    // without a pin are rejected at the gate).
     let client = match esplora_spki_pin {
         Some(pin_hex) => {
             let pin = parse_spki_pin_hex(&pin_hex)
@@ -219,6 +236,160 @@ pub async fn handle_show(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin_wallet_core::wallet::create_wallet;
+
+    /// Local test wallet password. The wallet is throwaway — no real
+    /// funds — so a hardcoded password is acceptable for the unit
+    /// surface.
+    fn test_password() -> bitcoin_wallet_core::keys::Secret<Vec<u8>> {
+        bitcoin_wallet_core::keys::Secret::new(b"test-password".to_vec())
+    }
+
+    /// Create a throwaway wallet on `network` in `base`, return its
+    /// `WalletId` as a String (the shape `handle_show` accepts).
+    fn make_wallet(base: &std::path::Path, network: bitcoin::Network) -> String {
+        let (id, _phrase) =
+            create_wallet(base, network, 12, &test_password()).expect("create_wallet must succeed");
+        id.to_string()
+    }
+
+    // -----------------------------------------------------------------------
+    // F20 enforcement tests for `handle_show` (push-sweep #2 fix).
+    //
+    // Background: `default_url_for` returns mainnet/testnet/etc. URLs
+    // so `handle_show` would happily route the operator to
+    // blockstream.info/api with `TlsPolicy::SystemRoots` (no SPKI
+    // pin) — an active mainnet attack surface. F20 mandates SPKI
+    // pinning for non-regtest public Esplora endpoints.
+    //
+    // These tests pin the contract that `handle_show` refuses to
+    // construct an EsploraClient for any non-regtest network without
+    // an explicit `--pin-spki`. Regtest retains the operator-opt-in
+    // exemption (localhost development).
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn handle_show_refuses_mainnet_without_pin() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = make_wallet(base, bitcoin::Network::Bitcoin);
+
+        let err = handle_show(
+            id,
+            crate::cli::NetArg::Bitcoin,
+            Some("test-password".to_string()),
+            None, // use default_url_for → blockstream.info/api
+            None, // NO pin
+            base,
+        )
+        .await
+        .expect_err("mainnet + no --pin-spki must be refused (F20)");
+
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("--pin-spki") || msg.contains("required"),
+            "F20 refusal message expected, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_show_refuses_testnet_without_pin() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = make_wallet(base, bitcoin::Network::Testnet);
+
+        let err = handle_show(
+            id,
+            crate::cli::NetArg::Testnet,
+            Some("test-password".to_string()),
+            None,
+            None,
+            base,
+        )
+        .await
+        .expect_err("testnet + no --pin-spki must be refused (F20)");
+
+        let msg = format!("{err:?}");
+        assert!(msg.contains("required"), "F20 refusal expected: {msg}");
+    }
+
+    #[tokio::test]
+    async fn handle_show_refuses_signet_without_pin() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = make_wallet(base, bitcoin::Network::Signet);
+
+        let err = handle_show(
+            id,
+            crate::cli::NetArg::Signet,
+            Some("test-password".to_string()),
+            None,
+            None,
+            base,
+        )
+        .await
+        .expect_err("signet + no --pin-spki must be refused (F20)");
+
+        let msg = format!("{err:?}");
+        assert!(msg.contains("required"), "F20 refusal expected: {msg}");
+    }
+
+    #[tokio::test]
+    async fn handle_show_refuses_testnet4_without_pin() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = make_wallet(base, bitcoin::Network::Testnet4);
+
+        let err = handle_show(
+            id,
+            crate::cli::NetArg::Testnet4,
+            Some("test-password".to_string()),
+            None,
+            None,
+            base,
+        )
+        .await
+        .expect_err("testnet4 + no --pin-spki must be refused (F20)");
+
+        let msg = format!("{err:?}");
+        assert!(msg.contains("required"), "F20 refusal expected: {msg}");
+    }
+
+    /// F20 regtest exemption: localhost regtest often uses a
+    /// self-signed cert + SystemRoots, which is acceptable behind
+    /// stunnel. Operator may omit `--pin-spki`.
+    ///
+    /// The test only asserts the F20 gate does NOT trip for regtest.
+    /// Whether the client construction itself succeeds depends on
+    /// the runtime TLS state (CA bundle, etc.) — we treat that as
+    /// out-of-scope for this unit test (covered by L29 live smoke).
+    #[tokio::test]
+    async fn handle_show_regtest_without_pin_skips_f20_refusal() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = make_wallet(base, bitcoin::Network::Regtest);
+
+        let err = handle_show(
+            id,
+            crate::cli::NetArg::Regtest,
+            Some("test-password".to_string()),
+            Some("https://localhost:50002".to_string()),
+            None,
+            base,
+        )
+        .await
+        .err();
+
+        if let Some(e) = err {
+            let msg = format!("{e:?}");
+            // Must NOT trip the F20 "required" refusal. Any other
+            // error (TLS builder, regtest server missing) is fine.
+            assert!(
+                !msg.contains("--pin-spki") && !msg.contains("required"),
+                "regtest must not trip F20 refusal: {msg}"
+            );
+        }
+    }
 
     #[test]
     fn default_url_for_bitcoin() {

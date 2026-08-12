@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ### Security
 
+- **`[internal]`** F20 enforcement tightened in `btc wallet show` (push-sweep #2): non-regtest networks (Bitcoin, Testnet, Testnet4, Signet) now refuse to construct an EsploraClient without an explicit `--pin-spki` (or `BTC_ESPLORA_SPKI_PIN` env). Regtest retains the operator-opt-in exemption (localhost development via stunnel + SystemRoots). Closes active mainnet attack surface where `default_url_for(Network::Bitcoin) → blockstream.info/api` would route without a pin. Mirrors the F20 gate already shipped in `btc wallet sync` / `btc wallet balance` (PR #81). 5 new unit tests pin the contract across all 4 non-regtest networks + regtest exemption.
 - **`[internal]`** F12 / F13: full implementation in `Wallet::sync` / `Wallet::balance`. F19 (`atomic_write`-backed persistence) deferred for UTXO state; encrypted mnemonic blob persistence lands in v0.1 via #54d per ADR 0001 (in-memory UTXO state until next `sync`).
 - **`[internal]`** `XPrvHolder::to_xprv_secret() -> Secret<String>` (replaces `to_xprv_string`; `pub(crate)`; zeroize-on-drop) — closes xprv zeroize window in descriptor construction. PR #55
 - **`[internal]`** `Error::Bdk` carries fixed message; raw bdk error dropped (avoids xprv leak via descriptor echo). PR #55
