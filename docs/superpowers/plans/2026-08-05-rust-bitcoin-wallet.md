@@ -12,6 +12,8 @@
 
 **Architecture:** Cargo workspace `rust-wallet-app/`. Crate `bitcoin-wallet-core` (BDK 3.1 + rust-bitcoin 0.32) owns signing + chain + encryption. `secp256k1` and `miniscript` re-exported via `bdk_wallet::bitcoin::*`; no direct deps needed. Crate `btc` (clap 4) is the minimal CLI. **Default network is Bitcoin testnet** for all development and CI; mainnet is opt-in via `--network mainnet`.
 
+> **Workspace version drift (2026-08-12, Phase 1 closure):** Workspace manifest `rust-wallet-app/Cargo.toml` resolved to `version = "0.2.0"` after the `chain-traits` umbrella scaffold was added as a workspace member (commit predates F33/F35 deferral decision). Per Phase 2 Backlog, `chain-traits` was supposed to ship in v0.2 — it was pulled forward into the same workspace, advancing the version without a plan-level decision. Resolution: **accept `0.2.0`** for the workspace + all member crates; Phase 2 plan will formally adopt `chain-traits` per F35. No source code change.
+
 **MVP scope (per F35):** Tasks 0-9 + minimal CLI = working wallet create + sync + balance. Stories 1, 2, 3, 4, 11, 12 in scope. Stories 5-10, 13-20 deferred to v0.1.1/v0.1.2.
 
 **Tech Stack:** Rust 1.85 MSRV (justification per F31: `bdk_wallet 3.1` requires 1.85; if a lower MSRV proves compatible, downgrade), BDK 3.1 (with `keys-bip39` feature for `bip39` re-export), rust-bitcoin 0.32 (re-exports `secp256k1` + `miniscript` + `bip39`), bip32 0.6 (fallback `^0.5` per F46), tokio 1, reqwest 0.12, thiserror 1, tracing 0.1, clap 4, proptest 1, argon2 0.5, aes-gcm 0.10, rand 0.8, zeroize 1.
@@ -135,8 +137,8 @@ rust-wallet-app/
 | U6, U7 | F19 (Task 1.5) | in plan |
 ```
 
-- [ ] **Step 1:** Write threat-model.md content above.
-- [ ] **Step 2:** Pause for commit approval.
+- [x] **Step 1:** Write threat-model.md content above.
+- [x] **Step 2:** Pause for commit approval.
 
 ---
 
@@ -157,7 +159,7 @@ rust-wallet-app/
 - Create: `rust-wallet-app/.github/workflows/ci.yml`
 - Create: `rust-wallet-app/deny.toml`
 
-- [ ] **Step 1: Write failing test for workspace build**
+- [x] **Step 1: Write failing test for workspace build**
 
 ```rust
 // crates/bitcoin-wallet-core/tests/build_workspace.rs  (lives under member crate
@@ -168,7 +170,7 @@ fn workspace_members_compile() {
 }
 ```
 
-- [ ] **Step 2: Create workspace Cargo.toml**
+- [x] **Step 2: Create workspace Cargo.toml**
 
 ```toml
 [workspace]
@@ -219,7 +221,7 @@ tempfile = "3"
 base64 = "0.22"
 ```
 
-- [ ] **Step 3: Create rust-toolchain.toml**
+- [x] **Step 3: Create rust-toolchain.toml**
 
 ```toml
 [toolchain]
@@ -229,7 +231,7 @@ channel = "1.94"
 components = ["rustfmt", "clippy", "rust-src"]
 ```
 
-- [ ] **Step 4: Create LICENSE (MIT + copyright per F32)**
+- [x] **Step 4: Create LICENSE (MIT + copyright per F32)**
 
 ```text
 MIT License
@@ -255,7 +257,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-- [ ] **Step 5: Create .gitignore**
+- [x] **Step 5: Create .gitignore**
 
 ```text
 /target
@@ -265,7 +267,7 @@ Cargo.lock
 .env
 ```
 
-- [ ] **Step 6: Create bitcoin-wallet-core/Cargo.toml**
+- [x] **Step 6: Create bitcoin-wallet-core/Cargo.toml**
 
 ```toml
 [package]
@@ -314,7 +316,7 @@ proptest = { workspace = true }
 tokio = { workspace = true }
 ```
 
-- [ ] **Step 7: Create bitcoin-wallet-core/src/lib.rs**
+- [x] **Step 7: Create bitcoin-wallet-core/src/lib.rs**
 
 ```rust
 //! bitcoin-wallet-core: standalone Bitcoin wallet engine.
@@ -343,7 +345,7 @@ pub mod wallet;
 pub use error::{Error, Result};
 ```
 
-- [ ] **Step 8: Create btc/Cargo.toml**
+- [x] **Step 8: Create btc/Cargo.toml**
 
 ```toml
 [package]
@@ -365,7 +367,7 @@ tracing-subscriber = { workspace = true }
 serde_json = { workspace = true }
 ```
 
-- [ ] **Step 9: Create btc/src/main.rs**
+- [x] **Step 9: Create btc/src/main.rs**
 
 ```rust
 fn main() {
@@ -373,7 +375,7 @@ fn main() {
 }
 ```
 
-- [ ] **Step 10: Create .github/workflows/ci.yml**
+- [ ] **Step 10: Create .github/workflows/ci.yml** *(lands in Phase 1 closure PR — see Architecture drift note above)*
 
 ```yaml
 name: CI
@@ -395,7 +397,7 @@ jobs:
         if: github.event.name == 'push' && github.ref == 'refs/heads/main'
 ```
 
-- [ ] **Step 11: Create deny.toml**
+- [x] **Step 11: Create deny.toml**
 
 ```toml
 [graph]
@@ -408,7 +410,7 @@ version = 2
 allow = ["MIT", "Apache-2.0", "BSD-3-Clause"]
 ```
 
-- [ ] **Step 12: Stub error.rs**
+- [x] **Step 12: Stub error.rs**
 
 ```rust
 // crates/bitcoin-wallet-core/src/error.rs
@@ -420,14 +422,14 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 ```
 
-- [ ] **Step 13: Stub empty modules**
+- [x] **Step 13: Stub empty modules**
 
 ```rust
 // crates/bitcoin-wallet-core/src/{config,threat,util/mod,keys/mod,crypto/mod,script/mod,address/mod,chain/mod,wallet/mod}.rs
 // each file contains: // empty
 ```
 
-- [ ] **Step 14: Verify workspace builds**
+- [x] **Step 14: Verify workspace builds**
 
 Run: `cargo build --workspace`
 Expected: success.
@@ -435,7 +437,7 @@ Expected: success.
 Run: `cargo test --workspace`
 Expected: 1 pass.
 
-- [ ] **Step 15:** Pause for commit approval (per `never-auto-commit` rule).
+- [x] **Step 15:** Pause for commit approval (per `never-auto-commit` rule).
 
 ### Task 1.5: v0.1 hygiene — Secret<T> + atomic_write + world-writable refusal (per F19, F47, F53)
 
@@ -446,7 +448,7 @@ Expected: 1 pass.
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/util/mod.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/util/permissions.rs`
 
-- [ ] **Step 1: Write failing tests for Secret (per F53 scoped unsafe block)**
+- [x] **Step 1: Write failing tests for Secret (per F53 scoped unsafe block)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/keys/secret.rs
@@ -491,7 +493,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Write failing test for atomic_write (per F19 + parent dir fsync)**
+- [x] **Step 2: Write failing test for atomic_write (per F19 + parent dir fsync)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/util/atomic_write.rs
@@ -533,7 +535,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Write failing test for refuse_world_writable**
+- [x] **Step 3: Write failing test for refuse_world_writable**
 
 ```rust
 // crates/bitcoin-wallet-core/src/util/permissions.rs
@@ -573,21 +575,21 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Create util/mod.rs**
+- [x] **Step 4: Create util/mod.rs**
 
 ```rust
 pub mod atomic_write;
 pub mod permissions;
 ```
 
-- [ ] **Step 5: Re-export Secret in keys/mod.rs**
+- [x] **Step 5: Re-export Secret in keys/mod.rs**
 
 ```rust
 mod secret;
 pub use secret::Secret;
 ```
 
-- [ ] **Step 6: Run tests, pause for commit.**
+- [x] **Step 6: Run tests, pause for commit.**
 
 ### Task 2: Error enum (thiserror)
 
@@ -595,7 +597,7 @@ pub use secret::Secret;
 
 - Modify: `rust-wallet-app/crates/bitcoin-wallet-core/src/error.rs`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```rust
 #[cfg(test)]
@@ -614,7 +616,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Implement Error enum (adds Encryption variant)**
+- [x] **Step 2: Implement Error enum (adds Encryption variant)**
 
 ```rust
 use thiserror::Error;
@@ -658,7 +660,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 ```
 
-- [ ] **Step 3: Run tests, pause for commit.**
+- [x] **Step 3: Run tests, pause for commit.**
 
 ### Task 3: keys::mnemonic (BIP-39) — entropy sized per word count
 
@@ -666,7 +668,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/mnemonic.rs`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```rust
 use bdk_wallet::keys::bip39::Mnemonic;
@@ -703,7 +705,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Implement with correct entropy sizes**
+- [x] **Step 2: Implement with correct entropy sizes**
 
 ```rust
 use bdk_wallet::keys::bip39::{Language, Mnemonic, MnemonicType};
@@ -744,7 +746,7 @@ pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] {
 }
 ```
 
-- [ ] **Step 3: Run tests, pause for commit.**
+- [x] **Step 3: Run tests, pause for commit.**
 
 ### Task 4: keys::derivation + keys::signer (BIP-32 + secp256k1) (per F44, F47)
 
@@ -753,7 +755,7 @@ pub fn to_seed(m: &Mnemonic, passphrase: &str) -> [u8; 64] {
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/derivation.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/keys/signer.rs`
 
-- [ ] **Step 1: Write failing tests for derivation**
+- [x] **Step 1: Write failing tests for derivation**
 
 ```rust
 use bip32::{DerivationPath, XPrv};
@@ -787,7 +789,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Implement derivation**
+- [x] **Step 2: Implement derivation**
 
 ```rust
 use bip32::{DerivationPath, XPrv};
@@ -827,7 +829,7 @@ pub fn derive_xprv(master: &XPrv, path: &DerivationPath) -> Result<XPrv, Error> 
 }
 ```
 
-- [ ] **Step 3: Write failing test for signer (per F47 Secret<Keypair> wrap)**
+- [x] **Step 3: Write failing test for signer (per F47 Secret<Keypair> wrap)**
 
 ```rust
 use bdk_wallet::bitcoin::secp256k1::{ecdsa::Signature, Keypair, Message, Secp256k1};
@@ -875,7 +877,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run tests, pause for commit.**
+- [x] **Step 4: Run tests, pause for commit.**
 
 ---
 
@@ -889,7 +891,7 @@ mod tests {
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/aes_gcm.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/mod.rs`
 
-- [ ] **Step 1: Write failing test for Argon2id (per F5 calibration)**
+- [x] **Step 1: Write failing test for Argon2id (per F5 calibration)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/crypto/argon2.rs
@@ -939,7 +941,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Write failing test for AES-256-GCM (per F6 encryption at rest)**
+- [x] **Step 2: Write failing test for AES-256-GCM (per F6 encryption at rest)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/crypto/aes_gcm.rs
@@ -996,7 +998,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Create crypto/mod.rs**
+- [x] **Step 3: Create crypto/mod.rs**
 
 ```rust
 pub mod argon2;
@@ -1004,7 +1006,7 @@ pub mod aes_gcm;
 pub mod bip137;
 ```
 
-- [ ] **Step 4: Run tests, pause for commit.**
+- [x] **Step 4: Run tests, pause for commit.**
 
 ### Task 6: crypto::bip137 (per F7, F9, F50, F21)
 
@@ -1012,7 +1014,7 @@ pub mod bip137;
 
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/crypto/bip137.rs`
 
-- [ ] **Step 1: Write failing tests for BIP-137 (per F9 varint, F50 recovery byte, F7 narrow API, F21 Sighash wrapper)**
+- [x] **Step 1: Write failing tests for BIP-137 (per F9 varint, F50 recovery byte, F7 narrow API, F21 Sighash wrapper)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/crypto/bip137.rs
@@ -1100,7 +1102,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Pause for commit.** (End-to-end BIP-137 verification with Bitcoin Core RPC deferred to v0.1.1 per F9 cross-verification test.)
+- [x] **Step 2: Pause for commit.** (End-to-end BIP-137 verification with Bitcoin Core RPC deferred to v0.1.1 per F9 cross-verification test.)
 
 ---
 
@@ -1115,7 +1117,7 @@ mod tests {
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/network.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/esplora.rs`
 
-- [ ] **Step 1: Write failing test for WalletConfig (per F15 sidecar pattern)**
+- [x] **Step 1: Write failing test for WalletConfig (per F15 sidecar pattern)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/config.rs
@@ -1169,7 +1171,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Write failing test for EsploraClient (per F20 pinning)**
+- [x] **Step 2: Write failing test for EsploraClient (per F20 pinning)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/chain/esplora.rs
@@ -1223,14 +1225,14 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Create chain/mod.rs**
+- [x] **Step 3: Create chain/mod.rs**
 
 ```rust
 pub mod network;
 pub mod esplora;
 ```
 
-- [ ] **Step 4: Run tests, pause for commit.**
+- [x] **Step 4: Run tests, pause for commit.**
 
 ### Task 8: chain::network helper (per F37 — replaces deleted Task 7 Step 3 stub)
 
@@ -1238,7 +1240,7 @@ pub mod esplora;
 
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/network.rs`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```rust
 use bitcoin::Network;
@@ -1265,7 +1267,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run tests, pause for commit.**
+- [x] **Step 2: Run tests, pause for commit.**
 
 ### Task 9: Wallet::from_mnemonic + sync + balance (per F12, F13, F14, F15, F21, F34, F44, F26)
 
@@ -1279,7 +1281,7 @@ mod tests {
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/wallet/balance.rs`
 - Create: `rust-wallet-app/crates/bitcoin-wallet-core/src/threat.rs`
 
-- [ ] **Step 1: Create threat.rs (per F21)**
+- [x] **Step 1: Create threat.rs (per F21)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/threat.rs
@@ -1296,7 +1298,7 @@ pub enum MessageClass {
 pub struct Sighash(pub [u8; 32], pub MessageClass);
 ```
 
-- [ ] **Step 2: Write failing test for Wallet::from_mnemonic (per F34 concrete assert)**
+- [x] **Step 2: Write failing test for Wallet::from_mnemonic (per F34 concrete assert)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/mod.rs
@@ -1343,7 +1345,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Implement Wallet::from_mnemonic (per F44 drop unused derive_xprv)**
+- [x] **Step 3: Implement Wallet::from_mnemonic (per F44 drop unused derive_xprv)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/builder.rs
@@ -1394,7 +1396,7 @@ fn descriptor_template(xprv: &str, t: AddressType) -> String {
 }
 ```
 
-- [ ] **Step 4: Implement Wallet::sync (per F12 wallet.start_full_scan)**
+- [x] **Step 4: Implement Wallet::sync (per F12 wallet.start_full_scan)**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/sync.rs
@@ -1422,7 +1424,7 @@ impl Wallet {
 }
 ```
 
-- [ ] **Step 5: Implement Wallet::balance**
+- [x] **Step 5: Implement Wallet::balance**
 
 ```rust
 // crates/bitcoin-wallet-core/src/wallet/balance.rs
@@ -1449,7 +1451,7 @@ impl Wallet {
 }
 ```
 
-- [ ] **Step 6: Run tests, pause for commit.**
+- [x] **Step 6: Run tests, pause for commit.**
 
 ---
 
