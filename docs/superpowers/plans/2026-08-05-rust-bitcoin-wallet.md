@@ -16,6 +16,8 @@
 
 **MVP scope (per F35):** Tasks 0-9 + minimal CLI = working wallet create + sync + balance. Stories 1, 2, 3, 4, 11, 12 in scope. Stories 5-10, 13-20 deferred to v0.1.1/v0.1.2.
 
+> **Phase 1 §MVP closure (2026-08-12):** Story 2 (`btc wallet import`) shipped in PR #101 (SHA `90d6e6f`). Security fix (remove `--passphrase` flag, broken-security-control) in PR #102 (SHA `786ce4b`). Spec-compliance fixes (exit code 2 + `checksum mismatch`) in PR #103 (SHA `43da9fc`). Demo `btc-import-demo.sh` verifies 8/8 steps across all 5 BIP-39 word counts (12/15/18/21/24) and all 5 networks (bitcoin, testnet, signet, testnet4, regtest). Remaining Phase 1 gap: **Story 11** (`btc config show`) tracked in issue #100 (backlog, p2).
+
 **Tech Stack:** Rust 1.85 MSRV (justification per F31: `bdk_wallet 3.1` requires 1.85; if a lower MSRV proves compatible, downgrade), BDK 3.1 (with `keys-bip39` feature for `bip39` re-export), rust-bitcoin 0.32 (re-exports `secp256k1` + `miniscript` + `bip39`), bip32 0.6 (fallback `^0.5` per F46), tokio 1, reqwest 0.12, thiserror 1, tracing 0.1, clap 4, proptest 1, argon2 0.5, aes-gcm 0.10, rand 0.8, zeroize 1.
 
 ## Global Constraints
