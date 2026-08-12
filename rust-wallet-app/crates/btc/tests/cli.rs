@@ -308,11 +308,18 @@ fn import_rejects_invalid_checksum() {
     // Same 12 words but with last word changed — checksum broken.
     let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
     let out = run_import(bad, "testnet", "test-password", temp.path());
-    assert!(
-        !out.status.success(),
-        "expected non-zero exit for invalid checksum; got {:?}; stderr={}",
-        out.status,
+    // Per Story 2 AC: invalid mnemonic → exit code 2 (not anyhow default 1).
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "expected exit code 2 for invalid checksum (Story 2 AC); got {:?}; stderr={}",
+        out.status.code(),
         String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("checksum mismatch"),
+        "expected 'checksum mismatch' in stderr (Story 2 AC); got: {stderr}"
     );
 }
 

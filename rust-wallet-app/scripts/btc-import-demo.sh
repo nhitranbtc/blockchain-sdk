@@ -352,24 +352,28 @@ else
     exit 1
 fi
 
-# --- Step 5: invalid checksum → non-zero exit -------------------------------
-banner "STEP 5/7: btc wallet import (invalid checksum → refusal)"
+# --- Step 5: invalid checksum → exit code 2 + 'checksum mismatch' ---------
+# Per Story 2 AC: invalid mnemonic returns exit code 2 (not anyhow default 1)
+# with stderr containing 'checksum mismatch'.
+banner "STEP 5/7: btc wallet import (invalid checksum → exit 2)"
 # Same 12 words but with last word changed → checksum broken.
 BAD_MNEMONIC_12="abandon abandon abandon abandon abandon abandon \
 abandon abandon abandon abandon abandon abandon"
 set +e
+STDERR_STEP5="${TMPDIR_DEMO}/step5-stderr.$$"
 "${BT_BIN}" wallet import \
     --mnemonic "${BAD_MNEMONIC_12}" \
     --network testnet \
-    --password demo-pwd 2>&1
+    --password demo-pwd 2>"${STDERR_STEP5}"
 BAD_EXIT=$?
 set -e
-if [[ ${BAD_EXIT} -ne 0 ]]; then
-    record_step 5 PASS "btc wallet import (invalid checksum refused)"
-    print_step_result 5 "exit code ${BAD_EXIT} (refused as expected)"
+STDERR_STEP5_CONTENT="$(cat "${STDERR_STEP5}" 2>/dev/null || true)"
+if [[ ${BAD_EXIT} -eq 2 && "${STDERR_STEP5_CONTENT}" == *"checksum mismatch"* ]]; then
+    record_step 5 PASS "btc wallet import (invalid checksum → exit 2 + checksum mismatch)"
+    print_step_result 5 "exit 2, stderr contains 'checksum mismatch'"
 else
     record_step 5 FAIL "btc wallet import (invalid checksum)"
-    print_step_result 5 "expected non-zero exit, got: 0"
+    print_step_result 5 "expected exit 2 + 'checksum mismatch'; got exit=${BAD_EXIT}, stderr=${STDERR_STEP5_CONTENT}"
     exit 1
 fi
 
@@ -420,10 +424,15 @@ if [[ -z "${BTC_DEMO_ESPLORA_SPKI_PIN:-}" ]]; then
     printf '$ %s %s %s --network %s --password %s\n' \
         "${BT_BIN}" "wallet" "show" "bitcoin" "demo-pwd"
     set +e
+    # Suppress stderr — the "Error: --pin-spki is required..." line is the
+    # expected refusal; printing it makes the demo look like it failed.
+    STDERR_TMP="${TMPDIR_DEMO}/step7-stderr.$$"
     "${BT_BIN}" wallet show "${WALLET_ID_A}" \
-        --network bitcoin --password demo-pwd 2>&1
+        --network bitcoin --password demo-pwd 2>"${STDERR_TMP}"
     STEP7_EXIT=$?
     set -e
+    REFUSAL_MSG="$(cat "${STDERR_TMP}" 2>/dev/null | head -1 || true)"
+    printf '        (expected F20 refusal: %s)\n' "${REFUSAL_MSG:-no stderr captured}"
     if [[ ${STEP7_EXIT} -ne 0 ]]; then
         record_step 7 PASS "btc wallet show (F20 gate demonstrated on imported wallet)"
         print_step_result 7 "refused without --pin-spki as expected"
