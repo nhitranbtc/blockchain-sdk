@@ -24,6 +24,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
+- [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -39,6 +40,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Skill + review pair | L11, L12, L13 |
 | Post-merge bookkeeping | L21, L24 |
 | Client product | L28 |
+| Live testnet smoke | L29 |
 | Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
 ---
@@ -629,5 +631,49 @@ These only surface when the binary actually calls the third-party code against a
 - ✅ PR #48 (`Wallet::from_mnemonic`) — full impl, all tests pass, real capability. Story #10 flipped to `[x]`.
 - ❌ PR #50 (`Wallet::sync stub`) — stub returning `Err("not yet implemented")`. **Story #11 should NOT be flipped**. PR #50 must NOT be merged without full impl replacing the stub.
 - ❌ PR #55 (`Wallet::sync` + `Wallet::balance` full impl) — gates A + B passed but Gate C missed; 3 semantic bugs caught only when "demo on main" ran against real testnet.
+
+---
+
+## L29 — Live testnet smoke is operator-driven, not CI
+
+**Trigger**: Multiple `#[ignore]`-marked live-Esplora tests across PRs (#55, #63, #84). Referenced in CHANGELOG entries ("Live testnet smoke `#[ignore]` per L29") + lesson L13 step 11b + L13 step 14 "external gate" handling — but never written as a stand-alone lesson.
+
+**Rule**: For any test that requires live network access (blockstream.info, mempool.space, public Esplora endpoints), apply all three:
+
+1. **Mark `#[ignore]`** with a comment naming L29: `#[ignore = "requires live testnet Esplora; run manually before merge per L29"]`. CI must never run it (flake risk on public infra; rate-limit risk on CI IPs).
+2. **Provide a CLI opt-in path for operators** — typically an env var like `BTC_TESTNET_RUN=1` gating a shell script that exercises the feature end-to-end (`rust-wallet-app/scripts/btc-quickstart.sh` is the canonical example, ~7 steps covering wallet create → message sign → wallet show → balance → sync).
+3. **Document the operator workflow in the PR description** — list the command(s) operator runs against live testnet before approving the PR merge. Issue acceptance checkboxes for `L29 manual smoke` stay `[ ]` until operator confirms; flip to `[x]` with operator's confirmation commit (per L13 step 14 "external gate acceptance").
+
+**Why**: CI runner network access is unreliable + flaky + slow. Public Esplora endpoints can rate-limit CI IPs. Tests that make real network calls belong in operator-driven smoke on hardware with stable egress + a real SPKI pin + the operator's judgment on whether the sync output matches the PR's claims. Demoing on real testnet before merge catches semantic bugs the unit tests miss (PR #55 — Gate C gap).
+
+**Apply — pattern for new live-network features**:
+
+```rust
+#[tokio::test]
+#[ignore = "requires live testnet Esplora; run manually before merge per L29"]
+async fn feature_completes_against_testnet_for_fresh_wallet() {
+    // ... test body ...
+}
+```
+
+And in the PR description:
+
+```markdown
+## L29 manual smoke (operator action before merge)
+
+\`\`\`bash
+BTC_TESTNET_RUN=1 BTC_ESPLORA_SPKI_PIN=<real-hex> \
+  cargo run -p bitcoin-wallet-core --example sync_demo
+# Expected: n_utxos=0 total_sat=0 (fresh wallet, no UTXOs)
+\`\`\`
+```
+
+Operator confirms via PR comment + flips the `L29` acceptance box.
+
+**Anti-patterns**:
+
+- Running live tests in CI (causes flakes + rate-limit failures; PR review noise).
+- Skipping the live smoke entirely (Gate C gap — semantic bugs that unit tests miss).
+- Auto-flipping the `L29` acceptance box before operator confirmation (false-positive completion; per L13 step 14).
 
 ---
