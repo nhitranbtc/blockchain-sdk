@@ -22,7 +22,8 @@ use bitcoin_wallet_core::crypto::mnemonic_cipher::{
 use bitcoin_wallet_core::keys::{AddressType, Mnemonic, Secret, Signer, XPrvHolder};
 use bitcoin_wallet_core::util::atomic_write::atomic_write;
 use bitcoin_wallet_core::wallet::{
-    create_wallet, show_wallet, KeychainKind, Wallet, WalletId, SUPPORTED_WORD_COUNTS,
+    create_wallet, import_wallet, show_wallet, KeychainKind, Wallet, WalletId,
+    SUPPORTED_WORD_COUNTS,
 };
 
 use crate::cli::{NetArg, WordCount};
@@ -216,6 +217,43 @@ pub async fn handle_create(
     println!("{wallet_id_str}");
     eprintln!("Mnemonic (write this down; never stored in plaintext):");
     eprintln!("{phrase}");
+    Ok(())
+}
+
+/// Import an existing BIP-39 mnemonic + persist the encrypted wallet
+/// blob (Issue #99 / Story 2). Generates a new WalletId; the phrase
+/// is NOT echoed back (caller already has it).
+///
+/// BIP-39 passphrase is NOT persisted — derivation-time only.
+pub async fn handle_import(
+    mnemonic: String,
+    passphrase: Option<String>,
+    network: NetArg,
+    password: Option<String>,
+    data_dir: &Path,
+) -> Result<()> {
+    // The mnemonic arrived via `--mnemonic` or `BTC_WALLET_MNEMONIC`;
+    // we never re-print it (unlike `handle_create`). Word count +
+    // checksum validated inside `import_wallet` via `Mnemonic::from_phrase`.
+    let pwd_plain = password_or_prompt(password)?;
+    let pwd = secret_password(pwd_plain);
+    let network_obj = network.as_network();
+
+    let wallet_id = import_wallet(data_dir, network_obj, &mnemonic, &pwd)
+        .context("import_wallet failed (invalid mnemonic or unsupported word count)")?;
+    let wallet_id_str = wallet_id.to_string();
+
+    println!("{wallet_id_str}");
+    eprintln!("Wallet imported successfully.");
+    if passphrase.is_some() {
+        eprintln!(
+            "Note: BIP-39 passphrase is NOT persisted; pass --passphrase again at `wallet show` time."
+        );
+    }
+    // Drop the mnemonic from the stack ASAP. Note: caller still holds
+    // the original String (from clap); this is best-effort defense
+    // inside `handle_import` only.
+    drop(mnemonic);
     Ok(())
 }
 

@@ -219,3 +219,161 @@ fn create_then_show_roundtrips_against_testnet() {
         "expected balance_sat on stdout: {stdout}"
     );
 }
+
+// -- wallet import (Issue #99 / Story 2) -----------------------------------
+
+/// BIP-39 standard test vector (12-word, valid checksum).
+const IMPORT_PHRASE: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+/// Run `btc wallet import` against a fresh tempdir + return captured output.
+fn run_import(
+    mnemonic: &str,
+    network: &str,
+    password: &str,
+    data_home: &std::path::Path,
+) -> std::process::Output {
+    btc()
+        .args([
+            "wallet",
+            "import",
+            "--mnemonic",
+            mnemonic,
+            "--network",
+            network,
+            "--password",
+            password,
+        ])
+        .env("XDG_DATA_HOME", data_home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn btc wallet import")
+}
+
+#[test]
+fn wallet_import_help_exits_zero() {
+    let out = btc()
+        .args(["wallet", "import", "--help"])
+        .output()
+        .expect("spawn btc");
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn import_accepts_valid_12_word_phrase_and_persists_blob() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out = run_import(IMPORT_PHRASE, "testnet", "test-password", temp.path());
+    assert!(
+        out.status.success(),
+        "import failed: {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Wallet_id on STDOUT (scriptable).
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let wallet_id = stdout.trim();
+    assert!(!wallet_id.is_empty(), "expected wallet_id on stdout");
+    // Basic UUID-shape sanity check (8-4-4-4-12 hex chars).
+    let parts: Vec<&str> = wallet_id.split('-').collect();
+    assert_eq!(parts.len(), 5, "expected UUID v4 shape, got: {wallet_id}");
+
+    // ADR 0001 path: $XDG_DATA_HOME/btc/wallets/<network>/<wallet_id>.enc
+    let blob_path = temp
+        .path()
+        .join("btc")
+        .join("wallets")
+        .join("testnet")
+        .join(format!("{wallet_id}.enc"));
+    assert!(
+        blob_path.exists(),
+        "expected blob at {}; ls: {:?}",
+        blob_path.display(),
+        std::fs::read_dir(temp.path().join("btc").join("wallets").join("testnet")).map(|d| d
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect::<Vec<_>>())
+    );
+}
+
+#[test]
+fn import_rejects_invalid_checksum() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    // Same 12 words but with last word changed — checksum broken.
+    let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+    let out = run_import(bad, "testnet", "test-password", temp.path());
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit for invalid checksum; got {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn import_does_not_echo_mnemonic_to_stdout() {
+    // Story 2 AC: "Output does not echo the mnemonic back to the terminal."
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out = run_import(IMPORT_PHRASE, "testnet", "test-password", temp.path());
+    assert!(out.status.success(), "import failed: {:?}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Only wallet_id expected on stdout — no mnemonic anywhere.
+    assert!(
+        !stdout.contains("abandon"),
+        "mnemonic leaked to stdout: {stdout}"
+    );
+    // STDERR is also clean of the mnemonic — we only print wallet_id
+    // and a success line.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("abandon"),
+        "mnemonic leaked to stderr: {stderr}"
+    );
+}
+
+#[test]
+fn import_then_create_produces_distinct_wallet_ids() {
+    // Importing the same phrase twice yields two distinct WalletIds
+    // (fresh UUID per import); the create flow generates a different
+    // mnemonic entirely.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let import_out = run_import(IMPORT_PHRASE, "testnet", "test-password", temp.path());
+    assert!(import_out.status.success());
+    let import_id = String::from_utf8_lossy(&import_out.stdout)
+        .trim()
+        .to_string();
+
+    let create_out = run_create("12", "testnet", "test-password", temp.path());
+    assert!(
+        create_out.status.success(),
+        "create failed: {:?}",
+        create_out.status
+    );
+    let create_id = String::from_utf8_lossy(&create_out.stdout)
+        .trim()
+        .to_string();
+
+    assert_ne!(
+        import_id, create_id,
+        "import + create should produce distinct wallet ids"
+    );
+}
+
+#[test]
+fn import_accepts_24_word_phrase() {
+    let phrase24 = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out = run_import(phrase24, "bitcoin", "test-password", temp.path());
+    assert!(
+        out.status.success(),
+        "24-word import failed: {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
