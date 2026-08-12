@@ -375,7 +375,7 @@ fn main() {
 }
 ```
 
-- [ ] **Step 10: Create .github/workflows/ci.yml** *(lands in Phase 1 closure PR — see Architecture drift note above)*
+- [x] **Step 10: Create .github/workflows/ci.yml** *(landed in PR #96, commit `2c1c5e7`)*
 
 ```yaml
 name: CI
