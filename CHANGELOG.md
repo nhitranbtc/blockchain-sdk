@@ -102,7 +102,7 @@ Each story is a user-facing capability. Once checked, the feature is **playaroun
 | 4 | [x] Encrypt with password (Argon2id KDF + AES-256-GCM) | done (PR #27) | `cargo test -p bitcoin-wallet-core crypto::aes_gcm` |
 | 5 | [x] Connect to Esplora server (SPKI-pinned TLS, F20) | done (PR #34) | `cargo test -p bitcoin-wallet-core chain::esplora` |
 | 6 | [x] Get BIP-44 coin type per network (F37) | done (PR #42) | `cargo test -p bitcoin-wallet-core chain::network` |
-| 7 | [x] Compile-time-pinned crypto constants (L20 audit) | done (PR #38) | see `docs/audit/2026-08-09-l20-constant-audit.md` |
+| 7 | [x] Compile-time-pinned crypto constants (L20 audit) | done (PR #38) | `cargo test -p bitcoin-wallet-core crypto` (compile-time `const _: ()` blocks fail the build on out-of-range literals) |
 | 8 | [x] Refuse mainnet default (CONTEXT.md hard rule #1) | done (PR #42; `bitcoin::Network` has no `Default` impl, so callers must explicitly choose) | see `rust-wallet-app/CONTEXT.md` hard rule #1 |
 | 9 | [x] Refuse transaction sighash as message (F21 type-level) | done (PR #39) | `cargo test -p bitcoin-wallet-core --doc threat::MessageHash` |
 | 10 | [x] **Create wallet from mnemonic** | done (PR #48, Task 9a) | `cargo test -p bitcoin-wallet-core wallet` |
