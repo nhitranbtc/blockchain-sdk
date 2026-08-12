@@ -25,6 +25,8 @@ Scope: planning only. Review, code-block, content, and deep-search plugin refere
 - [PL14] Step 5 — Plan review + drift scan (PL1, PL2, L30) before commit
 - [PL15] Step 6 — Executor pick (PL9), pickup, run, merge — close the loop
 - [PL16] Plugins for PLANNING (use during plan authoring)
+- [PL19] Approval-before-execute gate — pause for "approved" before any state-modifying action
+- [PL20] Tier 2 planning plugins — heavier ceremony for greenfield / multi-agent projects
 
 ---
 
@@ -408,6 +410,90 @@ Default to outcome #1; outcome #3 is the least common.
 **Anti-patterns:**
 - Calling implementation skills (frontend-design, mcp-builder) directly. Per brainstorming hard gate: writing-plans is the ONLY next step after brainstorming.
 - Skipping `using-superpowers` at session start. The skill-index is the routing table.
+
+---
+
+## PL19 — Approval-before-execute gate
+
+**Trigger:** Session 2026-08-12. Multiple times agent executed `git commit` or `gh pr merge` after user said only "approved" — but "approved" is ambiguous (approved to commit? approved to push? approved to merge? approved with admin-bypass?). L28 + L13 step 14 prohibit speculatively flipping acceptance boxes without explicit form. `never-auto-commit` (memory) and `workflow-approval-required` (memory) both require explicit state-modifying approval.
+
+**Rule:** Before any state-modifying action, pause and ask the user for explicit approval of the **specific** action. "Approved" alone is not enough. The required form includes the action verb + scope.
+
+**State-modifying actions requiring explicit approval (non-exhaustive):**
+
+| Action | Required approval form | Why |
+|---|---|---|
+| `git commit` | "commit" + commit message body, OR `#commit-approved` marker in body | `never-auto-commit` rule |
+| `git push` | "push" + branch name | Local commits are reversible; pushes are not |
+| `gh pr merge` | "admin bypass" (literal phrase) for `--admin` flag, or "merge" for default flow | Admin merge bypasses branch protection; irreversible |
+| `gh issue edit` | "update body" + specific issue #, OR "edit #N" | Changes public artifact |
+| `gh issue close` | "close #N" | Closes receipt; affects issue tracker audit |
+| `git branch -D` | "delete branch" + branch name | Force-delete is irreversible |
+| File move outside `docs/` | "move <from> → <to>" | `workflow-approval-required` rule |
+| `cargo publish` / npm publish | "publish <crate> <version>" | Public release; cannot unpublish |
+| `.env` write / secret rotation | "rotate <secret-name>" | Affects production credentials |
+| Force-push to `main` | "force-push main" (literal "force-push") | Rewrites shared history |
+
+**How to apply:**
+
+1. **Before any action in the table above**, surface the action in plain text and pause. Example: "About to run `gh pr merge --squash --admin --delete-branch 91`. Approve?"
+2. **Wait for explicit form.** "Approved" alone → AskUserQuestion to disambiguate.
+3. **For multi-step state changes**, ask once per step. Don't bundle "commit + push + merge" into one approval.
+4. **For "approved" follow-ups that match a previous clear approval** (e.g., user typed "approved" right after you showed a commit message), re-confirm the action verb matches.
+
+**Anti-patterns:**
+- Treating "approved" as blanket permission for any state-modifying action.
+- Speculatively flipping issue `[ ]` boxes after "approved" without operator evidence (L28).
+- Bundling commit + push + merge into one approval question.
+- Using "ok" / "sure" / "go ahead" as approval triggers. These are conversation acknowledgments, not action approvals.
+
+**Companion:** L6 (approval gates before persistent changes), L28 (verify-before-claim), `never-auto-commit` (memory), `workflow-approval-required` (memory), L13 step 14 (per-box evidence).
+
+---
+
+## PL20 — Tier 2 planning plugins (heavier ceremony)
+
+**Trigger:** Session 2026-08-12 plugin survey (`find ~/.claude/plugins -type d -name "skills"`) found 17 planning-relevant skills. PL16 covers Tier 1 (5 core skills for any project). This entry covers Tier 2 + Tier 3 for projects that need heavier ceremony.
+
+**Rule:** For greenfield / multi-agent / multi-stage projects, layer Tier 2 plugins on top of Tier 1 (PL16). For ≥3-stage agent handoffs, use compound-engineering (`ce-*`) instead of superpowers (`superpowers:*`) for the planning side. Don't mix the two on the same project.
+
+**Tier 2: planning-augmentation (use for harder projects):**
+
+| Plugin / skill | When | Why it matters |
+|---|---|---|
+| `compound-engineering:ce-plan` | Multi-stage plans with handoffs | 6-stage plan; wider than `superpowers:writing-plans`; pairs with `ce-handoff` |
+| `compound-engineering:ce-brainstorm` | Brainstorming with visual probes | Heavyweight alternative to `superpowers:brainstorming`; output-mode + section-order tests |
+| `compound-engineering:ce-ideate` | Pure ideation, no commitments | When exploring options before committing to a plan |
+| `mattpocock-skills:codebase-design` | Module/interface design (L11 row) | Pairs with `pr-review-toolkit:type-design-analyzer` for interface contracts |
+| `mattpocock-skills:domain-modeling` | New domain or threat model | Already in L11 map; re-invoke for spec/threat-model review |
+| `architecture-decision-records` (ADR skill) | When picking between ≥2 approaches (PL11 step 4) | Captures decision + rejected alternatives; write ADR per `docs/agents/adr` |
+
+**Tier 3: adjacent / agent-only (use when scaling up):**
+
+| Plugin / skill | When | Why it matters |
+|---|---|---|
+| `agent-planner` (or `agent-architecture`) | Multi-agent fleet planning | When planning a system of agents, not just a project |
+| `agent-specification` | Writing specs for agent behavior | Lower priority than `superpowers:brainstorming` for human-facing projects |
+| `agent-researcher` | Long-running research tasks | If planning requires deep prior-art search before spec |
+| `compound-engineering:ce-handoff` | Plan → spec → plan handoffs | Stage transitions; useful for `ce-plan` integration |
+| `compound-engineering:ce-compound` | End-to-end compound loop | "Compound" all CE stages; heavyweight — use only when CE is the chosen stack |
+
+**How to pick (decision tree):**
+
+1. **Is this a 1-feature project on an existing codebase?** → Tier 1 only. PL16.
+2. **Is this a new subsystem / greenfield feature?** → Tier 1 + Tier 2 (`mattpocock-skills:codebase-design` + `mattpocock-skills:domain-modeling`).
+3. **Is this a multi-stage project with multiple agents handing off work?** → Tier 1 + Tier 2 (`compound-engineering:ce-plan` + `ce-handoff`). Skip superpowers:writing-plans — `ce-plan` replaces it.
+4. **Is this a multi-agent fleet / system of agents?** → All three tiers. Add `agent-planner` + `agent-architecture`.
+
+**Why:** Two parallel planning pipelines exist. **superpowers** = simpler, narrower, hard-gated. **compound-engineering** = wider, more stages, handoff-driven. Both target the same outcome (spec → plan → execute) but with different ceremony. Mixing both on the same project = drift, handoff confusion, double-spec syndrome.
+
+**Anti-patterns:**
+- Skipping `using-superpowers` at session start. The skill-index IS the routing table.
+- Using `ce-plan` AND `superpowers:writing-plans` on the same project. Pick one. Both produce plans; mixing produces drift.
+- `agent-planner` for a 5-task human project. Overkill; use Tier 1 + `subagent-driven-development`.
+- `architecture-decision-records` for trivial choices (single alternative, no trade-off). ADRs are for *rejected alternatives*, not announcements.
+
+**Companion:** PL16 (Tier 1 quick-reference table), L11 mapping table in `tasks/lessons.md` (already references `mattpocock-skills:codebase-design` + `mattpocock-skills:domain-modeling`).
 
 ---
 
