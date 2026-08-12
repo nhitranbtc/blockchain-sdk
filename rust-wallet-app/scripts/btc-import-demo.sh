@@ -417,9 +417,8 @@ if [[ -z "${BTC_DEMO_ESPLORA_SPKI_PIN:-}" ]]; then
     # No pin supplied — demonstrate F20 refusal. Use mainnet so the URL
     # defaults to blockstream.info/api (the exact attack vector PR #82
     # closed). Without --pin-spki this MUST refuse.
-    printf '$ %q' "${BT_BIN}" wallet show "${WALLET_ID_A}" \
-        --network bitcoin --password demo-pwd
-    printf '\n'
+    printf '$ %s %s %s --network %s --password %s\n' \
+        "${BT_BIN}" "wallet" "show" "bitcoin" "demo-pwd"
     set +e
     "${BT_BIN}" wallet show "${WALLET_ID_A}" \
         --network bitcoin --password demo-pwd 2>&1
