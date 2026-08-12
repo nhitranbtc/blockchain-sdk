@@ -287,9 +287,17 @@ else
 fi
 
 # --- Step 5: btc wallet show ------------------------------------------------
+# Mirrors Steps 6/7 pattern: F20 enforcement (PR #82) refuses non-regtest
+# networks without --pin-spki. Without BTC_DEMO_ESPLORA_SPKI_PIN, fall
+# back to demonstrating the F20 refusal path (operator-not-configured,
+# treated as PASS — the gate works as designed).
+#
+# With BTC_DEMO_ESPLORA_SPKI_PIN=<64-hex> supplied, run the real testnet
+# sync. Failure treated as SKIP (network absent).
 banner "STEP 5/7: btc wallet show (JSON from live testnet Esplora)"
-printf '%s\n' "Note: requires network access to https://blockstream.info/testnet/api"
-printf '%s\n\n' "      (L29 operator smoke; may fail on isolated networks; this is OK)"
+printf '%s\n' "Note: F20 enforcement (PR #82) — requires BTC_DEMO_ESPLORA_SPKI_PIN"
+printf '%s\n' "      for non-regtest networks. Without it, demonstrates F20 refusal."
+printf '%s\n\n' "      (L29 operator smoke; non-regtest refuses without pin per F20)"
 
 # Pretty-print JSON if jq or python3 is available; otherwise print raw.
 if command -v jq >/dev/null 2>&1; then
@@ -301,17 +309,43 @@ else
     printf '(install jq or python3 for pretty JSON: brew install jq / apt install jq)\n'
 fi
 
-set +e  # tolerate step 5 failure (network-dependent)
-"${BT_BIN}" wallet show "${WALLET_ID}" --network testnet --password demo-pwd | ${JSON_PRETTY}
-STEP5_EXIT=$?
-set -e
-
-if [[ ${STEP5_EXIT} -eq 0 ]]; then
-    record_step 5 PASS "btc wallet show (live Esplora sync)"
-    print_step_result 5 "synced"
+if [[ -z "${BTC_DEMO_ESPLORA_SPKI_PIN:-}" ]]; then
+    # No pin supplied — demonstrate F20 refusal. Use mainnet so the URL
+    # defaults to blockstream.info/api (the exact attack vector PR #82
+    # closed). Without --pin-spki this MUST refuse.
+    printf '$ %q' "${BT_BIN}" wallet show "${WALLET_ID}" \
+        --network bitcoin --password demo-pwd
+    printf '\n'
+    set +e
+    "${BT_BIN}" wallet show "${WALLET_ID}" \
+        --network bitcoin --password demo-pwd 2>&1
+    STEP5_EXIT=$?
+    set -e
+    if [[ ${STEP5_EXIT} -ne 0 ]]; then
+        # Expected outcome: F20 refusal error.
+        record_step 5 PASS "btc wallet show (F20 gate demonstrated)"
+        print_step_result 5 "refused without --pin-spki as expected"
+    else
+        record_step 5 FAIL "btc wallet show"
+        print_step_result 5 "expected F20 refusal, got exit 0"
+    fi
 else
-    record_step 5 SKIP "btc wallet show (live Esplora sync)"
-    print_step_result 5 "sync failed (offline or L29 deferred)"
+    # Pin supplied — real testnet sync.
+    set +e  # tolerate step 5 failure (network-dependent)
+    "${BT_BIN}" wallet show "${WALLET_ID}" \
+        --network testnet \
+        --password demo-pwd \
+        --pin-spki "${BTC_DEMO_ESPLORA_SPKI_PIN}" | ${JSON_PRETTY}
+    STEP5_EXIT=$?
+    set -e
+
+    if [[ ${STEP5_EXIT} -eq 0 ]]; then
+        record_step 5 PASS "btc wallet show (live Esplora sync)"
+        print_step_result 5 "synced"
+    else
+        record_step 5 SKIP "btc wallet show (live Esplora sync)"
+        print_step_result 5 "sync failed (offline or pin mismatch)"
+    fi
 fi
 
 # --- Step 6: btc wallet balance (stateless, Issue #63) ----------------------
