@@ -74,7 +74,7 @@ rust-wallet-app/
 | 11 | Persist across invocations | 9 | MVP | core (via bdk_file_store) |
 | 12 | Config show | 9 | MVP | core (via WalletConfig struct) |
 
-**Deferred stories** (5, 6, 7, 8, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog) below.
+**Deferred stories** (5, 6, 7, 8, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below.
 
 ---
 
@@ -229,7 +229,7 @@ components = ["rustfmt", "clippy", "rust-src"]
 
 - [ ] **Step 4: Create LICENSE (MIT + copyright per F32)**
 
-```
+```text
 MIT License
 
 Copyright (c) 2026 The blockchain-sdk project contributors
