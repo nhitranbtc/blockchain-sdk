@@ -66,6 +66,40 @@ pub fn create_wallet(
     Ok((id, phrase))
 }
 
+/// Import an existing BIP-39 mnemonic phrase + persist the encrypted
+/// wallet blob. Returns the new `WalletId`; the phrase is not echoed
+/// back (caller already has it). No mnemonic generation.
+///
+/// **Story 2 / Issue #99.** Validates word count + checksum via
+/// `Mnemonic::from_phrase`; binds encryption AAD to the network
+/// discriminant (per ADR 0001) so cross-network decryption fails.
+///
+/// BIP-39 passphrase (`--passphrase`) is NOT persisted — it is
+/// derivation-time only. Pass it again at `show_wallet` time if you
+/// need to derive from a passphrase-protected mnemonic. The encrypted
+/// blob stores the mnemonic phrase alone.
+pub fn import_wallet(
+    base: &Path,
+    network: Network,
+    phrase: &str,
+    password: &Secret<Vec<u8>>,
+) -> Result<WalletId> {
+    // Validate word count + BIP-39 checksum. `from_phrase` rejects
+    // both unsupported word counts and invalid checksums with
+    // `Error::InvalidMnemonic` (mapped via `map_bip39_error`).
+    let _mnemonic = Mnemonic::from_phrase(phrase)?;
+    let id = WalletId::new();
+    let aad = Aad::network(network);
+    // Wrap phrase in Secret<String> to satisfy `encrypt_mnemonic`'s
+    // signature; the caller already has the phrase in plaintext (it
+    // came from `--mnemonic` CLI flag), so this is defense-in-depth,
+    // not a new exposure surface.
+    let phrase_secret = Secret::new(phrase.to_string());
+    let blob = encrypt_mnemonic(&phrase_secret, password.expose().as_slice(), aad)?;
+    write_wallet_at(base, network, id, blob.as_bytes())?;
+    Ok(id)
+}
+
 /// Load existing wallet from `base`, decrypt with `password`, sync
 /// against `esplora`, return addresses + confirmed balance.
 ///
@@ -167,6 +201,79 @@ mod tests {
             assert_eq!(phrase.expose().split_whitespace().count(), words);
             assert!(crate::wallet::store::wallet_path_at(base, Network::Testnet, id).exists());
         }
+    }
+
+    // -- import_wallet tests (Issue #99 / Story 2) -----------------------
+
+    /// BIP-39 standard test vector (12-word, valid checksum).
+    const IMPORT_PHRASE_12: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    /// BIP-39 standard test vector (24-word, valid checksum).
+    const IMPORT_PHRASE_24: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+    #[test]
+    fn import_wallet_accepts_valid_12_word_phrase() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = import_wallet(base, Network::Testnet, IMPORT_PHRASE_12, &password())
+            .expect("import must succeed for valid 12-word phrase");
+        let blob_path = crate::wallet::store::wallet_path_at(base, Network::Testnet, id);
+        assert!(
+            blob_path.exists(),
+            "imported wallet blob must exist on disk"
+        );
+        let mode = std::fs::metadata(&blob_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "imported blob must be 0o600");
+    }
+
+    #[test]
+    fn import_wallet_accepts_valid_24_word_phrase() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = import_wallet(base, Network::Bitcoin, IMPORT_PHRASE_24, &password())
+            .expect("import must succeed for valid 24-word phrase");
+        assert!(crate::wallet::store::wallet_path_at(base, Network::Bitcoin, id).exists());
+    }
+
+    #[test]
+    fn import_wallet_rejects_invalid_checksum() {
+        // Same 12 words but with last word changed — checksum broken.
+        let bad = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let err = import_wallet(base, Network::Testnet, bad, &password())
+            .expect_err("must reject invalid checksum");
+        assert!(
+            matches!(err, Error::InvalidMnemonic(_)),
+            "expected InvalidMnemonic, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn import_wallet_rejects_unsupported_word_count() {
+        // 13 words is not a BIP-39 supported length.
+        let bad = "abandon ".repeat(13);
+        let bad = bad.trim_end();
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let err = import_wallet(base, Network::Testnet, bad, &password())
+            .expect_err("must reject unsupported word count");
+        assert!(matches!(err, Error::InvalidMnemonic(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn import_wallet_persists_distinct_ids_for_same_phrase() {
+        // Each import gets a fresh WalletId (UUID). Two imports of the
+        // same phrase persist two distinct blobs.
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id_a =
+            import_wallet(base, Network::Testnet, IMPORT_PHRASE_12, &password()).expect("import A");
+        let id_b =
+            import_wallet(base, Network::Testnet, IMPORT_PHRASE_12, &password()).expect("import B");
+        assert_ne!(id_a, id_b);
+        assert!(crate::wallet::store::wallet_path_at(base, Network::Testnet, id_a).exists());
+        assert!(crate::wallet::store::wallet_path_at(base, Network::Testnet, id_b).exists());
     }
 
     /// Witness: missing-wallet surfaces the indistinguishable

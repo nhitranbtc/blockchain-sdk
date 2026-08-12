@@ -154,6 +154,26 @@ pub enum WalletActionKind {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Import an existing BIP-39 mnemonic, encrypt, persist to disk
+    /// (Issue #99 / Story 2). Generates a new WalletId; the phrase
+    /// is not echoed back (caller already has it).
+    Import {
+        /// BIP-39 mnemonic phrase (12/15/18/21/24 words, space-separated).
+        /// **SECURITY**: visible in shell history if passed as
+        /// `--mnemonic "..."` — prefer piping via `read -s` or env.
+        #[arg(long, env = "BTC_WALLET_MNEMONIC")]
+        mnemonic: String,
+        /// Optional BIP-39 passphrase (derivation-time only; not
+        /// persisted). Re-supply at `wallet show` time if used.
+        #[arg(long)]
+        passphrase: Option<String>,
+        /// Bitcoin network.
+        #[arg(long, value_enum)]
+        network: NetArg,
+        /// Wallet encryption password (omit to prompt securely).
+        #[arg(long)]
+        password: Option<String>,
+    },
     /// Decrypt a wallet, sync from Esplora, print addresses + balance.
     Show {
         /// Wallet ID (UUID v4) printed by `wallet create`.
@@ -404,6 +424,18 @@ impl fmt::Debug for WalletActionKind {
             } => f
                 .debug_struct("Create")
                 .field("words", words)
+                .field("network", network)
+                .field("password", &"<redacted>")
+                .finish(),
+            Self::Import {
+                mnemonic: _,
+                passphrase: _,
+                network,
+                password: _,
+            } => f
+                .debug_struct("Import")
+                .field("mnemonic", &"<redacted>")
+                .field("passphrase", &"<redacted>")
                 .field("network", network)
                 .field("password", &"<redacted>")
                 .finish(),
