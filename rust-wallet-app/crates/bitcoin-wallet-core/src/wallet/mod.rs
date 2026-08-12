@@ -57,11 +57,17 @@ pub use id::WalletId;
 pub use ops::{create_wallet, show_wallet, WalletInfo, SUPPORTED_WORD_COUNTS};
 pub use store::{data_dir, wallet_path};
 
+// Re-export `KeychainKind` from `bdk_wallet` so CLI handlers can
+// pass `KeychainKind::External` to `Wallet::peek_addresses` without
+// taking a direct dep on `bdk_wallet`. The type is part of the lib's
+// surface (used in `Wallet::peek_addresses`'s public signature).
+pub use bdk_wallet::KeychainKind;
+
 use std::str::FromStr;
 use std::sync::Mutex;
 
 use bdk_wallet::bitcoin::{Amount, Network, OutPoint, TxOut};
-use bdk_wallet::{KeychainKind, Wallet as BdkWallet};
+use bdk_wallet::Wallet as BdkWallet;
 
 use crate::chain::esplora::{EsploraClient, EsploraUtxo};
 use crate::chain::network::coin_type_for;
