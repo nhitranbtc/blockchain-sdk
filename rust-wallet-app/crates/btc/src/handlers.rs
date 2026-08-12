@@ -1099,13 +1099,17 @@ fn encrypt_decrypt_roundtrip_recovers_phrase() {
     .expect("write plaintext");
 
     handle_encrypt(
-        Some("test-password".to_string()), None, false,
+        Some("test-password".to_string()),
+        None,
+        false,
         plaintext_path.clone(),
         blob_path.clone(),
     )
     .expect("encrypt");
     handle_decrypt(
-        Some("test-password".to_string()), None, false,
+        Some("test-password".to_string()),
+        None,
+        false,
         blob_path,
         recovered_path.clone(),
     )
@@ -1130,13 +1134,17 @@ fn decrypt_with_wrong_password_fails() {
     std::fs::write(&plaintext_path, "secret mnemonic phrase here").expect("write");
 
     handle_encrypt(
-        Some("correct-password".to_string()), None, false,
+        Some("correct-password".to_string()),
+        None,
+        false,
         plaintext_path,
         blob_path.clone(),
     )
     .expect("encrypt");
     let err = handle_decrypt(
-        Some("wrong-password".to_string()), None, false,
+        Some("wrong-password".to_string()),
+        None,
+        false,
         blob_path,
         recovered_path,
     )
@@ -1162,7 +1170,9 @@ fn decrypt_tampered_blob_fails() {
     std::fs::write(&plaintext_path, "hello world").expect("write");
 
     handle_encrypt(
-        Some("test-password".to_string()), None, false,
+        Some("test-password".to_string()),
+        None,
+        false,
         plaintext_path,
         blob_path.clone(),
     )
@@ -1173,8 +1183,14 @@ fn decrypt_tampered_blob_fails() {
     bytes[last] ^= 0x01;
     std::fs::write(&blob_path, bytes).expect("rewrite tampered blob");
 
-    let err = handle_decrypt(Some("test-password".to_string()), None, false, blob_path, recovered_path)
-        .expect_err("decrypt must reject tampered blob");
+    let err = handle_decrypt(
+        Some("test-password".to_string()),
+        None,
+        false,
+        blob_path,
+        recovered_path,
+    )
+    .expect_err("decrypt must reject tampered blob");
     let msg = format!("{err:?}");
     // N2 oracle mitigation: same uniform message as wrong-password.
     assert!(
@@ -1195,7 +1211,9 @@ fn decrypt_tampered_first_byte_fails() {
     std::fs::write(&plaintext_path, "hello world").expect("write");
 
     handle_encrypt(
-        Some("test-password".to_string()), None, false,
+        Some("test-password".to_string()),
+        None,
+        false,
         plaintext_path,
         blob_path.clone(),
     )
@@ -1204,8 +1222,14 @@ fn decrypt_tampered_first_byte_fails() {
     bytes[0] ^= 0x01; // flip first byte (in salt region)
     std::fs::write(&blob_path, bytes).expect("rewrite tampered blob");
 
-    let err = handle_decrypt(Some("test-password".to_string()), None, false, blob_path, recovered_path)
-        .expect_err("decrypt must reject salt-tampered blob");
+    let err = handle_decrypt(
+        Some("test-password".to_string()),
+        None,
+        false,
+        blob_path,
+        recovered_path,
+    )
+    .expect_err("decrypt must reject salt-tampered blob");
     let msg = format!("{err:?}");
     assert!(
         msg.contains("decrypt failed"),
@@ -1222,8 +1246,14 @@ fn decrypt_truncated_blob_fails() {
     // MIN_LEN = 44 (SALT 16 + NONCE 12 + TAG 16). Write 10 bytes — well below.
     std::fs::write(&blob_path, vec![0u8; 10]).expect("write truncated");
 
-    let err = handle_decrypt(Some("any-password".to_string()), None, false, blob_path, recovered_path)
-        .expect_err("decrypt must reject truncated blob");
+    let err = handle_decrypt(
+        Some("any-password".to_string()),
+        None,
+        false,
+        blob_path,
+        recovered_path,
+    )
+    .expect_err("decrypt must reject truncated blob");
     let msg = format!("{err:?}");
     // N2 oracle: same uniform message as wrong-password + tampered.
     assert!(
@@ -1244,7 +1274,9 @@ fn encrypt_rejects_non_utf8_plaintext() {
     std::fs::write(&plaintext_path, [0xFF, 0xFE, 0xFD, 0xFC]).expect("write");
 
     let err = handle_encrypt(
-        Some("test-password".to_string()), None, false,
+        Some("test-password".to_string()),
+        None,
+        false,
         plaintext_path,
         blob_path.clone(),
     )
@@ -1273,8 +1305,14 @@ fn encrypt_rejects_empty_input() {
     let blob_path = tmp.path().join("cipher.enc");
     std::fs::write(&plaintext_path, "").expect("write empty");
 
-    let err = handle_encrypt(Some("test-password".to_string()), None, false, plaintext_path, blob_path)
-        .expect_err("encrypt must reject empty plaintext");
+    let err = handle_encrypt(
+        Some("test-password".to_string()),
+        None,
+        false,
+        plaintext_path,
+        blob_path,
+    )
+    .expect_err("encrypt must reject empty plaintext");
     let msg = format!("{err:?}");
     assert!(
         msg.contains("empty"),
@@ -1289,8 +1327,14 @@ fn encrypt_refuses_same_in_out() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("overlap.txt");
     std::fs::write(&path, "secret phrase").expect("write");
-    let err = handle_encrypt(Some("test-password".to_string()), None, false, path.clone(), path)
-        .expect_err("encrypt must refuse --in == --out");
+    let err = handle_encrypt(
+        Some("test-password".to_string()),
+        None,
+        false,
+        path.clone(),
+        path,
+    )
+    .expect_err("encrypt must refuse --in == --out");
     let msg = format!("{err:?}");
     assert!(
         msg.contains("must differ") || msg.contains("refusing to overwrite"),
@@ -1307,14 +1351,18 @@ fn decrypt_refuses_same_in_out() {
     let blob_path = tmp.path().join("cipher.enc");
     std::fs::write(&plaintext_path, "secret phrase").expect("write");
     handle_encrypt(
-        Some("test-password".to_string()), None, false,
+        Some("test-password".to_string()),
+        None,
+        false,
         plaintext_path,
         blob_path.clone(),
     )
     .expect("encrypt");
 
     let err = handle_decrypt(
-        Some("test-password".to_string()), None, false,
+        Some("test-password".to_string()),
+        None,
+        false,
         blob_path.clone(),
         blob_path,
     )
@@ -1334,8 +1382,14 @@ fn encrypt_missing_input_file_fails() {
     let plaintext_path = tmp.path().join("does-not-exist.txt");
     let blob_path = tmp.path().join("cipher.enc");
 
-    let err = handle_encrypt(Some("test-password".to_string()), None, false, plaintext_path, blob_path)
-        .expect_err("missing input must error");
+    let err = handle_encrypt(
+        Some("test-password".to_string()),
+        None,
+        false,
+        plaintext_path,
+        blob_path,
+    )
+    .expect_err("missing input must error");
     let msg = format!("{err:?}");
     assert!(
         msg.contains("No such file") || msg.contains("not found") || msg.contains("os error"),
@@ -1694,12 +1748,8 @@ mod password_source_tests {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let path = tmp.path().join("priority-file");
         write_secret_file(&path, "from-file\n");
-        let s = resolve_password(
-            Some("from-flag".to_string()),
-            Some(path.as_path()),
-            false,
-        )
-        .expect("resolve_password");
+        let s = resolve_password(Some("from-flag".to_string()), Some(path.as_path()), false)
+            .expect("resolve_password");
         assert_eq!(s, "from-file");
     }
 
