@@ -3,7 +3,7 @@
 **Date:** 2026-08-06
 **Status:** Draft — umbrella spec, supersedes nothing, extends Bitcoin single-chain spec
 **Scope:** Phase 2 of `BlockchainSdk` Rust rewrite. Multi-chain umbrella. Replaces per-chain modules in `tangem-app-ios/Modules/BlockchainSdk/Blockchains/`.
-**Source research:** [`../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md`](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`)
+**Source research:** [`../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md`](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (see PR #88)
 **Source Bitcoin spec:** [`2026-08-05-rust-bitcoin-wallet-design.md`](2026-08-05-rust-bitcoin-wallet-design.md)
 **Source Bitcoin arch:** [`2026-08-06-rust-bitcoin-wallet-architecture.md`](2026-08-06-rust-bitcoin-wallet-architecture.md)
 **Source plan (Bitcoin):** [`../plans/2026-08-05-rust-bitcoin-wallet.md`](../plans/2026-08-05-rust-bitcoin-wallet.md)
@@ -578,7 +578,7 @@ Cross-cutting: property-based tests on `ChainWallet` trait surface (per release)
 
 ### Canonical source documents
 
-- **This spec's source research:** [`../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md`](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`)
+- **This spec's source research:** [`../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md`](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (see PR #88)
 - **Bitcoin spec (the v0.1 first child):** [`2026-08-05-rust-bitcoin-wallet-design.md`](2026-08-05-rust-bitcoin-wallet-design.md)
 - **Bitcoin arch (this spec's template):** [`2026-08-06-rust-bitcoin-wallet-architecture.md`](2026-08-06-rust-bitcoin-wallet-architecture.md)
 - **Bitcoin plan:** [`../plans/2026-08-05-rust-bitcoin-wallet.md`](../plans/2026-08-05-rust-bitcoin-wallet.md)

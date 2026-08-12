@@ -4,9 +4,9 @@
 >
 > **Review audit:** [../reviews/2026-08-05-rust-bitcoin-wallet.md](../reviews/2026-08-05-rust-bitcoin-wallet.md) — 50 doc-review findings applied; 2 deferred to Open Questions.
 >
-> **Spec:** [../specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (commit `e2d51ec`).
+> **Spec:** [../specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (see PR #88).
 > **Architecture:** [../specs/2026-08-06-rust-bitcoin-wallet-architecture.md](../specs/2026-08-06-rust-bitcoin-wallet-architecture.md).
-> **Research:** [../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`).
+> **Research:** [../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (see PR #88).
 
 **Goal:** Replace `tangem-app-ios/Modules/BlockchainSdk/Blockchains/Bitcoin/` (~2,070 Swift LOC) with a standalone Rust Bitcoin wallet — library + minimal CLI. No Swift host, no `TangemSdk`, no hardware. Phase 1 ships MVP (Tasks 0-9 + minimal CLI); remaining user stories and v0.2 multi-chain umbrella deferred per F33/F35.
 
