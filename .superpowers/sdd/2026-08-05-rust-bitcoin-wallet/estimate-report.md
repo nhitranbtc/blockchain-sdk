@@ -113,4 +113,6 @@ Full MVP plan: `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`
 - **2026-08-10** — PR #40 (process docs + L21-L23 lessons) merged via `--admin` (SHA `3f234ea`). Process docs merged; no client deliverable change.
 - **2026-08-10** — PR #42 (Task 8 `coin_type_for`) merged via `--admin` (SHA `b3b5873`). Status: 12/13 code deliverables merged (Task 9 still in-flight). Fixed-fee total stays at $1,650.
 - **2026-08-10** — PR #48 (Task 9a `Wallet::from_mnemonic`) merged via `--admin` (SHA `a34fe0e`). Status: 12/13 code deliverables merged (Task 9b/9c still in-flight). Fixed-fee total stays at $1,650.
+- **2026-08-12** — PR #96 (Phase 1 closure — CI workflow + plan drift sync + CHANGELOG cascade) merged via `--admin` (SHA `2c1c5e7`). House-keeping per Excluded list ("Plan review, threat-model alignment, git workflow refinement, house-keeping PRs"); no client deliverable change. Fixed-fee total stays at $1,650.
+- **2026-08-12** — PR #97 (Task 1 Step 10 flip — post-merge plan checkbox sync per L13 step 14) merged via `--admin` (SHA `51822ad`). Doc-only per Excluded list; no client deliverable change. Fixed-fee total stays at $1,650.
 - Per L21: this bill updates on every PR merge (status, progress, in-flight count). Fixed-fee total stays unchanged unless scope shifts.

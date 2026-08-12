@@ -31,7 +31,10 @@ If the host model is unknown (this session: model ID `MiniMax-M3`, not a publish
 | Process | docs/estimate-report.md (client bill) | ~80k | ~30k | unknown | ~$0.65 | Retroactive; mid-session pivot from eng self-improvement to client billing; PR #40 merged |
 | Process | docs/ai-cost-report.md | ~30k | ~10k | unknown | ~$0.24 | Retroactive; this file |
 | Process | tasks/lessons.md L21-L23 | ~60k | ~25k | unknown | ~$0.50 | Retroactive; rule captures |
-| **Total (retroactive est.)** | | **~1.72M** | **~585k** | | **~$13.79** | Subject to ±50% (rates + token split assumed) |
+| Process | Phase 1 closure — PR #96 (CI workflow + plan drift + CHANGELOG cascade) | ~150k | ~50k | MiniMax-M3 (session model) | ~$0.50 | House-keeping; L13 step 11 verify gate (fmt + clippy + test 89/0/1 + geiger); PR #96 SHA `2c1c5e7` |
+| Process | PR #97 (Task 1 Step 10 flip — L13 step 14 post-merge) | ~15k | ~5k | MiniMax-M3 (session model) | ~$0.05 | Doc-only; 1-line plan checkbox flip; PR #97 SHA `51822ad` |
+| Process | Branch cleanup (post-#96, post-#97) + L21 update prep | ~20k | ~8k | MiniMax-M3 (session model) | ~$0.07 | `git branch -d` (chore/phase-1-closure local) + remote deletes for both PRs + this L21 PR prep |
+| **Total (retroactive est. + Phase 1 closure)** | | **~1.97M** | **~678k** | | **~$14.66** | Subject to ±50% (rates + token split assumed); Phase 1 closure subset ~$0.62 |
 
 ## Live tracking (going forward)
 
