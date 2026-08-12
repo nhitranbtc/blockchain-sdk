@@ -87,6 +87,72 @@ fn password_or_prompt(flag: Option<String>) -> Result<String> {
     }
 }
 
+/// Issue #84: read password bytes from a file path with security
+/// checks. Rejects symlinks (F19 pattern) and world/group-readable
+/// files (mode & 0o077 != 0). Trims trailing whitespace.
+fn read_password_file(path: &Path) -> Result<String> {
+    let meta = std::fs::symlink_metadata(path)
+        .with_context(|| format!("stat --password-file {path:?}"))?;
+    if meta.file_type().is_symlink() {
+        anyhow::bail!(
+            "--password-file must not be a symlink (refusing to follow); \
+             chmod + remove symlink, then re-run"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o077 != 0 {
+            anyhow::bail!(
+                "--password-file mode 0o{mode:o} is world or group readable; \
+                 chmod 0o600 (or 0o400) before re-running"
+            );
+        }
+    }
+    let bytes = std::fs::read(path).with_context(|| format!("read --password-file {path:?}"))?;
+    let mut s = String::from_utf8_lossy(&bytes).into_owned();
+    while s.ends_with(|c: char| c.is_ascii_whitespace()) {
+        s.pop();
+    }
+    if s.is_empty() {
+        anyhow::bail!("--password-file is empty (after trimming whitespace)");
+    }
+    Ok(s)
+}
+
+/// Issue #84: read password bytes from stdin (all of it, trimmed).
+fn read_password_stdin() -> Result<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .read_to_end(&mut bytes)
+        .context("read --password-stdin from stdin")?;
+    let mut s = String::from_utf8_lossy(&bytes).into_owned();
+    while s.ends_with(|c: char| c.is_ascii_whitespace()) {
+        s.pop();
+    }
+    if s.is_empty() {
+        anyhow::bail!("--password-stdin was empty (after trimming whitespace)");
+    }
+    Ok(s)
+}
+
+/// Issue #84: resolve password from all supply paths in priority order.
+fn resolve_password(
+    flag: Option<String>,
+    password_file: Option<&Path>,
+    password_stdin: bool,
+) -> Result<String> {
+    if let Some(path) = password_file {
+        return read_password_file(path);
+    }
+    if password_stdin {
+        return read_password_stdin();
+    }
+    password_or_prompt(flag)
+}
+
 /// Wrap plaintext password in zeroizing `Secret<Vec<u8>>` for the
 /// library API. Wrapped once at the boundary; the plaintext `String`
 /// is moved into the `Secret` (no copies survive past this point).
@@ -793,7 +859,18 @@ fn check_input_size(in_path: &Path, max_bytes: u64) -> Result<()> {
 /// (F5 Argon2id KDF + F6 AES-256-GCM), atomically writes the
 /// `MnemonicCipherBlob` bytes to `--out`. No persistence outside the
 /// operator's chosen paths.
-pub fn handle_encrypt(password: Option<String>, in_path: PathBuf, out_path: PathBuf) -> Result<()> {
+///
+/// Password supply paths (Issue #84):
+/// - `password_file` — read from file (mode 0o600 enforced, no symlinks)
+/// - `password_stdin` — read all of stdin
+/// - `password` flag — passed to `resolve_password` (handles /dev/tty prompt)
+pub fn handle_encrypt(
+    password: Option<String>,
+    password_file: Option<PathBuf>,
+    password_stdin: bool,
+    in_path: PathBuf,
+    out_path: PathBuf,
+) -> Result<()> {
     reject_same_in_out(&in_path, &out_path)?;
     check_input_size(&in_path, ENCRYPT_PLAINTEXT_MAX_BYTES)?;
     let plaintext_bytes =
@@ -807,7 +884,11 @@ pub fn handle_encrypt(password: Option<String>, in_path: PathBuf, out_path: Path
     }
     // F47: wrap plaintext in zeroizing Secret<String>.
     let phrase = Secret::new(plaintext);
-    let pwd = secret_password(password_or_prompt(password)?);
+    let pwd = secret_password(resolve_password(
+        password,
+        password_file.as_deref(),
+        password_stdin,
+    )?);
     let blob = encrypt_mnemonic(&phrase, pwd.expose().as_slice(), Aad::NONE)
         .context("encrypt_mnemonic failed")?;
     // Zeroize plaintext Secret BEFORE atomic_write (which copies the
@@ -826,7 +907,13 @@ pub fn handle_encrypt(password: Option<String>, in_path: PathBuf, out_path: Path
 /// password / tampered blob / truncated blob / non-UTF8 plaintext — all
 /// surface as a **uniform** "decrypt failed" message (N2 oracle
 /// mitigation: caller can't probe which failure mode occurred).
-pub fn handle_decrypt(password: Option<String>, in_path: PathBuf, out_path: PathBuf) -> Result<()> {
+pub fn handle_decrypt(
+    password: Option<String>,
+    password_file: Option<PathBuf>,
+    password_stdin: bool,
+    in_path: PathBuf,
+    out_path: PathBuf,
+) -> Result<()> {
     reject_same_in_out(&in_path, &out_path)?;
     // Library cap: MAX_LEN = 300 (44 overhead + 256 plaintext).
     check_input_size(&in_path, MnemonicCipherBlob::MAX_LEN as u64)?;
@@ -837,7 +924,11 @@ pub fn handle_decrypt(password: Option<String>, in_path: PathBuf, out_path: Path
     // failure mode occurred.
     let blob = MnemonicCipherBlob::try_from(blob_bytes.as_slice())
         .map_err(|_| anyhow::anyhow!("decrypt failed"))?;
-    let pwd = secret_password(password_or_prompt(password)?);
+    let pwd = secret_password(resolve_password(
+        password,
+        password_file.as_deref(),
+        password_stdin,
+    )?);
     let phrase_secret = decrypt_mnemonic(&blob, pwd.expose().as_slice(), Aad::NONE)
         .map_err(|_| anyhow::anyhow!("decrypt failed"))?;
     // F47 fix: borrow directly from the zeroizing Secret (no .clone()
@@ -1008,13 +1099,13 @@ fn encrypt_decrypt_roundtrip_recovers_phrase() {
     .expect("write plaintext");
 
     handle_encrypt(
-        Some("test-password".to_string()),
+        Some("test-password".to_string()), None, false,
         plaintext_path.clone(),
         blob_path.clone(),
     )
     .expect("encrypt");
     handle_decrypt(
-        Some("test-password".to_string()),
+        Some("test-password".to_string()), None, false,
         blob_path,
         recovered_path.clone(),
     )
@@ -1039,13 +1130,13 @@ fn decrypt_with_wrong_password_fails() {
     std::fs::write(&plaintext_path, "secret mnemonic phrase here").expect("write");
 
     handle_encrypt(
-        Some("correct-password".to_string()),
+        Some("correct-password".to_string()), None, false,
         plaintext_path,
         blob_path.clone(),
     )
     .expect("encrypt");
     let err = handle_decrypt(
-        Some("wrong-password".to_string()),
+        Some("wrong-password".to_string()), None, false,
         blob_path,
         recovered_path,
     )
@@ -1071,7 +1162,7 @@ fn decrypt_tampered_blob_fails() {
     std::fs::write(&plaintext_path, "hello world").expect("write");
 
     handle_encrypt(
-        Some("test-password".to_string()),
+        Some("test-password".to_string()), None, false,
         plaintext_path,
         blob_path.clone(),
     )
@@ -1082,7 +1173,7 @@ fn decrypt_tampered_blob_fails() {
     bytes[last] ^= 0x01;
     std::fs::write(&blob_path, bytes).expect("rewrite tampered blob");
 
-    let err = handle_decrypt(Some("test-password".to_string()), blob_path, recovered_path)
+    let err = handle_decrypt(Some("test-password".to_string()), None, false, blob_path, recovered_path)
         .expect_err("decrypt must reject tampered blob");
     let msg = format!("{err:?}");
     // N2 oracle mitigation: same uniform message as wrong-password.
@@ -1104,7 +1195,7 @@ fn decrypt_tampered_first_byte_fails() {
     std::fs::write(&plaintext_path, "hello world").expect("write");
 
     handle_encrypt(
-        Some("test-password".to_string()),
+        Some("test-password".to_string()), None, false,
         plaintext_path,
         blob_path.clone(),
     )
@@ -1113,7 +1204,7 @@ fn decrypt_tampered_first_byte_fails() {
     bytes[0] ^= 0x01; // flip first byte (in salt region)
     std::fs::write(&blob_path, bytes).expect("rewrite tampered blob");
 
-    let err = handle_decrypt(Some("test-password".to_string()), blob_path, recovered_path)
+    let err = handle_decrypt(Some("test-password".to_string()), None, false, blob_path, recovered_path)
         .expect_err("decrypt must reject salt-tampered blob");
     let msg = format!("{err:?}");
     assert!(
@@ -1131,7 +1222,7 @@ fn decrypt_truncated_blob_fails() {
     // MIN_LEN = 44 (SALT 16 + NONCE 12 + TAG 16). Write 10 bytes — well below.
     std::fs::write(&blob_path, vec![0u8; 10]).expect("write truncated");
 
-    let err = handle_decrypt(Some("any-password".to_string()), blob_path, recovered_path)
+    let err = handle_decrypt(Some("any-password".to_string()), None, false, blob_path, recovered_path)
         .expect_err("decrypt must reject truncated blob");
     let msg = format!("{err:?}");
     // N2 oracle: same uniform message as wrong-password + tampered.
@@ -1153,7 +1244,7 @@ fn encrypt_rejects_non_utf8_plaintext() {
     std::fs::write(&plaintext_path, [0xFF, 0xFE, 0xFD, 0xFC]).expect("write");
 
     let err = handle_encrypt(
-        Some("test-password".to_string()),
+        Some("test-password".to_string()), None, false,
         plaintext_path,
         blob_path.clone(),
     )
@@ -1182,7 +1273,7 @@ fn encrypt_rejects_empty_input() {
     let blob_path = tmp.path().join("cipher.enc");
     std::fs::write(&plaintext_path, "").expect("write empty");
 
-    let err = handle_encrypt(Some("test-password".to_string()), plaintext_path, blob_path)
+    let err = handle_encrypt(Some("test-password".to_string()), None, false, plaintext_path, blob_path)
         .expect_err("encrypt must reject empty plaintext");
     let msg = format!("{err:?}");
     assert!(
@@ -1198,7 +1289,7 @@ fn encrypt_refuses_same_in_out() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("overlap.txt");
     std::fs::write(&path, "secret phrase").expect("write");
-    let err = handle_encrypt(Some("test-password".to_string()), path.clone(), path)
+    let err = handle_encrypt(Some("test-password".to_string()), None, false, path.clone(), path)
         .expect_err("encrypt must refuse --in == --out");
     let msg = format!("{err:?}");
     assert!(
@@ -1216,14 +1307,14 @@ fn decrypt_refuses_same_in_out() {
     let blob_path = tmp.path().join("cipher.enc");
     std::fs::write(&plaintext_path, "secret phrase").expect("write");
     handle_encrypt(
-        Some("test-password".to_string()),
+        Some("test-password".to_string()), None, false,
         plaintext_path,
         blob_path.clone(),
     )
     .expect("encrypt");
 
     let err = handle_decrypt(
-        Some("test-password".to_string()),
+        Some("test-password".to_string()), None, false,
         blob_path.clone(),
         blob_path,
     )
@@ -1243,7 +1334,7 @@ fn encrypt_missing_input_file_fails() {
     let plaintext_path = tmp.path().join("does-not-exist.txt");
     let blob_path = tmp.path().join("cipher.enc");
 
-    let err = handle_encrypt(Some("test-password".to_string()), plaintext_path, blob_path)
+    let err = handle_encrypt(Some("test-password".to_string()), None, false, plaintext_path, blob_path)
         .expect_err("missing input must error");
     let msg = format!("{err:?}");
     assert!(
@@ -1489,6 +1580,162 @@ mod sync_balance_tests {
         assert!(
             msg.contains("mnemonic") || msg.contains("BIP-39") || msg.contains("invalid"),
             "empty mnemonic error should mention mnemonic/BIP-39: {msg}"
+        );
+    }
+}
+
+// ============================================================================
+// Issue #84: --password-file / --password-stdin handler tests
+// ============================================================================
+
+#[cfg(test)]
+mod password_source_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_secret_file(path: &std::path::Path, contents: &str) {
+        std::fs::write(path, contents).expect("write secret file");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("set perms 0o600");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_password_file_rejects_world_readable() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("insecure-pwd");
+        std::fs::write(&path, "secret\n").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("set perms 0o644");
+        let err = read_password_file(&path).expect_err("world-readable must reject");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("mode") || msg.contains("0o"), "error: {msg}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_password_file_rejects_group_readable() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("group-readable-pwd");
+        std::fs::write(&path, "secret\n").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640))
+            .expect("set perms 0o640");
+        let err = read_password_file(&path).expect_err("group-readable must reject");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("mode") || msg.contains("0o"), "error: {msg}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_password_file_rejects_symlink() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let target = tmp.path().join("target-pwd");
+        let link = tmp.path().join("link-pwd");
+        write_secret_file(&target, "secret\n");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        let err = read_password_file(&link).expect_err("symlink must reject");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("symlink"), "error: {msg}");
+    }
+
+    #[test]
+    fn read_password_file_accepts_0o600() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("secure-pwd");
+        write_secret_file(&path, "my-strong-password\n");
+        let s = read_password_file(&path).expect("0o600 file should read");
+        assert_eq!(s, "my-strong-password");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_password_file_accepts_0o400() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("readonly-pwd");
+        std::fs::write(&path, "pwd\n").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
+            .expect("set perms 0o400");
+        let s = read_password_file(&path).expect("0o400 file should read");
+        assert_eq!(s, "pwd");
+    }
+
+    #[test]
+    fn read_password_file_trims_trailing_whitespace() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("trailing-ws");
+        write_secret_file(&path, "secret\n\n   \t");
+        let s = read_password_file(&path).expect("read ok");
+        assert_eq!(s, "secret");
+    }
+
+    #[test]
+    fn read_password_file_rejects_empty_after_trim() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("empty-pwd");
+        write_secret_file(&path, "   \n\n\t");
+        let err = read_password_file(&path).expect_err("empty-after-trim must reject");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("empty"), "error: {msg}");
+    }
+
+    #[test]
+    fn read_password_file_missing_file_fails() {
+        let path = std::path::PathBuf::from("/nonexistent/path/to/secret");
+        let err = read_password_file(&path).expect_err("missing file must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("No such file") || msg.contains("not found") || msg.contains("os error"),
+            "io-flavored error expected: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_password_priority_password_file_wins_over_flag() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let path = tmp.path().join("priority-file");
+        write_secret_file(&path, "from-file\n");
+        let s = resolve_password(
+            Some("from-flag".to_string()),
+            Some(path.as_path()),
+            false,
+        )
+        .expect("resolve_password");
+        assert_eq!(s, "from-file");
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip_via_password_file() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let pwd_path = tmp.path().join("roundtrip-pwd");
+        write_secret_file(&pwd_path, "roundtrip-password\n");
+        let plaintext_path = tmp.path().join("plaintext.txt");
+        let blob_path = tmp.path().join("cipher.enc");
+        let recovered_path = tmp.path().join("recovered.txt");
+        std::fs::write(
+            &plaintext_path,
+            "abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("write plaintext");
+        handle_encrypt(
+            None,
+            Some(pwd_path.clone()),
+            false,
+            plaintext_path,
+            blob_path.clone(),
+        )
+        .expect("encrypt via password-file");
+        handle_decrypt(
+            None,
+            Some(pwd_path),
+            false,
+            blob_path,
+            recovered_path.clone(),
+        )
+        .expect("decrypt via password-file");
+        let recovered = std::fs::read_to_string(&recovered_path).expect("read recovered");
+        assert_eq!(
+            recovered,
+            "abandon abandon abandon abandon abandon abandon about"
         );
     }
 }
