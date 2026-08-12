@@ -25,6 +25,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + README "What's New" + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
+- [L30] Verify plan-cited SHAs with `git log --all -- <path>` before trusting — drift detector for plan/spec headers
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -41,6 +42,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Post-merge bookkeeping | L21, L24 |
 | Client product | L28 |
 | Live testnet smoke | L29 |
+| Doc drift detection | L30 |
 | Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
 ---
@@ -675,5 +677,50 @@ Operator confirms via PR comment + flips the `L29` acceptance box.
 - Running live tests in CI (causes flakes + rate-limit failures; PR review noise).
 - Skipping the live smoke entirely (Gate C gap — semantic bugs that unit tests miss).
 - Auto-flipping the `L29` acceptance box before operator confirmation (false-positive completion; per L13 step 14).
+
+---
+
+## L30 — Verify plan-cited SHAs with `git log --all -- <path>` before trusting
+
+**Trigger**: Session 2026-08-12 PR #88 triage. Plan header cited
+`e2d51ec` (design spec) and `0c20f77` (tangem research). `git log --all
+-- <path>` returned empty for both — files existed on disk but were
+never `git add`-ed. Plan referenced SHAs that resolved to nothing.
+PR #88 landed both files at squash-merge SHA `d846564`.
+
+**Rule**: At task pickup, scan plan / spec / review headers for SHA
+citations. For each cited SHA, verify with `git log --all -- <path>`:
+
+- **Returns ≥1 commit**: SHA is real; cross-ref works.
+- **Returns empty**: drift; the cited SHA never existed. Either commit
+  the artifact (resolve the drift) or update the header to point to a
+  real SHA / a PR number.
+
+**Why**: Plan headers are written once and referenced often. A future
+self chasing a plan-cited SHA finds nothing — wasted investigation or
+worse, silently broken cross-refs in published docs. The drift class is
+silent: cargo fmt / clippy / test don't surface it; only `git log`
+against the cited path reveals the gap.
+
+**Apply**:
+
+```bash
+# At task pickup, before trusting any plan-cited SHA:
+for path in $(grep -oE 'docs/[^ )]+\.md' plans/*.md specs/*.md reviews/*.md 2>/dev/null); do
+  hits=$(git log --oneline --all -- "$path" | wc -l)
+  if [ "$hits" -eq 0 ]; then
+    echo "DRIFT: $path has no git history"
+  fi
+done
+```
+
+Or per-file: `git log --all -- <path>` after spotting a `(commit \`SHA\`)`
+citation in the header.
+
+**Anti-patterns**:
+
+- Trusting a SHA citation without verification — broken cross-ref silently propagates.
+- Citing a SHA "aspirationally" (file doesn't exist yet) — drift class repeats on every reference.
+- Removing the SHA citation instead of resolving the drift — hides the cross-ref problem rather than fixing it.
 
 ---

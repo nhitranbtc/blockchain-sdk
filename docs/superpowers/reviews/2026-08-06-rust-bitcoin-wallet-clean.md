@@ -14,9 +14,9 @@
 
 **Tech Stack:** Rust 1.85 MSRV (justification per F31: `bdk_wallet 3.1` requires 1.85; if a lower MSRV proves compatible, downgrade), BDK 3.1 (with `keys-bip39` feature for `bip39` re-export), rust-bitcoin 0.32 (re-exports `secp256k1` + `miniscript` + `bip39`), bip32 0.6 (fallback `^0.5` per F46), tokio 1, reqwest 0.12, thiserror 1, tracing 0.1, clap 4, proptest 1, argon2 0.5, aes-gcm 0.10, rand 0.8, zeroize 1.
 
-**Spec:** [docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (commit `e2d51ec`).
+**Spec:** [docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md](../specs/2026-08-05-rust-bitcoin-wallet-design.md) (see PR #88).
 **Threat model:** [docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-threat-model.md](../specs/2026-08-05-rust-bitcoin-wallet-threat-model.md) (Task 0 — per F24).
-**Research:** [docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`).
+**Research:** [docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (see PR #88).
 
 ## Global Constraints
 

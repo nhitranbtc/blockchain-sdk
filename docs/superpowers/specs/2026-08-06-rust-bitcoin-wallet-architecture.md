@@ -399,7 +399,7 @@ Size audit (v1 CLI): `btc` binary ≤ 15 MB stripped (plan Task 21). Achieved vi
 
 ### Canonical source documents
 
-- **Spec:** [`docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md`](2026-08-05-rust-bitcoin-wallet-design.md) (commit `e2d51ec`)
+- **Spec:** [`docs/superpowers/specs/2026-08-05-rust-bitcoin-wallet-design.md`](2026-08-05-rust-bitcoin-wallet-design.md) (see PR #88)
 - **Plan:** [`docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`](../plans/2026-08-05-rust-bitcoin-wallet.md)
 - **Task→SDK map:** [`docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet-task-sdk-map.md`](../plans/2026-08-05-rust-bitcoin-wallet-task-sdk-map.md)
 - **ADR 0001 (signing model):** [`docs/wallets/2026-08-05-adr-0001-signing-model.md`](../../wallets/2026-08-05-adr-0001-signing-model.md)
@@ -407,7 +407,7 @@ Size audit (v1 CLI): `btc` binary ≤ 15 MB stripped (plan Task 21). Achieved vi
 
 ### Research
 
-- **Tangem→Rust SDK mapping:** [`docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md`](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (commit `0c20f77`)
+- **Tangem→Rust SDK mapping:** [`docs/blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md`](../../blockchain-sdks/2026-08-05-tangem-blockchainsdk-rust-sdks.md) (see PR #88)
 - **Implementation reference (crate inventory):** [`docs/2026-08-04-bcs-bitcoin-implementation-reference.md`](../../2026-08-04-bcs-bitcoin-implementation-reference.md)
 - **Tangem iOS Bitcoin module (subject of replacement):** `tangem-app-ios/Modules/BlockchainSdk/Blockchains/Bitcoin/` (read-only research material)
 
