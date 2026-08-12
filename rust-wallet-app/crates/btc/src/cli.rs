@@ -57,8 +57,22 @@ pub struct EncryptAction {
     /// `rpassword`). **SECURITY**: `--password <PWD>` is visible in
     /// shell history, `ps`, and `/proc/<pid>/cmdline`. Prefer omitting
     /// the flag for interactive use, or set `BTC_ENCRYPT_PASSWORD`.
-    #[arg(long, env = "BTC_ENCRYPT_PASSWORD")]
+    #[arg(long, env = "BTC_ENCRYPT_PASSWORD", conflicts_with_all = ["password_file", "password_stdin"])]
     pub password: Option<String>,
+    /// Read password bytes from a file path (Issue #84). Use case:
+    /// k8s secrets mounted as files, systemd LoadCredential=,
+    /// vault-agent sidecar. **SECURITY**: file must be mode `0o600`
+    /// (not world/group-readable) and not a symlink — both checks
+    /// happen at handler layer. Mutually exclusive with `--password`
+    /// and `--password-stdin`.
+    #[arg(long, conflicts_with_all = ["password", "password_stdin"])]
+    pub password_file: Option<PathBuf>,
+    /// Read password bytes from stdin (Issue #84). Use case: CI
+    /// pipelines piping secrets from a wrapper. Reads all of stdin,
+    /// trims trailing whitespace. Mutually exclusive with `--password`
+    /// and `--password-file`.
+    #[arg(long, conflicts_with_all = ["password", "password_file"])]
+    pub password_stdin: bool,
     /// Input file (UTF-8 plaintext).
     #[arg(long)]
     pub r#in: PathBuf,
@@ -73,8 +87,16 @@ pub struct DecryptAction {
     /// Decryption password (must match the value used at encrypt time).
     /// If omitted, prompts via `/dev/tty`. See `EncryptAction::password`
     /// for the security caveats of the `--password` flag form.
-    #[arg(long, env = "BTC_DECRYPT_PASSWORD")]
+    #[arg(long, env = "BTC_DECRYPT_PASSWORD", conflicts_with_all = ["password_file", "password_stdin"])]
     pub password: Option<String>,
+    /// Read password bytes from a file path (Issue #84). Mirror of
+    /// `EncryptAction::password_file`. Same security checks apply.
+    #[arg(long, conflicts_with_all = ["password", "password_stdin"])]
+    pub password_file: Option<PathBuf>,
+    /// Read password bytes from stdin (Issue #84). Mirror of
+    /// `EncryptAction::password_stdin`.
+    #[arg(long, conflicts_with_all = ["password", "password_file"])]
+    pub password_stdin: bool,
     /// Input file (binary blob).
     #[arg(long)]
     pub r#in: PathBuf,
@@ -297,8 +319,18 @@ impl fmt::Debug for EncryptAction {
         } else {
             "<unset — will prompt>"
         };
+        // password_file path is secret-adjacent (reveals where
+        // secrets live on disk). Issue #84.
+        let pwd_file_display = if self.password_file.is_some() {
+            "<redacted — path>"
+        } else {
+            "<unset>"
+        };
+        // password_stdin boolean is not secret (no value to leak).
         f.debug_struct("EncryptAction")
             .field("password", &pwd_display)
+            .field("password_file", &pwd_file_display)
+            .field("password_stdin", &self.password_stdin)
             .field("in", &self.r#in)
             .field("out", &self.out)
             .finish()
@@ -313,8 +345,15 @@ impl fmt::Debug for DecryptAction {
         } else {
             "<unset — will prompt>"
         };
+        let pwd_file_display = if self.password_file.is_some() {
+            "<redacted — path>"
+        } else {
+            "<unset>"
+        };
         f.debug_struct("DecryptAction")
             .field("password", &pwd_display)
+            .field("password_file", &pwd_file_display)
+            .field("password_stdin", &self.password_stdin)
             .field("in", &self.r#in)
             .field("out", &self.out)
             .finish()
@@ -750,6 +789,180 @@ mod tests {
             "/tmp/cipher.enc",
         ]);
         assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Issue #84: --password-file path (scripted/automation supply).
+    /// Reads password bytes from the file path instead of an env var
+    /// or /dev/tty prompt. Use case: k8s secrets mounted as files,
+    /// systemd LoadCredential=, vault-agent sidecar.
+    #[test]
+    fn parse_encrypt_accepts_password_file() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password-file",
+            "/run/secrets/btc-pwd",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Issue #84: --password-stdin (CI pipeline supply).
+    /// Reads password bytes from stdin.
+    #[test]
+    fn parse_encrypt_accepts_password_stdin() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password-stdin",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Issue #84: --password and --password-file are mutually
+    /// exclusive (operator must pick exactly one supply path).
+    #[test]
+    fn parse_encrypt_rejects_password_and_password_file() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password",
+            "hunter2",
+            "--password-file",
+            "/run/secrets/btc-pwd",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ]);
+        assert!(
+            cli.is_err(),
+            "--password + --password-file must be mutually exclusive"
+        );
+    }
+
+    /// Issue #84: --password and --password-stdin are mutually exclusive.
+    #[test]
+    fn parse_encrypt_rejects_password_and_password_stdin() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password",
+            "hunter2",
+            "--password-stdin",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ]);
+        assert!(
+            cli.is_err(),
+            "--password + --password-stdin must be mutually exclusive"
+        );
+    }
+
+    /// Issue #84: --password-file and --password-stdin are mutually
+    /// exclusive.
+    #[test]
+    fn parse_encrypt_rejects_password_file_and_password_stdin() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password-file",
+            "/run/secrets/btc-pwd",
+            "--password-stdin",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ]);
+        assert!(
+            cli.is_err(),
+            "--password-file + --password-stdin must be mutually exclusive"
+        );
+    }
+
+    #[test]
+    fn parse_decrypt_accepts_password_file() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "decrypt",
+            "--password-file",
+            "/run/secrets/btc-pwd",
+            "--in",
+            "/tmp/cipher.enc",
+            "--out",
+            "/tmp/recovered.txt",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    #[test]
+    fn parse_decrypt_accepts_password_stdin() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "decrypt",
+            "--password-stdin",
+            "--in",
+            "/tmp/cipher.enc",
+            "--out",
+            "/tmp/recovered.txt",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// L12 CRITICAL #2: --password-file path is secret-adjacent
+    /// (it reveals where secrets live on disk). Redact in Debug
+    /// output to avoid leaking in tracing/log capture.
+    #[test]
+    fn debug_redacts_password_file_path_in_encrypt() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "encrypt",
+            "--password-file",
+            "/run/secrets/btc-pwd",
+            "--in",
+            "/tmp/plain.txt",
+            "--out",
+            "/tmp/cipher.enc",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("/run/secrets"),
+            "password_file path leaked in Debug: {debug}"
+        );
+        assert!(
+            debug.contains("redacted"),
+            "redaction marker missing: {debug}"
+        );
+    }
+
+    #[test]
+    fn debug_redacts_password_file_path_in_decrypt() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "decrypt",
+            "--password-file",
+            "/run/secrets/btc-pwd",
+            "--in",
+            "/tmp/cipher.enc",
+            "--out",
+            "/tmp/recovered.txt",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("/run/secrets"),
+            "password_file path leaked in Debug: {debug}"
+        );
     }
 
     #[test]

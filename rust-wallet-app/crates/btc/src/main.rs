@@ -83,13 +83,17 @@ async fn main() -> Result<()> {
         },
         Commands::Encrypt(EncryptAction {
             password,
+            password_file,
+            password_stdin,
             r#in,
             out,
-        }) => handlers::handle_encrypt(password, r#in, out),
+        }) => handlers::handle_encrypt(password, password_file, password_stdin, r#in, out),
         Commands::Decrypt(DecryptAction {
             password,
+            password_file,
+            password_stdin,
             r#in,
             out,
-        }) => handlers::handle_decrypt(password, r#in, out),
+        }) => handlers::handle_decrypt(password, password_file, password_stdin, r#in, out),
     }
 }
