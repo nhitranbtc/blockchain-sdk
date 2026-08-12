@@ -168,7 +168,7 @@ fn map_bip39_error(e: bip39::Error) -> Error {
     let msg: &'static str = match e {
         bip39::Error::BadEntropyBitCount(_) => "invalid entropy length",
         bip39::Error::BadWordCount(_) => "unsupported word count",
-        bip39::Error::InvalidChecksum => "checksum invalid",
+        bip39::Error::InvalidChecksum => "checksum mismatch",
         bip39::Error::UnknownWord(_) => "unknown word",
         bip39::Error::AmbiguousLanguages(_) => "ambiguous language detection",
     };
