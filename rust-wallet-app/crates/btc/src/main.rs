@@ -15,7 +15,8 @@ mod cli;
 mod handlers;
 
 use cli::{
-    Cli, Commands, DecryptAction, EncryptAction, MessageAction, WalletAction, WalletActionKind,
+    Cli, Commands, ConfigAction, ConfigActionKind, DecryptAction, EncryptAction, MessageAction,
+    WalletAction, WalletActionKind,
 };
 
 #[tokio::main]
@@ -108,6 +109,9 @@ async fn main() -> Result<()> {
                 r#in,
                 out,
             }) => handlers::handle_decrypt(password, password_file, password_stdin, r#in, out),
+            Commands::Config(ConfigAction { action }) => match action {
+                ConfigActionKind::Show { json } => handlers::handle_config_show(json, &data_dir),
+            },
         }
     }
     .await;
