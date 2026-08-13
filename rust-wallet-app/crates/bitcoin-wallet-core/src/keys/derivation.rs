@@ -143,8 +143,11 @@ impl XPrvHolder {
         let prefix = match network {
             bdk_wallet::bitcoin::Network::Bitcoin => Prefix::XPRV,
             bdk_wallet::bitcoin::Network::Testnet => Prefix::TPRV,
-            // regtest/signet use mainnet xprv prefix per BIP-32
-            _ => Prefix::XPRV,
+            // regtest/signet use testnet derivation (BIP-44 coin type 1)
+            // + tprv prefix per convention. BDK 0.31+ validates the xprv
+            // network kind matches the wallet's network — xprv for both
+            // bitcoin and regtest fails with Key(InvalidNetworkKind).
+            _ => Prefix::TPRV,
         };
         let s = self.0.to_string(prefix).to_string();
         crate::keys::Secret::new(s)
