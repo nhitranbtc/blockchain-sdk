@@ -35,6 +35,11 @@ pub enum Commands {
     /// Errors on wrong password / tampered / truncated blob / non-UTF8
     /// plaintext (all surface as `Error::MnemonicCipher`).
     Decrypt(DecryptAction),
+    /// Diagnostic config (Issue #100 / Story 11).
+    /// `btc config show` prints / JSON-dumps the resolved CLI config
+    /// (data dir, Esplora URL, network, loaded wallets) for debugging
+    /// "why is this connecting to the wrong place" scenarios.
+    Config(ConfigAction),
 }
 
 #[derive(clap::Args)]
@@ -103,6 +108,41 @@ pub struct DecryptAction {
     /// Output file (UTF-8 plaintext).
     #[arg(long)]
     pub out: PathBuf,
+}
+
+/// `btc config` args — Issue #100 / Story 11.
+#[derive(clap::Args)]
+pub struct ConfigAction {
+    #[command(subcommand)]
+    pub action: ConfigActionKind,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigActionKind {
+    /// Show the resolved CLI configuration (data dir, Esplora URL,
+    /// network, list of loaded wallets). Exit 0 always.
+    Show {
+        /// Output as JSON instead of human-readable text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+impl fmt::Debug for ConfigAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // No secrets in this variant; safe to debug.
+        f.debug_struct("ConfigAction")
+            .field("action", &self.action)
+            .finish()
+    }
+}
+
+impl fmt::Debug for ConfigActionKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Show { json } => f.debug_struct("Show").field("json", json).finish(),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -313,6 +353,7 @@ impl fmt::Debug for Commands {
             Self::Message(m) => f.debug_tuple("Message").field(m).finish(),
             Self::Encrypt(e) => f.debug_tuple("Encrypt").field(e).finish(),
             Self::Decrypt(d) => f.debug_tuple("Decrypt").field(d).finish(),
+            Self::Config(c) => f.debug_tuple("Config").field(c).finish(),
         }
     }
 }

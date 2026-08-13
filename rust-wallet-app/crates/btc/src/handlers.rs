@@ -335,6 +335,93 @@ pub async fn handle_show(
     Ok(())
 }
 
+/// `btc config show` — Issue #100 / Story 11.
+///
+/// Prints the resolved CLI configuration: data dir, default Esplora URL,
+/// default network, list of loaded wallets. Per Story 11 AC: exit 0
+/// always (no env / network / filesystem failure propagates).
+pub fn handle_config_show(json: bool, data_dir: &Path) -> Result<()> {
+    use bitcoin::Network;
+
+    // Default network = testnet (per Architecture spec). Note: this is the
+    // *resolved* default — `btc config show` does not parse CLI subcommand
+    // args at the top level (only the --data-dir global). For per-wallet
+    // network, see the `wallets[].network` field in the JSON output.
+    let network = Network::Testnet;
+    let esplora_url = default_url_for(network).unwrap_or("(none — regtest)");
+
+    // Walk the wallet store on disk per network. Per ADR 0001 the layout
+    // is `$XDG_DATA_HOME/btc/wallets/<network>/<wallet_id>.enc`. We list
+    // each network dir independently — direct recursive glob would lose
+    // the network label.
+    let mut wallets: Vec<(Network, String, std::path::PathBuf)> = Vec::new();
+    for net in [
+        Network::Bitcoin,
+        Network::Testnet,
+        Network::Testnet4,
+        Network::Signet,
+        Network::Regtest,
+    ] {
+        let dir = data_dir.join("btc").join("wallets").join(net.to_string());
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue, // dir missing → no wallets on this network
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("enc") {
+                continue;
+            }
+            // Filename is `<wallet_id>.enc` per store::wallet_path_at.
+            let wid = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string();
+            wallets.push((net, wid, path));
+        }
+    }
+    // Sort by network then wallet_id for deterministic output.
+    wallets.sort_by(|a, b| (a.0.to_string(), &a.1).cmp(&(b.0.to_string(), &b.1)));
+
+    if json {
+        let payload = serde_json::json!({
+            "data_dir": data_dir.display().to_string(),
+            "esplora_url": esplora_url,
+            "network": network.to_string(),
+            "coin_type": coin_type_for(network),
+            "wallets": wallets.iter().map(|(net, wid, path)| {
+                serde_json::json!({
+                    "network": net.to_string(),
+                    "wallet_id": wid,
+                    "path": path.display().to_string(),
+                })
+            }).collect::<Vec<_>>(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).context("serialize config show JSON")?
+        );
+    } else {
+        println!("data_dir:    {}", data_dir.display());
+        println!("esplora_url: {}", esplora_url);
+        println!(
+            "network:     {} (coin type {})",
+            network,
+            coin_type_for(network)
+        );
+        println!("wallets:     {} total", wallets.len());
+        if wallets.is_empty() {
+            println!("  (none)");
+        } else {
+            for (net, wid, path) in &wallets {
+                println!("  - {} {} ({})", net, wid, path.display());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

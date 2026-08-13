@@ -384,3 +384,165 @@ fn import_accepts_24_word_phrase() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+// -- btc config show (Issue #100 / Story 11) -----------------------------------
+
+#[test]
+fn btc_version_flag_prints_semver() {
+    // Per Story 11 AC: diagnostic output includes the version string
+    // 'btc 0.1.0' (via --version). Workspace version is 0.2.0 currently,
+    // so accept any `btc <semver>` prefix.
+    let out = btc()
+        .args(["--version"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn btc --version");
+    assert!(
+        out.status.success(),
+        "--version failed: {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.starts_with("btc ") && stdout.contains('.'),
+        "expected 'btc <semver>' on stdout; got: {stdout}"
+    );
+}
+
+#[test]
+fn config_show_help_exits_zero() {
+    let out = btc()
+        .args(["config", "show", "--help"])
+        .output()
+        .expect("spawn btc");
+    assert!(
+        out.status.success(),
+        "expected exit 0, got {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn config_show_exits_zero_with_empty_wallet_dir() {
+    // Per Story 11 AC: exit 0 always (even with no wallets).
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out = btc()
+        .args(["config", "show"])
+        .env("XDG_DATA_HOME", temp.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn btc config show");
+    assert!(
+        out.status.success(),
+        "expected exit 0 (Story 11 AC: exit 0 always); got {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Human output must include data dir, Esplora URL, network.
+    assert!(stdout.contains("data_dir"), "missing data_dir: {stdout}");
+    assert!(
+        stdout.contains("esplora_url"),
+        "missing esplora_url: {stdout}"
+    );
+    assert!(stdout.contains("network"), "missing network: {stdout}");
+    assert!(stdout.contains("wallets"), "missing wallets list: {stdout}");
+}
+
+#[test]
+fn config_show_json_outputs_valid_json() {
+    // Per Story 11 AC: btc config show --json outputs the same as JSON.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out = btc()
+        .args(["config", "show", "--json"])
+        .env("XDG_DATA_HOME", temp.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn btc config show --json");
+    assert!(
+        out.status.success(),
+        "expected exit 0; got {:?}; stderr={}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON output: {e}; stdout: {stdout}"));
+    assert!(
+        parsed["data_dir"].is_string(),
+        "data_dir not a string: {parsed}"
+    );
+    assert!(
+        parsed["esplora_url"].is_string(),
+        "esplora_url not a string: {parsed}"
+    );
+    assert!(
+        parsed["network"].is_string(),
+        "network not a string: {parsed}"
+    );
+    assert!(
+        parsed["wallets"].is_array(),
+        "wallets not an array: {parsed}"
+    );
+}
+
+#[test]
+fn config_show_lists_wallets_after_create() {
+    // After creating a wallet, config show should list it.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let out_create = btc()
+        .args([
+            "wallet",
+            "create",
+            "--words",
+            "12",
+            "--network",
+            "testnet",
+            "--password",
+            "demo-pwd",
+        ])
+        .env("XDG_DATA_HOME", temp.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn btc wallet create");
+    assert!(
+        out_create.status.success(),
+        "create failed: {:?}",
+        out_create.status
+    );
+    let wallet_id = String::from_utf8_lossy(&out_create.stdout)
+        .trim()
+        .to_string();
+
+    let out_show = btc()
+        .args(["config", "show", "--json"])
+        .env("XDG_DATA_HOME", temp.path())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("spawn btc config show");
+    assert!(
+        out_show.status.success(),
+        "config show failed: {:?}",
+        out_show.status
+    );
+    let stdout = String::from_utf8_lossy(&out_show.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("config show JSON parse");
+    let wallets = parsed["wallets"].as_array().expect("wallets array");
+    assert_eq!(
+        wallets.len(),
+        1,
+        "expected 1 wallet in config show, got {}: {parsed}",
+        wallets.len()
+    );
+    let entry = &wallets[0];
+    assert_eq!(entry["network"].as_str(), Some("testnet"));
+    assert_eq!(entry["wallet_id"].as_str(), Some(wallet_id.as_str()));
+    assert!(entry["path"].is_string(), "path missing: {entry}");
+}
