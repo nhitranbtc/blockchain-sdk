@@ -37,7 +37,10 @@ If the host model is unknown (this session: model ID `MiniMax-M3`, not a publish
 | Feature | PR #101 — `btc wallet import` subcommand (Story 2 / Issue #99) | ~200k | ~60k | MiniMax-M3 (session model) | ~$0.70 | TDD red-green (5 lib + 6 CLI tests) + verify gate + demo script; PR #101 SHA `90d6e6f` |
 | Feature | PR #102 — security fix + demo expansion (all 5 BIP-39 word counts) | ~150k | ~45k | MiniMax-M3 (session model) | ~$0.50 | Remove `--passphrase` (broken-security-control); expand Step 4 to 12/15/18/21/24; PR #102 SHA `786ce4b` |
 | Process | L21 update for #101 + #102 + branch cleanup | ~10k | ~4k | MiniMax-M3 (session model) | ~$0.03 | Estimate-report footer entries + ai-cost-report rows; L21 ledger closure |
-| **Total (retroactive est. + Phase 1 closure + wallet-import)** | | **~2.33M** | **~795k** | | **~$15.96** | Subject to ±50% (rates + token split assumed); Phase 1 closure subset ~$0.62, wallet-import subset ~$1.20 |
+| Feature | PR #105 — `btc config show` subcommand (Story 11 / Issue #100) | ~180k | ~55k | MiniMax-M3 (session model) | ~$0.65 | TDD red-green (5 CLI tests) + verify gate + Try it examples; PR #105 SHA `4de4ea7` |
+| Process | PR #106 — CI workflow reorganization (move btc-import-demo to btc-cli-demo.yml) | ~50k | ~15k | MiniMax-M3 (session model) | ~$0.18 | Architectural move (ci.yml → btc-cli-demo.yml) + bug fix (SKIP_BUILD=1); PR #106 SHA `ecb0228` |
+| Process | Phase 1 §MVP final closure (issue #100 ACs flip + plan file marker) | ~10k | ~4k | MiniMax-M3 (session model) | ~$0.03 | L13 step 14 + plan marker |
+| **Total (retroactive est. + Phase 1 closure + wallet-import + Story 11)** | | **~2.57M** | **~873k** | | **~$17.42** | Subject to ±50% (rates + token split assumed); Phase 1 closure subset ~$0.62, wallet-import subset ~$1.20, Story 11 subset ~$0.65 |
 
 ## Live tracking (going forward)
 
