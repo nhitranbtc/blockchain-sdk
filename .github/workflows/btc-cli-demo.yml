@@ -57,6 +57,12 @@ jobs:
       - name: btc-import-demo.sh (all 5 BIP-39 word counts × all 5 networks)
         working-directory: rust-wallet-app
         run: bash scripts/btc-import-demo.sh
+      # 'get wallet balance' use case demo (Story 3). Exercises F20 gate
+      # across all 5 BIP-39 word counts (12/15/18/21/24) + regtest exemption.
+      # 8/8 PASS (deterministic; no network required).
+      - name: btc-balance-demo.sh (get wallet balance use case)
+        working-directory: rust-wallet-app
+        run: bash scripts/btc-balance-demo.sh
       - name: cargo test -p btc
         working-directory: rust-wallet-app
         run: cargo test -p btc
