@@ -291,7 +291,7 @@ fn btc_workflow_create_fund_balance() {
     // With host networking, electrs binds directly to ELECTRS_HTTP_PORT
     // on the host's loopback — no port mapping needed. The container
     // handle is kept alive for RAII teardown.
-    let electrs_host_port = ELECTRS_HTTP_PORT;
+    let electrs_host_port = electrs_host_port();
     let esplora_url = format!("http://127.0.0.1:{electrs_host_port}");
 
     // 3. STEP 1: btc wallet import — creates the wallet from entropy=0 mnemonic.
