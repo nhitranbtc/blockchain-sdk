@@ -133,11 +133,11 @@ Cross-check: every use case that `rust-bitcoin 0.32` provides natively (per `doc
 
 **Acceptance criteria:**
 
-- `btc balance --wallet test-wallet` prints one line: `confirmed: 0.00123 BTC, unconfirmed: 0, immature: 0`.
-- Values formatted in BTC by default; `--unit sats` switches to satoshis.
-- First run after wallet creation shows `0` across the board (no funds yet) and exits 0.
+- `btc wallet balance --mnemonic <words> --network <NET> --esplora-url <URL>` prints **two lines** (scriptable): `n_utxos=<N> total_sat=<S>` — matches `btc wallet sync` output format for piping.
+- First run after wallet creation shows `n_utxos=0 total_sat=0` (no funds yet) and exits 0.
 - If chain sync fails (Esplora unreachable), the command retries once, then prints `sync failed: <reason>` and exits 3.
 - Reads from cached DB first; falls back to live sync only if the cache is stale.
+- **Note:** implementation diverged from the original spec's `btc balance --wallet test-wallet` named-wallet model — the v0.1 architecture went stateless (mnemonic inline per PR #81). The named-wallet model is a future v0.2 Story 12 enhancement.
 
 ---
 
@@ -147,11 +147,11 @@ Cross-check: every use case that `rust-bitcoin 0.32` provides natively (per `doc
 
 **Acceptance criteria:**
 
-- `btc sync --wallet test-wallet` connects to Esplora and pulls new blocks/addresses.
-- Output: `synced to height 2500123 in 1.2s, 3 new addresses, 1 new tx`.
+- `btc wallet sync --mnemonic <words> --network <NET> --esplora-url <URL>` connects to Esplora and pulls new blocks/addresses.
+- Output: `n_utxos=<N> total_sat=<S>` (same format as `btc wallet balance`).
 - Exit 0 on success. Exit 3 on Esplora failure.
-- `--no-progress` suppresses the streaming progress line (for CI/scripting).
-- A subsequent `btc balance` reflects the synced state without a second sync.
+- A subsequent `btc wallet balance` reflects the synced state without a second sync.
+- **Note:** implementation uses stateless mnemonic inline per PR #81 (Issue #63 / Task 54c); named-wallet model deferred.
 
 ---
 
@@ -161,12 +161,12 @@ Cross-check: every use case that `rust-bitcoin 0.32` provides natively (per `doc
 
 **Acceptance criteria:**
 
-- `btc send --wallet test-wallet --to tb1q... --amount-sats 100000` builds, signs, and broadcasts.
+- `btc wallet send --mnemonic <words> --network <NET> --to tb1q... --amount-sats 100000` builds, signs, and broadcasts.
 - Default fee tier is `half_hour` (3-block target). Override via `--fee fastest|half_hour|hour|economy` or `--fee-rate-sat-per-vb 5`.
 - Output on success: `sent. txid: abc...123 (fee: 540 sats, weight: 110 vbytes)`.
 - Exit 0 on broadcast. Exit 4 on insufficient funds. Exit 5 on RPC error.
 - `--dry-run` builds + signs but does not broadcast; prints the base64 PSBT instead.
-- Wallet must be synced within the last 5 minutes; otherwise auto-syncs first.
+- **Note:** `btc wallet send` is **not yet shipped** — Story 5 is in Phase 2 Backlog (deferred to v0.1.1/v0.1.2 per F35).
 
 ---
 
@@ -270,10 +270,11 @@ Cross-check: every use case that `rust-bitcoin 0.32` provides natively (per `doc
 
 **Acceptance criteria:**
 
-- First `btc wallet create` writes `mnemonic.txt` to `~/.local/share/btc/{name}/`.
-- Subsequent `btc balance --wallet {name}` reads the file, reconstructs the wallet, and continues.
-- If the data dir is on slow disk (HDD, network FS), `btc balance` still completes in <500ms after sync.
-- If `mnemonic.txt` is missing or unreadable, the command exits 2 with `wallet '{name}' is missing or corrupt`.
+- First `btc wallet create` writes an encrypted blob (Argon2id + AES-256-GCM per F5/F6) to `$XDG_DATA_HOME/btc/wallets/<network>/<wallet_id>.enc` per ADR 0001.
+- Subsequent `btc wallet show --id <wallet_id> --network <NET> --password <PW>` reads the blob, decrypts, syncs from Esplora, prints the wallet state.
+- If the data dir is on slow disk (HDD, network FS), `btc wallet show` still completes in <500ms after sync.
+- If the blob is missing or unreadable, the command exits 2 with `wallet '<id>' is missing or corrupt`.
+- **Note:** v0.1 implementation uses UUID-based wallet IDs (not user-supplied names). The named-wallet model (`btc wallet --name w`) is a future enhancement.
 
 ---
 

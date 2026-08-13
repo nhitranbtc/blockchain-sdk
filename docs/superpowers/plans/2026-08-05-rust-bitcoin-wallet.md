@@ -21,7 +21,7 @@
 > - **Story 2** (`btc wallet import`) shipped in PR #101 (SHA `90d6e6f`). Security fix (remove `--passphrase` flag, broken-security-control) in PR #102 (SHA `786ce4b`). Spec-compliance fixes (exit code 2 + `checksum mismatch`) in PR #103 (SHA `43da9fc`). Demo `btc-import-demo.sh` verifies 8/8 steps across all 5 BIP-39 word counts (12/15/18/21/24) and all 5 networks (bitcoin, testnet, signet, testnet4, regtest).
 > - **Story 11** (`btc config show`) shipped in PR #105 (SHA `4de4ea7`). CLI integration tests cover human + JSON output + empty wallet dir + post-create listing + `--version` flag. PR #106 (SHA `ecb0228`) moved the demo invocation to the canonical `btc-cli-demo.yml` workflow + triggered the CI gate for every PR.
 >
-> **Phase 1 §MVP: 6/6 stories shipped.** All backlog issues (#99, #100) closed. Demo scripts (`btc-quickstart`, `btc-networks-demo`, `btc-import-demo`) all gated in CI via `.github/workflows/btc-cli-demo.yml`. L21 ledger closed for #96, #97, #98, #101, #102, #103, #105, #106, #107.
+> **Phase 1 §MVP: 6/6 stories shipped.** All backlog issues (#99, #100) closed. Demo scripts (`btc-quickstart`, `btc-networks-demo`, `btc-import-demo`, `btc-balance-demo`) all gated in CI via `.github/workflows/btc-cli-demo.yml`. L21 ledger closed for #96, #97, #98, #101, #102, #103, #105, #106, #107. PR #110 (btc-balance-demo) closed the last use-case demo gap (Story 3 happy-path coverage via F20 gate demo across all 5 BIP-39 word counts + regtest exemption).
 
 **Tech Stack:** Rust 1.85 MSRV (justification per F31: `bdk_wallet 3.1` requires 1.85; if a lower MSRV proves compatible, downgrade), BDK 3.1 (with `keys-bip39` feature for `bip39` re-export), rust-bitcoin 0.32 (re-exports `secp256k1` + `miniscript` + `bip39`), bip32 0.6 (fallback `^0.5` per F46), tokio 1, reqwest 0.12, thiserror 1, tracing 0.1, clap 4, proptest 1, argon2 0.5, aes-gcm 0.10, rand 0.8, zeroize 1.
 
@@ -80,8 +80,8 @@ rust-wallet-app/
 | 2 | Import wallet | 3, 9 | MVP | core |
 | 3 | Check balance | 9 | MVP | core |
 | 4 | Sync chain | 9 | MVP | core |
-| 11 | Persist across invocations | 9 | MVP | core (via bdk_file_store) |
-| 12 | Config show | 9 | MVP | core (via WalletConfig struct) |
+| 11 | Show config + debug | 9 | MVP | core (PR #105 — `btc config show`) |
+| 12 | Persist across invocations | 9 | MVP | core (via bdk_file_store) |
 
 **Deferred stories** (5, 6, 7, 8, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below.
 
