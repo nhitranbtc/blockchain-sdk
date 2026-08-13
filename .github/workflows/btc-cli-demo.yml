@@ -51,6 +51,12 @@ jobs:
       - name: btc-networks-demo.sh (5-network coverage)
         working-directory: rust-wallet-app
         run: bash scripts/btc-networks-demo.sh
+      # All 5 BIP-39 word counts (12/15/18/21/24) × all 5 networks
+      # (bitcoin/testnet/signet/testnet4/regtest). Fully offline
+      # (entropy=0 test vectors + temp XDG_DATA_HOME). 8/8 PASS.
+      - name: btc-import-demo.sh (all 5 BIP-39 word counts × all 5 networks)
+        working-directory: rust-wallet-app
+        run: bash scripts/btc-import-demo.sh
       - name: cargo test -p btc
         working-directory: rust-wallet-app
         run: cargo test -p btc
