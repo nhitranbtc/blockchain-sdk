@@ -23,3 +23,11 @@ rpassword = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Issue #112 / testcontainers regtest smoke (PR #111 follow-up).
+# `testcontainers` for ephemeral containers; `reqwest` for HTTP RPC client.
+testcontainers = { version = "0.23", default-features = false, features = ["blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# `bitcoind` for the regtest JSON-RPC client (boot + mine + send).
+# Pinned to a recent 0.36 release; same minor as the in-tree bitcoind
+# pattern referenced in the task-sdk map (Task 15).
+bitcoind = { version = "0.36", default-features = false, features = ["0_21_2"] }
