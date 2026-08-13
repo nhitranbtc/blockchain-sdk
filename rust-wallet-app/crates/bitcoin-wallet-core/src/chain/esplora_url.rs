@@ -81,10 +81,20 @@ impl EsploraUrl {
             )));
         }
         if url.scheme() != "https" {
-            return Err(Error::Esplora(format!(
-                "esplora url must use https:// scheme, got: {}",
-                url.scheme()
-            )));
+            // Test-friendly exception: allow `http://` for localhost /
+            // 127.0.0.1 so the testcontainers regtest smoke can talk to
+            // a local electrs without TLS. Production deployments use
+            // HTTPS via blockstream.info / mempool.space and are unaffected.
+            let is_localhost = matches!(
+                url.host_str(),
+                Some("localhost") | Some("127.0.0.1") | Some("::1") | Some("[::1]")
+            );
+            if !(is_localhost && url.scheme() == "http") {
+                return Err(Error::Esplora(format!(
+                    "esplora url must use https:// scheme, got: {}",
+                    url.scheme()
+                )));
+            }
         }
         // Trailing-slash normalization for `Url::join` semantics.
         if !url.path().ends_with('/') {

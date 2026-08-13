@@ -31,16 +31,21 @@ use std::time::Duration;
 use testcontainers::{
     core::{ContainerPort, IntoContainerPort, WaitFor},
     runners::SyncRunner,
-    Image,
+    Image, ImageExt,
 };
 
 const BITCOIND_IMAGE: &str = "bitcoin/bitcoin";
 const BITCOIND_TAG: &str = "25";
 const RPC_PORT: u16 = 18443;
 
+const ELECTRS_IMAGE: &str = "mempool/electrs";
+const ELECTRS_TAG: &str = "latest";
+const ELECTRS_HTTP_PORT: u16 = 50001;
+
 /// Static port list — `expose_ports()` returns `&[ContainerPort]` which
 /// requires `'static` data.
 const EXPOSED_PORTS: [ContainerPort; 1] = [ContainerPort::Tcp(18443)];
+const ELECTRS_EXPOSED_PORTS: [ContainerPort; 1] = [ContainerPort::Tcp(ELECTRS_HTTP_PORT)];
 
 /// Bitcoind regtest image — custom Image impl per testcontainers 0.23 API.
 /// Uses `cmd()` to pass regtest flags + RPC port.
@@ -73,6 +78,49 @@ impl Image for BitcoindRegtest {
 
     fn expose_ports(&self) -> &[ContainerPort] {
         &EXPOSED_PORTS
+    }
+}
+
+/// Electrs regtest image — custom Image impl per testcontainers 0.23 API.
+/// Connects to bitcoind via the daemon-rpc-addr + cookie auth. The
+/// `start_with_network` testcontainers helper joins the bitcoind
+/// container's network namespace so electrs can reach bitcoind at
+/// `localhost:18443`.
+struct ElectrsRegtest;
+
+impl Image for ElectrsRegtest {
+    fn name(&self) -> &str {
+        ELECTRS_IMAGE
+    }
+
+    fn tag(&self) -> &str {
+        ELECTRS_TAG
+    }
+
+    fn ready_conditions(&self) -> Vec<WaitFor> {
+        // Use log message check (electrs prints version to stderr).
+        vec![WaitFor::message_on_stderr("mempool-electrs")]
+    }
+
+    fn cmd(&self) -> impl IntoIterator<Item = impl Into<Cow<'_, str>>> {
+        [
+            "--network".to_string(),
+            "regtest".to_string(),
+            "--daemon-rpc-addr".to_string(),
+            "localhost:18443".to_string(),
+            "--cookie".to_string(),
+            "bitcoin:bitcoin".to_string(),
+            "--http-addr".to_string(),
+            "0.0.0.0:50001".to_string(),
+            "--db-dir".to_string(),
+            "/tmp/electrs-db".to_string(),
+            "--daemon-dir".to_string(),
+            "/tmp/electrs-daemon".to_string(),
+        ]
+    }
+
+    fn expose_ports(&self) -> &[ContainerPort] {
+        &ELECTRS_EXPOSED_PORTS
     }
 }
 
@@ -179,13 +227,11 @@ fn btc_regtest_smoke_mines_101_blocks() {
 /// Uses stateless `btc wallet balance` (no Esplora required) so the test
 /// stays focused on the wallet-fund-balance surface.
 ///
-/// **Currently `#[ignore]`** — `btc wallet import` saves the encrypted blob
-/// under `$XDG_DATA_HOME/btc/wallets/testnet/<uuid>.enc` per ADR 0001, which
-/// requires `btc wallet show` to decrypt — but `show` requires Esplora (F36).
-/// The workaround is to use `btc wallet balance --mnemonic` (stateless), which
-/// doesn't need the persisted blob. This test still demonstrates the workflow.
+/// **No `#[ignore]`** — uses testcontainers to spin up bitcoind + electrs
+/// sidecar; the `bitcoin-wallet-core` lib's `EsploraUrl::new` recently
+/// (via this PR) learned to allow `http://localhost` (F36 test-friendly
+/// exception), so the local regtest Esplora on HTTP works.
 #[test]
-#[ignore = "stateless check via --mnemonic; full wallet_id round-trip needs Esplora sidecar"]
 fn btc_workflow_create_fund_balance() {
     if std::env::var("SKIP_TESTCONTAINERS").is_ok() {
         eprintln!("SKIP_TESTCONTAINERS set; skipping testcontainers smoke");
@@ -205,8 +251,22 @@ fn btc_workflow_create_fund_balance() {
     let url = format!("http://127.0.0.1:{host_port}");
     let auth = ("bitcoin", "bitcoin");
 
-    // 2. STEP 1: btc wallet import — creates the wallet from entropy=0 mnemonic.
-    // CARGO_BIN_EXE_btc is the freshly-built binary.
+    // 2. Boot electrs sidecar on the same network as bitcoind.
+    // Use the default `bridge` network — both containers are joined
+    // via `with_network("bridge")`. testcontainers container names
+    // resolve via Docker DNS so electrs can reach bitcoind via
+    // container hostname. Both expose ports to host via testcontainers'
+    // default port mapping.
+    let _electrs = ElectrsRegtest
+        .with_network("bridge")
+        .start()
+        .expect("start electrs on bridge network");
+    let electrs_host_port = _electrs
+        .get_host_port_ipv4(ELECTRS_HTTP_PORT.tcp())
+        .expect("map electrs HTTP port to host");
+    let esplora_url = format!("http://127.0.0.1:{electrs_host_port}");
+
+    // 3. STEP 1: btc wallet import — creates the wallet from entropy=0 mnemonic.
     let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     let import_out = std::process::Command::new(env!("CARGO_BIN_EXE_btc"))
         .args([
@@ -280,9 +340,9 @@ fn btc_workflow_create_fund_balance() {
     );
     println!("✓ STEP 2: mined 101 blocks to {first_recv_addr}");
 
-    // 4. STEP 3: btc wallet balance — query the balance via stateless invocation.
-    // Use --network regtest to avoid F20 SPKI pin requirement (only
-    // non-regtest networks require --pin-spki per PR #82).
+    // 4. STEP 3: btc wallet balance — query the balance via the local
+    // electrs sidecar (HTTP on localhost, exercised by the F36
+    // test-friendly exception in the lib).
     let balance_out = std::process::Command::new(env!("CARGO_BIN_EXE_btc"))
         .args([
             "wallet",
@@ -292,7 +352,7 @@ fn btc_workflow_create_fund_balance() {
             "--network",
             "regtest",
             "--esplora-url",
-            &url,
+            &esplora_url,
         ])
         .output()
         .expect("spawn btc wallet balance");
