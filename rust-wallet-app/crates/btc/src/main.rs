@@ -81,6 +81,24 @@ async fn main() -> Result<()> {
                 } => {
                     handlers::handle_wallet_balance(mnemonic, network, esplora_url, pin_spki).await
                 }
+                WalletActionKind::Send {
+                    mnemonic,
+                    network,
+                    address,
+                    amount_sat,
+                    esplora_url,
+                    pin_spki,
+                } => {
+                    handlers::handle_wallet_send(
+                        mnemonic,
+                        network,
+                        address,
+                        amount_sat,
+                        esplora_url,
+                        pin_spki,
+                    )
+                    .await
+                }
             },
             Commands::Message(MessageAction { action }) => match action {
                 cli::MessageActionKind::Sign {

@@ -66,19 +66,27 @@ pub use bdk_wallet::KeychainKind;
 use std::str::FromStr;
 use std::sync::Mutex;
 
-use bdk_wallet::bitcoin::{Amount, Network, OutPoint, TxOut};
+use bdk_wallet::bitcoin::{Address, Amount, FeeRate, Network, OutPoint, TxOut, Txid};
 use bdk_wallet::Wallet as BdkWallet;
 
 use crate::chain::esplora::{EsploraClient, EsploraUtxo};
 use crate::chain::network::coin_type_for;
 use crate::error::Error;
 use crate::keys::{AddressType, Mnemonic, Secret, XPrvHolder};
+use crate::tx;
 
 /// Gap limit for full chain scan (v0.1 demo). BIP-44 default is 20;
 /// 5 keeps `Wallet::sync` quick while still finding any recent
 /// receive for a fresh wallet. Bump to 20 once we test against
 /// wallets with 20+ unused addresses.
 const SCAN_GAP_LIMIT: u32 = 5;
+
+/// Default fee rate for Story 5 `Wallet::send` (1 sat/vB). Story 6
+/// (#119) introduces a CLI `--fee-rate` override; for now we use a
+/// conservative low rate. The actual fee charged will be higher
+/// (bdk's coin selector + change generation add variance), but the
+/// floor is `DEFAULT_FEE_RATE_SAT_PER_VB` per vbyte.
+const DEFAULT_FEE_RATE_SAT_PER_VB: u64 = 1;
 
 /// Bitcoin wallet bound to one mnemonic + one network.
 ///
@@ -176,6 +184,62 @@ impl Wallet {
         let bal = bdk.balance().confirmed.to_sat();
         *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
         Ok(bal)
+    }
+
+    /// Send `amount` satoshis to `recipient` (Story 5 / Issue #118 /
+    /// Task 11 + 13). Full tx lifecycle: lazy-sync → build → sign →
+    /// broadcast → return txid.
+    ///
+    /// **Default fee rate: 1 sat/vB.** Story 6 (#119) adds a CLI
+    /// `--fee-rate` override; for now the call site hardcodes a
+    /// conservative low rate (Story 5 ships only the happy path).
+    ///
+    /// **Lock discipline:** bdk's `build_tx()` takes `&mut self`, so
+    /// we must take the bdk wallet OUT of the `Mutex<Option<...>>`
+    /// for the build step, then put it back before the async
+    /// broadcast. `MutexGuard` never crosses `.await`.
+    ///
+    /// **Error sanitization (F25 / U1):** `tx::builder::build_send_tx`
+    /// already sanitizes bdk's `CreateTxError` (no descriptor echo);
+    /// `tx::sign::sign_psbt` maps `SignerError` → `Error::Sign`. The
+    /// `Error::NotInitialized` here is only reachable if `balance`
+    /// succeeds but the wallet then disappears from the mutex — a
+    /// caller bug (no other code path mutates `self.bdk`).
+    pub async fn send(
+        &self,
+        esplora: &EsploraClient,
+        recipient: &Address,
+        amount: Amount,
+    ) -> Result<Txid, Error> {
+        // 1. Lazy-sync: populates the bdk wallet via balance().
+        self.balance(esplora).await?;
+        // 2. Take bdk wallet out of the mutex (build needs &mut).
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "send: bdk wallet not initialized after sync (caller bug)".into(),
+                )
+            })?
+        };
+        // 3. Build (sync, &mut bdk).
+        // FeeRate::from_sat_per_vb returns Option<FeeRate>; 0 is
+        // invalid (would mean no fee — txs wouldn't relay). We
+        // unwrap with expect because DEFAULT_FEE_RATE_SAT_PER_VB is
+        // a compile-time constant > 0.
+        let fee_rate = FeeRate::from_sat_per_vb(DEFAULT_FEE_RATE_SAT_PER_VB)
+            .expect("DEFAULT_FEE_RATE_SAT_PER_VB must be > 0 (compile-time constant)");
+        let mut psbt = tx::builder::build_send_tx(&mut bdk, recipient, amount, fee_rate)?;
+        // 4. Sign (sync, &bdk — sign mutates psbt, not self).
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        // 5. Finalize PSBT → broadcast-ready Transaction.
+        let tx = tx::sign::extract_tx(&psbt)?;
+        // 6. Put bdk wallet back BEFORE the async broadcast so the
+        //    MutexGuard doesn't cross .await (mutex poisoning guard).
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        // 7. Broadcast (async).
+        let txid = tx::broadcast::broadcast(esplora, &tx).await?;
+        Ok(txid)
     }
 
     /// Build the in-memory `bdk_wallet::Wallet` from the stored

@@ -313,6 +313,54 @@ impl EsploraClient {
             .map_err(|e| Error::Esplora(format!("get_tx parse: {e}")))
     }
 
+    /// Broadcast a raw transaction via Esplora's `/tx` endpoint
+    /// (Task 13 / Story 5 / Issue #118). POST body is the raw tx hex;
+    /// response is the txid as a 64-char hex string on success.
+    ///
+    /// **F20 enforcement**: TLS chain validation + SPKI pin check
+    /// (when configured) happen inside the underlying `reqwest::Client`
+    /// — no separate check here. The caller passes `&self` (the
+    /// pre-configured client) so the pin policy is whatever was set at
+    /// construction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Esplora`] on:
+    /// - HTTP transport failure (timeout, DNS, TLS handshake)
+    /// - HTTP non-2xx response (Esplora returns the failure reason as
+    ///   the response body — surface the first 200 chars for debug)
+    /// - Non-hex / malformed txid in the response body
+    pub async fn broadcast_tx(&self, raw_tx_hex: &str) -> Result<bitcoin::Txid> {
+        let url = self
+            .base_url
+            .join("tx")
+            .map_err(|e| Error::Esplora(format!("broadcast_tx url join: {e}")))?;
+        let resp = self
+            .client
+            .post(url)
+            .header("Content-Type", "text/plain")
+            .body(raw_tx_hex.to_string())
+            .send()
+            .await
+            .map_err(|e| Error::Esplora(format!("broadcast_tx request: {e}")))?;
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| Error::Esplora(format!("broadcast_tx read body: {e}")))?;
+        if !status.is_success() {
+            return Err(Error::Esplora(format!(
+                "broadcast_tx HTTP {}: {}",
+                status,
+                &body[..body.len().min(200)]
+            )));
+        }
+        let txid_str = body.trim();
+        txid_str
+            .parse::<bitcoin::Txid>()
+            .map_err(|e| Error::Esplora(format!("broadcast_tx parse txid {txid_str:?}: {e}")))
+    }
+
     /// Build the underlying `reqwest::Client` with the configured TLS
     /// policy wired in. For `TlsPolicy::Pinned`, this constructs an
     /// `EsploraVerifier` with the pin set and configures rustls to use
