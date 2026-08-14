@@ -331,6 +331,308 @@ impl Wallet {
         Ok(txid)
     }
 
+    /// Send to multiple recipients in a single tx (Story 13 / Issue #138).
+    /// Composes `tx::builder::build_multi_recipient_tx` + sign + broadcast.
+    /// Same async/lock discipline as [`Wallet::send`].
+    ///
+    /// # Errors
+    ///
+    /// - `Error::TxBuild` on bdk build failure (empty list / >20 / no funds).
+    /// - `Error::Sign` on signing failure.
+    /// - `Error::Esplora` on broadcast failure.
+    pub async fn send_multi(
+        &self,
+        esplora: &EsploraClient,
+        recipients: &[(Address, Amount)],
+        fee_rate: FeeRate,
+    ) -> Result<Txid, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "send_multi: bdk wallet not initialized after sync (caller bug)".into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_multi_recipient_tx(&mut bdk, recipients, fee_rate)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        let tx = tx::sign::extract_tx(&psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        let txid = tx::broadcast::broadcast(esplora, &tx).await?;
+        Ok(txid)
+    }
+
+    /// Build + sign a multi-recipient tx without broadcasting
+    /// (`--dry-run` / Stories 13+14). Returns the base64-encoded PSBT
+    /// so the operator can inspect / submit via another tool.
+    ///
+    /// Performs the same `balance()` lazy-sync as `send_multi` —
+    /// without it, the PSBT would reference stale UTXO state
+    /// (already-spent or newly-received outputs invisible to the
+    /// bdk tx graph). The sync is the operator's "live view" of the
+    /// wallet before sign.
+    pub async fn build_sign_multi(
+        &self,
+        esplora: &EsploraClient,
+        recipients: &[(Address, Amount)],
+        fee_rate: FeeRate,
+    ) -> Result<String, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized("build_sign_multi: bdk wallet not initialized".into())
+            })?
+        };
+        let mut psbt = tx::builder::build_multi_recipient_tx(&mut bdk, recipients, fee_rate)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(psbt.to_string())
+    }
+
+    /// Drain all spendable UTXOs to a single address (Story 14 / Issue #138).
+    /// Composes `tx::builder::build_drain_tx` + sign + broadcast. Excluded
+    /// outpoints are locked via bdk's `add_unspendable`.
+    ///
+    /// # Errors
+    ///
+    /// - `Error::TxBuild` on no spendable UTXOs (after exclusions) or bdk
+    ///   build failure.
+    /// - `Error::Sign` on signing failure.
+    /// - `Error::Esplora` on broadcast failure.
+    pub async fn send_drain(
+        &self,
+        esplora: &EsploraClient,
+        drain_addr: &Address,
+        fee_rate: FeeRate,
+        exclude: &[OutPoint],
+    ) -> Result<Txid, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "send_drain: bdk wallet not initialized after sync (caller bug)".into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_drain_tx(&mut bdk, drain_addr, fee_rate, exclude)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        let tx = tx::sign::extract_tx(&psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        let txid = tx::broadcast::broadcast(esplora, &tx).await?;
+        Ok(txid)
+    }
+
+    /// Build + sign a drain tx without broadcasting (`--dry-run`).
+    /// Returns the base64-encoded PSBT. Performs the same `balance()`
+    /// lazy-sync as `send_drain` to surface the live UTXO set.
+    pub async fn build_sign_drain(
+        &self,
+        esplora: &EsploraClient,
+        drain_addr: &Address,
+        fee_rate: FeeRate,
+        exclude: &[OutPoint],
+    ) -> Result<String, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized("build_sign_drain: bdk wallet not initialized".into())
+            })?
+        };
+        let mut psbt = tx::builder::build_drain_tx(&mut bdk, drain_addr, fee_rate, exclude)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(psbt.to_string())
+    }
+
+    /// Story 15 / Issue #139: send with explicit coin-selection
+    /// algorithm. Composes `tx::builder::build_send_with_coin_selection`
+    /// (then sign + broadcast). Lock discipline + lazy-sync mirror
+    /// `Wallet::send`.
+    pub async fn send_with_coin_selection(
+        &self,
+        esplora: &EsploraClient,
+        recipient: &Address,
+        amount: Amount,
+        fee_rate: FeeRate,
+        algorithm: tx::builder::CoinSelection,
+    ) -> Result<Txid, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "send_with_coin_selection: bdk wallet not initialized after sync (caller bug)"
+                        .into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_send_with_coin_selection(
+            &mut bdk, recipient, amount, fee_rate, algorithm,
+        )?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        let tx = tx::sign::extract_tx(&psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        let txid = tx::broadcast::broadcast(esplora, &tx).await?;
+        Ok(txid)
+    }
+
+    /// Story 16 / Issue #139: send with manual UTXO selection.
+    /// `only_manual = true` → bdk `manually_selected_only` strict mode
+    /// (fails if selected UTXOs don't cover amount + fee).
+    /// `algorithm` applies to any auto-fill UTXOs when
+    /// `only_manual = false`. Lock discipline + lazy-sync mirror
+    /// [`Wallet::send`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_with_manual_utxo(
+        &self,
+        esplora: &EsploraClient,
+        recipient: &Address,
+        amount: Amount,
+        fee_rate: FeeRate,
+        utxos: &[OutPoint],
+        only_manual: bool,
+        algorithm: tx::builder::CoinSelection,
+    ) -> Result<Txid, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "send_with_manual_utxo: bdk wallet not initialized after sync (caller bug)"
+                        .into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_send_with_manual_utxo(
+            &mut bdk,
+            recipient,
+            amount,
+            fee_rate,
+            utxos,
+            only_manual,
+            algorithm,
+        )?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        let tx = tx::sign::extract_tx(&psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        let txid = tx::broadcast::broadcast(esplora, &tx).await?;
+        Ok(txid)
+    }
+
+    /// Story 15 dry-run: build + sign with explicit coin-selection
+    /// algorithm. Returns base64 PSBT.
+    pub async fn build_sign_with_coin_selection(
+        &self,
+        esplora: &EsploraClient,
+        recipient: &Address,
+        amount: Amount,
+        fee_rate: FeeRate,
+        algorithm: tx::builder::CoinSelection,
+    ) -> Result<String, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "build_sign_with_coin_selection: bdk wallet not initialized".into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_send_with_coin_selection(
+            &mut bdk, recipient, amount, fee_rate, algorithm,
+        )?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(psbt.to_string())
+    }
+
+    /// Story 16 dry-run: build + sign with manual UTXO selection.
+    /// Returns base64 PSBT.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_sign_with_manual_utxo(
+        &self,
+        esplora: &EsploraClient,
+        recipient: &Address,
+        amount: Amount,
+        fee_rate: FeeRate,
+        utxos: &[OutPoint],
+        only_manual: bool,
+        algorithm: tx::builder::CoinSelection,
+    ) -> Result<String, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "build_sign_with_manual_utxo: bdk wallet not initialized".into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_send_with_manual_utxo(
+            &mut bdk,
+            recipient,
+            amount,
+            fee_rate,
+            utxos,
+            only_manual,
+            algorithm,
+        )?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(psbt.to_string())
+    }
+
+    /// Story 17 / Issue #140: bump fee on an existing tx (RBF).
+    /// The replacement tx preserves inputs/outputs of the original
+    /// and pays a strictly higher fee. bdk auto-bumps BIP-125 sequence.
+    /// Returns the txid (same as input — RBF replaces in mempool).
+    pub async fn bump_fee(
+        &self,
+        esplora: &EsploraClient,
+        txid: bitcoin::Txid,
+        fee_rate: FeeRate,
+    ) -> Result<Txid, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "bump_fee: bdk wallet not initialized after sync (caller bug)".into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_bump_fee_tx(&mut bdk, txid, fee_rate)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        let tx = tx::sign::extract_tx(&psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(tx::broadcast::broadcast(esplora, &tx).await?)
+    }
+
+    /// Story 17 dry-run: build + sign RBF replacement without
+    /// broadcasting. Returns base64 PSBT.
+    pub async fn build_sign_bump_fee(
+        &self,
+        esplora: &EsploraClient,
+        txid: bitcoin::Txid,
+        fee_rate: FeeRate,
+    ) -> Result<String, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized("build_sign_bump_fee: bdk wallet not initialized".into())
+            })?
+        };
+        let mut psbt = tx::builder::build_bump_fee_tx(&mut bdk, txid, fee_rate)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(psbt.to_string())
+    }
+
     /// Build the in-memory `bdk_wallet::Wallet` from the stored
     /// phrase + network. Used by `sync` and `balance`; not exposed.
     ///

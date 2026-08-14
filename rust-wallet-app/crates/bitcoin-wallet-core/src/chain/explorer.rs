@@ -21,8 +21,14 @@ use bitcoin::{Address, Txid};
 ///
 /// ```
 /// use bitcoin_wallet_core::chain::explorer::tx_url;
-/// let url = tx_url("https://blockstream.info/testnet/api", "deadbeef".parse().unwrap());
-/// assert_eq!(url, "https://blockstream.info/testnet/api/tx/deadbeef");
+/// let txid = "0000000000000000000000000000000000000000000000000000000000000001"
+///     .parse()
+///     .unwrap();
+/// let url = tx_url("https://blockstream.info/testnet/api", txid);
+/// assert_eq!(
+///     url,
+///     "https://blockstream.info/testnet/api/tx/0000000000000000000000000000000000000000000000000000000000000001"
+/// );
 /// ```
 pub fn tx_url(base: &str, txid: Txid) -> String {
     format!("{base}/tx/{txid}")

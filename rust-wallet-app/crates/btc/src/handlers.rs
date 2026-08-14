@@ -1208,35 +1208,40 @@ pub async fn handle_fee_estimates(
 /// **Cross-network rejection**: `--address` must be valid for
 /// `--network` (e.g., a `tb1...` address with `--network bitcoin` is
 /// refused). This prevents accidentally sending to the wrong chain.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_wallet_send(
     mnemonic_phrase: String,
     network: NetArg,
-    address: String,
-    amount_sat: u64,
+    address: Option<String>,
+    amount_sat: Option<u64>,
+    to: Vec<crate::cli::ToArg>,
+    drain_to: Option<bitcoin::Address<bitcoin::address::NetworkUnchecked>>,
+    exclude_utxo: Vec<bitcoin::OutPoint>,
+    dry_run: bool,
     esplora_url: String,
     pin_spki: Option<String>,
     fee_rate_sat_per_vb: Option<u64>,
+    coin_selection: crate::cli::CoinSelection,
+    input: Vec<bitcoin::OutPoint>,
+    manual_selection_only: bool,
+    confirm_yes: Option<String>,
 ) -> Result<()> {
     let network_obj = network.as_network();
 
-    // Cross-network rejection (defends against "send to wrong chain"
-    // operator error). bitcoin 0.32 parses unchecked then
-    // require_network (the typed FromStr only accepts
-    // Address<NetworkUnchecked>).
-    let recipient: bitcoin::Address = address
-        .parse::<bitcoin::Address<_>>()
-        .with_context(|| format!("invalid recipient address {address:?}"))?
-        .require_network(network_obj)
-        .with_context(|| {
-            format!(
-                "recipient {address:?} is not valid for network {network_obj:?}; \
-                 cross-network send refused"
-            )
-        })?;
+    // Story 10 (extended to Stories 13-14 / U1): mainnet spend
+    // requires explicit `--confirm-yes yes`. Defends against
+    // accidental `--drain-to` / `--to` typos that move real BTC.
+    // Dry-run does NOT require confirmation (no broadcast).
+    if network_obj == bitcoin::Network::Bitcoin && !dry_run && confirm_yes.as_deref() != Some("yes")
+    {
+        anyhow::bail!(
+            "--network mainnet requires --confirm-yes yes for non-dry-run sends \
+             (Story 10 + Stories 13-14 / U1: accidental mainnet spend defense). \
+             Re-run with --confirm-yes yes to proceed."
+        );
+    }
 
-    // Story 6 / Issue #119: validate fee-rate. FeeRate::from_sat_per_vb
-    // returns None for 0 (invalid — txs without fee don't relay).
-    // Reject any value < 1 sat/vB with a clear error message.
+    // Story 6 / Issue #119: validate fee-rate.
     const DEFAULT_FEE_RATE_SAT_PER_VB: u64 = 1;
     let fee_rate_raw: u64 = fee_rate_sat_per_vb.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_VB);
     if fee_rate_raw < 1 {
@@ -1256,17 +1261,191 @@ pub async fn handle_wallet_send(
     let wallet = Wallet::from_mnemonic(&mnemonic, network_obj, None)
         .context("Wallet::from_mnemonic failed")?;
 
-    let txid = wallet
-        .send(
-            &client,
-            &recipient,
-            bitcoin::Amount::from_sat(amount_sat),
-            fee_rate,
+    // Dispatch by mode (drain_to → multi → single).
+    if let Some(drain_addr_unchecked) = drain_to {
+        // Story 14: --drain-to <addr>. Single destination, no amount.
+        let drain_addr = require_network_unchecked(&drain_addr_unchecked, network_obj)?;
+        if dry_run {
+            warn_psbt_broadcast_risk("drain");
+            let psbt_b64 = wallet
+                .build_sign_drain(&client, &drain_addr, fee_rate, &exclude_utxo)
+                .await
+                .context("Wallet::build_sign_drain failed")?;
+            println!("{psbt_b64}");
+        } else {
+            let txid = wallet
+                .send_drain(&client, &drain_addr, fee_rate, &exclude_utxo)
+                .await
+                .context("Wallet::send_drain failed (build + sign + broadcast)")?;
+            println!("{txid}");
+        }
+        return Ok(());
+    }
+
+    if !to.is_empty() {
+        // Story 13: --to addr:amount (repeatable). Cross-network check
+        // each entry; require_network rejects mismatched networks.
+        // MAX_RECIPIENTS cap is enforced here (clap `num_args` on
+        // Vec<T> isn't honored in this clap 4 derive version).
+        if to.len() > crate::cli::MAX_RECIPIENTS {
+            anyhow::bail!(
+                "--to entries exceed MAX_RECIPIENTS = {} (got {}); \
+                 bdk recommended safe max — split into multiple txs",
+                crate::cli::MAX_RECIPIENTS,
+                to.len()
+            );
+        }
+        let recipients: Vec<(bitcoin::Address, bitcoin::Amount)> = to
+            .iter()
+            .map(|t| {
+                let addr = require_network_unchecked(&t.address, network_obj)?;
+                Ok((addr, bitcoin::Amount::from_sat(t.amount_sat)))
+            })
+            .collect::<anyhow::Result<_>>()
+            .context("invalid recipient in --to")?;
+        let recipient_count = recipients.len();
+        if dry_run {
+            warn_psbt_broadcast_risk("multi");
+            let psbt_b64 = wallet
+                .build_sign_multi(&client, &recipients, fee_rate)
+                .await
+                .context("Wallet::build_sign_multi failed")?;
+            println!("{psbt_b64}");
+        } else {
+            let txid = wallet
+                .send_multi(&client, &recipients, fee_rate)
+                .await
+                .context("Wallet::send_multi failed (build + sign + broadcast)")?;
+            println!("sent. txid: {txid} (recipients: {recipient_count})");
+        }
+        return Ok(());
+    }
+
+    // Single-recipient mode (Story 5 backward compat).
+    let address_str = address.ok_or_else(|| {
+        anyhow::anyhow!("--address required when --to and --drain-to are absent (Story 5 mode)")
+    })?;
+    let amount = amount_sat.ok_or_else(|| {
+        anyhow::anyhow!(
+            "--amount-sat required when --address is set (Story 5 single-recipient mode)"
         )
-        .await
-        .context("Wallet::send failed (build + sign + broadcast)")?;
-    println!("{txid}");
+    })?;
+    let recipient = require_network_address_str(&address_str, network_obj)?;
+    let amount_obj = bitcoin::Amount::from_sat(amount);
+    if dry_run {
+        warn_psbt_broadcast_risk("single");
+        let psbt_b64 = if !input.is_empty() {
+            wallet
+                .build_sign_with_manual_utxo(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    &input,
+                    manual_selection_only,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::build_sign_with_manual_utxo failed")?
+        } else if coin_selection != crate::cli::CoinSelection::Bnb {
+            wallet
+                .build_sign_with_coin_selection(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::build_sign_with_coin_selection failed")?
+        } else {
+            let recipients = vec![(recipient.clone(), amount_obj)];
+            wallet
+                .build_sign_multi(&client, &recipients, fee_rate)
+                .await
+                .context("Wallet::build_sign_multi (single) failed")?
+        };
+        println!("{psbt_b64}");
+    } else {
+        let txid = if !input.is_empty() {
+            wallet
+                .send_with_manual_utxo(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    &input,
+                    manual_selection_only,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::send_with_manual_utxo failed")?
+        } else if coin_selection != crate::cli::CoinSelection::Bnb {
+            wallet
+                .send_with_coin_selection(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::send_with_coin_selection failed")?
+        } else {
+            wallet
+                .send(
+                    &client,
+                    &recipient,
+                    bitcoin::Amount::from_sat(amount),
+                    fee_rate,
+                )
+                .await
+                .context("Wallet::send failed (build + sign + broadcast)")?
+        };
+        println!("{txid}");
+    }
     Ok(())
+}
+
+/// Emit a STDERR warning before printing a base64-encoded signed PSBT
+/// to STDOUT. The PSBT is fully signed (witness data + valid ECDSA
+/// sigs) — anyone who captures it can broadcast the spend. The
+/// warning is on STDERR so it does NOT pollute scriptable STDOUT
+/// output. Per L13 sec-H2 / F25.
+fn warn_psbt_broadcast_risk(mode: &str) {
+    eprintln!(
+        "WARNING: signed PSBT follows on STDOUT ({mode} mode). \
+         The string below is live key material — anyone who captures \
+         it can broadcast the spend. Treat as secret. (L13 sec-H2)"
+    );
+}
+
+/// Cross-network rejection for `Address<NetworkUnchecked>` (the
+/// type returned by clap's value_parser after the L13 H1 fix).
+fn require_network_unchecked(
+    addr: &bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+    network_obj: bitcoin::Network,
+) -> Result<bitcoin::Address> {
+    addr.clone().require_network(network_obj).with_context(|| {
+        format!(
+            "recipient {addr:?} is not valid for network {network_obj:?}; \
+                 cross-network send refused"
+        )
+    })
+}
+
+/// Cross-network rejection helper for `--address <str>` (Story 5
+/// backward compat).
+fn require_network_address_str(s: &str, network_obj: bitcoin::Network) -> Result<bitcoin::Address> {
+    s.parse::<bitcoin::Address<_>>()
+        .with_context(|| format!("invalid recipient address {s:?}"))?
+        .require_network(network_obj)
+        .with_context(|| {
+            format!(
+                "recipient {s:?} is not valid for network {network_obj:?}; \
+                 cross-network send refused"
+            )
+        })
 }
 
 /// Cap for `--in` plaintext size on encrypt (1 MiB). Library has
@@ -2240,4 +2419,69 @@ mod password_source_tests {
             "abandon abandon abandon abandon abandon abandon about"
         );
     }
+}
+
+/// Handle `btc wallet bump-fee --txid <id> --fee-rate <N>` (Story 17).
+///
+/// Syncs the wallet (lazy), builds the RBF replacement via
+/// `tx::builder::build_bump_fee_tx` (which enforces `fee_rate >
+/// original_fee_rate`), signs, and broadcasts.
+///
+/// Exits:
+///  - 0: broadcast succeeded (txid printed on STDOUT)
+///  - 1: build/sign/broadcast failure
+///  - 4: new fee rate does not exceed original fee rate
+///  - 5: signing failure (bdk `SignerError` propagate)
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_wallet_bump_fee(
+    mnemonic_phrase: String,
+    network: NetArg,
+    txid: bitcoin::Txid,
+    fee_rate_sat_per_vb: u64,
+    esplora_url: String,
+    pin_spki: Option<String>,
+    confirm_yes: Option<String>,
+    dry_run: bool,
+) -> Result<()> {
+    let network_obj = network.as_network();
+
+    if network_obj == bitcoin::Network::Bitcoin && !dry_run && confirm_yes.as_deref() != Some("yes")
+    {
+        anyhow::bail!(
+            "--network mainnet requires --confirm-yes yes for non-dry-run bump-fee \
+             (Story 10 + Story 17 / U1: accidental mainnet spend defense). \
+             Re-run with --confirm-yes yes to proceed."
+        );
+    }
+
+    let fee_rate = bitcoin::FeeRate::from_sat_per_vb(fee_rate_sat_per_vb)
+        .ok_or_else(|| anyhow::anyhow!("invalid fee rate {fee_rate_sat_per_vb} sat/vB"))?;
+
+    let tmp_base = std::env::temp_dir();
+    let client =
+        build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
+    let mnemonic =
+        Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network_obj, None)
+        .context("Wallet::from_mnemonic failed")?;
+
+    if dry_run {
+        eprintln!(
+            "WARNING: signed PSBT follows on STDOUT (bump-fee dry-run). \
+             The string below is live key material — anyone who captures \
+             it can broadcast the spend. Treat as secret. (L13 sec-H2)"
+        );
+        let psbt_b64 = wallet
+            .build_sign_bump_fee(&client, txid, fee_rate)
+            .await
+            .context("Wallet::build_sign_bump_fee failed")?;
+        println!("{psbt_b64}");
+    } else {
+        let txid_new = wallet
+            .bump_fee(&client, txid, fee_rate)
+            .await
+            .context("Wallet::bump_fee failed (build + sign + broadcast)")?;
+        println!("{txid_new}");
+    }
+    Ok(())
 }
