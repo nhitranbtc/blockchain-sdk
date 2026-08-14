@@ -91,18 +91,28 @@ async fn main() -> Result<()> {
                     network,
                     address,
                     amount_sat,
+                    to,
+                    drain_to,
+                    exclude_utxo,
+                    dry_run,
                     esplora_url,
                     pin_spki,
                     fee_rate_sat_per_vb,
+                    confirm_yes,
                 } => {
                     handlers::handle_wallet_send(
                         mnemonic,
                         network,
                         address,
                         amount_sat,
+                        to,
+                        drain_to,
+                        exclude_utxo,
+                        dry_run,
                         esplora_url,
                         pin_spki,
                         fee_rate_sat_per_vb,
+                        confirm_yes,
                     )
                     .await
                 }

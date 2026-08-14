@@ -421,14 +421,27 @@ pub enum WalletActionKind {
         #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
         pin_spki: Option<String>,
     },
-    /// Send satoshis to a recipient address (Story 5 / Issue #118).
+    /// Send satoshis to a recipient address (Story 5 / Issue #118,
+    /// extended by Stories 13-14 / Issue #131).
     /// Full tx lifecycle: sync → build → sign → broadcast → return txid.
     /// Default fee rate is 1 sat/vB (Story 6 #119 adds --fee-rate override).
     ///
+    /// Three send modes (mutually exclusive at parse layer):
+    /// 1. Single-recipient: `--address <addr> --amount-sat <n>` (Story 5)
+    /// 2. Multi-recipient: `--to <addr>:<amount>` (repeatable, 1-20 entries, Story 13)
+    /// 3. Drain: `--drain-to <addr>` (Story 14)
+    ///
+    /// `--dry-run` builds + signs without broadcasting (Stories 13/14).
+    /// `--exclude-utxo <txid:vout>` is repeatable (Story 14).
+    ///
+    /// `--confirm-yes yes` is required for mainnet (Story 10 precedent
+    /// extended to send: defends against operator typo draining
+    /// real BTC funds).
+    ///
     /// **SECURITY**: mnemonic is the wallet's key material — see
-    /// `Sync::mnemonic` for shell-history caveats. The recipient address
-    /// must be a valid address on the `--network` (cross-network
-    /// rejection enforced at handler layer).
+    /// `Sync::mnemonic` for shell-history caveats. Recipient addresses
+    /// are validated against `--network` at the handler layer
+    /// (`require_network_address`).
     Send {
         /// BIP-39 mnemonic phrase (12/15/18/21/24 words).
         /// **SECURITY**: see `Sync::mnemonic` for shell-history caveats.
@@ -437,13 +450,43 @@ pub enum WalletActionKind {
         /// Bitcoin network.
         #[arg(long, value_enum)]
         network: NetArg,
-        /// Recipient Bitcoin address (must match `--network`).
+        /// Single-recipient address (Story 5 mode).
+        #[arg(long, conflicts_with_all = ["to", "drain_to"])]
+        address: Option<String>,
+        /// Single-recipient amount in satoshis (Story 5 mode).
+        #[arg(long, conflicts_with_all = ["to", "drain_to"])]
+        amount_sat: Option<u64>,
+        /// Multi-recipient list (Story 13): one or more `addr:amount`
+        /// pairs. Repeatable; up to MAX_RECIPIENTS (20) entries
+        /// (BDK recommended safe max, enforced at handler layer
+        /// — clap `num_args` on `Vec<T>` is not honored in this
+        /// clap 4 derive version). Excludes `--address`,
+        /// `--amount-sat`, and `--drain-to`.
+        #[arg(
+            long = "to",
+            value_name = "addr:amount",
+            value_parser = parse_to_arg,
+            conflicts_with_all = ["address", "amount_sat", "drain_to"],
+        )]
+        to: Vec<ToArg>,
+        /// Drain all spendable UTXOs to this single address
+        /// (Story 14). Excludes `--address`, `--amount-sat`, and
+        /// `--to`. UTXOs listed in `--exclude-utxo` are skipped.
+        #[arg(
+            long = "drain-to",
+            value_name = "addr",
+            value_parser = parse_address_arg,
+            conflicts_with_all = ["address", "amount_sat", "to"],
+        )]
+        drain_to: Option<bitcoin::Address<bitcoin::address::NetworkUnchecked>>,
+        /// Exclude a UTXO from coin selection (Story 14). Repeatable.
+        /// Format: `<txid>:<vout>` (64-char hex txid).
+        #[arg(long = "exclude-utxo", value_name = "txid:vout", value_parser = parse_outpoint_arg)]
+        exclude_utxo: Vec<bitcoin::OutPoint>,
+        /// Build + sign without broadcasting (Stories 13/14).
+        /// Output is a base64-encoded PSBT instead of a txid.
         #[arg(long)]
-        address: String,
-        /// Amount to send in satoshis (u64). Must exceed dust limit
-        /// (546 sat for native segwit P2WPKH).
-        #[arg(long)]
-        amount_sat: u64,
+        dry_run: bool,
         /// Esplora base URL (HTTPS-only per F36).
         #[arg(long)]
         esplora_url: String,
@@ -456,7 +499,75 @@ pub enum WalletActionKind {
         /// fetch Esplora estimates when `--fee-rate` is omitted).
         #[arg(long = "fee-rate", alias = "fee-rate-sat-per-vb")]
         fee_rate_sat_per_vb: Option<u64>,
+        /// Confirmation text for mainnet (Story 10 + Stories 13/14).
+        /// When `--network mainnet`, this flag must be passed with
+        /// the exact text `yes` (lowercase). Defends against
+        /// accidental mainnet spend (real BTC funds at risk).
+        #[arg(long, value_name = "yes")]
+        confirm_yes: Option<String>,
     },
+}
+
+/// BDK recommended safe max recipients per multi-recipient tx
+/// (Story 13 / Issue #138). Re-exported from
+/// `bitcoin_wallet_core::tx::builder::MAX_RECIPIENTS` so the clap
+/// `num_args` bound can reference it without a cross-crate const
+/// import. Kept in sync manually (verified by compile).
+pub const MAX_RECIPIENTS: usize = 20;
+
+/// Multi-recipient entry (`--to addr:amount`). Story 13.
+///
+/// **Network unchecked by design** — `address` is
+/// `Address<NetworkUnchecked>`. The handler layer's
+/// `require_network_address` is the single authoritative gate
+/// (matches `--network`); the parser is intentionally permissive
+/// so any network's address parses through and only the handler
+/// rejects wrong-network combinations.
+#[derive(Clone, Debug)]
+pub struct ToArg {
+    pub address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+    pub amount_sat: u64,
+}
+
+/// Parse `--to addr:amount`. Address is stored unchecked;
+/// handler does `require_network(--network)`. Amount must be u64.
+fn parse_to_arg(s: &str) -> Result<ToArg, String> {
+    let (addr_str, amount_str) = s
+        .rsplit_once(':')
+        .ok_or_else(|| format!("--to expects `addr:amount` format, got `{s}`"))?;
+    let address = addr_str
+        .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+        .map_err(|e| format!("--to address parse: {e}"))?;
+    let amount_sat = amount_str
+        .parse::<u64>()
+        .map_err(|e| format!("--to amount parse: {e}"))?;
+    Ok(ToArg {
+        address,
+        amount_sat,
+    })
+}
+
+/// Parse `--drain-to <addr>` (no amount). Address is unchecked;
+/// handler does the network check.
+fn parse_address_arg(
+    s: &str,
+) -> Result<bitcoin::Address<bitcoin::address::NetworkUnchecked>, String> {
+    s.parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+        .map_err(|e| format!("--drain-to address parse: {e}"))
+}
+
+/// Parse `--exclude-utxo <txid>:<vout>`. txid is 64-char hex; vout is u32.
+fn parse_outpoint_arg(s: &str) -> Result<bitcoin::OutPoint, String> {
+    let (txid_str, vout_str) = s
+        .split_once(':')
+        .ok_or_else(|| format!("--exclude-utxo expects `<txid>:<vout>` format, got `{s}`"))?;
+    let txid = txid_str
+        .parse::<bitcoin::Txid>()
+        .map_err(|e| format!("--exclude-utxo txid parse: {e}"))?;
+    let vout = vout_str
+        .parse::<u32>()
+        .map_err(|e| format!("--exclude-utxo vout must be u32, got `{vout_str}` ({e})"))?;
+    Ok(bitcoin::OutPoint::new(txid, vout))
 }
 
 /// BIP-39 mnemonic word counts supported by the library
@@ -712,25 +823,52 @@ impl fmt::Debug for WalletActionKind {
                 .field("esplora_url", esplora_url)
                 .field("pin_spki", pin_spki)
                 .finish(),
-            // Story 5 / Issue #118: same redaction policy as Sync/Balance
-            // (mnemonic is secret material — never appear in Debug).
+            // Story 5 / Issue #118 (extended Stories 13-14): same
+            // redaction policy as Sync/Balance (mnemonic is secret
+            // material — never appear in Debug). Recipient addresses
+            // and amounts are not secret; --exclude-utxo outpoints
+            // are public chain data; drain_to address is public chain
+            // data; confirm_yes presence is surfaced (value not — to
+            // avoid leaking the confirmation token in traces).
             Self::Send {
                 mnemonic: _,
                 network,
                 address,
                 amount_sat,
+                to,
+                drain_to,
+                exclude_utxo,
+                dry_run,
                 esplora_url,
                 pin_spki,
                 fee_rate_sat_per_vb,
+                confirm_yes,
             } => f
                 .debug_struct("Send")
                 .field("mnemonic", &"<redacted>")
                 .field("network", network)
                 .field("address", address)
                 .field("amount_sat", amount_sat)
+                .field("to", &to.len())
+                .field(
+                    "drain_to",
+                    &drain_to
+                        .as_ref()
+                        .map(|_| "<provided>")
+                        .unwrap_or("<absent>"),
+                )
+                .field("exclude_utxo", &exclude_utxo.len())
+                .field("dry_run", dry_run)
                 .field("esplora_url", esplora_url)
                 .field("pin_spki", pin_spki)
                 .field("fee_rate_sat_per_vb", fee_rate_sat_per_vb)
+                .field(
+                    "confirm_yes",
+                    &confirm_yes
+                        .as_ref()
+                        .map(|_| "<provided>")
+                        .unwrap_or("<absent>"),
+                )
                 .finish(),
             Self::List { network, json } => f
                 .debug_struct("List")
@@ -941,11 +1079,14 @@ mod tests {
         assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
     }
 
-    /// Story 5 / Issue #118: missing `--address` must fail to parse
-    /// (handler-layer cross-network check would also catch this, but
-    /// the parse-layer guard gives a faster error).
+    /// Story 5 / Issue #118 (updated Stories 13-14): missing `--address`
+    /// no longer fails at parse layer — args are now optional (the
+    /// mode is resolved by which flag is set: `--address` + `--amount-sat`
+    /// for single, `--to` for multi, `--drain` for drain). Handler
+    /// layer rejects when no mode is selected. Parse accepts the bare
+    /// mnemonic + network + esplora-url.
     #[test]
-    fn parse_send_rejects_missing_address() {
+    fn parse_send_accepts_without_address_or_to() {
         let cli = Cli::try_parse_from([
             "btc",
             "wallet",
@@ -954,18 +1095,19 @@ mod tests {
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
             "--network",
             "testnet",
-            "--amount-sat",
-            "10000",
             "--esplora-url",
             "https://blockstream.info/testnet/api",
         ]);
-        assert!(cli.is_err(), "missing --address should fail to parse");
+        assert!(
+            cli.is_ok(),
+            "missing --address/--to must parse (handler rejects); got: {cli:?}"
+        );
     }
 
-    /// Story 5 / Issue #118: missing `--amount-sat` must fail to
-    /// parse.
+    /// Story 5 / Issue #118 (updated): same as above for `--amount-sat`.
+    /// Handler layer validates the single-recipient pair together.
     #[test]
-    fn parse_send_rejects_missing_amount() {
+    fn parse_send_accepts_without_amount_sat() {
         let cli = Cli::try_parse_from([
             "btc",
             "wallet",
@@ -979,7 +1121,10 @@ mod tests {
             "--esplora-url",
             "https://blockstream.info/testnet/api",
         ]);
-        assert!(cli.is_err(), "missing --amount-sat should fail to parse");
+        assert!(
+            cli.is_ok(),
+            "missing --amount-sat must parse (handler rejects); got: {cli:?}"
+        );
     }
 
     /// Story 5 / Issue #118 (L12 CRITICAL #2): mnemonic MUST NOT
@@ -1664,6 +1809,325 @@ mod tests {
         assert!(
             debug.contains("redacted"),
             "redaction marker missing: {debug}"
+        );
+    }
+
+    // ========== Story 13-14 / Issue #131 / #138: btc wallet send extensions ==========
+
+    /// Story 13 / Issue #138: `--to addr:amount` parses (repeatable,
+    /// single entry).
+    #[test]
+    fn parse_send_accepts_to_repeatable() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--to",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx:10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 14 / Issue #138: `--drain-to <addr>` parses (drain
+    /// mode, no amount — separate flag from `--to`).
+    #[test]
+    fn parse_send_accepts_drain_to_flag() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--drain-to",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 14 / Issue #138: `--drain-to` + `--to` are mutually
+    /// exclusive (different intent; parser guards).
+    #[test]
+    fn parse_send_rejects_drain_to_and_to_together() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--drain-to",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--to",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx:1",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_err(), "--drain-to + --to must be mutually exclusive");
+    }
+
+    /// Story 10 + 13/14: `--network mainnet --confirm-yes yes` parses
+    /// for non-dry-run sends. Handler enforces the gate.
+    #[test]
+    fn parse_send_accepts_confirm_yes_for_mainnet() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "bitcoin",
+            "--address",
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--confirm-yes",
+            "yes",
+            "--esplora-url",
+            "https://blockstream.info/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 13 / Issue #138: `--to` accepts up to MAX_RECIPIENTS
+    /// (20) entries.
+    #[test]
+    fn parse_send_accepts_to_with_max_recipients() {
+        let mut args: Vec<String> = vec![
+            "btc".into(),
+            "wallet".into(),
+            "send".into(),
+            "--mnemonic".into(),
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".into(),
+            "--network".into(),
+            "testnet".into(),
+            "--esplora-url".into(),
+            "https://blockstream.info/testnet/api".into(),
+        ];
+        for i in 0..20 {
+            args.push("--to".into());
+            args.push(format!(
+                "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx:{}",
+                1000 + i
+            ));
+        }
+        let cli = Cli::try_parse_from(args);
+        assert!(
+            cli.is_ok(),
+            "20 --to entries must parse (MAX_RECIPIENTS); got: {cli:?}"
+        );
+    }
+
+    /// Story 13 / Issue #138: `--to` with 21 entries (over
+    /// MAX_RECIPIENTS) parses through clap but the handler layer
+    /// enforces the cap (matches the lib `build_multi_recipient_tx`
+    /// check — clap's `num_args` on `Vec<T>` isn't honored in this
+    /// clap 4 derive version). The lib-layer test
+    /// `build_multi_recipient_tx_rejects_over_20_recipients`
+    /// pins the actual cap.
+    #[test]
+    fn parse_send_accepts_to_with_over_max_recipients_handler_enforces() {
+        let mut args: Vec<String> = vec![
+            "btc".into(),
+            "wallet".into(),
+            "send".into(),
+            "--mnemonic".into(),
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".into(),
+            "--network".into(),
+            "testnet".into(),
+            "--esplora-url".into(),
+            "https://blockstream.info/testnet/api".into(),
+        ];
+        for i in 0..21 {
+            args.push("--to".into());
+            args.push(format!(
+                "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx:{}",
+                1000 + i
+            ));
+        }
+        let cli = Cli::try_parse_from(args);
+        assert!(
+            cli.is_ok(),
+            "21 --to entries parse (handler enforces MAX_RECIPIENTS cap); got: {cli:?}"
+        );
+    }
+
+    /// Story 14 / Issue #138: `--exclude-utxo` with invalid txid
+    /// (non-hex chars) fails at parse layer.
+    #[test]
+    fn parse_send_rejects_invalid_exclude_utxo() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--exclude-utxo",
+            "not-a-valid-txid:0",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(
+            cli.is_err(),
+            "invalid txid in --exclude-utxo must fail at parse"
+        );
+    }
+
+    /// Story 13 / Issue #138 (L13 H1 fix): `--to` accepts a mainnet
+    /// address even when `--network testnet` is set (parser is
+    /// permissive; handler does cross-network rejection).
+    #[test]
+    fn parse_send_accepts_mainnet_to_with_testnet_network() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--to",
+            "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh:10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(
+            cli.is_ok(),
+            "mainnet address in --to must parse (handler rejects); got: {cli:?}"
+        );
+    }
+
+    /// Story 14 / Issue #138 (L13 H1 fix): `--drain-to` accepts a
+    /// mainnet address even when `--network testnet` is set.
+    #[test]
+    fn parse_send_accepts_mainnet_drain_to_with_testnet_network() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--drain-to",
+            "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(
+            cli.is_ok(),
+            "mainnet address in --drain-to must parse (handler rejects); got: {cli:?}"
+        );
+    }
+
+    /// Story 14 / Issue #138: `--exclude-utxo <txid:vout>` parses
+    /// (repeatable).
+    #[test]
+    fn parse_send_accepts_exclude_utxo() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--exclude-utxo",
+            "0000000000000000000000000000000000000000000000000000000000000001:0",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 13 / Issue #138: `--dry-run` parses.
+    #[test]
+    fn parse_send_accepts_dry_run_flag() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--dry-run",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 13 / Issue #138: `--to` and `--address` are mutually
+    /// exclusive (parse-layer guard).
+    #[test]
+    fn parse_send_rejects_to_and_address_together() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--to",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx:10000",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_err(), "--to + --address must be mutually exclusive");
+    }
+
+    /// Story 14 / Issue #138: `--drain` conflicts with `--address` /
+    /// `--amount-sat`.
+    #[test]
+    fn parse_send_rejects_drain_and_address_together() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--drain",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(
+            cli.is_err(),
+            "--drain + --address must be mutually exclusive"
         );
     }
 }
