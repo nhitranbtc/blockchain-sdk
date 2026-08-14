@@ -286,6 +286,36 @@ impl Wallet {
         result.map_err(|_| Error::Bdk("wallet descriptor parse failed (sanitized)".into()))
     }
 
+    /// Return a sorted, deduped list of txids the wallet has seen
+    /// during sync. Read-only after sync — does NOT trigger a network
+    /// fetch. Caller must have invoked [`Wallet::sync`] or
+    /// [`Wallet::balance`] first (either populates the tx graph).
+    ///
+    /// **Note:** the txid list includes incoming + outgoing txs
+    /// touching our keychain, plus any ancestor txs bdk pulled in
+    /// to validate UTXO provenance. Caller filters as needed.
+    ///
+    /// # Errors
+    ///
+    /// - `Error::NotInitialized` if called before sync/balance.
+    pub fn txids(&self) -> Result<Vec<Txid>, Error> {
+        let guard = self.bdk.lock().expect("bdk lock poisoned");
+        let bdk = guard
+            .as_ref()
+            .ok_or_else(|| Error::NotInitialized("txids called before sync or balance".into()))?;
+        // bdk's tx_graph exposes anchored + floating (orphan) txs.
+        // We collect both — orphans useful for "what txs are in my
+        // mempool?" workflows. Dedup + sort for deterministic output.
+        let mut out: Vec<Txid> = bdk
+            .tx_graph()
+            .txs_with_no_anchor_or_last_seen()
+            .map(|node| node.txid)
+            .collect();
+        out.sort();
+        out.dedup();
+        Ok(out)
+    }
+
     /// Peek the first `count` addresses on the given keychain
     /// (external receive = 0, internal change = 1). Caller must have
     /// invoked [`Wallet::sync`] or [`Wallet::balance`] first (either

@@ -16,7 +16,7 @@ mod handlers;
 
 use cli::{
     Cli, Commands, ConfigAction, ConfigActionKind, DecryptAction, EncryptAction,
-    FeeEstimatesAction, MessageAction, WalletAction, WalletActionKind,
+    FeeEstimatesAction, MessageAction, TxListAction, WalletAction, WalletActionKind,
 };
 
 #[tokio::main]
@@ -138,6 +138,17 @@ async fn main() -> Result<()> {
                 pin_spki,
                 json,
             }) => handlers::handle_fee_estimates(network, esplora_url, pin_spki, json).await,
+            Commands::TxList(TxListAction {
+                mnemonic,
+                network,
+                esplora_url,
+                pin_spki,
+                limit,
+                json,
+            }) => {
+                handlers::handle_tx_list(mnemonic, network, esplora_url, pin_spki, limit, json)
+                    .await
+            }
         }
     }
     .await;
