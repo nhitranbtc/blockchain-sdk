@@ -289,6 +289,13 @@ pub enum WalletActionKind {
         /// Wallet encryption password (omit to prompt securely).
         #[arg(long)]
         password: Option<String>,
+        /// Confirmation text for mainnet (Story 10). When `--network
+        /// mainnet`, this flag must be passed with the exact text
+        /// `yes` (lowercase). Any other value, or absence, aborts with
+        /// exit code 1. Defends against accidental mainnet wallet
+        /// creation (real BTC funds at risk).
+        #[arg(long, value_name = "yes")]
+        confirm_yes: Option<String>,
     },
     /// Import an existing BIP-39 mnemonic, encrypt, persist to disk
     /// (Issue #99 / Story 2). Generates a new WalletId; the phrase
@@ -639,11 +646,19 @@ impl fmt::Debug for WalletActionKind {
                 words,
                 network,
                 password: _,
+                confirm_yes,
             } => f
                 .debug_struct("Create")
                 .field("words", words)
                 .field("network", network)
                 .field("password", &"<redacted>")
+                .field(
+                    "confirm_yes",
+                    &confirm_yes
+                        .as_ref()
+                        .map(|_| "<provided>")
+                        .unwrap_or("<absent>"),
+                )
                 .finish(),
             Self::Import {
                 mnemonic: _,
@@ -755,6 +770,38 @@ mod tests {
             "hunter2",
         ]);
         assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 10: Bitcoin network (mainnet) requires `--confirm-yes yes`.
+    #[test]
+    fn parse_create_bitcoin_network_accepts_confirm_yes() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "create",
+            "--words",
+            "12",
+            "--network",
+            "bitcoin",
+            "--confirm-yes",
+            "yes",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 10: testnet does NOT require confirm (no real BTC at risk).
+    #[test]
+    fn parse_create_testnet_accepts_without_confirm() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "create",
+            "--words",
+            "12",
+            "--network",
+            "testnet",
+        ]);
+        assert!(cli.is_ok(), "testnet must parse without confirm_yes");
     }
 
     #[test]
