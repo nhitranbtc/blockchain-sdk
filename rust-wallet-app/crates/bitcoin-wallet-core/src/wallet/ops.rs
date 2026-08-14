@@ -10,6 +10,7 @@
 //! `wallet::store::data_dir()` at the call site.
 
 use std::path::Path;
+use std::str::FromStr;
 
 use bdk_wallet::bitcoin::{Address, Network};
 use bdk_wallet::KeychainKind;
@@ -21,7 +22,7 @@ use crate::crypto::mnemonic_cipher::{decrypt_mnemonic, encrypt_mnemonic, Mnemoni
 use crate::error::{Error, Result};
 use crate::keys::{Mnemonic, Secret};
 use crate::wallet::id::WalletId;
-use crate::wallet::store::{read_wallet_at, write_wallet_at};
+use crate::wallet::store::{read_wallet_at, wallet_path_at, write_wallet_at, WALLETS_SUBDIR};
 use crate::wallet::Wallet;
 
 /// Result of `show_wallet` — addresses + confirmed balance (in satoshis).
@@ -166,6 +167,86 @@ pub async fn show_wallet(
         receive_addresses,
         change_addresses,
         balance_sat: balance,
+    })
+}
+
+/// List all wallet IDs in `<base>/wallets/<network>/`. Returns empty
+/// `Vec` if the directory does not exist (Story 9 AC: empty data dir
+/// → "no wallets" + exit 0).
+pub fn list_wallets(base: &Path, network: Network) -> Result<Vec<WalletId>> {
+    let mut dir = base.to_path_buf();
+    dir.push(crate::wallet::store::ROOT_DIR);
+    dir.push(WALLETS_SUBDIR);
+    dir.push(crate::wallet::store::network_dir_name(network));
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(&dir).map_err(|e| {
+        Error::WalletStore(format!("list_wallets: read_dir {}: {e}", dir.display()))
+    })?;
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| Error::WalletStore(format!("list_wallets: entry: {e}")))?;
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(stem) = name.strip_suffix(".enc") else {
+            continue;
+        };
+        if let Ok(id) = WalletId::from_str(stem) {
+            out.push(id);
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Delete the wallet blob at `<base>/wallets/<network>/<id>.enc`. Story
+/// 9 AC: `btc wallet delete --id <id>` removes the wallet. Errors if
+/// the wallet does not exist (so callers can distinguish "already
+/// gone" from "successfully deleted").
+pub fn delete_wallet(base: &Path, network: Network, id: WalletId) -> Result<()> {
+    let path = wallet_path_at(base, network, id);
+    std::fs::remove_file(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Error::WalletStore(format!(
+                "delete_wallet: wallet '{id}' not found at {}",
+                path.display()
+            ))
+        } else {
+            Error::WalletStore(format!(
+                "delete_wallet: remove_file {}: {e}",
+                path.display()
+            ))
+        }
+    })
+}
+
+/// Rename a wallet blob in-place. Story 9 AC: `btc wallet rename
+/// --id <old> --to <new>`. Errors if the source is missing OR the
+/// target already exists.
+pub fn rename_wallet(base: &Path, network: Network, old: WalletId, new: WalletId) -> Result<()> {
+    let src = wallet_path_at(base, network, old);
+    let dst = wallet_path_at(base, network, new);
+    if !src.exists() {
+        return Err(Error::WalletStore(format!(
+            "rename_wallet: source wallet '{old}' not found at {}",
+            src.display()
+        )));
+    }
+    if dst.exists() {
+        return Err(Error::WalletStore(format!(
+            "rename_wallet: target wallet '{new}' already exists at {}",
+            dst.display()
+        )));
+    }
+    std::fs::rename(&src, &dst).map_err(|e| {
+        Error::WalletStore(format!(
+            "rename_wallet: rename {} → {}: {e}",
+            src.display(),
+            dst.display()
+        ))
     })
 }
 
@@ -315,5 +396,81 @@ mod tests {
             .expect_err("missing wallet must reject");
         assert!(matches!(err, Error::WalletStore(_)));
         assert!(err.to_string().contains("wallet not accessible"));
+    }
+
+    /// Story 9 — list_wallets returns empty when no wallets exist.
+    #[test]
+    fn list_wallets_empty_when_no_wallets() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let ids = list_wallets(base, Network::Testnet).expect("list");
+        assert!(ids.is_empty(), "no wallets → empty Vec");
+    }
+
+    /// Story 9 — list_wallets returns sorted IDs of created wallets.
+    #[test]
+    fn list_wallets_returns_created_wallet_ids() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let (id1, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c1");
+        let (id2, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c2");
+        let mut ids = list_wallets(base, Network::Testnet).expect("list");
+        assert_eq!(ids.len(), 2);
+        ids.sort();
+        let mut expected = vec![id1, id2];
+        expected.sort();
+        assert_eq!(ids, expected, "list contains both created wallets (sorted)");
+    }
+
+    /// Story 9 — delete_wallet removes the blob; subsequent list returns empty.
+    #[test]
+    fn delete_wallet_removes_blob() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let (id, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c");
+        let blob_path = crate::wallet::store::wallet_path_at(base, Network::Testnet, id);
+        assert!(blob_path.exists(), "precondition: blob exists");
+        delete_wallet(base, Network::Testnet, id).expect("delete");
+        assert!(!blob_path.exists(), "blob must be removed");
+        let ids = list_wallets(base, Network::Testnet).expect("list");
+        assert!(ids.is_empty());
+    }
+
+    /// Story 9 — delete_wallet on missing wallet errors (operator can
+    /// distinguish "already gone" from "successfully deleted").
+    #[test]
+    fn delete_wallet_missing_errors() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let id = WalletId::new();
+        let err = delete_wallet(base, Network::Testnet, id).expect_err("missing must error");
+        assert!(matches!(err, Error::WalletStore(_)));
+        assert!(err.to_string().contains("not found"));
+    }
+
+    /// Story 9 — rename_wallet moves the blob; subsequent list shows new ID.
+    #[test]
+    fn rename_wallet_moves_blob() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let (old, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c");
+        let new = WalletId::new();
+        rename_wallet(base, Network::Testnet, old, new).expect("rename");
+        assert!(!crate::wallet::store::wallet_path_at(base, Network::Testnet, old).exists());
+        assert!(crate::wallet::store::wallet_path_at(base, Network::Testnet, new).exists());
+        let ids = list_wallets(base, Network::Testnet).expect("list");
+        assert_eq!(ids, vec![new]);
+    }
+
+    /// Story 9 — rename_wallet errors if target already exists.
+    #[test]
+    fn rename_wallet_target_exists_errors() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let base = tmp.path();
+        let (id1, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c1");
+        let (id2, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c2");
+        let err = rename_wallet(base, Network::Testnet, id1, id2).expect_err("target exists");
+        assert!(matches!(err, Error::WalletStore(_)));
+        assert!(err.to_string().contains("already exists"));
     }
 }

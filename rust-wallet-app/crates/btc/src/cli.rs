@@ -341,6 +341,39 @@ pub enum WalletActionKind {
         #[arg(long)]
         db_path: Option<std::path::PathBuf>,
     },
+    /// List all wallets in `<data_dir>/wallets/<network>/`. One wallet
+    /// ID per line; `--json` outputs a JSON array. Empty data dir
+    /// prints `(no wallets)` and exits 0 (Story 9 AC).
+    List {
+        /// Bitcoin network to list wallets for.
+        #[arg(long, value_enum)]
+        network: NetArg,
+        /// JSON output (array of `{id}` strings).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete the wallet at `<data_dir>/wallets/<network>/<id>.enc`.
+    /// Errors if the wallet does not exist (Story 9 AC).
+    Delete {
+        /// Wallet ID (UUID v4) printed by `wallet create`.
+        id: String,
+        /// Bitcoin network the wallet was created for.
+        #[arg(long, value_enum)]
+        network: NetArg,
+    },
+    /// Rename the wallet blob in-place. Errors if source is missing
+    /// OR target already exists (Story 9 AC).
+    Rename {
+        /// Source wallet ID.
+        #[arg(long)]
+        id: String,
+        /// Target wallet ID (must be a valid UUID v4).
+        #[arg(long)]
+        to: String,
+        /// Bitcoin network the wallet was created for.
+        #[arg(long, value_enum)]
+        network: NetArg,
+    },
     /// Statelessly sync a BIP-39 mnemonic against an Esplora server
     /// (Issue #63 / Task 54c). Prints UTXO count + total sats. No
     /// wallet persistence — mnemonic lives in process memory only.
@@ -683,6 +716,22 @@ impl fmt::Debug for WalletActionKind {
                 .field("esplora_url", esplora_url)
                 .field("pin_spki", pin_spki)
                 .field("fee_rate_sat_per_vb", fee_rate_sat_per_vb)
+                .finish(),
+            Self::List { network, json } => f
+                .debug_struct("List")
+                .field("network", network)
+                .field("json", json)
+                .finish(),
+            Self::Delete { id, network } => f
+                .debug_struct("Delete")
+                .field("id", id)
+                .field("network", network)
+                .finish(),
+            Self::Rename { id, to, network } => f
+                .debug_struct("Rename")
+                .field("id", id)
+                .field("to", to)
+                .field("network", network)
                 .finish(),
         }
     }

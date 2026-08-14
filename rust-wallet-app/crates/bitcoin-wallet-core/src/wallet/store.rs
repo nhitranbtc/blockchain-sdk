@@ -43,10 +43,10 @@ const BLOB_FILE_MODE: u32 = 0o600;
 const PARENT_DIR_MODE: u32 = 0o700;
 
 /// Conventional root directory name under `data_dir()` for the `btc` wallet store.
-const ROOT_DIR: &str = "btc";
+pub(crate) const ROOT_DIR: &str = "btc";
 
 /// `wallets/` subdirectory under the root.
-const WALLETS_SUBDIR: &str = "wallets";
+pub(crate) const WALLETS_SUBDIR: &str = "wallets";
 
 /// Filename extension for encrypted wallet blobs.
 const BLOB_EXT: &str = "enc";
@@ -116,7 +116,7 @@ fn o_nofollow_flag() -> i32 {
 /// wallet-store layout. Pinning layout strings independent of upstream
 /// `Display` drift (defense-in-depth: ADR §Filesystem layout commits to
 /// specific directory names).
-fn network_dir_name(n: Network) -> &'static str {
+pub(crate) fn network_dir_name(n: Network) -> &'static str {
     match n {
         Network::Bitcoin => "mainnet",
         Network::Testnet => "testnet",

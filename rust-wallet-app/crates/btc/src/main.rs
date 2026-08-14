@@ -103,6 +103,15 @@ async fn main() -> Result<()> {
                     )
                     .await
                 }
+                WalletActionKind::List { network, json } => {
+                    handlers::handle_wallet_list(network, json, &data_dir)
+                }
+                WalletActionKind::Delete { id, network } => {
+                    handlers::handle_wallet_delete(id, network, &data_dir)
+                }
+                WalletActionKind::Rename { id, to, network } => {
+                    handlers::handle_wallet_rename(id, to, network, &data_dir)
+                }
             },
             Commands::Message(MessageAction { action }) => match action {
                 cli::MessageActionKind::Sign {
