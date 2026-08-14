@@ -30,8 +30,10 @@
 - **Rationale:** BDK re-exports the same `bip39` crate. Use the re-export to drop 1 direct dependency. **BDK does NOT have a `Wallet::from_mnemonic` shortcut** — the flow is always Mnemonic → xprv → descriptor string → `Wallet::create`.
 
 ### Task 4: keys::derivation + keys::signer
-- **Crates:** `bip32 0.6` + `bdk_wallet::bitcoin::secp256k1` (re-export, no direct dep)
-- **API surface:** `bip32::{XPrv, DerivationPath, DerivationPath::from_str}`, `XPrv::derive_from_path(seed, path)`, `XPrv::derive_path(path)`, `XPrv::to_string()`; `bdk_wallet::bitcoin::secp256k1::{Secp256k1, Keypair, Message, SecretKey}`, `Keypair::from_secret_key(&secp, &sk)`, `secp.sign_ecdsa(&msg, &kp)`
+
+- **Status:** ✅ Done (PR #26, SHA in audit).
+- **Crates:** `bip32 0.6` + `bdk_wallet::bitcoin::secp256k1` (re-export, no direct dep).
+- **API surface:** `bip32::{XPrv, DerivationPath, DerivationPath::from_str}`, `XPrv::derive_from_path(&seed_bytes: AsRef<[u8]>, &path)` (takes seed bytes, NOT XPrv), `XPrv::derive_path(path)`, `XPrv::to_string()`; `bdk_wallet::bitcoin::secp256k1::{Secp256k1, Keypair, Message, SecretKey}`, `Keypair::from_secret_key(&secp, &sk)`, `secp.sign_ecdsa(&msg, &kp)`.
 - **Rationale:** BDK does NOT re-export bip32; we keep it as a direct dep. `secp256k1` is reachable via `bdk_wallet::bitcoin::secp256k1` (re-exported from `bitcoin ^0.32`). Standalone `secp256k1 0.30` direct dep is NOT needed.
 
 ### Task 5: script::builder + script::parser
@@ -40,9 +42,11 @@
 - **Rationale:** `rust-bitcoin` is the reference Bitcoin script library. **Critical:** `.pubkey_hash()` and `.wpubkey_hash()` are methods on `bitcoin::PublicKey`, NOT on `bitcoin::secp256k1::PublicKey` (the secp256k1 type is the raw curve point, not a Bitcoin public key). Use `bitcoin::PublicKey::from(secp_pk).pubkey_hash()`.
 
 ### Task 6: address (legacy, segwit, taproot)
-- **Crates:** `rust-bitcoin 0.32`
-- **API surface:** `bitcoin::Address`, `Address::p2pkh(&payload, network)`, `Address::p2wpkh(&payload, network)`, `Address::p2tr(&secp, xonly, None, network)`, `bitcoin::WPubkeyHash`
-- **Rationale:** all address encoding is in `rust-bitcoin`. Network enum `bitcoin::Network`.
+
+- **Status:** ✅ Done (PR #13 + F19 hardening).
+- **Crates:** `rust-bitcoin 0.32`.
+- **API surface:** `bitcoin::Address`, `Address::p2pkh(&pubkey: &PublicKey, network) -> Address` (legacy), `Address::p2wpkh(&pubkey: &PublicKey, network) -> Address` (segwit v0), `Address::p2wsh(&script, network) -> Address`, `Address::p2tr(&secp, xonly, None, network) -> Address` (taproot), `Address::parse::<Address<_>>(&str).require_network(network)` (cross-network rejection, F19), `bitcoin::WPubkeyHash`.
+- **Rationale:** all address encoding is in `rust-bitcoin`. Network enum `bitcoin::Network`. F19 enforcement via `require_network` rejects "send to wrong chain" operator error.
 
 ### Task 7: chain::network + config
 - **Crates:** none (just `std` + `serde`)
@@ -57,9 +61,11 @@
 - **Rationale:** custom SPKI-pinned `EsploraClient` enforces F20 (cert chain + SPKI pin check). Direct `reqwest` to dodge the unpatched `bdk_esplora` transitive.
 
 ### Task 9: wallet (from_mnemonic + sync + balance)
-- **Crates:** `bdk_wallet 3.1` (with `keys-bip39` feature) + `bip32 0.6` + `bdk_esplora 0.22` + `bdk_file_store 0.15`
-- **API surface:** `bdk_wallet::Wallet::create(descriptor, change_descriptor).network(network).create_wallet_no_persist()?`, `bdk_wallet::Wallet::create_single(...).create_wallet_no_persist()?`, `bdk_wallet::KeychainKind::External`, `wallet.peek_address(KeychainKind::External, index)`, `wallet.reveal_next_address(KeychainKind::External)`, `wallet.next_derivation_index(KeychainKind::External)`, `wallet.apply_update(update)`, `wallet.persist()`, `wallet.balance()`, `bdk_esplora::esplora_client::Builder::new(url).build_blocking()`, `bdk_esplora::EsploraExt::full_scan`
-- **Rationale:** central task. BDK's `Wallet` is the wallet shell. Our 4-crate flow ends here.
+
+- **Status:** ✅ Done across PRs #48 (9a `from_mnemonic`), #51 (9b `sync` partial), #52 (9c `balance` partial), #122 (send compose). Full F12/F13 deferred features superseded by post-MVP stories.
+- **Crates:** `bdk_wallet 3.1` (with `keys-bip39` feature) + `bip32 0.6` + `bdk_file_store 0.15` + custom `EsploraClient` (direct `reqwest`, **NOT** `bdk_esplora` per CONTEXT.md hard rule #2).
+- **API surface:** `bdk_wallet::Wallet::create(descriptor, change_descriptor).network(network).create_wallet_no_persist()?`, `bdk_wallet::Wallet::create_single(...).create_wallet_no_persist()?`, `bdk_wallet::KeychainKind::External`, `wallet.peek_address(KeychainKind::External, index)`, `wallet.reveal_next_address(KeychainKind::External)`, `wallet.next_derivation_index(KeychainKind::External)`, `wallet.apply_update(update)`, `wallet.persist(&store)`, `wallet.balance()`. Sync path uses our `EsploraClient::address_utxos(&Address)` + `EsploraClient::get_tx(&Txid)` to populate `TxGraph` (per F12/F13). **NO** `bdk_esplora::EsploraExt::full_scan`.
+- **Rationale:** central task. BDK's `Wallet` is the wallet shell. Our custom `EsploraClient` (F20 SPKI pin) is the only sanctioned HTTP path; direct `reqwest` dodges `bdk_esplora` RUSTSEC-2026-0106 transitive.
 
 ### Task 10: addresses (multi-address via xpub)
 - **Crates:** `bdk_wallet 3.1`
@@ -100,9 +106,11 @@
 - **Rationale:** `testcontainers` orchestrates ephemeral containers; direct `reqwest` JSON-RPC avoids `bitcoind-async-client` (unmaintained). Bitcoin Core 0.21+ requires explicit wallet creation OR `scantxoutset` — no default wallet.
 
 ### Task 16: btc CLI scaffold + wallet/address/balance/sync commands
-- **Crates:** `clap 4` (with `derive` feature) + `anyhow 1` + `tracing 0.1` + `tracing-subscriber 0.3` + `bitcoin-wallet-core 0.1` (workspace path)
-- **API surface:** `clap::{Parser, Subcommand}`, `#[derive(Parser)]`, `#[derive(Subcommand)]`, `tracing_subscriber::fmt::init()`, `anyhow::Result`
-- **Rationale:** `clap` derive is standard. `anyhow` is CLI top-level only.
+
+- **Status:** ✅ Done (PR #11 scaffold; PRs #48, #51, #52, #99, #101, #118 wallet/show/sync/balance/import/send subcommands).
+- **Crates:** `clap 4` (with `derive` feature) + `anyhow 1` + `tracing 0.1` + `tracing-subscriber 0.3` + `bitcoin-wallet-core 0.1` (workspace path).
+- **API surface:** `clap::{Parser, Subcommand}`, `#[derive(Parser)]`, `#[derive(Subcommand)]`, `tracing_subscriber::fmt().with_env_filter(...).with_writer(std::io::stderr).init()` (STDERR routing per L28/F49), `anyhow::Result`. Manual `Debug` impls redact mnemonic per L17 (CRITICAL #2 pattern).
+- **Rationale:** `clap` derive is standard. `anyhow` is CLI top-level only. STDERR routing keeps STDOUT scriptable (wallet_id on `create`, JSON on `show`).
 
 ### Task 17: btc send + tx + fee + config commands
 
@@ -132,8 +140,10 @@
 - **Rationale:** `cargo-deny` enforces license/advisory/duplicate-deps policy. `cargo-fuzz` is standard libfuzzer wrapper.
 
 ### Task 21: Docker + size audit
-- **Crates:** none (Dockerfile + size check)
-- **API surface:** `docker build -t btc:dev -f docker/Dockerfile .`, `RUSTFLAGS="-C opt-level=z -C lto=fat -C strip=symbols -C panic=abort" cargo build --release -p btc`
+
+- **Status:** ⏸ Deferred. No `docker/Dockerfile` in repo. CI does not produce a container image; release-time Dockerfile TBD per release prep.
+- **Crates:** none (Dockerfile + size check).
+- **API surface:** `docker build -t btc:dev -f docker/Dockerfile .` (when Dockerfile lands), `RUSTFLAGS="-C opt-level=z -C lto=fat -C strip=symbols -C panic=abort" cargo build --release -p btc`.
 - **Rationale:** pure build / packaging.
 
 ### Task 22: README
@@ -142,8 +152,10 @@
 - **Rationale:** docs.
 
 ### Task 23: CONTRIBUTING + CHANGELOG + SECURITY
-- **Crates:** none
-- **API surface:** markdown
+
+- **Status:** 🔄 Partial — `CHANGELOG.md` ✅ Done (Keep a Changelog format, L24 cascade per PR). `CONTRIBUTING.md` ✅ Done (commit + PR workflow + ledger rules). `SECURITY.md` ⏸ Missing — threat-model disclosure policy TBD per release prep.
+- **Crates:** none.
+- **API surface:** markdown.
 - **Rationale:** docs.
 
 ### Task 24: CI workflows
@@ -173,9 +185,11 @@
 - **Rationale:** pure `String` formatting. Blockstream + mempool.space are just websites.
 
 ### Task 28: tx::sign_external (Signer trait)
-- **Crates:** `secp256k1 0.30` (specifically `secp256k1::ecdsa::Signature`)
-- **API surface:** `trait Signer { fn sign_ecdsa(&self, hash: &[u8; 32]) -> Result<ecdsa::Signature>; fn public_key(&self) -> bdk_wallet::bitcoin::secp256k1::PublicKey; }`
-- **Rationale:** this is the Phase 2 UniFFI hook. Trait returns the same `secp256k1::ecdsa::Signature` type that BDK's signing produces. iOS Swift wraps `TangemSdk` in this trait.
+
+- **Status:** ⏸ Deferred (Phase 2 per F33/F35; UniFFI hook for iOS Swift host).
+- **Crates:** `secp256k1 0.30` (specifically `secp256k1::ecdsa::Signature`).
+- **API surface:** `trait Signer { fn sign_ecdsa(&self, hash: &[u8; 32]) -> Result<ecdsa::Signature>; fn public_key(&self) -> bdk_wallet::bitcoin::secp256k1::PublicKey; }`.
+- **Rationale:** Phase 2 UniFFI hook. Trait returns the same `secp256k1::ecdsa::Signature` type that BDK's signing produces. iOS Swift wraps `TangemSdk` in this trait.
 
 ### Task 29: btc CLI bump-fee + sign-message
 
@@ -197,8 +211,10 @@
 - **Rationale:** throwaway spike. Validates the 9 specific assumptions listed in `docs/wallets/2026-08-05-feature-sdks-support.md`.
 
 ### Task 32: wallet::xpub_watch_only
-- **Crates:** `bdk_wallet 3.1` + `bdk_file_store 0.15` (no new crate)
-- **API surface:** `Wallet::new_single(descriptor)`, public-only descriptor (no xprv in input), `KeychainKind::External`, `wallet.peek_address`, `wallet.reveal_next_address`
+
+- **Status:** ⏸ Deferred (v0.2; not in MVP scope per F33/F35).
+- **Crates:** `bdk_wallet 3.1` + `bdk_file_store 0.15` (no new crate).
+- **API surface:** `Wallet::new_single(descriptor)`, public-only descriptor (no xprv in input), `KeychainKind::External`, `wallet.peek_address`, `wallet.reveal_next_address`.
 - **Rationale:** BDK handles watch-only natively — public-only descriptors don't need signing infrastructure.
 
 ### Task 33: Live testnet gates (operator-driven, replaces original CI testnet plan)
