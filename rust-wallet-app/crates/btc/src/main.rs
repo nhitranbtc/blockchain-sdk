@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
                     password,
                     esplora_url,
                     esplora_spki_pin,
+                    db_path,
                 } => {
                     handlers::handle_show(
                         id,
@@ -63,6 +64,7 @@ async fn main() -> Result<()> {
                         password,
                         esplora_url,
                         esplora_spki_pin,
+                        db_path,
                         &data_dir,
                     )
                     .await
