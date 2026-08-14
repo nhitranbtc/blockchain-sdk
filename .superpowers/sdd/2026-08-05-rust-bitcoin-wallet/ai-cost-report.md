@@ -40,7 +40,8 @@ If the host model is unknown (this session: model ID `MiniMax-M3`, not a publish
 | Feature | PR #105 — `btc config show` subcommand (Story 11 / Issue #100) | ~180k | ~55k | MiniMax-M3 (session model) | ~$0.65 | TDD red-green (5 CLI tests) + verify gate + Try it examples; PR #105 SHA `4de4ea7` |
 | Process | PR #106 — CI workflow reorganization (move btc-import-demo to btc-cli-demo.yml) | ~50k | ~15k | MiniMax-M3 (session model) | ~$0.18 | Architectural move (ci.yml → btc-cli-demo.yml) + bug fix (SKIP_BUILD=1); PR #106 SHA `ecb0228` |
 | Process | Phase 1 §MVP final closure (issue #100 ACs flip + plan file marker) | ~10k | ~4k | MiniMax-M3 (session model) | ~$0.03 | L13 step 14 + plan marker |
-| **Total (retroactive est. + Phase 1 closure + wallet-import + Story 11)** | | **~2.57M** | **~873k** | | **~$17.42** | Subject to ±50% (rates + token split assumed); Phase 1 closure subset ~$0.62, wallet-import subset ~$1.20, Story 11 subset ~$0.65 |
+| Feature | PR #114 — `btc-regtest-smoke` testcontainers suite (Issue #112) | ~250k | ~80k | MiniMax-M3 (session model) | ~$0.95 | testcontainers regtest smoke (2/3 tests pass) + F36 localhost exception + tprv prefix fix for regtest + ci.yml multi-job split + cargo deny/audit ignore flags; PR #114 SHA `a5df1ab` |
+| **Total (retroactive est. + Phase 1 closure + wallet-import + Story 11 + testcontainers)** | | **~2.82M** | **~953k** | | **~$18.37** | Subject to ±50% (rates + token split assumed); Phase 1 closure subset ~$0.62, wallet-import subset ~$1.20, Story 11 subset ~$0.65, testcontainers subset ~$0.95 |
 
 ## Live tracking (going forward)
 
