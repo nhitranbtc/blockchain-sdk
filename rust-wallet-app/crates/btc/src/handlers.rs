@@ -343,6 +343,62 @@ pub async fn handle_show(
     Ok(())
 }
 
+/// `btc wallet list` — Story 9. Lists wallet IDs in the network
+/// directory. Empty dir prints `(no wallets)` + exits 0.
+pub fn handle_wallet_list(network: NetArg, json: bool, data_dir: &Path) -> Result<()> {
+    let network_obj = network.as_network();
+    let ids = bitcoin_wallet_core::wallet::list_wallets(data_dir, network_obj)
+        .context("list_wallets failed")?;
+    if json {
+        let arr: Vec<serde_json::Value> = ids
+            .iter()
+            .map(|id| serde_json::json!({ "id": id.to_string() }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&arr)?);
+    } else if ids.is_empty() {
+        println!("(no wallets)");
+    } else {
+        for id in ids {
+            println!("{}", id);
+        }
+    }
+    Ok(())
+}
+
+/// `btc wallet delete` — Story 9. Removes the wallet blob at
+/// `<data_dir>/wallets/<network>/<id>.enc`. Errors if the wallet does
+/// not exist (Story 9 AC: `wallet '<id>' not found`).
+pub fn handle_wallet_delete(id: String, network: NetArg, data_dir: &Path) -> Result<()> {
+    let network_obj = network.as_network();
+    let wallet_id = WalletId::from_str(&id).with_context(|| format!("parsing wallet_id {id:?}"))?;
+    bitcoin_wallet_core::wallet::delete_wallet(data_dir, network_obj, wallet_id)
+        .with_context(|| format!("delete_wallet failed for {id:?}"))?;
+    println!("wallet '{id}' deleted.");
+    Ok(())
+}
+
+/// `btc wallet rename` — Story 9. Renames the wallet blob in-place.
+/// Errors if source is missing OR target already exists.
+pub fn handle_wallet_rename(
+    id: String,
+    to: String,
+    network: NetArg,
+    data_dir: &Path,
+) -> Result<()> {
+    let network_obj = network.as_network();
+    let old_id =
+        WalletId::from_str(&id).with_context(|| format!("parsing source wallet_id {id:?}"))?;
+    let new_id =
+        WalletId::from_str(&to).with_context(|| format!("parsing target wallet_id {to:?}"))?;
+    if old_id == new_id {
+        anyhow::bail!("rename: source and target wallet IDs are identical ({id:?})");
+    }
+    bitcoin_wallet_core::wallet::rename_wallet(data_dir, network_obj, old_id, new_id)
+        .with_context(|| format!("rename_wallet failed: {id:?} → {to:?}"))?;
+    println!("wallet '{id}' renamed to '{to}'.");
+    Ok(())
+}
+
 /// `btc config show` — Issue #100 / Story 11.
 ///
 /// Prints the resolved CLI configuration: data dir, default Esplora URL,

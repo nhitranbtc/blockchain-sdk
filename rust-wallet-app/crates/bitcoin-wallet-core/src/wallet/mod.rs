@@ -55,7 +55,10 @@ pub mod persist;
 pub mod store;
 
 pub use id::WalletId;
-pub use ops::{create_wallet, import_wallet, show_wallet, WalletInfo, SUPPORTED_WORD_COUNTS};
+pub use ops::{
+    create_wallet, delete_wallet, import_wallet, list_wallets, rename_wallet, show_wallet,
+    WalletInfo, SUPPORTED_WORD_COUNTS,
+};
 pub use store::{data_dir, wallet_path};
 
 // Re-export `KeychainKind` from `bdk_wallet` so CLI handlers can
