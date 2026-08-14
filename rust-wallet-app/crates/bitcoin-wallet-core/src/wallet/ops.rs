@@ -141,7 +141,7 @@ pub async fn show_wallet(
     let phrase_secret = decrypt_mnemonic(&blob, password.expose().as_slice(), aad)
         .map_err(|_| Error::WalletStore(crate::wallet::store::WALLET_NOT_ACCESSIBLE.into()))?;
     let mnemonic = Mnemonic::from_phrase(phrase_secret.expose())?;
-    let wallet = Wallet::from_mnemonic(&mnemonic, network)?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network, None)?;
     wallet.sync(esplora).await?;
     let balance = wallet.balance(esplora).await?;
     let receive_addresses = wallet

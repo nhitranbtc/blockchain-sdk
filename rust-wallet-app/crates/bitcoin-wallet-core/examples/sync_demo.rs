@@ -28,7 +28,7 @@ async fn main() {
     println!();
 
     // 2. Construct wallet on testnet.
-    let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("valid input");
+    let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet, None).expect("valid input");
     println!(
         "Wallet constructed: network = {:?}, word_count = {}",
         wallet.network(),

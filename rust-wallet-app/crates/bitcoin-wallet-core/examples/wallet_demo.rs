@@ -11,7 +11,7 @@ fn main() {
     println!("  word count = {}", mnemonic.word_count());
 
     // Construct wallet
-    let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet).expect("wallet construction");
+    let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet, None).expect("wallet construction");
     println!("\nWallet constructed:");
     println!("  network = {:?}", wallet.network());
     println!("  phrase  = \"{}\"", wallet.phrase().expose());
