@@ -18,6 +18,7 @@ pub mod error;
 pub mod keys;
 pub mod script;
 pub mod threat;
+pub mod tx;
 pub mod util;
 pub mod wallet;
 

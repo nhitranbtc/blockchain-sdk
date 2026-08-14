@@ -277,6 +277,36 @@ pub enum WalletActionKind {
         #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
         pin_spki: Option<String>,
     },
+    /// Send satoshis to a recipient address (Story 5 / Issue #118).
+    /// Full tx lifecycle: sync → build → sign → broadcast → return txid.
+    /// Default fee rate is 1 sat/vB (Story 6 #119 adds --fee-rate override).
+    ///
+    /// **SECURITY**: mnemonic is the wallet's key material — see
+    /// `Sync::mnemonic` for shell-history caveats. The recipient address
+    /// must be a valid address on the `--network` (cross-network
+    /// rejection enforced at handler layer).
+    Send {
+        /// BIP-39 mnemonic phrase (12/15/18/21/24 words).
+        /// **SECURITY**: see `Sync::mnemonic` for shell-history caveats.
+        #[arg(long, env = "BTC_WALLET_MNEMONIC")]
+        mnemonic: String,
+        /// Bitcoin network.
+        #[arg(long, value_enum)]
+        network: NetArg,
+        /// Recipient Bitcoin address (must match `--network`).
+        #[arg(long)]
+        address: String,
+        /// Amount to send in satoshis (u64). Must exceed dust limit
+        /// (546 sat for native segwit P2WPKH).
+        #[arg(long)]
+        amount_sat: u64,
+        /// Esplora base URL (HTTPS-only per F36).
+        #[arg(long)]
+        esplora_url: String,
+        /// Esplora SPKI pin. See `Sync::pin_spki` for F20 enforcement.
+        #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
+        pin_spki: Option<String>,
+    },
 }
 
 /// BIP-39 mnemonic word counts supported by the library
@@ -520,6 +550,24 @@ impl fmt::Debug for WalletActionKind {
                 .field("esplora_url", esplora_url)
                 .field("pin_spki", pin_spki)
                 .finish(),
+            // Story 5 / Issue #118: same redaction policy as Sync/Balance
+            // (mnemonic is secret material — never appear in Debug).
+            Self::Send {
+                mnemonic: _,
+                network,
+                address,
+                amount_sat,
+                esplora_url,
+                pin_spki,
+            } => f
+                .debug_struct("Send")
+                .field("mnemonic", &"<redacted>")
+                .field("network", network)
+                .field("address", address)
+                .field("amount_sat", amount_sat)
+                .field("esplora_url", esplora_url)
+                .field("pin_spki", pin_spki)
+                .finish(),
         }
     }
 }
@@ -656,6 +704,102 @@ mod tests {
             "https://blockstream.info/testnet/api",
         ]);
         assert!(cli.is_err(), "missing --mnemonic should fail to parse");
+    }
+
+    /// Story 5 / Issue #118: `btc wallet send` parses required args.
+    /// Full coverage of the happy path is in handler tests (which
+    /// would require a funded wallet — covered by integration tests).
+    #[test]
+    fn parse_send_accepts_required_args() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 5 / Issue #118: missing `--address` must fail to parse
+    /// (handler-layer cross-network check would also catch this, but
+    /// the parse-layer guard gives a faster error).
+    #[test]
+    fn parse_send_rejects_missing_address() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--amount-sat",
+            "10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_err(), "missing --address should fail to parse");
+    }
+
+    /// Story 5 / Issue #118: missing `--amount-sat` must fail to
+    /// parse.
+    #[test]
+    fn parse_send_rejects_missing_amount() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_err(), "missing --amount-sat should fail to parse");
+    }
+
+    /// Story 5 / Issue #118 (L12 CRITICAL #2): mnemonic MUST NOT
+    /// appear in Debug output for the new `send` subcommand.
+    /// Tracing / log capture is the most likely leak vector.
+    #[test]
+    fn debug_redacts_mnemonic_in_send() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("abandon"),
+            "mnemonic leaked in Debug: {debug}"
+        );
+        assert!(
+            debug.contains("redacted"),
+            "redaction marker missing: {debug}"
+        );
     }
 
     /// Issue #63 SPKI enforcement at parse layer: the `--pin-spki`

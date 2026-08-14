@@ -940,6 +940,59 @@ pub async fn handle_wallet_balance(
     Ok(())
 }
 
+/// Handle `btc wallet send --mnemonic <words> --network <NET> --address <ADDR> --amount-sat <SAT> --esplora-url <URL> [--pin-spki <hex64>]`.
+///
+/// Full tx lifecycle (Story 5 / Issue #118 / Task 11 + 13):
+/// `wallet.sync` → `Wallet::send` (build + sign + broadcast) → return txid.
+///
+/// Prints the txid (64-char hex) to STDOUT. The mnemonic lives only in
+/// process memory; nothing is persisted. Default fee rate is 1 sat/vB
+/// (Story 6 #119 will add `--fee-rate` override).
+///
+/// **Cross-network rejection**: `--address` must be valid for
+/// `--network` (e.g., a `tb1...` address with `--network bitcoin` is
+/// refused). This prevents accidentally sending to the wrong chain.
+pub async fn handle_wallet_send(
+    mnemonic_phrase: String,
+    network: NetArg,
+    address: String,
+    amount_sat: u64,
+    esplora_url: String,
+    pin_spki: Option<String>,
+) -> Result<()> {
+    let network_obj = network.as_network();
+
+    // Cross-network rejection (defends against "send to wrong chain"
+    // operator error). bitcoin 0.32 parses unchecked then
+    // require_network (the typed FromStr only accepts
+    // Address<NetworkUnchecked>).
+    let recipient: bitcoin::Address = address
+        .parse::<bitcoin::Address<_>>()
+        .with_context(|| format!("invalid recipient address {address:?}"))?
+        .require_network(network_obj)
+        .with_context(|| {
+            format!(
+                "recipient {address:?} is not valid for network {network_obj:?}; \
+                 cross-network send refused"
+            )
+        })?;
+
+    let tmp_base = std::env::temp_dir();
+    let client =
+        build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
+    let mnemonic =
+        Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
+    let wallet =
+        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+
+    let txid = wallet
+        .send(&client, &recipient, bitcoin::Amount::from_sat(amount_sat))
+        .await
+        .context("Wallet::send failed (build + sign + broadcast)")?;
+    println!("{txid}");
+    Ok(())
+}
+
 /// Cap for `--in` plaintext size on encrypt (1 MiB). Library has
 /// `MAX_PLAINTEXT_LEN=256` for BIP-39 phrases; CLI accepts any UTF-8
 /// so we cap higher (1 MiB) for general file ops but still reject
