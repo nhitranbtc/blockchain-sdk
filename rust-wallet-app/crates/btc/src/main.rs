@@ -98,6 +98,9 @@ async fn main() -> Result<()> {
                     esplora_url,
                     pin_spki,
                     fee_rate_sat_per_vb,
+                    coin_selection,
+                    input,
+                    manual_selection_only,
                     confirm_yes,
                 } => {
                     handlers::handle_wallet_send(
@@ -112,6 +115,9 @@ async fn main() -> Result<()> {
                         esplora_url,
                         pin_spki,
                         fee_rate_sat_per_vb,
+                        coin_selection,
+                        input,
+                        manual_selection_only,
                         confirm_yes,
                     )
                     .await

@@ -499,6 +499,43 @@ pub enum WalletActionKind {
         /// fetch Esplora estimates when `--fee-rate` is omitted).
         #[arg(long = "fee-rate", alias = "fee-rate-sat-per-vb")]
         fee_rate_sat_per_vb: Option<u64>,
+        /// Coin-selection algorithm (Story 15 / Issue #139).
+        /// `bnb` (default — BranchAndBound with SingleRandomDraw),
+        /// `knapsack` (largest-first greedy, BDK's
+        /// `LargestFirstCoinSelection`), or `oldest`
+        /// (`OldestFirstCoinSelection`). Single-recipient mode
+        /// only; `--drain-to` and `--to` are mutually exclusive at
+        /// parse layer (per L12 H1 fix — silently dropping the flag
+        /// in those modes was a documented-but-false contract).
+        #[arg(
+            long,
+            value_enum,
+            default_value_t = CoinSelection::Bnb,
+            conflicts_with_all = ["drain_to", "to"],
+        )]
+        coin_selection: CoinSelection,
+        /// Manual UTXO selection (Story 16 / Issue #139). One or
+        /// more `<txid>:<vout>` outpoints the operator wants to
+        /// fund the send with. Repeatable. Outpoints not tracked by
+        /// the wallet fail at build time (bdk `add_utxo` error,
+        /// sanitized to "add_utxo failed: UnknownUtxo").
+        /// Single-recipient mode only; `--drain-to` and `--to`
+        /// are mutually exclusive (L12 H1 + H3 fix).
+        #[arg(
+            long = "input",
+            value_name = "txid:vout",
+            value_parser = parse_input_arg,
+            conflicts_with_all = ["drain_to", "to"],
+        )]
+        input: Vec<bitcoin::OutPoint>,
+        /// When `--input` is set, restrict coin selection to ONLY
+        /// those outpoints (bdk `manually_selected_only`). The tx
+        /// fails if selected UTXOs don't cover amount + fee (no
+        /// auto-append). Story 16 strict mode. Requires `--input`
+        /// (L12 M2 fix — silently no-op'ing without input is the
+        /// wrong default for a spend command).
+        #[arg(long, requires = "input", conflicts_with_all = ["drain_to", "to"])]
+        manual_selection_only: bool,
         /// Confirmation text for mainnet (Story 10 + Stories 13/14).
         /// When `--network mainnet`, this flag must be passed with
         /// the exact text `yes` (lowercase). Defends against
@@ -506,6 +543,35 @@ pub enum WalletActionKind {
         #[arg(long, value_name = "yes")]
         confirm_yes: Option<String>,
     },
+}
+
+/// User-facing coin-selection algorithm menu (Story 15 / Issue #139).
+///
+/// Mirrors the lib-layer enum (kept separate to keep the lib free
+/// of clap — adding clap as a lib dep would be heavy). The lib
+/// has the real semantics (maps to bdk 3.1 `CoinSelectionAlgorithm`
+/// impls). The 1:1 identity `From` impl below bridges them.
+///
+/// Maps to bdk 3.1's `CoinSelectionAlgorithm` impls:
+/// - `Bnb` → `BranchAndBoundCoinSelection<SingleRandomDraw>` (BDK default)
+/// - `Knapsack` → `LargestFirstCoinSelection` (greedy largest-first; bdk
+///   3.1 has no standalone `Knapsack` impl)
+/// - `Oldest` → `OldestFirstCoinSelection` (picks oldest-block UTXOs first)
+#[derive(Copy, Clone, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum CoinSelection {
+    Bnb,
+    Knapsack,
+    Oldest,
+}
+
+impl From<CoinSelection> for bitcoin_wallet_core::tx::builder::CoinSelection {
+    fn from(c: CoinSelection) -> Self {
+        match c {
+            CoinSelection::Bnb => Self::Bnb,
+            CoinSelection::Knapsack => Self::Knapsack,
+            CoinSelection::Oldest => Self::Oldest,
+        }
+    }
 }
 
 /// BDK recommended safe max recipients per multi-recipient tx
@@ -558,15 +624,26 @@ fn parse_address_arg(
 
 /// Parse `--exclude-utxo <txid>:<vout>`. txid is 64-char hex; vout is u32.
 fn parse_outpoint_arg(s: &str) -> Result<bitcoin::OutPoint, String> {
+    parse_outpoint_for("--exclude-utxo", s)
+}
+
+/// Parse `--input <txid>:<vout>` (Story 16). Same format as
+/// `--exclude-utxo`; parameterized flag name for accurate errors
+/// (L12 M4 fix).
+fn parse_input_arg(s: &str) -> Result<bitcoin::OutPoint, String> {
+    parse_outpoint_for("--input", s)
+}
+
+fn parse_outpoint_for(flag: &str, s: &str) -> Result<bitcoin::OutPoint, String> {
     let (txid_str, vout_str) = s
         .split_once(':')
-        .ok_or_else(|| format!("--exclude-utxo expects `<txid>:<vout>` format, got `{s}`"))?;
+        .ok_or_else(|| format!("{flag} expects `<txid>:<vout>` format, got `{s}`"))?;
     let txid = txid_str
         .parse::<bitcoin::Txid>()
-        .map_err(|e| format!("--exclude-utxo txid parse: {e}"))?;
+        .map_err(|e| format!("{flag} txid parse: {e}"))?;
     let vout = vout_str
         .parse::<u32>()
-        .map_err(|e| format!("--exclude-utxo vout must be u32, got `{vout_str}` ({e})"))?;
+        .map_err(|e| format!("{flag} vout must be u32, got `{vout_str}` ({e})"))?;
     Ok(bitcoin::OutPoint::new(txid, vout))
 }
 
@@ -842,6 +919,9 @@ impl fmt::Debug for WalletActionKind {
                 esplora_url,
                 pin_spki,
                 fee_rate_sat_per_vb,
+                coin_selection,
+                input,
+                manual_selection_only,
                 confirm_yes,
             } => f
                 .debug_struct("Send")
@@ -862,6 +942,9 @@ impl fmt::Debug for WalletActionKind {
                 .field("esplora_url", esplora_url)
                 .field("pin_spki", pin_spki)
                 .field("fee_rate_sat_per_vb", fee_rate_sat_per_vb)
+                .field("coin_selection", coin_selection)
+                .field("input", &input.len())
+                .field("manual_selection_only", manual_selection_only)
                 .field(
                     "confirm_yes",
                     &confirm_yes
@@ -2034,6 +2117,182 @@ mod tests {
         assert!(
             cli.is_ok(),
             "mainnet address in --drain-to must parse (handler rejects); got: {cli:?}"
+        );
+    }
+
+    /// Story 15 / Issue #139: `--coin-selection bnb` is the default.
+    #[test]
+    fn parse_send_default_coin_selection_is_bnb() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ])
+        .unwrap();
+        let Commands::Wallet(WalletAction {
+            action: WalletActionKind::Send { coin_selection, .. },
+        }) = cli.command
+        else {
+            panic!("expected Send subcommand");
+        };
+        assert_eq!(coin_selection, CoinSelection::Bnb);
+    }
+
+    /// Story 15 / Issue #139: `--coin-selection knapsack` parses.
+    #[test]
+    fn parse_send_accepts_coin_selection_knapsack() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--coin-selection",
+            "knapsack",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 15 / Issue #139: invalid coin-selection value fails at parse.
+    #[test]
+    fn parse_send_rejects_invalid_coin_selection() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--coin-selection",
+            "magic",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(
+            cli.is_err(),
+            "invalid --coin-selection value must fail to parse (exit 2 per Story 15 AC)"
+        );
+    }
+
+    /// Story 16 / Issue #139: `--input <txid:vout>` is repeatable.
+    #[test]
+    fn parse_send_accepts_input_repeatable() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--input",
+            "0000000000000000000000000000000000000000000000000000000000000001:0",
+            "--input",
+            "0000000000000000000000000000000000000000000000000000000000000002:1",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 16 / Issue #139: `--manual-selection-only` parses.
+    #[test]
+    fn parse_send_accepts_manual_selection_only() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--input",
+            "0000000000000000000000000000000000000000000000000000000000000001:0",
+            "--manual-selection-only",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 15+16 / Issue #139: `--coin-selection` + `--drain-to`
+    /// are mutually exclusive.
+    #[test]
+    fn parse_send_rejects_coin_selection_and_drain_to_together() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--drain-to",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--coin-selection",
+            "bnb",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(
+            cli.is_err(),
+            "--coin-selection + --drain-to must be mutually exclusive"
+        );
+    }
+
+    /// Story 16 / Issue #139: `--input` + `--drain-to` are
+    /// mutually exclusive (drain picks all UTXOs).
+    #[test]
+    fn parse_send_rejects_input_and_drain_to_together() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--drain-to",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--input",
+            "0000000000000000000000000000000000000000000000000000000000000001:0",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(
+            cli.is_err(),
+            "--input + --drain-to must be mutually exclusive"
         );
     }
 
