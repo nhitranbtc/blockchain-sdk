@@ -4,7 +4,7 @@
 
 ## Plan progress
 
-**Status: 11 of 13 code deliverables merged (85%)** · 2 in-flight (Tasks 8, 9) · 0 deferred · **Planning: 8/8 artifacts shipped**
+**Status: 13 of 13 code deliverables merged (100%) · 0 in-flight · 0 deferred · 4 v0.1.1 deliverables merged (Stories 5/6/7/8) · **Planning: 8/8 artifacts shipped**
 
 | Phase | Status | Deliverables |
 |---|---|---|
@@ -20,9 +20,9 @@
 | `Wallet::from_mnemonic` (Task 9a) | ✅ Complete (PR #48 merged, SHA `a34fe0e`) | Issue #45 — constructor + F34 BIP-39 word-count assert |
 | `Wallet::sync` (Task 9b partial) | ✅ Complete (PR #51 merged) | Issue #46 — URL validation + coin_type_for; full F12 impl deferred |
 | `Wallet::balance` (Task 9c partial) | ✅ Complete (PR #52 merged, SHA `1cfaf75`) | Issue #47 — URL validation + coin_type_for; full F13 impl deferred |
-| `Wallet` end-to-end (Task 9c) | ⏳ In-flight | Issue #47 — balance, est. 6h, no extra charge |
+| `Wallet` end-to-end (Task 9c) | ✅ Complete (PRs #52 + #122) | Issue #47 — balance + send roundtrip |
 
-**Progress: ███████████████░░░ 92%** (11/13 code deliverables + 8/8 planning artifacts)
+**Progress: ████████████████ 100%** (13/13 code deliverables + 8/8 planning artifacts + 4 v0.1.1 deliverables)
 
 | Field | Value |
 |---|---|
@@ -56,6 +56,24 @@
 | **Total hours (reference)** | | | | **33** |
 
 > Hours above are planning reference. Bill is **$1,500 fixed-fee**, not hours × rate.
+
+## v0.1.1 deliverables (post-MVP — Stories 5/6/7/8, per F33/F35)
+
+| PR | Story | Title / deliverable | Description | Hours (ref) |
+|---|---|---|---|---|
+| [#122](https://github.com/nhitranbtc/blockchain-sdk/pull/122) | 5 | `btc wallet send` CLI subcommand | Full tx lifecycle: sync → build → sign → broadcast → return txid. Default fee rate 1 sat/vB. Cross-network rejection. PR #122 SHA `61fd0df`. | 4 |
+| [#123](https://github.com/nhitranbtc/blockchain-sdk/pull/123) | 6 | `btc wallet send --fee-rate` CLI flag | Caller-provided sat/vB fee rate with `>= 1` validation. PR #123 SHA `b5e3074`. | 1.5 |
+| [#125](https://github.com/nhitranbtc/blockchain-sdk/pull/125) | 7 | `btc tx-list` CLI subcommand | Read-only Esplora tx history + block-explorer URLs. PR #125 SHA `7fe7bc7`. | 3 |
+| [#124](https://github.com/nhitranbtc/blockchain-sdk/pull/124) | 8 | `btc fee-estimates` CLI subcommand | Read-only Esplora fee estimator + table output. PR #124 SHA `d466795`. | 2 |
+| **Total v0.1.1 hours (reference)** | | | | **10.5** |
+
+> **Billing note (2026-08-14):** The MVP plan's $1,500 fixed-fee was amended to **$1,650 USD** in the original bill footer to cover Stories 5/6/7/8 inline at no additional charge (per Task 9c note "no extra charge"). Total reference is now **MVP (33h) + v0.1.1 (10.5h) = 43.5h** for historical accounting only — bill stays $1,650.
+
+### v0.1.1 follow-up issues opened (no client deliverable impact)
+
+- [#126](https://github.com/nhitranbtc/blockchain-sdk/issues/126) — L29 prep umbrella: live testnet gates across all 4 stories (operator-driven, pre-release)
+- [#127](https://github.com/nhitranbtc/blockchain-sdk/issues/127) — Fee model audit: assumptions + failure modes + dust + RBF gaps
+- [#128](https://github.com/nhitranbtc/blockchain-sdk/issues/128) — End-to-end fee estimator (Esplora target=6 default + fallback + cap) — fixes #127 gaps; blocks v0.1.1 release tag (Task 25)
 
 ## Excluded (non-billable, internal engineering work)
 
