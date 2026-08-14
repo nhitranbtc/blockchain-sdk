@@ -1221,6 +1221,9 @@ pub async fn handle_wallet_send(
     esplora_url: String,
     pin_spki: Option<String>,
     fee_rate_sat_per_vb: Option<u64>,
+    coin_selection: crate::cli::CoinSelection,
+    input: Vec<bitcoin::OutPoint>,
+    manual_selection_only: bool,
     confirm_yes: Option<String>,
 ) -> Result<()> {
     let network_obj = network.as_network();
@@ -1328,24 +1331,77 @@ pub async fn handle_wallet_send(
         )
     })?;
     let recipient = require_network_address_str(&address_str, network_obj)?;
+    let amount_obj = bitcoin::Amount::from_sat(amount);
     if dry_run {
         warn_psbt_broadcast_risk("single");
-        let recipients = vec![(recipient.clone(), bitcoin::Amount::from_sat(amount))];
-        let psbt_b64 = wallet
-            .build_sign_multi(&client, &recipients, fee_rate)
-            .await
-            .context("Wallet::build_sign_multi (single) failed")?;
+        let psbt_b64 = if !input.is_empty() {
+            wallet
+                .build_sign_with_manual_utxo(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    &input,
+                    manual_selection_only,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::build_sign_with_manual_utxo failed")?
+        } else if coin_selection != crate::cli::CoinSelection::Bnb {
+            wallet
+                .build_sign_with_coin_selection(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::build_sign_with_coin_selection failed")?
+        } else {
+            let recipients = vec![(recipient.clone(), amount_obj)];
+            wallet
+                .build_sign_multi(&client, &recipients, fee_rate)
+                .await
+                .context("Wallet::build_sign_multi (single) failed")?
+        };
         println!("{psbt_b64}");
     } else {
-        let txid = wallet
-            .send(
-                &client,
-                &recipient,
-                bitcoin::Amount::from_sat(amount),
-                fee_rate,
-            )
-            .await
-            .context("Wallet::send failed (build + sign + broadcast)")?;
+        let txid = if !input.is_empty() {
+            wallet
+                .send_with_manual_utxo(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    &input,
+                    manual_selection_only,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::send_with_manual_utxo failed")?
+        } else if coin_selection != crate::cli::CoinSelection::Bnb {
+            wallet
+                .send_with_coin_selection(
+                    &client,
+                    &recipient,
+                    amount_obj,
+                    fee_rate,
+                    coin_selection.into(),
+                )
+                .await
+                .context("Wallet::send_with_coin_selection failed")?
+        } else {
+            wallet
+                .send(
+                    &client,
+                    &recipient,
+                    bitcoin::Amount::from_sat(amount),
+                    fee_rate,
+                )
+                .await
+                .context("Wallet::send failed (build + sign + broadcast)")?
+        };
         println!("{txid}");
     }
     Ok(())

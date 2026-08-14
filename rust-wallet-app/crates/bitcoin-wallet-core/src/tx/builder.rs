@@ -13,6 +13,9 @@
 //! it back — `MutexGuard` never crosses an `.await` point.
 
 use bdk_wallet::bitcoin::{Address, Amount, FeeRate, OutPoint, Psbt};
+use bdk_wallet::coin_selection::{
+    BranchAndBoundCoinSelection, LargestFirstCoinSelection, OldestFirstCoinSelection,
+};
 use bdk_wallet::Wallet as BdkWallet;
 
 use crate::error::{Error, Result};
@@ -24,6 +27,31 @@ use crate::error::{Error, Result};
 /// `TxBuilder::finish` runs (bdk itself does not enforce a hard cap
 /// on `add_recipient` count).
 pub const MAX_RECIPIENTS: usize = 20;
+
+/// User-facing coin-selection algorithm menu (Story 15 / Issue #139).
+///
+/// **Drift from user-stories spec:** spec lists `bnb | knapsack | oldest`.
+/// bdk 3.1 has `BranchAndBoundCoinSelection<SingleRandomDraw>` (bnb) +
+/// `LargestFirstCoinSelection` (knapsack-style: pick largest UTXOs first) +
+/// `OldestFirstCoinSelection`. There is no standalone `Knapsack` impl
+/// in bdk 3.1 — `LargestFirstCoinSelection` is the closest semantic
+/// equivalent (greedy largest-first, the textbook knapsack approximation).
+///
+/// The CLI derives its own `CoinSelection` enum (clap `ValueEnum`
+/// lives in the binary crate; pulling clap into the lib would be
+/// heavy). The CLI → lib conversion is a 1:1 `From<cli::CoinSelection>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoinSelection {
+    /// Branch-and-bound with single random draw — BDK default,
+    /// recommended for most wallets.
+    Bnb,
+    /// Largest-first greedy selection (textbook knapsack approximation).
+    /// Picks the fewest-largest UTXOs until the target is met.
+    Knapsack,
+    /// Oldest-first — picks the earliest-block UTXOs until target is met.
+    /// Useful for wallet hygiene / coin-age management.
+    Oldest,
+}
 
 /// Build an unsigned PSBT that sends `amount` to `recipient` at the
 /// given `fee_rate`. UTXO selection, change generation, and fee
@@ -127,6 +155,165 @@ pub fn build_drain_tx(
     builder.finish().map_err(|e| {
         Error::TxBuild(format!(
             "build_drain_tx failed: {}",
+            sanitize_create_tx_error(&e)
+        ))
+    })
+}
+
+/// Build an unsigned PSBT for a single-recipient send with an
+/// explicit coin-selection algorithm (Story 15 / Issue #139).
+///
+/// # Errors
+///
+/// - `Error::TxBuild` on bdk `CreateTxError` (insufficient funds,
+///   dust, etc.)
+pub fn build_send_with_coin_selection(
+    bdk: &mut BdkWallet,
+    recipient: &Address,
+    amount: Amount,
+    fee_rate: FeeRate,
+    algorithm: CoinSelection,
+) -> Result<Psbt> {
+    // bdk's `coin_selection` method changes the builder's `Cs`
+    // type parameter — each variant binds to a local so the typed
+    // builder can `finish()` (which takes `self`, not `&mut self`).
+    match algorithm {
+        CoinSelection::Bnb => {
+            let mut builder = bdk.build_tx().coin_selection(BranchAndBoundCoinSelection::<
+                bdk_wallet::coin_selection::SingleRandomDraw,
+            >::default());
+            builder.add_recipient(recipient.script_pubkey(), amount);
+            builder.fee_rate(fee_rate);
+            builder.finish().map_err(|e| {
+                Error::TxBuild(format!(
+                    "build_send_with_coin_selection (bnb) failed: {}",
+                    sanitize_create_tx_error(&e)
+                ))
+            })
+        }
+        CoinSelection::Knapsack => {
+            let mut builder = bdk.build_tx().coin_selection(LargestFirstCoinSelection);
+            builder.add_recipient(recipient.script_pubkey(), amount);
+            builder.fee_rate(fee_rate);
+            builder.finish().map_err(|e| {
+                Error::TxBuild(format!(
+                    "build_send_with_coin_selection (knapsack) failed: {}",
+                    sanitize_create_tx_error(&e)
+                ))
+            })
+        }
+        CoinSelection::Oldest => {
+            let mut builder = bdk.build_tx().coin_selection(OldestFirstCoinSelection);
+            builder.add_recipient(recipient.script_pubkey(), amount);
+            builder.fee_rate(fee_rate);
+            builder.finish().map_err(|e| {
+                Error::TxBuild(format!(
+                    "build_send_with_coin_selection (oldest) failed: {}",
+                    sanitize_create_tx_error(&e)
+                ))
+            })
+        }
+    }
+}
+
+/// Build an unsigned PSBT for a single-recipient send with manual
+/// UTXO selection (Story 16 / Issue #139).
+///
+///  - `utxos`: outpoints the operator explicitly chose to fund the
+///    send. Each is added via bdk's `add_utxo`. MUST be non-empty —
+///    pass an empty slice and the function returns `Error::TxBuild`
+///    (handler-layer caller bug).
+///  - `only_manual`: when true, bdk's `only_manual_selection` is set
+///    — the tx will FAIL if the selected UTXOs don't cover amount +
+///    fee (no auto-append). When false, bdk may auto-append additional
+///    UTXOs to cover the amount (algorithm honors `algorithm`).
+///  - `algorithm`: coin-selection algorithm for any auto-append
+///    (default `Bnb` matches bdk's default). When `only_manual = true`
+///    this is unused.
+///
+/// Outpoints not tracked by the wallet surface as
+/// `Error::TxBuild("...add_utxo failed: UnknownUtxo")` per the
+/// sanitize pattern (no Debug-format leak).
+///
+/// # Errors
+///
+///  - `Error::TxBuild` on empty `utxos`, add_utxo failure
+///    (UnknownUtxo), or bdk `CreateTxError` (InsufficientFunds,
+///    dust, etc.)
+#[allow(clippy::too_many_arguments)]
+pub fn build_send_with_manual_utxo(
+    bdk: &mut BdkWallet,
+    recipient: &Address,
+    amount: Amount,
+    fee_rate: FeeRate,
+    utxos: &[OutPoint],
+    only_manual: bool,
+    algorithm: CoinSelection,
+) -> Result<Psbt> {
+    if utxos.is_empty() {
+        return Err(Error::TxBuild(
+            "build_send_with_manual_utxo: utxos slice is empty (pass at least one --input)".into(),
+        ));
+    }
+    let mut builder = bdk.build_tx();
+    for outpoint in utxos {
+        // bdk 3.1 `add_utxo` returns `Result<&mut Self, AddUtxoError>`
+        // (the outpoint may not be tracked by the wallet). Sanitize
+        // the error to a fixed message — `AddUtxoError` only carries
+        // `OutPoint` (public chain data) today, but the sanitize
+        // pattern keeps us safe if bdk adds variants in the future.
+        builder
+            .add_utxo(*outpoint)
+            .map_err(|_| Error::TxBuild("add_utxo failed: UnknownUtxo".into()))?;
+    }
+    if only_manual {
+        builder.manually_selected_only();
+    }
+    // Apply user's coin-selection algorithm for any auto-fill
+    // (bdk's default is used when algorithm == Bnb; thread through
+    // unconditionally per L12 review — explicit Bnb is load-bearing
+    // semantically, not just a default). Each arm binds to a local
+    // so the typed builder can call `finish()` (which takes `self`).
+    match algorithm {
+        CoinSelection::Bnb => finalize_manual_tx(
+            builder.coin_selection(BranchAndBoundCoinSelection::<
+                bdk_wallet::coin_selection::SingleRandomDraw,
+            >::default()),
+            recipient,
+            amount,
+            fee_rate,
+        ),
+        CoinSelection::Knapsack => finalize_manual_tx(
+            builder.coin_selection(LargestFirstCoinSelection),
+            recipient,
+            amount,
+            fee_rate,
+        ),
+        CoinSelection::Oldest => finalize_manual_tx(
+            builder.coin_selection(OldestFirstCoinSelection),
+            recipient,
+            amount,
+            fee_rate,
+        ),
+    }
+}
+
+/// Shared add_recipient + fee_rate + finish for the three `algorithm`
+/// arms in `build_send_with_manual_utxo`. Generic over the bdk
+/// `CoinSelectionAlgorithm` impl bound on the builder — each arm
+/// above passes a differently-typed `TxBuilder<Cs>`, but the
+/// shared steps don't care about `Cs`.
+fn finalize_manual_tx<Cs: bdk_wallet::coin_selection::CoinSelectionAlgorithm>(
+    mut builder: bdk_wallet::tx_builder::TxBuilder<'_, Cs>,
+    recipient: &Address,
+    amount: Amount,
+    fee_rate: FeeRate,
+) -> Result<Psbt> {
+    builder.add_recipient(recipient.script_pubkey(), amount);
+    builder.fee_rate(fee_rate);
+    builder.finish().map_err(|e| {
+        Error::TxBuild(format!(
+            "manual-utxo send failed: {}",
             sanitize_create_tx_error(&e)
         ))
     })
@@ -314,5 +501,89 @@ mod tests {
         // error variant instead. Exclude logic is exercised by the L29
         // live testnet smoke (PR #122 follow-up).
         let _ = funded_test_wallet;
+    }
+
+    // ---- Story 15 — coin-selection algorithm (Issue #139) ----
+
+    #[test]
+    fn coin_selection_variants_distinct() {
+        // Pin the enum's distinctness — the CLI derives a parallel
+        // `CoinSelection` enum from this; if two variants collapse the
+        // parse would be ambiguous.
+        assert_ne!(CoinSelection::Bnb, CoinSelection::Knapsack);
+        assert_ne!(CoinSelection::Bnb, CoinSelection::Oldest);
+        assert_ne!(CoinSelection::Knapsack, CoinSelection::Oldest);
+    }
+
+    #[test]
+    fn build_send_with_coin_selection_signature_compiles() {
+        // Pin the public API surface for Story 15.
+        let _: fn(&mut BdkWallet, &Address, Amount, FeeRate, CoinSelection) -> Result<Psbt> =
+            build_send_with_coin_selection;
+    }
+
+    #[test]
+    fn build_send_with_coin_selection_rejects_unknown_address() {
+        // The empty-test-wallet has no UTXOs; even with a valid addr +
+        // valid amount, bdk should reject with NoUtxosSelected.
+        let mut bdk = empty_test_wallet();
+        let addr: bitcoin::Address = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+            .parse::<bitcoin::Address<_>>()
+            .expect("testnet address parse")
+            .require_network(bitcoin::Network::Testnet)
+            .expect("testnet network check");
+        let fee_rate = FeeRate::from_sat_per_vb(1).expect("fee rate 1 sat/vB");
+        let err = build_send_with_coin_selection(
+            &mut bdk,
+            &addr,
+            Amount::from_sat(1_000),
+            fee_rate,
+            CoinSelection::Bnb,
+        )
+        .expect_err("empty wallet must reject with TxBuild");
+        assert!(matches!(err, Error::TxBuild(_)), "got {err:?}");
+    }
+
+    // ---- Story 16 — manual UTXO selection (Issue #139) ----
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn build_send_with_manual_utxo_signature_compiles() {
+        // Pin the public API surface for Story 16.
+        let _: fn(
+            &mut BdkWallet,
+            &Address,
+            Amount,
+            FeeRate,
+            &[OutPoint],
+            bool,
+            CoinSelection,
+        ) -> Result<Psbt> = build_send_with_manual_utxo;
+    }
+
+    #[test]
+    fn build_send_with_manual_utxo_rejects_unknown_outpoint() {
+        // bdk's `add_utxo` validates the outpoint is tracked by the
+        // wallet. An outpoint that the wallet doesn't track must
+        // surface as `Error::TxBuild` (sanitized — no descriptor leak).
+        let mut bdk = empty_test_wallet();
+        let addr: bitcoin::Address = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx"
+            .parse::<bitcoin::Address<_>>()
+            .expect("testnet address parse")
+            .require_network(bitcoin::Network::Testnet)
+            .expect("testnet network check");
+        let unknown_outpoint = OutPoint::new(Txid::from_byte_array([0xaa; 32]), 0);
+        let fee_rate = FeeRate::from_sat_per_vb(1).expect("fee rate 1 sat/vB");
+        let err = build_send_with_manual_utxo(
+            &mut bdk,
+            &addr,
+            Amount::from_sat(1_000),
+            fee_rate,
+            &[unknown_outpoint],
+            false,
+            CoinSelection::Bnb,
+        )
+        .expect_err("unknown outpoint must be rejected at add_utxo");
+        assert!(matches!(err, Error::TxBuild(_)), "got {err:?}");
     }
 }
