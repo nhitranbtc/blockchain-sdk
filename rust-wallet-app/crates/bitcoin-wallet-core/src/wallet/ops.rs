@@ -112,6 +112,7 @@ pub async fn show_wallet(
     id: WalletId,
     password: &Secret<Vec<u8>>,
     esplora: &EsploraClient,
+    db_path: Option<&Path>,
 ) -> Result<WalletInfo> {
     let blob_bytes = match read_wallet_at(base, network, id) {
         Ok(b) => b,
@@ -141,7 +142,7 @@ pub async fn show_wallet(
     let phrase_secret = decrypt_mnemonic(&blob, password.expose().as_slice(), aad)
         .map_err(|_| Error::WalletStore(crate::wallet::store::WALLET_NOT_ACCESSIBLE.into()))?;
     let mnemonic = Mnemonic::from_phrase(phrase_secret.expose())?;
-    let wallet = Wallet::from_mnemonic(&mnemonic, network, None)?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network, db_path.map(|p| p.to_path_buf()))?;
     wallet.sync(esplora).await?;
     let balance = wallet.balance(esplora).await?;
     let receive_addresses = wallet
@@ -150,6 +151,17 @@ pub async fn show_wallet(
     let change_addresses = wallet
         .peek_addresses(KeychainKind::Internal, 5)
         .map_err(|_| Error::WalletStore("cannot peek wallet addresses".into()))?;
+
+    // Story 12 / Issue #130 PR3-CLI: if `db_path` is set, write the
+    // wallet's `ChangeSet` to the bdk_file_store so subsequent
+    // `btc wallet show --db-path <path>` invocations can reload
+    // without re-syncing from Esplora.
+    if db_path.is_some() {
+        wallet
+            .persist()
+            .map_err(|e| Error::WalletStore(format!("Wallet::persist failed: {e}")))?;
+    }
+
     Ok(WalletInfo {
         receive_addresses,
         change_addresses,
@@ -298,6 +310,7 @@ mod tests {
                 id,
                 &password(),
                 &esplora,
+                None,
             ))
             .expect_err("missing wallet must reject");
         assert!(matches!(err, Error::WalletStore(_)));

@@ -261,6 +261,7 @@ pub async fn handle_show(
     password: Option<String>,
     esplora_url: Option<String>,
     esplora_spki_pin: Option<String>,
+    db_path: Option<std::path::PathBuf>,
     data_dir: &Path,
 ) -> Result<()> {
     let pwd_plain = password_or_prompt(password)?;
@@ -325,9 +326,16 @@ pub async fn handle_show(
             .context("build Esplora client (SystemRoots)")?,
     };
 
-    let info = show_wallet(data_dir, network_obj, wallet_id, &pwd, &client)
-        .await
-        .context("show_wallet failed")?;
+    let info = show_wallet(
+        data_dir,
+        network_obj,
+        wallet_id,
+        &pwd,
+        &client,
+        db_path.as_deref(),
+    )
+    .await
+    .context("show_wallet failed")?;
 
     // Pretty JSON to STDOUT for piping / scripting.
     let json = serde_json::to_string_pretty(&info).context("serializing wallet info")?;
@@ -469,6 +477,7 @@ mod tests {
             Some("test-password".to_string()),
             None, // use default_url_for → blockstream.info/api
             None, // NO pin
+            None, // db_path
             base,
         )
         .await
@@ -493,6 +502,7 @@ mod tests {
             Some("test-password".to_string()),
             None,
             None,
+            None, // db_path
             base,
         )
         .await
@@ -514,6 +524,7 @@ mod tests {
             Some("test-password".to_string()),
             None,
             None,
+            None, // db_path
             base,
         )
         .await
@@ -535,6 +546,7 @@ mod tests {
             Some("test-password".to_string()),
             None,
             None,
+            None, // db_path
             base,
         )
         .await
@@ -564,6 +576,7 @@ mod tests {
             Some("test-password".to_string()),
             Some("https://localhost:50002".to_string()),
             None,
+            None, // db_path
             base,
         )
         .await
@@ -884,8 +897,8 @@ pub async fn handle_wallet_sync(
         build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
     let mnemonic =
         Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
-    let wallet =
-        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network_obj, None)
+        .context("Wallet::from_mnemonic failed")?;
     wallet.sync(&client).await.context("Wallet::sync failed")?;
     let balance = wallet
         .balance(&client)
@@ -930,8 +943,8 @@ pub async fn handle_wallet_balance(
         build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
     let mnemonic =
         Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
-    let wallet =
-        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network_obj, None)
+        .context("Wallet::from_mnemonic failed")?;
     let balance = wallet
         .balance(&client)
         .await
@@ -990,8 +1003,8 @@ pub async fn handle_tx_list(
         build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
     let mnemonic =
         Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
-    let wallet =
-        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network_obj, None)
+        .context("Wallet::from_mnemonic failed")?;
     wallet.sync(&client).await.context("Wallet::sync failed")?;
 
     let txids = wallet.txids().context("Wallet::txids failed")?;
@@ -1162,8 +1175,8 @@ pub async fn handle_wallet_send(
         build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
     let mnemonic =
         Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
-    let wallet =
-        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network_obj, None)
+        .context("Wallet::from_mnemonic failed")?;
 
     let txid = wallet
         .send(

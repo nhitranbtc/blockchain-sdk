@@ -332,6 +332,14 @@ pub enum WalletActionKind {
         /// production endpoints. Env: `BTC_ESPLORA_SPKI_PIN`.
         #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
         esplora_spki_pin: Option<String>,
+        /// Path to the bdk_file_store SQLite-like store (Story 12 /
+        /// Issue #130 PR3-CLI). When set, `btc wallet show` writes
+        /// the wallet's `ChangeSet` to this file after syncing. The
+        /// next invocation with the same `--db-path` reloads the
+        /// persisted state instead of re-syncing from Esplora.
+        /// Default: not persisted (in-memory only).
+        #[arg(long)]
+        db_path: Option<std::path::PathBuf>,
     },
     /// Statelessly sync a BIP-39 mnemonic against an Esplora server
     /// (Issue #63 / Task 54c). Prints UTXO count + total sats. No
@@ -620,6 +628,7 @@ impl fmt::Debug for WalletActionKind {
                 password: _,
                 esplora_url,
                 esplora_spki_pin,
+                db_path,
             } => f
                 .debug_struct("Show")
                 .field("id", id)
@@ -627,6 +636,7 @@ impl fmt::Debug for WalletActionKind {
                 .field("password", &"<redacted>")
                 .field("esplora_url", esplora_url)
                 .field("esplora_spki_pin", esplora_spki_pin)
+                .field("db_path", db_path)
                 .finish(),
             // L12 CRITICAL #2 (Issue #63): mnemonic is secret material.
             // Redact both `mnemonic` fields; show everything else.
