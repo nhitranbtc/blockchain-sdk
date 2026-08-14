@@ -51,6 +51,7 @@
 
 pub mod id;
 pub mod ops;
+pub mod persist;
 pub mod store;
 
 pub use id::WalletId;
