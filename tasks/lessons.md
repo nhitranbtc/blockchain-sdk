@@ -240,10 +240,28 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 10. L12: pre-PR code review FIRST — `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`
     - Parallel sub-agents: type-design-analyzer + code-reviewer
     - Run on first commit on branch
-11. Verify (double gate): `cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace`
-    - Per-step AND task-end
+11. Verify (triple gate): `cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace`
+    - Run AFTER each fix commit AND at task-end (before final commit-push-pr).
+    - All three must pass before the task-end commit. A single failing gate = task is not done.
     - **`cargo fmt --check` is a blocking gate**, not a convenience. Run it BEFORE every commit; CI's `Format check` job fails the PR if any line exceeds rustfmt's max-width.
-    - **rustfmt version drift caveat (PR #137, 2026-08-14):** local `cargo fmt --check` passing is **necessary but not sufficient**. CI's pre-installed rustfmt may differ from the project's `rust-toolchain.toml` channel. PR #137's local fmt passed but CI failed because CI's rustfmt wrapped a longer line that local accepted. Mitigation: pin the workflow's rustfmt to match `rust-toolchain.toml` (e.g. `dtolnay/rust-toolchain@<channel>` with explicit channel matching the project), or rely on the rustfmt component in `rust-toolchain.toml`. If CI fails Format check despite local pass, run `cargo fmt --all` and commit the diff — that's what CI is asking for.
+    - **rustfmt version drift (PR #137, 2026-08-14) — local pass ≠ CI pass.**
+        - Local `cargo fmt --check` is necessary but not sufficient. CI's pre-installed rustfmt may differ from the project's `rust-toolchain.toml` channel (e.g. CI installs rustfmt from `dtolnay/rust-toolchain@stable` while project pins `1.94`).
+        - **Diagnostic** when CI Format check fails but local fmt passes:
+            ```bash
+            # Compare local vs CI rustfmt versions
+            cargo fmt --version              # local
+            # CI's rustfmt appears in the failed job's log header
+            ```
+            Version mismatch = drift (safe to apply `cargo fmt --all`); version match = real format error (needs investigation).
+        - **Permanent fix (one-time CI config):** pin the workflow's rustfmt to match the project's pinned channel. In `.github/workflows/ci.yml` (or btc-cli-demo.yml), change the rustfmt job to use the project toolchain:
+            ```yaml
+            - uses: dtolnay/rust-toolchain@<channel>   # match rust-toolchain.toml
+              with:
+                toolchain: <channel>                  # e.g. 1.94
+                components: rustfmt, clippy, rust-src
+            ```
+            Verify after change: PR's Format check log should show `rustfmt <version>` matching local.
+        - **Workaround when workflow isn't yet pinned:** if CI fails Format check despite local pass, run `cargo fmt --all` and commit the diff — that's the format CI is asking for.
     - **Post-bulk-edit caveat (PR #85):** the Edit-tool hook auto-formats on save, but bulk-script edits (Python `cat <<EOF` / `sed` / `git checkout --`) bypass the hook. After ANY non-Edit-tool change to a `.rs` file, run `cargo fmt -p <crate>` explicitly before the verify gate. The hook is a safety net, not a guarantee.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
     - **Format-verification plugin** (2026-08-12 grill): the `cargo fmt --check` gate is the only Rust-quality check bundled into a dedicated plugin. Subagent `ecc:rust-build-resolver` runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` + `cargo tree --duplicates` (+ `cargo audit` if installed) in one invocation; slash command `/ecc:rust-build` wraps the same agent. `ecc:rust-reviewer` (or `/ecc:rust-review`) runs the same fmt check on modified `.rs` files after a code-review pass. Other Rust-engineer agents (`compass:rust-engineer`, `voltagent-lang:rust-engineer`) apply style by writing idiomatic code on first pass — they do NOT expose a discrete `cargo fmt --check` step. `caveman:cavecrew-reviewer` intentionally skips formatting nits unless they change meaning — wrong tool for rustfmt policing. Use `/ecc:rust-build` for one-shot verify; use `/ecc:rust-review` for fmt-check paired with review.
