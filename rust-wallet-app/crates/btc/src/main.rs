@@ -15,8 +15,8 @@ mod cli;
 mod handlers;
 
 use cli::{
-    Cli, Commands, ConfigAction, ConfigActionKind, DecryptAction, EncryptAction, MessageAction,
-    WalletAction, WalletActionKind,
+    Cli, Commands, ConfigAction, ConfigActionKind, DecryptAction, EncryptAction,
+    FeeEstimatesAction, MessageAction, WalletAction, WalletActionKind,
 };
 
 #[tokio::main]
@@ -132,6 +132,12 @@ async fn main() -> Result<()> {
             Commands::Config(ConfigAction { action }) => match action {
                 ConfigActionKind::Show { json } => handlers::handle_config_show(json, &data_dir),
             },
+            Commands::FeeEstimates(FeeEstimatesAction {
+                network,
+                esplora_url,
+                pin_spki,
+                json,
+            }) => handlers::handle_fee_estimates(network, esplora_url, pin_spki, json).await,
         }
     }
     .await;
