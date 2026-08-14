@@ -586,6 +586,53 @@ impl Wallet {
         Ok(psbt.to_string())
     }
 
+    /// Story 17 / Issue #140: bump fee on an existing tx (RBF).
+    /// The replacement tx preserves inputs/outputs of the original
+    /// and pays a strictly higher fee. bdk auto-bumps BIP-125 sequence.
+    /// Returns the txid (same as input — RBF replaces in mempool).
+    pub async fn bump_fee(
+        &self,
+        esplora: &EsploraClient,
+        txid: bitcoin::Txid,
+        fee_rate: FeeRate,
+    ) -> Result<Txid, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized(
+                    "bump_fee: bdk wallet not initialized after sync (caller bug)".into(),
+                )
+            })?
+        };
+        let mut psbt = tx::builder::build_bump_fee_tx(&mut bdk, txid, fee_rate)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        let tx = tx::sign::extract_tx(&psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(tx::broadcast::broadcast(esplora, &tx).await?)
+    }
+
+    /// Story 17 dry-run: build + sign RBF replacement without
+    /// broadcasting. Returns base64 PSBT.
+    pub async fn build_sign_bump_fee(
+        &self,
+        esplora: &EsploraClient,
+        txid: bitcoin::Txid,
+        fee_rate: FeeRate,
+    ) -> Result<String, Error> {
+        self.balance(esplora).await?;
+        let mut bdk = {
+            let mut guard = self.bdk.lock().expect("bdk lock poisoned");
+            guard.take().ok_or_else(|| {
+                Error::NotInitialized("build_sign_bump_fee: bdk wallet not initialized".into())
+            })?
+        };
+        let mut psbt = tx::builder::build_bump_fee_tx(&mut bdk, txid, fee_rate)?;
+        tx::sign::sign_psbt(&bdk, &mut psbt)?;
+        *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
+        Ok(psbt.to_string())
+    }
+
     /// Build the in-memory `bdk_wallet::Wallet` from the stored
     /// phrase + network. Used by `sync` and `balance`; not exposed.
     ///

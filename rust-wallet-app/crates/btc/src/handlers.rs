@@ -2420,3 +2420,68 @@ mod password_source_tests {
         );
     }
 }
+
+/// Handle `btc wallet bump-fee --txid <id> --fee-rate <N>` (Story 17).
+///
+/// Syncs the wallet (lazy), builds the RBF replacement via
+/// `tx::builder::build_bump_fee_tx` (which enforces `fee_rate >
+/// original_fee_rate`), signs, and broadcasts.
+///
+/// Exits:
+///  - 0: broadcast succeeded (txid printed on STDOUT)
+///  - 1: build/sign/broadcast failure
+///  - 4: new fee rate does not exceed original fee rate
+///  - 5: signing failure (bdk `SignerError` propagate)
+#[allow(clippy::too_many_arguments)]
+pub async fn handle_wallet_bump_fee(
+    mnemonic_phrase: String,
+    network: NetArg,
+    txid: bitcoin::Txid,
+    fee_rate_sat_per_vb: u64,
+    esplora_url: String,
+    pin_spki: Option<String>,
+    confirm_yes: Option<String>,
+    dry_run: bool,
+) -> Result<()> {
+    let network_obj = network.as_network();
+
+    if network_obj == bitcoin::Network::Bitcoin && !dry_run && confirm_yes.as_deref() != Some("yes")
+    {
+        anyhow::bail!(
+            "--network mainnet requires --confirm-yes yes for non-dry-run bump-fee \
+             (Story 10 + Story 17 / U1: accidental mainnet spend defense). \
+             Re-run with --confirm-yes yes to proceed."
+        );
+    }
+
+    let fee_rate = bitcoin::FeeRate::from_sat_per_vb(fee_rate_sat_per_vb)
+        .ok_or_else(|| anyhow::anyhow!("invalid fee rate {fee_rate_sat_per_vb} sat/vB"))?;
+
+    let tmp_base = std::env::temp_dir();
+    let client =
+        build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
+    let mnemonic =
+        Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
+    let wallet = Wallet::from_mnemonic(&mnemonic, network_obj, None)
+        .context("Wallet::from_mnemonic failed")?;
+
+    if dry_run {
+        eprintln!(
+            "WARNING: signed PSBT follows on STDOUT (bump-fee dry-run). \
+             The string below is live key material — anyone who captures \
+             it can broadcast the spend. Treat as secret. (L13 sec-H2)"
+        );
+        let psbt_b64 = wallet
+            .build_sign_bump_fee(&client, txid, fee_rate)
+            .await
+            .context("Wallet::build_sign_bump_fee failed")?;
+        println!("{psbt_b64}");
+    } else {
+        let txid_new = wallet
+            .bump_fee(&client, txid, fee_rate)
+            .await
+            .context("Wallet::bump_fee failed (build + sign + broadcast)")?;
+        println!("{txid_new}");
+    }
+    Ok(())
+}
