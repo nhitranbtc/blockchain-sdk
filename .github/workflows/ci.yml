@@ -90,7 +90,14 @@ jobs:
         working-directory: rust-wallet-app
         run: |
           cargo install cargo-audit --locked
-          cargo audit
+          # Mirror the RUSTSEC ignores from deny.toml — transitive dev-deps
+          # (rustls-webpki via bitcoind, tokio-tar via testcontainers)
+          # that don't have upstream fixes yet. See deny.toml for rationale.
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
 
   # Live-testnet sync_demo example (Issue #63 / Task 54c). Kept here
   # rather than in the demo workflow because it's a single cargo
