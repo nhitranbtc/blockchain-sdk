@@ -1,8 +1,10 @@
 # Task → Rust SDK Map
 
-**Date:** 2026-08-05
+**Date:** 2026-08-05 (drift fix 2026-08-14)
 **Purpose:** Companion to `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md`. Maps every task in the plan to the specific Rust crates it uses, the API surface, and the rationale.
 **Use this when:** starting work on a task — you need to know which crates to import and which functions to call. The plan describes the WHAT; this doc describes the WITH-WHAT.
+
+**Drift fix (2026-08-14):** API surface corrected to match actual implementation per PRs #27, #33, #34, #105, #114, #122, #123, #124, #125. Removed `EsploraExt` references (we use `EsploraClient` directly with `reqwest`, not `bdk_esplora` — see CONTEXT.md hard rule #2 + F20). Fixed `v0.2 adds` row (`argon2` + `aes-gcm` shipped in v0.1, PR #27). Added `Status as of 2026-08-14` per task. Task 33 replaced with L29 operator-driven gate. Status column uses ✅ Done / ⏸ Deferred / 🔄 In-progress / ❌ Replaced.
 
 ## How to read this map
 
@@ -48,9 +50,11 @@
 - **Rationale:** config-only.
 
 ### Task 8: chain::esplora + chain::electrum
-- **Crates:** `bdk_esplora 0.22` + `bdk_electrum 0.24` + `reqwest 0.12` (transitive)
-- **API surface:** `bdk_esplora::esplora_client::Builder::new(url).build_blocking()`, `EsploraExt::full_scan`, `EsploraExt::broadcast`, `EsploraExt::get_fee_estimates`
-- **Rationale:** `bdk_esplora` is the official Esplora client.
+
+- **Status:** ✅ Done (PR #34, SHA `a5df1ab` plus later F20 hardening). electrum path removed in implementation — we ship Esplora only.
+- **Crates:** `reqwest 0.12` (rustls-tls) + `rustls 0.23` + `rustls-native-certs 0.7` + `webpki 0.22` + `sha2 0.10` + `x509-parser 0.16` (direct deps); `bdk_electrum` is declared in Cargo.toml but not wired. **`bdk_esplora` deliberately NOT used** (CONTEXT.md hard rule #2 — pulls in unpatched `rustls-webpki 0.101.7` per RUSTSEC-2026-0106).
+- **API surface:** `EsploraClient::new(EsploraUrl, TlsPolicy)`, `EsploraClient::from_config(&WalletConfig)`, `EsploraClient::fee_estimate() -> Result<RawFeeEstimates>`, `EsploraClient::address_utxos(&Address) -> Result<Vec<EsploraUtxo>>`, `EsploraClient::get_tx(&Txid) -> Result<Transaction>`, `EsploraClient::broadcast_tx(&str) -> Result<Txid>`. **NO** `bdk_esplora::EsploraExt`.
+- **Rationale:** custom SPKI-pinned `EsploraClient` enforces F20 (cert chain + SPKI pin check). Direct `reqwest` to dodge the unpatched `bdk_esplora` transitive.
 
 ### Task 9: wallet (from_mnemonic + sync + balance)
 - **Crates:** `bdk_wallet 3.1` (with `keys-bip39` feature) + `bip32 0.6` + `bdk_esplora 0.22` + `bdk_file_store 0.15`
@@ -63,9 +67,11 @@
 - **Rationale:** BDK handles the address index internally.
 
 ### Task 11: tx::builder
-- **Crates:** `bdk_wallet 3.1` (specifically `bdk_wallet::TxBuilder`)
-- **API surface:** `wallet.build_tx()`, `bdk_wallet::bitcoin::Psbt`, `bdk_wallet::TxBuilder::add_recipient(script, amount)`, `.fee_rate(rate)`, `.drain_to(addr)`, `.finish()`
-- **Rationale:** BDK's TxBuilder is the canonical UTXO selection + fee calculation + change generation.
+
+- **Status:** ✅ Done (PR #122, SHA `61fd0df`). Wrapped in lib module `bitcoin_wallet_core::tx::builder`.
+- **Crates:** `bdk_wallet 3.1` (specifically `bdk_wallet::TxBuilder`) + `bdk_wallet::bitcoin` (re-exported).
+- **API surface:** `tx::builder::build_send_tx(&mut BdkWallet, &Address, Amount, FeeRate) -> Result<Psbt>` (compose layer); underlying BDK primitives: `bdk.build_tx()`, `TxBuilder::add_recipient(script_pubkey, amount)`, `.fee_rate(rate)`, `.finish()`. Sanitize helper `sanitize_create_tx_error` maps `CreateTxError::CoinSelection(InsufficientFunds)` etc. to error strings.
+- **Rationale:** BDK's TxBuilder is canonical UTXO selection + fee calculation + change generation. Our wrapper adds F19 (cross-network rejection) + F25 (signing path sanitization) + composes with `Wallet::send` (Story 5).
 
 ### Task 12: tx::psbt + tx::sighash
 - **Crates:** `rust-bitcoin 0.32` (`bitcoin::Psbt`, `bitcoin::sighash::SighashCache`)
@@ -73,19 +79,25 @@
 - **Rationale:** PSBT serialization is in `rust-bitcoin`. Sighash extraction is in `rust-bitcoin::sighash::SighashCache`.
 
 ### Task 13: tx::sign + tx::broadcast
-- **Crates:** `bdk_wallet 3.1` (sign) + `bdk_esplora 0.22` (broadcast)
-- **API surface:** `wallet.sign(&mut psbt, SignOptions::default())`, `psbt.extract_tx()`, `EsploraExt::broadcast(&tx)`
-- **Rationale:** BDK's `sign` handles sighash + ECDSA + finalization.
+
+- **Status:** ✅ Done (PR #122, SHA `61fd0df`). Wrapped in lib modules `tx::sign` + `tx::broadcast`.
+- **Crates:** `bdk_wallet 3.1` (sign) + direct `reqwest` via `EsploraClient::broadcast_tx` (NOT `bdk_esplora` per CONTEXT.md hard rule #2).
+- **API surface:** `tx::sign::sign_psbt(&BdkWallet, &mut Psbt) -> Result<()>` with `SignOptions { trust_witness_utxo: true, ..Default::default() }`; `tx::sign::extract_tx(&Psbt) -> Result<Transaction>` (uses `psbt.clone().extract_tx()` to handle consume-self); `tx::broadcast::broadcast(&EsploraClient, &Transaction) -> Result<Txid>` (serializes via `consensus::encode::serialize_hex` + calls `EsploraClient::broadcast_tx`). **NO** `EsploraExt::broadcast`.
+- **Rationale:** BDK's `sign` handles sighash + ECDSA + finalization. Direct Esplora POST avoids `bdk_esplora` RUSTSEC-2026-0106 transitive.
 
 ### Task 14: tx::fee + tx::bump_fee
-- **Crates:** `bdk_esplora 0.22` (fee) + `bdk_wallet 3.1` (bump_fee)
-- **API surface:** `EsploraClient::get_fee_estimates().await` (returns `HashMap<String, f64>`), `bdk_wallet::bitcoin::FeeRate::from_sat_per_vb(rate)`, `wallet.build_fee_bump(txid).fee_rate(new_rate).finish()`
-- **Rationale:** fee estimates are HTTP-only; BDK's `build_fee_bump` is the canonical RBF implementation.
+
+- **Status:** 🔄 In-progress — `EsploraClient::fee_estimate()` shipped (PR #34, used by PR #124 `btc fee-estimates` CLI subcommand, SHA `d466795`). End-to-end `FeeEstimator` with target=6 default + fallback + cap deferred per issue #128; depends on #127 audit findings.
+- **Crates:** direct `reqwest` via `EsploraClient` (NOT `bdk_esplora`) for fee; `bdk_wallet 3.1` for `build_fee_bump`.
+- **API surface:** `EsploraClient::fee_estimate() -> Result<RawFeeEstimates>` (returns `HashMap<String, f64>` aliased as `RawFeeEstimates`); `bdk_wallet::bitcoin::FeeRate::from_sat_per_vb(rate) -> Option<FeeRate>`; CLI surface `btc fee-estimates [--network N] [--esplora-url URL] [--pin-spki HEX] [--json]` (PR #124); RBF `wallet.build_fee_bump(&txid).fee_rate(new_rate).finish()` deferred (no CLI surface yet).
+- **Rationale:** fee estimates are HTTP-only. Our custom `EsploraClient` (F20 SPKI pin) is the only sanctioned HTTP path. BDK's `build_fee_bump` is canonical RBF once #128 ships.
 
 ### Task 15: regtest integration test
-- **Crates (dev-dep only):** `bitcoind 0.36` + `bitcoind-async-client 0.36` + `tempfile 3`
-- **API surface:** `bitcoind::BitcoinD::new(bitcoin_data_dir, exe_path)`, `client.create_wallet("name", ...)`, `client.generate_to_address(101, &addr)`, `client.send_to_address(&addr, amount)`, `bitcoind::exe_path()`
-- **Rationale:** `bitcoind` crate spawns + controls a real `bitcoind` binary for regtest.
+
+- **Status:** 🔄 In-progress (PR #114, SHA `a5df1ab`). `btc-regtest-smoke` testcontainers suite shipped (2/3 pass, 1 ignored). Bollard follow-up (custom Docker network) deferred per issue #115.
+- **Crates (dev-dep of `btc` crate):** `testcontainers 0.23` (blocking) + `bitcoind 0.36` (feature `0_21_2`) + `reqwest 0.12` (blocking + json + rustls-tls). **`bitcoind-async-client` NOT used** — replaced by direct `reqwest` JSON-RPC.
+- **API surface:** `testcontainers::Container::new(image, cmd)` (boot ephemeral bitcoind 0.21+); `reqwest::blocking::Client` for JSON-RPC (`createwallet`, `generatetoaddress`, `scantxoutset`); `bitcoind::exe_path()` only as fallback.
+- **Rationale:** `testcontainers` orchestrates ephemeral containers; direct `reqwest` JSON-RPC avoids `bitcoind-async-client` (unmaintained). Bitcoin Core 0.21+ requires explicit wallet creation OR `scantxoutset` — no default wallet.
 
 ### Task 16: btc CLI scaffold + wallet/address/balance/sync commands
 - **Crates:** `clap 4` (with `derive` feature) + `anyhow 1` + `tracing 0.1` + `tracing-subscriber 0.3` + `bitcoin-wallet-core 0.1` (workspace path)
@@ -93,8 +105,15 @@
 - **Rationale:** `clap` derive is standard. `anyhow` is CLI top-level only.
 
 ### Task 17: btc send + tx + fee + config commands
-- **Crates:** same as Task 16 + `serde_json 1` (for `--json` output) + `tokio 1` (async runtime)
-- **API surface:** `serde_json::json!()`, `serde_json::to_string_pretty(&record)`, `tokio::main`, `tokio::time::sleep`, `tokio::fs::read_to_string`
+
+- **Status:** ✅ Done across PRs #105, #122, #123, #124, #125.
+  - `btc config show [--json]` — PR #105, SHA `4de4ea7`
+  - `btc wallet send` — PR #122, SHA `61fd0df`
+  - `btc wallet send --fee-rate` — PR #123, SHA `b5e3074`
+  - `btc fee-estimates [--json]` — PR #124, SHA `d466795`
+  - `btc tx-list [--json] [--limit N]` — PR #125, SHA `7fe7bc7`
+- **Crates:** same as Task 16 + `serde_json 1` (for `--json` output) + `tokio 1` (async runtime).
+- **API surface:** `serde_json::json!()`, `serde_json::to_string_pretty(&record)`, `tokio::main`, `tokio::time::sleep`, `tokio::fs::read_to_string`.
 - **Rationale:** `serde_json` is standard. `tokio` is standard async runtime.
 
 ### Task 18: btc end-to-end CLI test
@@ -132,19 +151,25 @@
 - **API surface:** GitHub Actions YAML
 - **Rationale:** CI configuration.
 
-### Task 25: v0.1.0 release
-- **Crates:** none
-- **API surface:** `git tag v0.1.0`, `git push origin main --tags`, `cargo publish -p bitcoin-wallet-core`, `cargo login <token>`
-- **Rationale:** release process.
+### Task 25: v0.1.1 release
+
+- **Status:** ⏸ Deferred (v0.1.0 tag never cut; we are at v0.1.1 release candidate). Pending: #128 fee estimator impl + #126 L29 live testnet gates.
+- **Crates:** none.
+- **API surface:** `git tag v0.1.1`, `git push origin main --tags`, `cargo publish -p bitcoin-wallet-core`, `cargo login <token>`.
+- **Rationale:** release process. v0.1.1 supersedes the original v0.1.0 plan due to 4 post-MVP stories (5/6/7/8) added inline.
 
 ### Task 26: tx::dust
-- **Crates:** `rust-bitcoin 0.32` (specifically `bitcoin::ScriptBuf`)
-- **API surface:** `ScriptBuf::len()`, threshold calculation per script type
+
+- **Status:** ⏸ Deferred. Surface flagged by #127 fee model audit (issue opened 2026-08-14). Implementation order: #127 audit → #128 estimator → dust checks → re-defer or schedule for v0.2.
+- **Crates:** `rust-bitcoin 0.32` (specifically `bitcoin::ScriptBuf`).
+- **API surface:** `ScriptBuf::len()`, threshold calculation per script type.
 - **Rationale:** no `dust` crate in Rust ecosystem; we implement the Bitcoin Core `CFeeRate` dust rule (3 * minRelayFee per vbyte).
 
 ### Task 27: chain::explorer
-- **Crates:** `rust-bitcoin 0.32` (`bitcoin::Network`, `bitcoin::Txid`, `bitcoin::Address`)
-- **API surface:** `format!("{base}/tx/{txid}", ...)`, `format!("{base}/address/{addr}", ...)`
+
+- **Status:** ✅ Done (PR #125, SHA `7fe7bc7`).
+- **Crates:** `rust-bitcoin 0.32` (`bitcoin::Network`, `bitcoin::Txid`, `bitcoin::Address`).
+- **API surface:** `chain::explorer::tx_url(base: &str, txid: Txid) -> String`, `chain::explorer::address_url(base: &str, address: &Address) -> String`. 3 lib unit tests cover path append + trailing-slash preservation.
 - **Rationale:** pure `String` formatting. Blockstream + mempool.space are just websites.
 
 ### Task 28: tx::sign_external (Signer trait)
@@ -153,13 +178,17 @@
 - **Rationale:** this is the Phase 2 UniFFI hook. Trait returns the same `secp256k1::ecdsa::Signature` type that BDK's signing produces. iOS Swift wraps `TangemSdk` in this trait.
 
 ### Task 29: btc CLI bump-fee + sign-message
-- **Crates:** same as Tasks 16/17 + `rust-bitcoin 0.32::hashes::sha256` (re-exported, no new dep) for BIP-137
-- **API surface:** `wallet.build_fee_bump(&txid)`, `bdk_wallet::bitcoin::hashes::sha256::Hash::engine()`, `bdk_wallet::bitcoin::secp256k1::secp.sign_ecdsa(&msg, &kp)`
+
+- **Status:** 🔄 In-progress — `btc message sign/verify` ✅ Done (PR #33, SHA in audit); RBF `btc wallet bump-fee` ⏸ Deferred (depends on #128 fee estimator surface).
+- **Crates:** same as Tasks 16/17 + `rust-bitcoin 0.32::hashes::sha256` (re-exported, no new dep) for BIP-137.
+- **API surface:** `wallet.build_fee_bump(&txid)` (RBF path), `bdk_wallet::bitcoin::hashes::sha256::Hash::engine()` (BIP-137), `bdk_wallet::bitcoin::secp256k1::secp.sign_ecdsa(&msg, &kp)`.
 - **Rationale:** BIP-137 = SHA256(SHA256("\x19Bitcoin Signed Message:\n" || varint(len) || message)). The hash primitives are already in `rust-bitcoin::hashes`.
 
 ### Task 30: keys::encrypted_mnemonic (Argon2id + AES-256-GCM)
-- **Crates:** `argon2 0.5` + `aes-gcm 0.10` + `zeroize 1` + `rand 0.8` (for the salt/nonce)
-- **API surface:** `Argon2::new(Algorithm::Argon2id, Version::V0x13, params)`, `argon.hash_password_into(passphrase, salt, &mut key)`, `Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key))`, `cipher.encrypt(nonce, plaintext)`, `cipher.decrypt(nonce, payload)`, `Zeroizing::zeroize(&mut key)`
+
+- **Status:** ✅ Done (PR #27, SHA in audit). Both crates shipped in v0.1, NOT v0.2 as originally scheduled.
+- **Crates:** `argon2 0.5` + `aes-gcm 0.10` + `zeroize 1` + `rand 0.8` (for the salt/nonce).
+- **API surface:** `Argon2::new(Algorithm::Argon2id, Version::V0x13, params)`, `argon.hash_password_into(passphrase, salt, &mut key)`, `Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key))`, `cipher.encrypt(nonce, plaintext)`, `cipher.decrypt(nonce, payload)`, `Zeroizing::zeroize(&mut key)`.
 - **Rationale:** all from RustCrypto, all audited. m=256MiB/t=10/p=4 calibrated to 500ms wall-clock on first run. AES-256-GCM is AEAD.
 
 ### Task 31: BDK 3.1 API spike
@@ -172,28 +201,32 @@
 - **API surface:** `Wallet::new_single(descriptor)`, public-only descriptor (no xprv in input), `KeychainKind::External`, `wallet.peek_address`, `wallet.reveal_next_address`
 - **Rationale:** BDK handles watch-only natively — public-only descriptors don't need signing infrastructure.
 
-### Task 33: CI testnet integration test
-- **Crates:** none (CI yaml only — uses the `btc` binary built in earlier jobs)
-- **API surface:** `btc wallet create`, `btc sync`, `btc balance`, `btc send`, `btc tx list`
-- **Rationale:** exercise the real CLI against real testnet.
+### Task 33: Live testnet gates (operator-driven, replaces original CI testnet plan)
+
+- **Status:** ❌ Replaced. Original CI-gated plan abandoned per L29 (live testnet is operator-driven, not CI). Live testnet prep umbrella tracked in issue #126.
+- **Crates:** none (manual run scripts + testnet-faucet-funded wallet).
+- **API surface:** `btc wallet create`, `btc wallet show`, `btc wallet send`, `btc fee-estimates`, `btc tx-list` (kebab-case per clap subcommand conflict resolution, PR #125). All against `--network testnet` + `https://blockstream.info/testnet/api` + F20 SPKI pin.
+- **Rationale:** exercise the real CLI against real testnet. Operator runs `scripts/btc-testnet-gate.sh` (TBD per #126); CI cannot fund a real wallet or pay real fees.
 
 ## Summary table — Rust crates per release
 
 | Release | Production deps | Dev-deps |
 |---|---|---|
-| **v0.1** | bdk_wallet 3.1 (keys-bip39) + rust-bitcoin 0.32 + bip32 0.6 + clap 4 + tokio 1 + reqwest 0.12 + thiserror 1 + tracing 0.1 + tracing-subscriber 0.3 + serde 1 + serde_json 1 + anyhow 1 + base64 0.22 + zeroize 1 | bitcoind 0.36 + bitcoind-async-client 0.36 + tempfile 3 + assert_cmd 2 + predicates 3 + proptest 1 |
-| **v0.2** (adds) | argon2 0.5 + aes-gcm 0.10 + libc 0.2 | — |
+| **v0.1** | bdk_wallet 3.1 (keys-bip39) + bdk_chain 3.1 + bdk_electrum 0.21 (declared, not wired) + bdk_file_store 0.15 + rust-bitcoin 0.32 + bip32 0.6 + bip39 (via bdk_wallet re-export) + clap 4 + tokio 1 + reqwest 0.12 (rustls-tls) + thiserror 1 + tracing 0.1 + tracing-subscriber 0.3 + serde 1 + serde_json 1 + anyhow 1 + base64 0.22 + zeroize 1 + **argon2 0.5 + aes-gcm 0.10 + rand 0.8 + rustls 0.23 + rustls-native-certs 0.7 + webpki 0.22 + sha2 0.10 + x509-parser 0.16 + subtle 0.6 + rpassword 7 + uuid 1 + directories 5 + tempfile 3** | bitcoind 0.36 (feature `0_21_2`) + testcontainers 0.23 (blocking) + reqwest 0.12 (blocking + json) + tempfile 3 + assert_cmd 2 + predicates 3 + proptest 1 |
+| **v0.2** (adds) | libc 0.2 | — |
 | **v1.0** (mobile adds) | (no new Rust deps; iOS side has Swift packages) | — |
 
 ## Crates that were considered and rejected (for reference)
 
 - `miniscript` — in workspace deps as future-proofing for multi-sig (v1.0+). Not used in v0.1.
-- `rand` 0.8 — not a direct dep; BDK's `bip39` re-export handles randomness via the `rand` feature.
+- `rand` 0.8 — WAS rejected as direct dep in original plan; **NOW a direct dep** in v0.1 (used by Argon2id salt/nonce + Aes256Gcm nonce, see Task 30).
 - `wagyu` / `wazir-cash` — niche PSBT libs; `rust-bitcoin::Psbt` is standard.
 - `rust-lightning` — tied to Lightning, not Bitcoin core.
 - `age` — single-author; `aes-gcm` (RustCrypto) is standard.
 - `bdk_bitcoind_rpc` — 2024-era, unmaintained; use `bitcoind` crate directly.
 - `bitcoin-savings` — community fork; `rust-bitcoin` is canonical.
+- `bdk_esplora` — **deliberately not used** in v0.1 (CONTEXT.md hard rule #2; pulls in unpatched `rustls-webpki 0.101.7` per RUSTSEC-2026-0106). We use direct `reqwest` via our `EsploraClient` instead.
+- `bitcoind-async-client` — unmaintained; replaced by direct `reqwest` JSON-RPC in testcontainers regtest smoke (Task 15).
 
 ## How to use this map
 
