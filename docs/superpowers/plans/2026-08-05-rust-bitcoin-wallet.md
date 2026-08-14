@@ -87,7 +87,7 @@ rust-wallet-app/
 | 6 | Custom fee rate | 14 | v0.1.1 | core (PR pending — `btc wallet send --fee-rate`) |
 | 8 | Fee estimates | 14 | v0.1.1 | core (PR pending — `btc fee-estimates`) |
 
-**Deferred stories** (7, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below. Stories 5 + 6 + 8 moved to v0.1.1 in progress — see PR branches `feat/story-5-send` (merged as PR #122), `feat/story-6-fee-rate` (merged as PR #123), `feat/story-8-fee-estimates` (this PR).
+**Deferred stories** (9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below. Stories 5 + 6 + 7 + 8 moved to v0.1.1 in progress — see PR branches `feat/story-5-send` (merged as PR #122), `feat/story-6-fee-rate` (merged as PR #123), `feat/story-8-fee-estimates` (merged as PR #124), `feat/story-7-tx-history` (this PR).
 
 ---
 

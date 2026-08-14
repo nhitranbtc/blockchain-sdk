@@ -964,6 +964,74 @@ fn print_fee_table(map: &RawFeeEstimates) {
     }
 }
 
+/// Handle `btc tx list --mnemonic <words> --network <NET>
+/// --esplora-url <URL> [--pin-spki <hex64>] [--limit N] [--json]`
+/// (Issue #120 / Story 7 / Task 27 `chain::explorer`).
+///
+/// Stateless like `btc wallet sync`/`balance` — takes a mnemonic,
+/// syncs from Esplora, then prints deduped txids + block-explorer
+/// URLs from the populated tx graph.
+///
+/// **Live testnet L29:** this handler hits the network every
+/// invocation. Operator-driven gate per L29 pattern.
+pub async fn handle_tx_list(
+    mnemonic_phrase: String,
+    network: NetArg,
+    esplora_url: String,
+    pin_spki: Option<String>,
+    limit: Option<u32>,
+    json: bool,
+) -> Result<()> {
+    let network_obj = network.as_network();
+
+    // F20 SPKI / F36 HTTPS-only enforcement via the shared helper.
+    let tmp_base = std::env::temp_dir();
+    let client =
+        build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
+    let mnemonic =
+        Mnemonic::from_phrase(&mnemonic_phrase).context("invalid BIP-39 mnemonic phrase")?;
+    let wallet =
+        Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
+    wallet.sync(&client).await.context("Wallet::sync failed")?;
+
+    let txids = wallet.txids().context("Wallet::txids failed")?;
+    let visible: Vec<_> = txids
+        .iter()
+        .take(limit.unwrap_or(txids.len() as u32) as usize)
+        .collect();
+
+    if json {
+        let urls: Vec<serde_json::Value> = visible
+            .iter()
+            .map(|txid| {
+                serde_json::json!({
+                    "txid": txid.to_string(),
+                    "explorer_url": bitcoin_wallet_core::chain::explorer::tx_url(&esplora_url, **txid),
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "network": network_obj.to_string(),
+            "count": visible.len(),
+            "txs": urls,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).context("serialize tx-list JSON")?
+        );
+    } else {
+        println!("network: {} ({} txs)", network_obj, visible.len());
+        for txid in &visible {
+            println!(
+                "  {}  {}",
+                txid,
+                bitcoin_wallet_core::chain::explorer::tx_url(&esplora_url, **txid),
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Handle `btc fee-estimates [--network N] [--esplora-url URL]
 /// [--pin-spki HEX64] [--json]` (Issue #121 / Story 8 / Task 14
 /// `get_fee_estimates` portion).

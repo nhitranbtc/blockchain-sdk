@@ -20,5 +20,6 @@
 
 pub mod esplora;
 pub mod esplora_url;
+pub mod explorer;
 pub mod network;
 pub mod spki;

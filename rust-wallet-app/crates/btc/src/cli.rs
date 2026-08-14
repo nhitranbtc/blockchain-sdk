@@ -46,6 +46,11 @@ pub enum Commands {
     /// required. Pretty table by default; `--json` for
     /// machine-readable output.
     FeeEstimates(FeeEstimatesAction),
+    /// List transactions touching the wallet's keychain (Issue #120
+    /// / Story 7 / Task 27 `chain::explorer`). Stateless like
+    /// `btc wallet sync`/`balance` — takes a mnemonic, syncs from
+    /// Esplora, then prints deduped txids + block-explorer URLs.
+    TxList(TxListAction),
 }
 
 #[derive(clap::Args)]
@@ -137,6 +142,36 @@ pub struct FeeEstimatesAction {
     pub json: bool,
 }
 
+/// `btc tx-list` args — Issue #120 / Story 7. Read-only Esplora
+/// scan + tx graph enumeration; mirrors `btc wallet sync` arg
+/// shape (mnemonic + network + esplora-url + pin-spki + limit + json).
+///
+/// CLI command name is `tx-list` (kebab-case) instead of nested
+/// `tx list` to avoid clap-subcommand conflict with any future
+/// `tx <sub>` siblings.
+#[derive(clap::Args)]
+#[command(name = "tx-list")]
+pub struct TxListAction {
+    /// BIP-39 mnemonic phrase (12/15/18/21/24 words).
+    #[arg(long, env = "BTC_WALLET_MNEMONIC")]
+    pub mnemonic: String,
+    /// Bitcoin network.
+    #[arg(long, value_enum)]
+    pub network: NetArg,
+    /// Esplora base URL (HTTPS-only per F36).
+    #[arg(long)]
+    pub esplora_url: String,
+    /// Esplora SPKI pin (required for non-regtest per F20).
+    #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
+    pub pin_spki: Option<String>,
+    /// Cap the number of txs printed (default: all).
+    #[arg(long)]
+    pub limit: Option<u32>,
+    /// Output as JSON instead of human-readable text.
+    #[arg(long)]
+    pub json: bool,
+}
+
 /// `btc config` args — Issue #100 / Story 11.
 #[derive(clap::Args)]
 pub struct ConfigAction {
@@ -184,6 +219,23 @@ impl fmt::Debug for FeeEstimatesAction {
             .field("network", &self.network)
             .field("esplora_url", &self.esplora_url)
             .field("pin_spki", &self.pin_spki)
+            .field("json", &self.json)
+            .finish()
+    }
+}
+
+impl fmt::Debug for TxListAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Story 7 / Issue #120 — mnemonic is secret material
+        // (L12 CRITICAL #2 pattern). Redact it from Debug output.
+        // The remaining fields (network + esplora_url + pin_spki
+        // + limit + json) are not secret.
+        f.debug_struct("TxListAction")
+            .field("mnemonic", &"<redacted>")
+            .field("network", &self.network)
+            .field("esplora_url", &self.esplora_url)
+            .field("pin_spki", &self.pin_spki)
+            .field("limit", &self.limit)
             .field("json", &self.json)
             .finish()
     }
@@ -435,6 +487,7 @@ impl fmt::Debug for Commands {
             Self::Decrypt(d) => f.debug_tuple("Decrypt").field(d).finish(),
             Self::Config(c) => f.debug_tuple("Config").field(c).finish(),
             Self::FeeEstimates(fe) => f.debug_tuple("FeeEstimates").field(fe).finish(),
+            Self::TxList(tl) => f.debug_tuple("TxList").field(tl).finish(),
         }
     }
 }
@@ -1440,5 +1493,71 @@ mod tests {
             "https://blockstream.info/testnet/api",
         ]);
         assert!(cli.is_err(), "missing --network should fail to parse");
+    }
+
+    // ========== Story 7 / Issue #120: btc tx list ==========
+
+    /// Story 7: `btc tx list` parses required args (mnemonic,
+    /// network, esplora-url). Full happy-path coverage is
+    /// operator-driven per L29 (live testnet).
+    #[test]
+    fn parse_tx_list_accepts_required_args() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "tx-list",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 7: optional `--limit N` and `--json` flags parse cleanly.
+    #[test]
+    fn parse_tx_list_accepts_limit_and_json_flags() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "tx-list",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+            "--limit",
+            "10",
+            "--json",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 7 (L12 CRITICAL #2): mnemonic MUST NOT appear in
+    /// Debug output for `tx list`. Tracing / log capture is the
+    /// most likely leak vector.
+    #[test]
+    fn debug_redacts_mnemonic_in_tx_list() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "tx-list",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("abandon"),
+            "mnemonic leaked in Debug: {debug}"
+        );
+        assert!(
+            debug.contains("redacted"),
+            "redaction marker missing: {debug}"
+        );
     }
 }
