@@ -196,6 +196,7 @@ pub async fn handle_create(
     words: WordCount,
     network: NetArg,
     password: Option<String>,
+    confirm_yes: Option<String>,
     data_dir: &Path,
 ) -> Result<()> {
     let n = words.as_usize();
@@ -206,10 +207,31 @@ pub async fn handle_create(
     let pwd = secret_password(pwd_plain);
     let network_obj = network.as_network();
 
+    // Story 10 / user-stories Story 10 AC: mainnet requires explicit
+    // `--confirm-yes yes` to defend against accidental mainnet wallet
+    // creation (real BTC funds at risk). Testnet/regtest/signet do
+    // NOT require confirmation (test money, no risk).
+    if network_obj == bitcoin::Network::Bitcoin && confirm_yes.as_deref() != Some("yes") {
+        anyhow::bail!(
+            "--network mainnet requires --confirm-yes yes to acknowledge \
+             real BTC funds at risk (Story 10)"
+        );
+    }
+
     let (wallet_id, mnemonic) =
         create_wallet(data_dir, network_obj, n, &pwd).context("create_wallet failed")?;
     let wallet_id_str = wallet_id.to_string();
     let phrase = mnemonic.expose().to_string();
+
+    // Story 10: print mainnet WARNING before mnemonic (defends U10
+    // — phishing/typo operator creating a real-BTC wallet by mistake).
+    if network_obj == bitcoin::Network::Bitcoin {
+        eprintln!(
+            "WARNING: this wallet uses real Bitcoin on mainnet. \
+             Funds are at risk. The mnemonic below can move ALL funds \
+             in this wallet — never share, never store in plaintext."
+        );
+    }
 
     // F49 / L28: wallet_id on STDOUT (scriptable), mnemonic on
     // STDERR (operator-only). The mnemonic never lands on STDOUT
