@@ -8,7 +8,21 @@ version = 2
 # rustls-pemfile 2.x is unmaintained (transitive via rustls-native-certs →
 # bitcoin-wallet-core). Advisory says "no safe upgrade"; migration to
 # rustls-pki-types is a separate change. Track upstream rustls.
-ignore = ["RUSTSEC-2025-0141", "RUSTSEC-2025-0134"]
+#
+# rustls-webpki 0.101.7 (RUSTSEC-2026-0098/0099/0104): name-constraint + CRL
+# parsing advisories. Transitive via bitcoind 0.36.1 → jsonrpc → rustls.
+# Dev-dep only (bitcoind testcontainer). Upgrade path: bump bitcoind or
+# `cargo update -p rustls-webpki --precise 0.103.13` once upstream settles.
+#
+# tokio-tar 0.3.1 (RUSTSEC-2025-0111): PAX extended-header smuggling. Transitive
+# via testcontainers 0.23.3. Maintainer archived the crate; no safe upgrade.
+# Switch to `astral-tokio-tar` (per upstream recommendation) when testcontainers
+# publishes a release that pulls it. Dev-dep only (testcontainers).
+ignore = [
+    "RUSTSEC-2025-0141", "RUSTSEC-2025-0134",
+    "RUSTSEC-2026-0098", "RUSTSEC-2026-0099", "RUSTSEC-2026-0104",
+    "RUSTSEC-2025-0111",
+]
 
 [licenses]
 allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "MIT-0", "MITNFA", "CC0-1.0", "CDLA-Permissive-2.0", "Zlib", "OpenSSL", "MPL-2.0"]
