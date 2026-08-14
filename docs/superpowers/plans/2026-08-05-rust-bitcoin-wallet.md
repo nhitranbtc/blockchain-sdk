@@ -83,11 +83,12 @@ rust-wallet-app/
 | 4 | Sync chain | 9 | MVP | core |
 | 11 | Show config + debug | 9 | MVP | core (PR #105 — `btc config show`) |
 | 12 | Persist across invocations | 9 | MVP | core (via bdk_file_store) |
-| 5 | Send to address | 11, 13 | v0.1.1 | core (PR pending — `btc wallet send`) |
-| 6 | Custom fee rate | 14 | v0.1.1 | core (PR pending — `btc wallet send --fee-rate`) |
-| 8 | Fee estimates | 14 | v0.1.1 | core (PR pending — `btc fee-estimates`) |
+| 5 | Send to address | 11, 13 | v0.1.1 | core (PR #122, SHA `61fd0df` — `btc wallet send`) |
+| 6 | Custom fee rate | 14 | v0.1.1 | core (PR #123, SHA `b5e3074` — `btc wallet send --fee-rate`) |
+| 7 | Tx history | 13 | v0.1.1 | core (PR #125, SHA `7fe7bc7` — `btc tx-list`) |
+| 8 | Fee estimates | 14 | v0.1.1 | core (PR #124, SHA `d466795` — `btc fee-estimates`) |
 
-**Deferred stories** (9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below. Stories 5 + 6 + 7 + 8 moved to v0.1.1 in progress — see PR branches `feat/story-5-send` (merged as PR #122), `feat/story-6-fee-rate` (merged as PR #123), `feat/story-8-fee-estimates` (merged as PR #124), `feat/story-7-tx-history` (this PR).
+**Deferred stories** (9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below. Stories 5 + 6 + 7 + 8 all shipped inline at v0.1.1 — PRs #122, #123, #125, #124 (see Status cells above for SHAs).
 
 ---
 
