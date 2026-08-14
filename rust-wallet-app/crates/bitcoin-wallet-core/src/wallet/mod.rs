@@ -81,13 +81,6 @@ use crate::tx;
 /// wallets with 20+ unused addresses.
 const SCAN_GAP_LIMIT: u32 = 5;
 
-/// Default fee rate for Story 5 `Wallet::send` (1 sat/vB). Story 6
-/// (#119) introduces a CLI `--fee-rate` override; for now we use a
-/// conservative low rate. The actual fee charged will be higher
-/// (bdk's coin selector + change generation add variance), but the
-/// floor is `DEFAULT_FEE_RATE_SAT_PER_VB` per vbyte.
-const DEFAULT_FEE_RATE_SAT_PER_VB: u64 = 1;
-
 /// Bitcoin wallet bound to one mnemonic + one network.
 ///
 /// No `Default` impl (network policy). Construct via
@@ -187,12 +180,14 @@ impl Wallet {
     }
 
     /// Send `amount` satoshis to `recipient` (Story 5 / Issue #118 /
-    /// Task 11 + 13). Full tx lifecycle: lazy-sync → build → sign →
-    /// broadcast → return txid.
+    /// Task 11 + 13, extended by Story 6 / Issue #119). Full tx
+    /// lifecycle: lazy-sync → build → sign → broadcast → return txid.
     ///
-    /// **Default fee rate: 1 sat/vB.** Story 6 (#119) adds a CLI
-    /// `--fee-rate` override; for now the call site hardcodes a
-    /// conservative low rate (Story 5 ships only the happy path).
+    /// `fee_rate` controls the sat/vB fee. Pass the result of
+    /// `FeeRate::from_sat_per_vb(N)` (the caller validates `N >= 1`;
+    /// `from_sat_per_vb` returns `None` for `N == 0`). CLI layer
+    /// passes the `DEFAULT_FEE_RATE_SAT_PER_VB`-derived rate when
+    /// the user omits `--fee-rate`.
     ///
     /// **Lock discipline:** bdk's `build_tx()` takes `&mut self`, so
     /// we must take the bdk wallet OUT of the `Mutex<Option<...>>`
@@ -210,6 +205,7 @@ impl Wallet {
         esplora: &EsploraClient,
         recipient: &Address,
         amount: Amount,
+        fee_rate: FeeRate,
     ) -> Result<Txid, Error> {
         // 1. Lazy-sync: populates the bdk wallet via balance().
         self.balance(esplora).await?;
@@ -223,12 +219,6 @@ impl Wallet {
             })?
         };
         // 3. Build (sync, &mut bdk).
-        // FeeRate::from_sat_per_vb returns Option<FeeRate>; 0 is
-        // invalid (would mean no fee — txs wouldn't relay). We
-        // unwrap with expect because DEFAULT_FEE_RATE_SAT_PER_VB is
-        // a compile-time constant > 0.
-        let fee_rate = FeeRate::from_sat_per_vb(DEFAULT_FEE_RATE_SAT_PER_VB)
-            .expect("DEFAULT_FEE_RATE_SAT_PER_VB must be > 0 (compile-time constant)");
         let mut psbt = tx::builder::build_send_tx(&mut bdk, recipient, amount, fee_rate)?;
         // 4. Sign (sync, &bdk — sign mutates psbt, not self).
         tx::sign::sign_psbt(&bdk, &mut psbt)?;
