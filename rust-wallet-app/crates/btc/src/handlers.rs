@@ -959,6 +959,7 @@ pub async fn handle_wallet_send(
     amount_sat: u64,
     esplora_url: String,
     pin_spki: Option<String>,
+    fee_rate_sat_per_vb: Option<u64>,
 ) -> Result<()> {
     let network_obj = network.as_network();
 
@@ -977,6 +978,20 @@ pub async fn handle_wallet_send(
             )
         })?;
 
+    // Story 6 / Issue #119: validate fee-rate. FeeRate::from_sat_per_vb
+    // returns None for 0 (invalid — txs without fee don't relay).
+    // Reject any value < 1 sat/vB with a clear error message.
+    const DEFAULT_FEE_RATE_SAT_PER_VB: u64 = 1;
+    let fee_rate_raw: u64 = fee_rate_sat_per_vb.unwrap_or(DEFAULT_FEE_RATE_SAT_PER_VB);
+    if fee_rate_raw < 1 {
+        anyhow::bail!(
+            "--fee-rate must be >= 1 sat/vB (0 would mean no fee; txs \
+             without fee don't relay); got {fee_rate_raw}"
+        );
+    }
+    let fee_rate = bitcoin::FeeRate::from_sat_per_vb(fee_rate_raw)
+        .ok_or_else(|| anyhow::anyhow!("invalid fee rate {fee_rate_raw} sat/vB"))?;
+
     let tmp_base = std::env::temp_dir();
     let client =
         build_esplora_client_for(network_obj, &esplora_url, pin_spki.as_deref(), &tmp_base)?;
@@ -986,7 +1001,12 @@ pub async fn handle_wallet_send(
         Wallet::from_mnemonic(&mnemonic, network_obj).context("Wallet::from_mnemonic failed")?;
 
     let txid = wallet
-        .send(&client, &recipient, bitcoin::Amount::from_sat(amount_sat))
+        .send(
+            &client,
+            &recipient,
+            bitcoin::Amount::from_sat(amount_sat),
+            fee_rate,
+        )
         .await
         .context("Wallet::send failed (build + sign + broadcast)")?;
     println!("{txid}");

@@ -88,6 +88,7 @@ async fn main() -> Result<()> {
                     amount_sat,
                     esplora_url,
                     pin_spki,
+                    fee_rate_sat_per_vb,
                 } => {
                     handlers::handle_wallet_send(
                         mnemonic,
@@ -96,6 +97,7 @@ async fn main() -> Result<()> {
                         amount_sat,
                         esplora_url,
                         pin_spki,
+                        fee_rate_sat_per_vb,
                     )
                     .await
                 }

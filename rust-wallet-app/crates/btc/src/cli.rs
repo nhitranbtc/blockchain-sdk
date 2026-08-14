@@ -306,6 +306,12 @@ pub enum WalletActionKind {
         /// Esplora SPKI pin. See `Sync::pin_spki` for F20 enforcement.
         #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
         pin_spki: Option<String>,
+        /// Fee rate in sat/vB (Story 6 / Issue #119). Must be `>= 1`
+        /// (0 is invalid — txs without fee don't relay). Default
+        /// (`None`): 1 sat/vB (conservative; Story 8 #121 will
+        /// fetch Esplora estimates when `--fee-rate` is omitted).
+        #[arg(long = "fee-rate", alias = "fee-rate-sat-per-vb")]
+        fee_rate_sat_per_vb: Option<u64>,
     },
 }
 
@@ -559,6 +565,7 @@ impl fmt::Debug for WalletActionKind {
                 amount_sat,
                 esplora_url,
                 pin_spki,
+                fee_rate_sat_per_vb,
             } => f
                 .debug_struct("Send")
                 .field("mnemonic", &"<redacted>")
@@ -567,6 +574,7 @@ impl fmt::Debug for WalletActionKind {
                 .field("amount_sat", amount_sat)
                 .field("esplora_url", esplora_url)
                 .field("pin_spki", pin_spki)
+                .field("fee_rate_sat_per_vb", fee_rate_sat_per_vb)
                 .finish(),
         }
     }
@@ -799,6 +807,68 @@ mod tests {
         assert!(
             debug.contains("redacted"),
             "redaction marker missing: {debug}"
+        );
+    }
+
+    /// Story 6 / Issue #119: `btc wallet send --fee-rate <sat/vb>`
+    /// parses the fee-rate flag. Validation (>= 1) is at handler
+    /// layer (clap `value_parser` would reject 0 — but we surface
+    /// the error in `handle_wallet_send` for a friendlier message).
+    #[test]
+    fn parse_send_accepts_fee_rate_flag() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+            "--fee-rate",
+            "5",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 6 / Issue #119 (L13 step 14 defensive test): Debug
+    /// output for `send` does not echo the fee rate in a way that
+    /// would change log-capture behavior. (Fee rate is not secret
+    /// material — only mnemonic + password are. This test pins the
+    /// existing redaction pattern.)
+    #[test]
+    fn debug_includes_fee_rate_in_send() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "send",
+            "--mnemonic",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "--network",
+            "testnet",
+            "--address",
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx",
+            "--amount-sat",
+            "10000",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+            "--fee-rate",
+            "42",
+        ])
+        .unwrap();
+        let debug = format!("{cli:?}");
+        assert!(
+            !debug.contains("abandon"),
+            "mnemonic leaked in Debug: {debug}"
+        );
+        assert!(
+            debug.contains("42"),
+            "fee_rate_sat_per_vb should appear in Debug; got {debug}"
         );
     }
 

@@ -84,8 +84,9 @@ rust-wallet-app/
 | 11 | Show config + debug | 9 | MVP | core (PR #105 — `btc config show`) |
 | 12 | Persist across invocations | 9 | MVP | core (via bdk_file_store) |
 | 5 | Send to address | 11, 13 | v0.1.1 | core (PR pending — `btc wallet send`) |
+| 6 | Custom fee rate | 14 | v0.1.1 | core (PR pending — `btc wallet send --fee-rate`) |
 
-**Deferred stories** (6, 7, 8, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below. Story 5 (Send to address) moved to v0.1.1 in progress — see PR branch `feat/story-5-send`.
+**Deferred stories** (7, 8, 9, 10, 13-20) → see [Phase 2 Backlog](#phase-2-backlog-deferred-to-v011--v012-per-f33-f35) below. Stories 5 + 6 moved to v0.1.1 in progress — see PR branches `feat/story-5-send` (merged as PR #122) and `feat/story-6-fee-rate`.
 
 ---
 
