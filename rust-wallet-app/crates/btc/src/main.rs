@@ -131,6 +131,28 @@ async fn main() -> Result<()> {
                 WalletActionKind::Rename { id, to, network } => {
                     handlers::handle_wallet_rename(id, to, network, &data_dir)
                 }
+                WalletActionKind::BumpFee {
+                    mnemonic,
+                    network,
+                    txid,
+                    fee_rate_sat_per_vb,
+                    esplora_url,
+                    pin_spki,
+                    confirm_yes,
+                    dry_run,
+                } => {
+                    handlers::handle_wallet_bump_fee(
+                        mnemonic,
+                        network,
+                        txid,
+                        fee_rate_sat_per_vb,
+                        esplora_url,
+                        pin_spki,
+                        confirm_yes,
+                        dry_run,
+                    )
+                    .await
+                }
             },
             Commands::Message(MessageAction { action }) => match action {
                 cli::MessageActionKind::Sign {

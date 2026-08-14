@@ -381,6 +381,40 @@ pub enum WalletActionKind {
         #[arg(long, value_enum)]
         network: NetArg,
     },
+    /// Bump fee on a previously-broadcast tx (RBF, Story 17 / Issue #140).
+    /// Replaces the original tx with one that pays a strictly higher fee.
+    /// BIP-125 sequence auto-bumped by bdk.
+    BumpFee {
+        /// BIP-39 mnemonic phrase (12/15/18/21/24 words).
+        /// **SECURITY**: see `Sync::mnemonic` for shell-history caveats.
+        #[arg(long, env = "BTC_WALLET_MNEMONIC")]
+        mnemonic: String,
+        /// Bitcoin network.
+        #[arg(long, value_enum)]
+        network: NetArg,
+        /// Original txid to bump (64-char hex). Must be an
+        /// unconfirmed tx in the wallet's tx graph.
+        #[arg(long, value_name = "TXID", value_parser = parse_txid)]
+        txid: bitcoin::Txid,
+        /// New fee rate in sat/vB. MUST exceed the original tx's
+        /// effective fee rate (RBF rule 3); exit 4 otherwise.
+        #[arg(long = "fee-rate", alias = "fee-rate-sat-per-vb")]
+        fee_rate_sat_per_vb: u64,
+        /// Esplora base URL (HTTPS-only per F36).
+        #[arg(long)]
+        esplora_url: String,
+        /// Esplora SPKI pin. See `Sync::pin_spki` for F20 enforcement.
+        #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
+        pin_spki: Option<String>,
+        /// Confirmation text for mainnet (Story 10 + Story 17).
+        /// When `--network mainnet`, this flag must be passed with
+        /// the exact text `yes` (lowercase).
+        #[arg(long, value_name = "yes")]
+        confirm_yes: Option<String>,
+        /// Build + sign without broadcasting. Output is a base64 PSBT.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Statelessly sync a BIP-39 mnemonic against an Esplora server
     /// (Issue #63 / Task 54c). Prints UTXO count + total sats. No
     /// wallet persistence — mnemonic lives in process memory only.
@@ -645,6 +679,12 @@ fn parse_outpoint_for(flag: &str, s: &str) -> Result<bitcoin::OutPoint, String> 
         .parse::<u32>()
         .map_err(|e| format!("{flag} vout must be u32, got `{vout_str}` ({e})"))?;
     Ok(bitcoin::OutPoint::new(txid, vout))
+}
+
+/// Parse `--txid <64-char-hex>` (Story 17 bump-fee).
+fn parse_txid(s: &str) -> Result<bitcoin::Txid, String> {
+    s.parse::<bitcoin::Txid>()
+        .map_err(|e| format!("--txid parse: {e}"))
 }
 
 /// BIP-39 mnemonic word counts supported by the library
@@ -968,6 +1008,34 @@ impl fmt::Debug for WalletActionKind {
                 .field("id", id)
                 .field("to", to)
                 .field("network", network)
+                .finish(),
+            // Story 17 / Issue #140: RBF bump-fee. Mnemonic redacted;
+            // txid is public chain data (printed in Debug).
+            Self::BumpFee {
+                mnemonic: _,
+                network,
+                txid,
+                fee_rate_sat_per_vb,
+                esplora_url,
+                pin_spki,
+                confirm_yes,
+                dry_run,
+            } => f
+                .debug_struct("BumpFee")
+                .field("mnemonic", &"<redacted>")
+                .field("network", network)
+                .field("txid", txid)
+                .field("fee_rate_sat_per_vb", fee_rate_sat_per_vb)
+                .field("esplora_url", esplora_url)
+                .field("pin_spki", pin_spki)
+                .field("dry_run", dry_run)
+                .field(
+                    "confirm_yes",
+                    &confirm_yes
+                        .as_ref()
+                        .map(|_| "<provided>")
+                        .unwrap_or("<absent>"),
+                )
                 .finish(),
         }
     }

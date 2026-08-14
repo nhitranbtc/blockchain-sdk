@@ -319,6 +319,67 @@ fn finalize_manual_tx<Cs: bdk_wallet::coin_selection::CoinSelectionAlgorithm>(
     })
 }
 
+/// Build an unsigned PSBT that bumps the fee on an existing tx
+/// (Story 17 / Issue #140 / BIP-125 RBF).
+///
+/// Uses bdk 3.1's `build_fee_bump(txid)` builder. The replacement tx
+/// preserves all inputs/outputs of the original but adjusts the
+/// fee_rate upward; BIP-125 sequence auto-bumped by bdk.
+///
+/// **`fee_rate_sat_per_vb` MUST exceed the original tx's effective
+/// fee rate** (RBF rule 3). This function enforces the constraint
+/// — returns `Error::TxBuild` with a clear message if the new rate
+/// is not strictly greater.
+///
+/// # Errors
+///
+///  - `Error::TxBuild` on rate-not-greater, bdk `BuildFeeBumpError`
+///    (TransactionNotFound, TransactionConfirmed, Irreplaceable,
+///    FeeRateUnavailable), or bdk `CreateTxError`.
+pub fn build_bump_fee_tx(
+    bdk: &mut BdkWallet,
+    txid: bitcoin::Txid,
+    fee_rate: FeeRate,
+) -> Result<Psbt> {
+    // Compute the original tx's fee + fee_rate (per-vByte). bdk's
+    // `calculate_fee` reads the tx from the wallet's tx_graph; we
+    // call it via the BdkWallet handle. The tx may not be in the
+    // graph yet (caller is expected to have run `balance()` first).
+    let original_tx = bdk.get_tx(txid).ok_or_else(|| {
+        Error::TxBuild("bump_fee: original tx not found in wallet tx graph (run sync first)".into())
+    })?;
+    let original_tx: &bitcoin::Transaction = &original_tx.tx_node.tx;
+    let original_fee = bdk.calculate_fee(original_tx).map_err(|_| {
+        Error::TxBuild("bump_fee: cannot calculate original fee (tx missing UTXO data)".into())
+    })?;
+    let original_weight = original_tx.weight();
+    let original_fee_rate_sat_per_vb = original_fee.to_sat() * 4 / original_weight.to_wu() as u64;
+    let new_fee_rate_sat_per_vb: u64 = fee_rate.to_sat_per_vb_ceil();
+    if new_fee_rate_sat_per_vb <= original_fee_rate_sat_per_vb {
+        return Err(Error::TxBuild(format!(
+            "bump_fee: new fee rate {new_fee_rate_sat_per_vb} sat/vB must exceed original \
+             fee rate {original_fee_rate_sat_per_vb} sat/vB (RBF rule 3 — replacement must pay \
+             strictly more)"
+        )));
+    }
+
+    let mut builder = bdk.build_fee_bump(txid).map_err(|e| {
+        // bdk 3.1 `BuildFeeBumpError` is in a private module. The
+        // enum carries only txid (public chain data) per inspection,
+        // so Debug-format is safe today. If bdk adds new variants in
+        // the future, route through a typed sanitize once
+        // `BuildFeeBumpError` becomes `pub` upstream.
+        Error::TxBuild(format!("bump_fee: build_fee_bump failed: {e:?}"))
+    })?;
+    builder.fee_rate(fee_rate);
+    builder.finish().map_err(|e| {
+        Error::TxBuild(format!(
+            "bump_fee: finish failed: {}",
+            sanitize_create_tx_error(&e)
+        ))
+    })
+}
+
 /// Map bdk `CreateTxError` to a sanitized string. The variants we
 /// care about (in production) are:
 /// - `CoinSelection(InsufficientFunds)` — caller has wrong network
