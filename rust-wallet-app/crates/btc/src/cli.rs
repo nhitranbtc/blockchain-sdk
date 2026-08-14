@@ -40,6 +40,12 @@ pub enum Commands {
     /// (data dir, Esplora URL, network, loaded wallets) for debugging
     /// "why is this connecting to the wrong place" scenarios.
     Config(ConfigAction),
+    /// Display current fee estimates from Esplora (Issue #121 /
+    /// Story 8 / Task 14 `get_fee_estimates` portion). Read-only
+    /// query against the configured `--esplora-url`; no wallet
+    /// required. Pretty table by default; `--json` for
+    /// machine-readable output.
+    FeeEstimates(FeeEstimatesAction),
 }
 
 #[derive(clap::Args)]
@@ -110,6 +116,27 @@ pub struct DecryptAction {
     pub out: PathBuf,
 }
 
+/// `btc fee-estimates` args — Issue #121 / Story 8. Read-only
+/// Esplora fee estimator; mirrors `btc wallet sync` arg shape.
+#[derive(clap::Args)]
+pub struct FeeEstimatesAction {
+    /// Bitcoin network (used for default Esplora URL when
+    /// `--esplora-url` is not provided).
+    #[arg(long, value_enum)]
+    pub network: NetArg,
+    /// Esplora base URL (HTTPS-only per F36; defaults to network's
+    /// canonical endpoint if omitted).
+    #[arg(long)]
+    pub esplora_url: Option<String>,
+    /// Esplora SPKI pin. Required for non-regtest networks per
+    /// F20; regtest is exempted.
+    #[arg(long, env = "BTC_ESPLORA_SPKI_PIN")]
+    pub pin_spki: Option<String>,
+    /// Output as JSON instead of a pretty table.
+    #[arg(long)]
+    pub json: bool,
+}
+
 /// `btc config` args — Issue #100 / Story 11.
 #[derive(clap::Args)]
 pub struct ConfigAction {
@@ -142,6 +169,23 @@ impl fmt::Debug for ConfigActionKind {
         match self {
             Self::Show { json } => f.debug_struct("Show").field("json", json).finish(),
         }
+    }
+}
+
+impl fmt::Debug for FeeEstimatesAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // `pin_spki` is secret-adjacent (reveals which TLS leaf the
+        // operator trusts) but not the secret itself — it's the
+        // SHA-256 of the SubjectPublicKeyInfo. We surface it in
+        // Debug output so tracing operators can see which pin
+        // pattern is active (mirrors `Sync`/`Balance` redaction
+        // policy).
+        f.debug_struct("FeeEstimatesAction")
+            .field("network", &self.network)
+            .field("esplora_url", &self.esplora_url)
+            .field("pin_spki", &self.pin_spki)
+            .field("json", &self.json)
+            .finish()
     }
 }
 
@@ -390,6 +434,7 @@ impl fmt::Debug for Commands {
             Self::Encrypt(e) => f.debug_tuple("Encrypt").field(e).finish(),
             Self::Decrypt(d) => f.debug_tuple("Decrypt").field(d).finish(),
             Self::Config(c) => f.debug_tuple("Config").field(c).finish(),
+            Self::FeeEstimates(fe) => f.debug_tuple("FeeEstimates").field(fe).finish(),
         }
     }
 }
@@ -1350,5 +1395,50 @@ mod tests {
             NetArg::Testnet4.as_network(),
             bitcoin::Network::Testnet4
         ));
+    }
+
+    // ========== Story 8 / Issue #121: btc fee-estimates ==========
+
+    /// Story 8: `btc fee-estimates` parses required args. Full coverage
+    /// of the happy path is in handler tests (which would require a
+    /// live Esplora — covered by L29 operator-driven gate).
+    #[test]
+    fn parse_fee_estimates_accepts_required_args() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "fee-estimates",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 8: `--json` flag parses cleanly.
+    #[test]
+    fn parse_fee_estimates_accepts_json_flag() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "fee-estimates",
+            "--network",
+            "testnet",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+            "--json",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 8: missing `--network` must fail to parse.
+    #[test]
+    fn parse_fee_estimates_rejects_missing_network() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "fee-estimates",
+            "--esplora-url",
+            "https://blockstream.info/testnet/api",
+        ]);
+        assert!(cli.is_err(), "missing --network should fail to parse");
     }
 }

@@ -9,7 +9,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 
 use bitcoin::CompressedPublicKey;
-use bitcoin_wallet_core::chain::esplora::{EsploraClient, TlsPolicy};
+use bitcoin_wallet_core::chain::esplora::{EsploraClient, RawFeeEstimates, TlsPolicy};
 use bitcoin_wallet_core::chain::esplora_url::EsploraUrl;
 use bitcoin_wallet_core::chain::network::coin_type_for;
 use bitcoin_wallet_core::chain::spki::SpkiPin;
@@ -937,6 +937,103 @@ pub async fn handle_wallet_balance(
         .await
         .context("Wallet::balance failed")?;
     println!("{balance}");
+    Ok(())
+}
+
+/// Print a 2-column pretty table: `target_blocks` | `sat/vB`.
+/// Sorts targets ascending. If the operator-supplied map is empty,
+/// prints `(no estimates)` (defends against Esplora returning
+/// an empty map during an incident).
+fn print_fee_table(map: &RawFeeEstimates) {
+    if map.is_empty() {
+        println!("(no estimates)");
+        return;
+    }
+    // Sort by target blocks ascending. Esplora returns numeric
+    // target strings ("1", "3", "6", "144", etc.); if a key is not
+    // a valid u64, drop it (defensive — never expected for Esplora).
+    let mut entries: Vec<(u64, f64)> = map
+        .iter()
+        .filter_map(|(k, v)| k.parse::<u64>().ok().map(|target| (target, *v)))
+        .collect();
+    entries.sort_by_key(|(t, _)| *t);
+    println!("{:>13} | {:>8}", "target_blocks", "sat/vB");
+    println!("{:-<15}+{:-<9}", "", "");
+    for (target, rate) in entries {
+        println!("{:>13} | {:>8.1}", target, rate);
+    }
+}
+
+/// Handle `btc fee-estimates [--network N] [--esplora-url URL]
+/// [--pin-spki HEX64] [--json]` (Issue #121 / Story 8 / Task 14
+/// `get_fee_estimates` portion).
+///
+/// Read-only Esplora fee estimator. No wallet required. Reuses
+/// `default_url_for` (Issue #74) for the per-network canonical
+/// endpoint; `EsploraClient::fee_estimate()` for the HTTP call.
+/// Output: pretty table (`target_blocks | sat/vB`) by default;
+/// JSON map with `--json`.
+///
+/// **Live testnet L29**: this handler hits the network every
+/// invocation. Operator-driven gate per L29 pattern.
+pub async fn handle_fee_estimates(
+    network: NetArg,
+    esplora_url: Option<String>,
+    pin_spki: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let network_obj = network.as_network();
+    // Default to the network's canonical Esplora endpoint when the
+    // operator omits `--esplora-url`. Regtest has no default
+    // (per L24 — F20 + F36 make a localhost-only path awkward);
+    // require the operator to pass an explicit URL.
+    let url = esplora_url
+        .as_deref()
+        .or_else(|| default_url_for(network_obj))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "--network regtest has no default Esplora URL; \
+                 pass --esplora-url <https://...> (regtest localhost behind \
+                 HTTPS-terminating proxy or stunnel is recommended per F20)"
+            )
+        })?;
+    let esplora_url_typed =
+        EsploraUrl::new(url).with_context(|| format!("invalid esplora url {url:?}"))?;
+
+    let client = match pin_spki {
+        Some(pin_hex) => {
+            let pin = parse_spki_pin_hex(&pin_hex)
+                .with_context(|| format!("parsing --pin-spki ({pin_hex:?})"))?;
+            // `db_path` is unused (fee-estimates is read-only);
+            // use a placeholder path so WalletConfig builds cleanly.
+            let mut cfg =
+                WalletConfig::testnet(url, std::env::temp_dir().join("placeholder.sqlite"))
+                    .with_esplora_spki_pin(pin);
+            cfg.network = network_obj;
+            EsploraClient::from_config(&cfg).context("build pinned Esplora client")?
+        }
+        None => EsploraClient::new(esplora_url_typed, TlsPolicy::SystemRoots)
+            .context("build Esplora client (SystemRoots)")?,
+    };
+
+    let estimates = client
+        .fee_estimate()
+        .await
+        .context("EsploraClient::fee_estimate failed")?;
+
+    if json {
+        let payload = serde_json::json!({
+            "network": network_obj.to_string(),
+            "estimates": estimates,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).context("serialize fee estimates JSON")?
+        );
+    } else {
+        println!("network: {}", network_obj);
+        print_fee_table(&estimates);
+    }
     Ok(())
 }
 
