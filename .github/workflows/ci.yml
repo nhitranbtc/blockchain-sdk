@@ -1,25 +1,63 @@
 name: CI
+
+# Triggers: push to main, PR to main, manual workflow_dispatch.
+# Note: btc-cli-demo workflow (separate file) runs end-to-end demo scripts.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
 
+# Least-privilege token. CI doesn't push or comment.
 permissions:
   contents: read
 
+# Cancel in-progress runs on the same branch — saves CI minutes when
+# pushing rapid follow-ups to a PR.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test:
+  fmt:
+    name: Format check
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     steps:
-      # Pin third-party actions to full commit SHAs per security guidance.
-      # Update SHAs via Dependabot (config at .github/dependabot.yml).
-      # Format: <sha> # <tag>
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo clippy
+        working-directory: rust-wallet-app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           persist-credentials: false
@@ -27,26 +65,22 @@ jobs:
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c  # v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: Format check
-        working-directory: rust-wallet-app
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        working-directory: rust-wallet-app
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Build
+      - name: cargo build
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: Test
+      - name: cargo test
         working-directory: rust-wallet-app
         run: cargo test --workspace
-      # L29 + L32: end-to-end demo of Wallet::sync + Wallet::balance
-      # against public testnet Esplora. Per L33 the unit tests cover
-      # shape; this exercises semantics (live reqwest + bdk scan path).
-      # Real network calls — flake risk on CI runner. Future enhancement:
-      # split into a separate non-blocking smoke job.
-      - name: Demo (sync_demo against live testnet)
-        working-directory: rust-wallet-app
-        run: cargo run -p bitcoin-wallet-core --example sync_demo
+
+  lint-audit:
+    name: Lint + audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable
       - name: cargo-deny
         working-directory: rust-wallet-app
         run: |
@@ -56,4 +90,33 @@ jobs:
         working-directory: rust-wallet-app
         run: |
           cargo install cargo-audit --locked
-          cargo audit
+          # Mirror the RUSTSEC ignores from deny.toml — transitive dev-deps
+          # (rustls-webpki via bitcoind, tokio-tar via testcontainers)
+          # that don't have upstream fixes yet. See deny.toml for rationale.
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
+
+  # Live-testnet sync_demo example (Issue #63 / Task 54c). Kept here
+  # rather than in the demo workflow because it's a single cargo
+  # invocation, not a multi-step shell demo. Allowed to be skipped on
+  # PRs (operator-driven per L29 + the btc-cli-demo job covers the same
+  # surface on push to main).
+  sync-demo:
+    name: Sync demo (live testnet, push only)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c  # stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: sync_demo (live testnet Esplora)
+        working-directory: rust-wallet-app
+        run: cargo run -p bitcoin-wallet-core --example sync_demo
