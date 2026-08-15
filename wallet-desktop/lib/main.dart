@@ -1,4 +1,4 @@
-// Placeholder. Real app shell in Task 16 (HomeShell + go_router).
+// App entry point. Real shell (ProviderScope + MaterialApp.router) lands in Task 16.
 import 'package:flutter/material.dart';
 
 void main() {
@@ -10,6 +10,6 @@ class _PlaceholderApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(home: Scaffold(body: Center(child: Text('flutter-btc-wallet scaffold'))));
+    return const MaterialApp(home: Scaffold(body: Center(child: Text('wallet-desktop scaffold'))));
   }
 }
