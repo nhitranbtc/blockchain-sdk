@@ -264,6 +264,15 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - **Workaround when workflow isn't yet pinned:** if CI fails Format check despite local pass, run `cargo fmt --all` and commit the diff — that's the format CI is asking for.
     - **Post-bulk-edit caveat (PR #85):** the Edit-tool hook auto-formats on save, but bulk-script edits (Python `cat <<EOF` / `sed` / `git checkout --`) bypass the hook. After ANY non-Edit-tool change to a `.rs` file, run `cargo fmt -p <crate>` explicitly before the verify gate. The hook is a safety net, not a guarantee.
     - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full triple gate (`fmt` + `clippy --all-targets` + `test`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
+    - **Hardcode-sweep gate** (Issue #148, 2026-08-15): in addition to fmt/clippy/test, sweep the diff for runtime hardcoded values that bypass operator config. Grep targets:
+        ```bash
+        # From repo root:
+        rg -n --type rust -e '127\.0\.0\.1|localhost|0\.0\.0\.0' rust-wallet-app/crates/
+        rg -n --type rust -e 'blockstream\.info|mempool\.space|blockchair|btc\.com' rust-wallet-app/crates/
+        rg -n --type rust -e 'm/.*'\''/[0-9]+'\''/[0-9]+'\''' rust-wallet-app/crates/
+        rg -n --type rust -e '/tmp/|/usr/share/|/etc/|XDG_(DATA|CONFIG)' rust-wallet-app/crates/
+        ```
+        **Rule**: anything outside `#[cfg(test)]`, doc comments, or named cryptographic constants (BIP-32 `0x80000000`, BIP-44/86 paths) is a defect — either route through `WalletConfig` (Esplora URL) or extract a named `const`. `WalletConfig` has no `Default` impl and no `const DEFAULT_ESPLORA_URL`; every URL must arrive via the `--esplora-url` CLI flag. Tests legitimately bake `https://blockstream.info/testnet/api` and `/tmp/db` in `#[cfg(test)]` blocks — those are fixtures, not defects. The sweep must distinguish "test fixture" from "production hardcode" — the `#[cfg(test)]` boundary is the discriminator.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
     - **Format-verification plugin** (2026-08-12 grill): the `cargo fmt --check` gate is the only Rust-quality check bundled into a dedicated plugin. Subagent `ecc:rust-build-resolver` runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` + `cargo tree --duplicates` (+ `cargo audit` if installed) in one invocation; slash command `/ecc:rust-build` wraps the same agent. `ecc:rust-reviewer` (or `/ecc:rust-review`) runs the same fmt check on modified `.rs` files after a code-review pass. Other Rust-engineer agents (`compass:rust-engineer`, `voltagent-lang:rust-engineer`) apply style by writing idiomatic code on first pass — they do NOT expose a discrete `cargo fmt --check` step. `caveman:cavecrew-reviewer` intentionally skips formatting nits unless they change meaning — wrong tool for rustfmt policing. Use `/ecc:rust-build` for one-shot verify; use `/ecc:rust-review` for fmt-check paired with review.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
@@ -749,3 +758,101 @@ citation in the header.
 - Removing the SHA citation instead of resolving the drift — hides the cross-ref problem rather than fixing it.
 
 ---
+
+## L31 — L13 per-task pipeline adapted for Flutter / Dart (`wallet-desktop`)
+
+**Trigger**: Session 2026-08-15 wallet-desktop execution. L13 (Rust pipeline) is the canonical per-task spec, but its toolchain references (`cargo fmt`, `cargo clippy`, `cargo test`) and PR model don't apply to the Flutter project at `wallet-desktop/`. Adapted below; **apply for every wallet-desktop task**.
+
+**Rule**: Run the L13 pipeline with these substitutions. Where the rule diverges, the divergence is noted.
+
+### Step-by-step mapping (L13 → wallet-desktop)
+
+| L13 step | Rust equivalent | Flutter/Dart equivalent (wallet-desktop) |
+|---|---|---|
+| 1 L11 skill tag | Skill list scan | Same: load 3-5 relevant (flutter_lints, riverpod_generator, dart:io, package:logging, etc.) |
+| 2 Complexity self-detect | trivial / normal / critical | Same tiers; "critical" for L12 secret-handling, password fields, mnemonic lifecycle, network TLS pinning |
+| 3 Pick up issue | Read issue body | Same; check task is sub-task or top-level (plan §Task Index) |
+| 4 karpathy-guidelines + branch | Worktree + branch from main | **wallet-desktop uses direct commit on `main`** (per user direction 2026-08-15). No worktree, no feature branch. |
+| 4a Drift scan (L30) | `git log --all -- <path>` | Same |
+| 5-8 Skill pair | L11 map, domain-tag wins | Same |
+| **9 TDD red-green** | failing test → impl → pass | **Same for tasks 3-24**. **Skipped for** config tasks (Task 2 lint, Task 25 CI workflow) and asset-stub tasks (Task 1). For UI feature tasks (Tasks 17-23), write failing widget test FIRST (per design §8.3 widget test matrix). |
+| **10 L12 pre-PR review** | code-review + type-design parallel | **Same; but invoke `ecc:flutter-reviewer`** instead of `ecc:rust-reviewer`. For "critical" tier, add `pr-review-toolkit:security-auditor`. |
+| **11 Verify gate** | `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test --workspace` | `dart format --set-exit-if-changed --output=none .` + `dart analyze --fatal-warnings --fatal-infos` + `flutter test` |
+| 11a Backlog triage | Same | Same |
+| **12 PAUSE commit approval** | Wait for explicit "yes commit" | Same |
+| **13 Commit + push + PR** | PR model | **Direct commit on `main`. No PR, no push.** Squash-merge steps 15-15d collapse. (Per user direction; deviation from canonical L13.) |
+| **14 Flip issue checkboxes** | `gh issue edit N --body` | `gh issue comment N --body "<progress + commit SHA + next task ref>"` (issue body has no checkboxes in our batch-created issues). |
+| 15-15d PR review + merge + tech doc + L24 cascade | PR model | **Skipped** (no PR). L24 CHANGELOG entry added in Task 26 (manual verification task). |
+| 16-19 Session-level | Same | Same |
+
+### Verify gate details (Step 11)
+
+```bash
+# Format check (idempotent — re-run after any non-Edit tool change)
+export PATH="$HOME/flutter/bin:$PATH"
+cd wallet-desktop
+dart format --set-exit-if-changed --output=none .
+
+# Static analysis (CLAUDE.md `-D warnings` equivalent)
+dart analyze --fatal-warnings --fatal-infos
+
+# Unit + widget tests (L29: live smoke excluded)
+flutter test
+```
+
+**All three must pass before commit.** A single failing gate = task is not done.
+
+### Hardcode sweep (L13 step 11 Flutter adaptation)
+
+Mirrors Rust hardcode-sweep, scoped to Dart files:
+
+```bash
+# From wallet-desktop/lib:
+rg -n -e '127\.0\.0\.1|localhost|0\.0\.0\.0'
+rg -n -e 'blockstream\.info|mempool\.space|blockchair|btc\.com'
+rg -n -e '/tmp/|XDG_(DATA|CONFIG)'
+```
+
+**Rule**: anything outside `// @TestOn('vm')` or `test/` blocks is a defect — route through `EsploraConfig` (already in Task 12) or extract a named constant. Tests legitimately bake fixtures in `test/` blocks — those are fixtures, not defects.
+
+### Secret-leak sweep (L12 CRITICAL #2 mirror)
+
+```bash
+# From wallet-desktop/lib:
+rg -n -e '(password|mnemonic|secret)\s*[:=]\s*"[^"]+"'   # string literal assignment
+rg -n -e 'print\s*\(.*password|print\s*\(.*mnemonic'        # logging mnemonic-shaped
+```
+
+**Rule**: zero matches outside `test/`. Mnemonic-shaped strings (12/15/18/21/24 lowercase words) in source = defect. Routes through `BtcLogFilter` (Task 7) before any logger call.
+
+### Complexity tier variation
+
+| Tier | Pipeline variation for wallet-desktop |
+|---|---|
+| `trivial` (lint config, asset stubs) | Skip TDD; verify gate only; no L12 review subagent (self-review); direct commit |
+| `normal` (DTOs, providers, widgets) | Full: failing test → impl → pass → L12 review → verify → PAUSE → commit |
+| `critical` (BtcInvoker, TempSecretFile, BtcLogFilter, password/mnemonic widgets) | Full + `pr-review-toolkit:security-auditor` subagent + explicit L12 CRITICAL #2 sweep + flutter analyze with extra `unsafe_html` + custom lint rule for mnemonic-shaped strings |
+
+### Branch + PR model deviation
+
+Per user direction (2026-08-15), wallet-desktop commits directly to `main` rather than via feature branches + PRs. This:
+
+1. Skips L13 steps 13 (commit-push-pr), 15 (PR review), 15a (10-section tech doc), 15b-15c (L24 cascade + L13 audit), 15d (merge + close).
+2. Replaces them with: `git commit` on main + `gh issue comment N` for progress tracking.
+3. Means L21 (estimate-report + ai-cost-report update on every PR merge) doesn't fire. Cost-tracking adapted to: append to ledger after each commit.
+4. Means L24 (CHANGELOG on PR merge) doesn't fire. CHANGELOG entry added in Task 26 (manual verification task) instead.
+
+**If branch model changes back** (e.g., wallet-desktop moves to a feature branch for v0.2+), revert to canonical L13 for steps 13-15d.
+
+### Anti-patterns
+
+- **Skipping widget tests** for feature tasks (17-23). Per design §8.3, every screen has a widget test matrix (loading/data/error/validation/dispose).
+- **Bypassing the verify gate** to ship faster. Flutter analyzer debt (`unused_element`, `prefer_const_constructors`) compounds the same way clippy debt does.
+- **Logging mnemonic-shaped strings** in widget code. L12 CRITICAL #2 is a hard gate; `BtcLogFilter` is the only path for secret-bearing logs.
+- **Committing secrets** to git (`.dart_tool/`, `coverage/`, `~/.local/share/flutter_btc_wallet/`). `.gitignore` is mandatory; verify with `git status --ignored` after scaffold.
+- **Spawning `btc` without stripping inherited env vars** (Task 10 `BtcInvoker`). L7: strip `BTC_WALLET_MNEMONIC`, `BTC_ENCRYPT_PASSWORD`, `BTC_DECRYPT_PASSWORD` from parent env before `Process.start`.
+
+### Apply
+
+For every wallet-desktop task, run this adapted pipeline. If a step doesn't apply (e.g., TDD skipped for trivial config), log why in the ledger. If a step fails, escalate per L13 Q9. Re-grill after 5 tasks or when a Flutter-specific pattern emerges.
+
