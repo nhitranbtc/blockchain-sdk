@@ -150,6 +150,18 @@ pub(crate) fn wallet_path_at(base: &Path, network: Network, id: WalletId) -> Pat
     p
 }
 
+/// Sidecar metadata path (e.g. `<id>.type`) carrying the address
+/// type (Story 20 / Issue #132). Optional file — absent means
+/// `NativeSegwit` (the pre-Story-20 default).
+pub(crate) fn wallet_meta_path_at(base: &Path, network: Network, id: WalletId) -> PathBuf {
+    let mut p = base.to_path_buf();
+    p.push(ROOT_DIR);
+    p.push(WALLETS_SUBDIR);
+    p.push(network_dir_name(network));
+    p.push(format!("{}.type", id));
+    p
+}
+
 /// Ensure the directory exists with `0o700` permissions. Closes umask-leak
 /// gap (per ADR §F19). Refuses symlinks anywhere in the chain (TOCTOU
 /// window defense). Re-chmods the deepest pre-existing ancestor to 0o700
@@ -271,6 +283,137 @@ pub(crate) fn read_wallet_at(
 
 /// Dummy Argon2id derive (~500ms) on missing-file + try_from failure
 /// paths to match wrong-password wall-clock — closes N8 timing oracle.
+/// Persist the wallet's address type (Story 20 / Issue #132) as a
+/// sidecar `<wallet-id>.type` file. Format: one-line ASCII label
+/// (`legacy` / `nested-segwit` / `native-segwit` / `taproot`) +
+/// newline. Atomic write via tempfile + rename (F19 pattern).
+pub(crate) fn write_address_type_at(
+    base: &Path,
+    network: Network,
+    id: WalletId,
+    address_type: crate::keys::AddressType,
+) -> Result<(), Error> {
+    use crate::keys::AddressType;
+    let label: &'static str = match address_type {
+        AddressType::Legacy => "legacy",
+        AddressType::NestedSegwit => "nested-segwit",
+        AddressType::NativeSegwit => "native-segwit",
+        AddressType::Taproot => "taproot",
+    };
+    let path = wallet_meta_path_at(base, network, id);
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::WalletStore("wallet meta path has no parent".into()))?;
+    ensure_secure_dir(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(label.as_bytes())?;
+    tmp.write_all(b"\n")?;
+    tmp.as_file_mut().sync_all()?;
+    tmp.persist(&path)
+        .map_err(|e| Error::WalletStore(format!("persist address_type tmp: {e}")))?;
+    Ok(())
+}
+
+/// Max bytes for the `<id>.type` sidecar (Story 20 / Issue #132).
+/// 64 is more than enough for any valid label + trailing newline
+/// (`native-segwit` = 12 chars + `\n`). Bounds allocation in
+/// `read_address_type_at` (L13 commit-review HIGH fix — closes
+/// memory-DoS amplification on adversarial file growth).
+const MAX_SIDECAR_LEN: u64 = 64;
+
+/// Read the persisted address type (Story 20 / Issue #132).
+///
+/// **L13 commit-review fixes applied:**
+///  - `symlink_metadata` preflight: refuse symlinks at the path level
+///    (mirrors `read_wallet_at`'s F19 atomic check — closes the
+///    TOCTOU window between stat and open).
+///  - `OpenOptionsExt::custom_flags(o_nofollow_flag())` on the open:
+///    atomic symlink refusal at `open(2)` (second line of defense
+///    in case the preflight raced with a link replacement).
+///  - `Read::take(MAX_SIDECAR_LEN)`: bound the read length (closes
+///    the post-stat-grow race where an adversarial process could grow
+///    the file between `symlink_metadata` and `read_to_end`).
+///  - `constant_time_padding()` on IO failure: equalize timing with
+///    the wallet-blob read path (N8 closure).
+///  - Returns `Err` only on actual IO failure (not on absence —
+///    `NotFound` → `Ok(None)`). Caller (`read_address_type_or_default`)
+///    treats unrecognized labels + all failures as default
+///    `NativeSegwit` to preserve N2 closure (per commit-review MED).
+pub(crate) fn read_address_type_at(
+    base: &Path,
+    network: Network,
+    id: WalletId,
+) -> Result<Option<crate::keys::AddressType>, Error> {
+    use crate::keys::AddressType;
+    use std::io::Read;
+    let path = wallet_meta_path_at(base, network, id);
+    // Preflight: refuse symlinks at the path level (F19 atomic).
+    let md = match fs::symlink_metadata(&path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            constant_time_padding();
+            return Err(Error::WalletStore(format!(
+                "read address_type sidecar metadata: {e}"
+            )));
+        }
+    };
+    if md.file_type().is_symlink() {
+        constant_time_padding();
+        return Err(Error::WalletStore(
+            "address_type sidecar is a symlink — refusing to follow (security check)".into(),
+        ));
+    }
+    if md.len() > MAX_SIDECAR_LEN {
+        constant_time_padding();
+        return Err(Error::WalletStore(format!(
+            "address_type sidecar too large: {} bytes (max {MAX_SIDECAR_LEN})",
+            md.len()
+        )));
+    }
+    // Open with O_NOFOLLOW (defense in depth vs symlink replacement race).
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(o_nofollow_flag())
+        .open(&path)
+        .map_err(|e| {
+            if e.raw_os_error() == Some(libc_eloop()) {
+                Error::WalletStore(
+                    "address_type sidecar is a symlink — refusing to follow (security check)"
+                        .into(),
+                )
+            } else {
+                constant_time_padding();
+                Error::WalletStore(format!("open address_type sidecar: {e}"))
+            }
+        })?;
+    // Read capped at MAX_SIDECAR_LEN (closes the post-stat-grow race).
+    let mut limited = (&mut file).take(MAX_SIDECAR_LEN);
+    let mut buf = Vec::with_capacity(MAX_SIDECAR_LEN as usize);
+    if let Err(e) = limited.read_to_end(&mut buf) {
+        constant_time_padding();
+        return Err(Error::WalletStore(format!(
+            "read address_type sidecar: {e}"
+        )));
+    }
+    let label = std::str::from_utf8(&buf)
+        .map_err(|e| Error::WalletStore(format!("address_type sidecar non-utf8: {e}")))?
+        .trim();
+    let t = match label {
+        "legacy" => AddressType::Legacy,
+        "nested-segwit" => AddressType::NestedSegwit,
+        "native-segwit" => AddressType::NativeSegwit,
+        "taproot" => AddressType::Taproot,
+        _ => {
+            constant_time_padding();
+            return Err(Error::WalletStore(format!(
+                "address_type sidecar {path:?} has unrecognized label {label:?}"
+            )));
+        }
+    };
+    Ok(Some(t))
+}
+
 pub(crate) fn constant_time_padding() {
     let dummy_password = b"constant-time-padding-not-a-secret";
     let dummy_salt = [0u8; argon2::SALT_LEN];

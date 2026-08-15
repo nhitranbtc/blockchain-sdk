@@ -62,6 +62,36 @@ impl AddressType {
             Self::Taproot => 86,
         }
     }
+
+    /// Receiving-chain descriptor template for this address type.
+    /// Returns the static wrapper form (e.g. `"wpkh({}/0/*)"` for
+    /// NativeSegwit). Caller substitutes `{}` with the BIP-32 xprv at
+    /// `m/<purpose>/<coin>/0'`.
+    ///
+    /// Templates per BIP-44/49/84/86:
+    ///  - Legacy (BIP-44): `pkh({key}/0/*)`
+    ///  - NestedSegwit (BIP-49): `sh(wpkh({key}/0/*))`
+    ///  - NativeSegwit (BIP-84): `wpkh({key}/0/*)` — default
+    ///  - Taproot (BIP-86): `tr({key}/0/*)`
+    pub const fn receiving_template(self) -> &'static str {
+        match self {
+            Self::Legacy => "pkh({}/0/*)",
+            Self::NestedSegwit => "sh(wpkh({}/0/*))",
+            Self::NativeSegwit => "wpkh({}/0/*)",
+            Self::Taproot => "tr({}/0/*)",
+        }
+    }
+
+    /// Change-chain descriptor template for this address type.
+    /// Same wrapper form as receiving but with `/1/*` chain index.
+    pub const fn change_template(self) -> &'static str {
+        match self {
+            Self::Legacy => "pkh({}/1/*)",
+            Self::NestedSegwit => "sh(wpkh({}/1/*))",
+            Self::NativeSegwit => "wpkh({}/1/*)",
+            Self::Taproot => "tr({}/1/*)",
+        }
+    }
 }
 
 /// Newtype around `bip32::XPrv`. Custom `Drop` for best-effort scalar
@@ -243,6 +273,34 @@ mod tests {
         assert_eq!(AddressType::NestedSegwit.purpose(), 49);
         assert_eq!(AddressType::NativeSegwit.purpose(), 84);
         assert_eq!(AddressType::Taproot.purpose(), 86);
+    }
+
+    /// Story 20 / Issue #132: each address type produces the
+    /// correct BIP-44/49/84/86 descriptor wrapper. Pin the template
+    /// strings so future drift is caught by the test suite.
+    #[test]
+    fn receiving_template_matches_bip() {
+        assert_eq!(AddressType::Legacy.receiving_template(), "pkh({}/0/*)");
+        assert_eq!(
+            AddressType::NestedSegwit.receiving_template(),
+            "sh(wpkh({}/0/*))"
+        );
+        assert_eq!(
+            AddressType::NativeSegwit.receiving_template(),
+            "wpkh({}/0/*)"
+        );
+        assert_eq!(AddressType::Taproot.receiving_template(), "tr({}/0/*)");
+    }
+
+    #[test]
+    fn change_template_matches_bip() {
+        assert_eq!(AddressType::Legacy.change_template(), "pkh({}/1/*)");
+        assert_eq!(
+            AddressType::NestedSegwit.change_template(),
+            "sh(wpkh({}/1/*))"
+        );
+        assert_eq!(AddressType::NativeSegwit.change_template(), "wpkh({}/1/*)");
+        assert_eq!(AddressType::Taproot.change_template(), "tr({}/1/*)");
     }
 
     #[test]

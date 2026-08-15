@@ -20,9 +20,13 @@ use crate::chain::esplora::EsploraClient;
 use crate::crypto::aad::Aad;
 use crate::crypto::mnemonic_cipher::{decrypt_mnemonic, encrypt_mnemonic, MnemonicCipherBlob};
 use crate::error::{Error, Result};
-use crate::keys::{Mnemonic, Secret};
+#[allow(unused_imports)]
+use crate::keys::{AddressType, Mnemonic, Secret};
 use crate::wallet::id::WalletId;
-use crate::wallet::store::{read_wallet_at, wallet_path_at, write_wallet_at, WALLETS_SUBDIR};
+use crate::wallet::store::{
+    read_address_type_at, read_wallet_at, wallet_path_at, write_address_type_at, write_wallet_at,
+    WALLETS_SUBDIR,
+};
 use crate::wallet::Wallet;
 
 /// Result of `show_wallet` — addresses + confirmed balance (in satoshis).
@@ -52,6 +56,7 @@ pub fn create_wallet(
     network: Network,
     words: usize,
     password: &Secret<Vec<u8>>,
+    address_type: crate::keys::AddressType,
 ) -> Result<(WalletId, Secret<String>)> {
     if !SUPPORTED_WORD_COUNTS.contains(&words) {
         return Err(Error::InvalidMnemonic(format!(
@@ -64,7 +69,32 @@ pub fn create_wallet(
     let aad = Aad::network(network);
     let blob = encrypt_mnemonic(&phrase, password.expose().as_slice(), aad)?;
     write_wallet_at(base, network, id, blob.as_bytes())?;
+    write_address_type_at(base, network, id, address_type)?;
     Ok((id, phrase))
+}
+
+/// Read the persisted address type sidecar (Story 20 / Issue #132).
+///
+/// **L13 commit-review MED fix:** treat all failures (parse error,
+/// IO error, security check) as the default `NativeSegwit` — the
+/// sidecar is best-effort metadata, not a security boundary.
+/// Refusing the entire decrypt path on a malformed sidecar would
+/// break the N2 closure (the secret-bearing blob is intact; the
+/// descriptor shape would just default to NativeSegwit).
+///
+/// Back-compat: absent sidecar (wallets created before Story 20)
+/// also returns the default.
+pub fn read_address_type_or_default(
+    base: &Path,
+    network: Network,
+    id: WalletId,
+) -> crate::keys::AddressType {
+    use crate::keys::AddressType;
+    match read_address_type_at(base, network, id) {
+        Ok(Some(t)) => t,
+        Ok(None) => AddressType::NativeSegwit,
+        Err(_) => AddressType::NativeSegwit,
+    }
 }
 
 /// Import an existing BIP-39 mnemonic phrase + persist the encrypted
@@ -143,7 +173,12 @@ pub async fn show_wallet(
     let phrase_secret = decrypt_mnemonic(&blob, password.expose().as_slice(), aad)
         .map_err(|_| Error::WalletStore(crate::wallet::store::WALLET_NOT_ACCESSIBLE.into()))?;
     let mnemonic = Mnemonic::from_phrase(phrase_secret.expose())?;
-    let wallet = Wallet::from_mnemonic(&mnemonic, network, db_path.map(|p| p.to_path_buf()))?;
+    let wallet = Wallet::from_mnemonic_with_type(
+        &mnemonic,
+        network,
+        read_address_type_or_default(base, network, id),
+        db_path.map(|p| p.to_path_buf()),
+    )?;
     wallet.sync(esplora).await?;
     let balance = wallet.balance(esplora).await?;
     let receive_addresses = wallet
@@ -265,7 +300,14 @@ mod tests {
     fn create_wallet_persists_blob_and_returns_id_phrase() {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let base = tmp.path();
-        let (id, phrase) = create_wallet(base, Network::Testnet, 12, &password()).expect("create");
+        let (id, phrase) = create_wallet(
+            base,
+            Network::Testnet,
+            12,
+            &password(),
+            AddressType::NativeSegwit,
+        )
+        .expect("create");
         assert_eq!(phrase.expose().split_whitespace().count(), 12);
         let blob_path = crate::wallet::store::wallet_path_at(base, Network::Testnet, id);
         assert!(blob_path.exists(), "blob must exist on disk");
@@ -278,8 +320,14 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let base = tmp.path();
         for bad in [0usize, 1, 7, 13, 14, 22, 23, 25, 100] {
-            let err =
-                create_wallet(base, Network::Testnet, bad, &password()).expect_err("must reject");
+            let err = create_wallet(
+                base,
+                Network::Testnet,
+                bad,
+                &password(),
+                AddressType::NativeSegwit,
+            )
+            .expect_err("must reject");
             assert!(matches!(err, Error::InvalidMnemonic(_)), "word count {bad}");
         }
     }
@@ -289,8 +337,14 @@ mod tests {
         for words in [12usize, 15, 18, 21, 24] {
             let tmp = tempfile::tempdir().expect("tmpdir");
             let base = tmp.path();
-            let (id, phrase) =
-                create_wallet(base, Network::Testnet, words, &password()).expect("create");
+            let (id, phrase) = create_wallet(
+                base,
+                Network::Testnet,
+                words,
+                &password(),
+                AddressType::NativeSegwit,
+            )
+            .expect("create");
             assert_eq!(phrase.expose().split_whitespace().count(), words);
             assert!(crate::wallet::store::wallet_path_at(base, Network::Testnet, id).exists());
         }
@@ -412,8 +466,22 @@ mod tests {
     fn list_wallets_returns_created_wallet_ids() {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let base = tmp.path();
-        let (id1, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c1");
-        let (id2, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c2");
+        let (id1, _) = create_wallet(
+            base,
+            Network::Testnet,
+            12,
+            &password(),
+            AddressType::NativeSegwit,
+        )
+        .expect("c1");
+        let (id2, _) = create_wallet(
+            base,
+            Network::Testnet,
+            12,
+            &password(),
+            AddressType::NativeSegwit,
+        )
+        .expect("c2");
         let mut ids = list_wallets(base, Network::Testnet).expect("list");
         assert_eq!(ids.len(), 2);
         ids.sort();
@@ -427,7 +495,14 @@ mod tests {
     fn delete_wallet_removes_blob() {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let base = tmp.path();
-        let (id, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c");
+        let (id, _) = create_wallet(
+            base,
+            Network::Testnet,
+            12,
+            &password(),
+            AddressType::NativeSegwit,
+        )
+        .expect("c");
         let blob_path = crate::wallet::store::wallet_path_at(base, Network::Testnet, id);
         assert!(blob_path.exists(), "precondition: blob exists");
         delete_wallet(base, Network::Testnet, id).expect("delete");
@@ -453,7 +528,14 @@ mod tests {
     fn rename_wallet_moves_blob() {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let base = tmp.path();
-        let (old, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c");
+        let (old, _) = create_wallet(
+            base,
+            Network::Testnet,
+            12,
+            &password(),
+            AddressType::NativeSegwit,
+        )
+        .expect("c");
         let new = WalletId::new();
         rename_wallet(base, Network::Testnet, old, new).expect("rename");
         assert!(!crate::wallet::store::wallet_path_at(base, Network::Testnet, old).exists());
@@ -467,8 +549,22 @@ mod tests {
     fn rename_wallet_target_exists_errors() {
         let tmp = tempfile::tempdir().expect("tmpdir");
         let base = tmp.path();
-        let (id1, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c1");
-        let (id2, _) = create_wallet(base, Network::Testnet, 12, &password()).expect("c2");
+        let (id1, _) = create_wallet(
+            base,
+            Network::Testnet,
+            12,
+            &password(),
+            AddressType::NativeSegwit,
+        )
+        .expect("c1");
+        let (id2, _) = create_wallet(
+            base,
+            Network::Testnet,
+            12,
+            &password(),
+            AddressType::NativeSegwit,
+        )
+        .expect("c2");
         let err = rename_wallet(base, Network::Testnet, id1, id2).expect_err("target exists");
         assert!(matches!(err, Error::WalletStore(_)));
         assert!(err.to_string().contains("already exists"));

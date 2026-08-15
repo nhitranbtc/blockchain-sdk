@@ -44,9 +44,18 @@ async fn main() -> Result<()> {
                     words,
                     network,
                     password,
+                    address_type,
                     confirm_yes,
                 } => {
-                    handlers::handle_create(words, network, password, confirm_yes, &data_dir).await
+                    handlers::handle_create(
+                        words,
+                        network,
+                        password,
+                        address_type,
+                        confirm_yes,
+                        &data_dir,
+                    )
+                    .await
                 }
                 WalletActionKind::Import {
                     mnemonic,
