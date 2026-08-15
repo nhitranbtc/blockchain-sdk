@@ -8,9 +8,9 @@ import 'package:path/path.dart' as p;
 import '../paths.dart';
 
 /// Base class for any error originating in the bundled-`btc` subsystem.
-/// Future Tasks 6 / 8 / 10 add more specific subclasses; callers can catch
-/// [BtcException] once and handle the whole family.
-abstract class BtcException implements Exception {
+/// `sealed` forces Dart 3 exhaustiveness checks when callers `switch` on
+/// `BtcException`; future Tasks 6 / 8 / 10 add more specific subclasses.
+sealed class BtcException implements Exception {
   const BtcException(this.message, {this.cause});
 
   /// Human-readable description of the failure.
@@ -25,6 +25,14 @@ abstract class BtcException implements Exception {
       : '$runtimeType: $message ($cause)';
 }
 
+/// Thrown by [hostTarget] when the running platform has no bundled asset.
+/// Distinguishes platform-classification errors from extraction errors so
+/// callers (Task 11+ btcInvokerProvider) can decide whether to retry on
+/// a different host vs surface the failure to the user.
+class UnsupportedPlatformException extends BtcException {
+  const UnsupportedPlatformException(super.message, {super.cause});
+}
+
 /// Triplet returned by [hostTarget] describing the bundled asset for the
 /// running platform. Public so tests can assert arch/asset-path selection
 /// without launching the actual binary.
@@ -34,6 +42,12 @@ class HostTarget {
     required this.assetPath,
     required this.binaryName,
   })  : assert(arch.isNotEmpty, 'arch must be non-empty'),
+        assert(
+          assetPath.isNotEmpty &&
+              !assetPath.contains('..') &&
+              assetPath.startsWith('assets/btc/'),
+          'assetPath must be a non-empty path under assets/btc/ with no .. segments',
+        ),
         assert(
           !binaryName.contains('/') && !binaryName.contains(r'\'),
           'binaryName must be a bare filename, not a path',
@@ -91,7 +105,7 @@ HostTarget hostTarget() {
       binaryName: 'btc.exe',
     );
   }
-  throw const ExtractionException(
+  throw const UnsupportedPlatformException(
     'Unsupported platform — cannot extract bundled btc binary',
   );
 }
@@ -101,10 +115,19 @@ HostTarget hostTarget() {
 /// to disk (`manifest.json` keyed by sha256 + arch), `chmod 0o755`s the
 /// binary on POSIX, and spawns `btc --version` to verify before returning.
 ///
-/// Subsequent calls with the same `(arch, sha256)` skip re-extraction and
-/// reuse the cached binary. Throws [ExtractionException] (extends
-/// [BtcException]) on empty asset, unsupported platform, corrupt manifest,
-/// or post-extract `--version` failure.
+/// **Failure cleanup**: if any post-write step (chmod, --version spawn,
+/// --version exit non-zero) throws, the on-disk binary is deleted before
+/// the exception propagates. The manifest is NOT written on failure, so
+/// the next call re-extracts from scratch. Callers may safely retry.
+///
+/// **Cache reuse**: subsequent calls with the same `(arch, sha256)` skip
+/// re-extraction and return the cached binary path immediately — no
+/// `--version` re-verify (the manifest is the trust anchor).
+///
+/// Throws [UnsupportedPlatformException] if the host has no bundled asset
+/// (Task 11+ invoker can route this to a "platform unsupported" UI).
+/// Throws [ExtractionException] (extends [BtcException]) on empty asset,
+/// corrupt manifest, chmod failure, --version failure.
 Future<String> extractBtc() async {
   final target = hostTarget();
   final btcDir = await subdirFor('btc');
