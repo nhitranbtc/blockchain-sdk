@@ -150,6 +150,18 @@ pub(crate) fn wallet_path_at(base: &Path, network: Network, id: WalletId) -> Pat
     p
 }
 
+/// Sidecar metadata path (e.g. `<id>.type`) carrying the address
+/// type (Story 20 / Issue #132). Optional file — absent means
+/// `NativeSegwit` (the pre-Story-20 default).
+pub(crate) fn wallet_meta_path_at(base: &Path, network: Network, id: WalletId) -> PathBuf {
+    let mut p = base.to_path_buf();
+    p.push(ROOT_DIR);
+    p.push(WALLETS_SUBDIR);
+    p.push(network_dir_name(network));
+    p.push(format!("{}.type", id));
+    p
+}
+
 /// Ensure the directory exists with `0o700` permissions. Closes umask-leak
 /// gap (per ADR §F19). Refuses symlinks anywhere in the chain (TOCTOU
 /// window defense). Re-chmods the deepest pre-existing ancestor to 0o700
@@ -271,6 +283,71 @@ pub(crate) fn read_wallet_at(
 
 /// Dummy Argon2id derive (~500ms) on missing-file + try_from failure
 /// paths to match wrong-password wall-clock — closes N8 timing oracle.
+/// Persist the wallet's address type (Story 20 / Issue #132) as a
+/// sidecar `<wallet-id>.type` file. Format: one-line ASCII label
+/// (`legacy` / `nested-segwit` / `native-segwit` / `taproot`) +
+/// newline. Atomic write via tempfile + rename (F19 pattern).
+pub(crate) fn write_address_type_at(
+    base: &Path,
+    network: Network,
+    id: WalletId,
+    address_type: crate::keys::AddressType,
+) -> Result<(), Error> {
+    use crate::keys::AddressType;
+    let label: &'static str = match address_type {
+        AddressType::Legacy => "legacy",
+        AddressType::NestedSegwit => "nested-segwit",
+        AddressType::NativeSegwit => "native-segwit",
+        AddressType::Taproot => "taproot",
+    };
+    let path = wallet_meta_path_at(base, network, id);
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::WalletStore("wallet meta path has no parent".into()))?;
+    ensure_secure_dir(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(label.as_bytes())?;
+    tmp.write_all(b"\n")?;
+    tmp.as_file_mut().sync_all()?;
+    tmp.persist(&path)
+        .map_err(|e| Error::WalletStore(format!("persist address_type tmp: {e}")))?;
+    Ok(())
+}
+
+/// Read the persisted address type (Story 20 / Issue #132).
+/// Returns `Ok(None)` when the sidecar file is absent (back-compat
+/// for wallets created before Story 20 — default `NativeSegwit`).
+/// `Err` only on actual IO failure (not on absence).
+pub(crate) fn read_address_type_at(
+    base: &Path,
+    network: Network,
+    id: WalletId,
+) -> Result<Option<crate::keys::AddressType>, Error> {
+    use crate::keys::AddressType;
+    let path = wallet_meta_path_at(base, network, id);
+    match std::fs::read_to_string(&path) {
+        Ok(s) => {
+            let label = s.trim();
+            let t = match label {
+                "legacy" => AddressType::Legacy,
+                "nested-segwit" => AddressType::NestedSegwit,
+                "native-segwit" => AddressType::NativeSegwit,
+                "taproot" => AddressType::Taproot,
+                _ => {
+                    return Err(Error::WalletStore(format!(
+                        "address type sidecar {path:?} has unrecognized label {label:?}"
+                    )));
+                }
+            };
+            Ok(Some(t))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::WalletStore(format!(
+            "read address_type sidecar: {e}"
+        ))),
+    }
+}
+
 pub(crate) fn constant_time_padding() {
     let dummy_password = b"constant-time-padding-not-a-secret";
     let dummy_salt = [0u8; argon2::SALT_LEN];

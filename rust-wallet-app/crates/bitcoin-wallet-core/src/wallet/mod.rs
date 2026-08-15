@@ -101,6 +101,11 @@ pub struct Wallet {
     /// `sync` re-parses via `Mnemonic::from_phrase` to derive xprv.
     phrase: Secret<String>,
     network: Network,
+    /// BIP-44/49/84/86 address type (Story 20 / Issue #132). Drives
+    /// the descriptor template in `build_bdk_wallet`. Defaults to
+    /// `NativeSegwit` (BIP-84 P2WPKH) via `from_mnemonic`. Other
+    /// types require `from_mnemonic_with_type`.
+    address_type: AddressType,
     /// Lazily-populated by `sync`. Held in a `Mutex` for interior
     /// mutability across the `&self` API; `sync` and `balance` take
     /// short-lived locks that never cross `await`.
@@ -118,15 +123,40 @@ impl Wallet {
     /// Network policy: caller must supply `network` explicitly.
     /// `db_path`: `Some(path)` enables `Wallet::persist()` (Story 12
     /// bdk_file_store). `None` keeps the in-memory-only v0.1.1 default.
+    ///
+    /// **Defaults to `AddressType::NativeSegwit`** (BIP-84 P2WPKH).
+    /// For other address types (legacy / nested-segwit / taproot),
+    /// use [`Wallet::from_mnemonic_with_type`] (Story 20 / Issue #132).
     pub fn from_mnemonic(
         mnemonic: &Mnemonic,
         network: Network,
+        db_path: Option<PathBuf>,
+    ) -> Result<Self, Error> {
+        Self::from_mnemonic_with_type(mnemonic, network, AddressType::NativeSegwit, db_path)
+    }
+
+    /// Construct a `Wallet` from a BIP-39 mnemonic + network +
+    /// explicit address type (BIP-44/49/84/86). Story 20 / Issue #132.
+    ///
+    /// The address type drives the descriptor template used by
+    /// `build_bdk_wallet` (private; invoked by `sync` / `balance` /
+    /// `send` / `show`). Persisted wallet blobs do NOT carry the
+    /// address type — it is encoded in the descriptor shape
+    /// (`pkh(...)` vs `sh(wpkh(...))` vs `wpkh(...)` vs `tr(...)`).
+    /// Operators re-supply `--type` on `wallet create` (CLI); on
+    /// `wallet show` / `send` / `balance` the type is inferred from
+    /// the persisted descriptor.
+    pub fn from_mnemonic_with_type(
+        mnemonic: &Mnemonic,
+        network: Network,
+        address_type: AddressType,
         db_path: Option<PathBuf>,
     ) -> Result<Self, Error> {
         match mnemonic.word_count() {
             12 | 15 | 18 | 21 | 24 => Ok(Self {
                 phrase: mnemonic.to_phrase(),
                 network,
+                address_type,
                 bdk: Mutex::new(None),
                 db_path,
             }),
@@ -224,6 +254,7 @@ impl Wallet {
         Ok(Self {
             phrase: mnemonic.to_phrase(),
             network,
+            address_type: AddressType::NativeSegwit,
             bdk: Mutex::new(None),
             db_path: Some(db_path),
         })
@@ -658,7 +689,9 @@ impl Wallet {
         // external/change chain + address index. Deriving to a
         // specific index (e.g., `m/.../0/0`) then appending `*/0/*`
         // would yield `m/.../0/0/0/*` — duplicate receive index.
-        let path_str = format!("m/{}h/{}h/0h", AddressType::NativeSegwit.purpose(), coin,);
+        // Story 20 / Issue #132: address type drives purpose + descriptor
+        // wrapper (pkh / sh-wpkh / wpkh / tr).
+        let path_str = format!("m/{}h/{}h/0h", self.address_type.purpose(), coin);
         let path = bip32::DerivationPath::from_str(&path_str)
             .map_err(|e| Error::InvalidDerivationPath(e.to_string()))?;
         let derived = master.derive(&path)?;
@@ -666,8 +699,14 @@ impl Wallet {
         // Build descriptor from zeroizing Secret<String>. Drop
         // immediately after `create` returns.
         let xprv_secret = derived.to_xprv_secret(self.network);
-        let external_descriptor = format!("wpkh({}/0/*)", xprv_secret.expose());
-        let change_descriptor = format!("wpkh({}/1/*)", xprv_secret.expose());
+        let external_descriptor = self
+            .address_type
+            .receiving_template()
+            .replace("{}", xprv_secret.expose().as_str());
+        let change_descriptor = self
+            .address_type
+            .change_template()
+            .replace("{}", xprv_secret.expose().as_str());
         drop(xprv_secret);
         drop(derived);
         drop(master);

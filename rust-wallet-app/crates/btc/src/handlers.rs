@@ -196,6 +196,7 @@ pub async fn handle_create(
     words: WordCount,
     network: NetArg,
     password: Option<String>,
+    address_type: crate::cli::AddressTypeArg,
     confirm_yes: Option<String>,
     data_dir: &Path,
 ) -> Result<()> {
@@ -218,8 +219,8 @@ pub async fn handle_create(
         );
     }
 
-    let (wallet_id, mnemonic) =
-        create_wallet(data_dir, network_obj, n, &pwd).context("create_wallet failed")?;
+    let (wallet_id, mnemonic) = create_wallet(data_dir, network_obj, n, &pwd, address_type.into())
+        .context("create_wallet failed")?;
     let wallet_id_str = wallet_id.to_string();
     let phrase = mnemonic.expose().to_string();
 
@@ -523,8 +524,14 @@ mod tests {
     /// Create a throwaway wallet on `network` in `base`, return its
     /// `WalletId` as a String (the shape `handle_show` accepts).
     fn make_wallet(base: &std::path::Path, network: bitcoin::Network) -> String {
-        let (id, _phrase) =
-            create_wallet(base, network, 12, &test_password()).expect("create_wallet must succeed");
+        let (id, _phrase) = create_wallet(
+            base,
+            network,
+            12,
+            &test_password(),
+            bitcoin_wallet_core::keys::AddressType::NativeSegwit,
+        )
+        .expect("create_wallet must succeed");
         id.to_string()
     }
 

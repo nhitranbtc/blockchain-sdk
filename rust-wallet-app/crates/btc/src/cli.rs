@@ -289,6 +289,14 @@ pub enum WalletActionKind {
         /// Wallet encryption password (omit to prompt securely).
         #[arg(long)]
         password: Option<String>,
+        /// Address type (BIP-44/49/84/86) — Story 20 / Issue #132.
+        /// `legacy` (P2PKH `m`/`n`), `nested-segwit` (BIP-49 P2SH-P2WPKH
+        /// `2`), `native-segwit` (BIP-84 P2WPKH `tb1q...` — default),
+        /// `taproot` (BIP-86 P2TR `tb1p...`). The chosen type drives
+        /// the descriptor template at wallet creation; persisted blobs
+        /// encode the type in the descriptor shape.
+        #[arg(long = "type", value_enum, default_value_t = AddressTypeArg::NativeSegwit)]
+        address_type: AddressTypeArg,
         /// Confirmation text for mainnet (Story 10). When `--network
         /// mainnet`, this flag must be passed with the exact text
         /// `yes` (lowercase). Any other value, or absence, aborts with
@@ -743,6 +751,32 @@ impl NetArg {
     }
 }
 
+/// CLI-side address-type enum (Story 20 / Issue #132). Mirrors the
+/// lib's `AddressType` (clap `ValueEnum` lives in the binary crate
+/// — same separation pattern as `CoinSelection`).
+#[derive(Copy, Clone, ValueEnum, Debug, PartialEq, Eq)]
+pub enum AddressTypeArg {
+    /// BIP-44 P2PKH (`m`/`n` on testnet).
+    Legacy,
+    /// BIP-49 P2SH-P2WPKH (`2` on testnet).
+    NestedSegwit,
+    /// BIP-84 P2WPKH (`tb1q...`) — default.
+    NativeSegwit,
+    /// BIP-86 P2TR (`tb1p...`).
+    Taproot,
+}
+
+impl From<AddressTypeArg> for bitcoin_wallet_core::keys::AddressType {
+    fn from(a: AddressTypeArg) -> Self {
+        match a {
+            AddressTypeArg::Legacy => Self::Legacy,
+            AddressTypeArg::NestedSegwit => Self::NestedSegwit,
+            AddressTypeArg::NativeSegwit => Self::NativeSegwit,
+            AddressTypeArg::Taproot => Self::Taproot,
+        }
+    }
+}
+
 // --- Manual Debug impls (L12 CRITICAL #2: redact password) ---
 
 impl fmt::Debug for Cli {
@@ -874,12 +908,14 @@ impl fmt::Debug for WalletActionKind {
                 words,
                 network,
                 password: _,
+                address_type,
                 confirm_yes,
             } => f
                 .debug_struct("Create")
                 .field("words", words)
                 .field("network", network)
                 .field("password", &"<redacted>")
+                .field("address_type", address_type)
                 .field(
                     "confirm_yes",
                     &confirm_yes
@@ -1059,6 +1095,83 @@ mod tests {
             "hunter2",
         ]);
         assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 20 / Issue #132: `--type native-segwit` is the default
+    /// (no `--type` flag required for the historical default).
+    #[test]
+    fn parse_create_defaults_address_type_to_native_segwit() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "create",
+            "--words",
+            "12",
+            "--network",
+            "testnet",
+        ])
+        .unwrap();
+        let Commands::Wallet(WalletAction {
+            action: WalletActionKind::Create { address_type, .. },
+        }) = cli.command
+        else {
+            panic!("expected Create subcommand");
+        };
+        assert_eq!(address_type, AddressTypeArg::NativeSegwit);
+    }
+
+    /// Story 20: `--type legacy` parses.
+    #[test]
+    fn parse_create_accepts_legacy_address_type() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "create",
+            "--words",
+            "12",
+            "--network",
+            "testnet",
+            "--type",
+            "legacy",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 20: `--type taproot` parses.
+    #[test]
+    fn parse_create_accepts_taproot_address_type() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "create",
+            "--words",
+            "12",
+            "--network",
+            "testnet",
+            "--type",
+            "taproot",
+        ]);
+        assert!(cli.is_ok(), "expected parse ok, got: {cli:?}");
+    }
+
+    /// Story 20: invalid address type value exits at parse.
+    #[test]
+    fn parse_create_rejects_invalid_address_type() {
+        let cli = Cli::try_parse_from([
+            "btc",
+            "wallet",
+            "create",
+            "--words",
+            "12",
+            "--network",
+            "testnet",
+            "--type",
+            "p2pkh",
+        ]);
+        assert!(
+            cli.is_err(),
+            "invalid --type value must fail at parse (exit 2)"
+        );
     }
 
     /// Story 10: Bitcoin network (mainnet) requires `--confirm-yes yes`.
