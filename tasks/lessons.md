@@ -829,20 +829,23 @@ rg -n -e 'print\s*\(.*password|print\s*\(.*mnemonic'        # logging mnemonic-s
 
 | Tier | Pipeline variation for wallet-desktop |
 |---|---|
-| `trivial` (lint config, asset stubs) | Skip TDD; verify gate only; no L12 review subagent (self-review); direct commit |
+| `trivial` (lint config, asset stubs) | Skip TDD; verify gate only; no L12 review subagent (self-review); commit + push to PR |
 | `normal` (DTOs, providers, widgets) | Full: failing test → impl → pass → L12 review → verify → PAUSE → commit |
 | `critical` (BtcInvoker, TempSecretFile, BtcLogFilter, password/mnemonic widgets) | Full + `pr-review-toolkit:security-auditor` subagent + explicit L12 CRITICAL #2 sweep + flutter analyze with extra `unsafe_html` + custom lint rule for mnemonic-shaped strings |
 
-### Branch + PR model deviation
+### Branch + PR model — historical archive
 
-Per user direction (2026-08-15), wallet-desktop commits directly to `main` rather than via feature branches + PRs. This:
+**2026-08-15 (early session):** wallet-desktop was originally scoped with a "direct commit on `main`" deviation, skipping canonical L13's branch + PR model. Reasoning captured in the original L31 draft: speed over reversibility, single developer, no merge queue.
 
-1. Skips L13 steps 13 (commit-push-pr), 15 (PR review), 15a (10-section tech doc), 15b-15c (L24 cascade + L13 audit), 15d (merge + close).
-2. Replaces them with: `git commit` on main + `gh issue comment N` for progress tracking.
-3. Means L21 (estimate-report + ai-cost-report update on every PR merge) doesn't fire. Cost-tracking adapted to: append to ledger after each commit.
-4. Means L24 (CHANGELOG on PR merge) doesn't fire. CHANGELOG entry added in Task 26 (manual verification task) instead.
+**2026-08-15 (same day):** user reversed the deviation. `feat/wallet-desktop/task-N` branches now follow canonical L13:
 
-**If branch model changes back** (e.g., wallet-desktop moves to a feature branch for v0.2+), revert to canonical L13 for steps 13-15d.
+1. Each task branches off `main` (`git checkout -b feat/wallet-desktop/task-N`).
+2. L13 steps 13 (commit-push-pr), 14 (issue edit), 15 (PR review), 15a (10-section tech doc), 15b-15c (L24 cascade + L13 audit), 15d (merge + close) all fire as canonical.
+3. L21 (estimate-report + ai-cost-report) updates on every PR merge — recorded in PR body.
+4. L24 (CHANGELOG `[Unreleased]` + User Stories table) cascade runs on each PR merge; accumulated entries release-cut at Task 26.
+5. Tasks 1 + 2 (`26dfec9`, `a342597`) remain on `main` as historical artifacts of the original deviation. Task 3 onwards follows canonical L13.
+
+**Rationale for reversal:** even on solo dev branches, the L12 review + L24 cascade + L21 cost tracking provide audit trail value that direct commits lack. Reverting to canonical L13 trades ~2 min/branch for a complete per-task audit record.
 
 ### Anti-patterns
 
