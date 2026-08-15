@@ -109,4 +109,27 @@ void main() {
           '10',
         ]));
   });
+
+  test('WalletImport carries mnemonic + password-file (security-relevant)',
+      () {
+    // Per security-auditor (PR #184 HIGH): mnemonic embedded in argv is
+    // visible in /proc/<pid>/cmdline + any logger that prints argv.
+    // v0.2 plan: withMnemonicFile helper. Lock the current behavior with
+    // a test so the future refactor is intentional.
+    final cmd = BtcCommand.walletImport(
+      mnemonic: 'abandon x11 about',
+      network: 'testnet',
+      passwordFilePath: '/tmp/pwd',
+    );
+    expect(cmd.argv, containsAllInOrder([
+      'wallet',
+      'import',
+      '--mnemonic',
+      'abandon x11 about',
+      '--network',
+      'testnet',
+      '--password-file',
+      '/tmp/pwd',
+    ]));
+  });
 }
