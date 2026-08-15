@@ -59,7 +59,10 @@ class WalletDetail {
     if (balanceRaw is! Map<String, dynamic>) {
       throw DtoParseException('balance', balanceRaw);
     }
-    final utxosRaw = (j['utxos'] as List?) ?? const <Map<String, dynamic>>[];
+    final utxosRaw = j['utxos'];
+    if (utxosRaw != null && utxosRaw is! List) {
+      throw DtoParseException('utxos', utxosRaw);
+    }
     return WalletDetail(
       id: dtoString(j, 'id'),
       network: dtoString(j, 'network'),
@@ -67,7 +70,7 @@ class WalletDetail {
       firstAddress: dtoString(j, 'first_address'),
       balance: Balance.fromJson(balanceRaw),
       utxos: List<Utxo>.unmodifiable(
-        utxosRaw.map((e) {
+        ((utxosRaw ?? const <Object?>[]) as List<Object?>).map((Object? e) {
           if (e is! Map<String, dynamic>) {
             throw DtoParseException('utxos[]', e);
           }
