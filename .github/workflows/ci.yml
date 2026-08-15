@@ -107,6 +107,13 @@ jobs:
   sync-demo:
     name: Sync demo (live testnet, push only)
     if: github.event_name == 'push'
+    # L29: live-network gates are flake-prone on public Esplora
+    # infrastructure (504 Gateway Timeout from upstream openresty proxy
+    # observed 2026-08-15 on SHA 7e2c002; same code succeeded on prior SHA
+    # 2e67dac within 24h). Sync-demo's value is "does the live path
+    # still work?" — transient infra should not block main. CI status
+    # still surfaces the failure for operator attention.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
