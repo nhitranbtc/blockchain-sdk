@@ -1,0 +1,41 @@
+name: wallet_desktop
+description: "Desktop UI for the rust-wallet-app umbrella (v1: BTC host layer)."
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  riverpod_annotation: ^2.3.5
+  go_router: ^14.2.0
+  path_provider: ^2.1.4
+  path: ^1.9.0
+  crypto: ^3.0.3
+  logging: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.11
+  riverpod_generator: ^2.6.5
+  custom_lint: ^0.7.6
+  riverpod_lint: ^2.6.5
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/btc/linux-x64/btc
+    - assets/btc/linux-arm64/btc
+    - assets/btc/macos-x64/btc
+    - assets/btc/macos-arm64/btc
+    - assets/btc/windows-x64/btc.exe
+
+dependency_overrides: {}
