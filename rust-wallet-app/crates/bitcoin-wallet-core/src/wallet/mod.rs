@@ -640,7 +640,7 @@ impl Wallet {
         tx::sign::sign_psbt(&bdk, &mut psbt)?;
         let tx = tx::sign::extract_tx(&psbt)?;
         *self.bdk.lock().expect("bdk lock poisoned") = Some(bdk);
-        Ok(tx::broadcast::broadcast(esplora, &tx).await?)
+        tx::broadcast::broadcast(esplora, &tx).await
     }
 
     /// Story 17 dry-run: build + sign RBF replacement without

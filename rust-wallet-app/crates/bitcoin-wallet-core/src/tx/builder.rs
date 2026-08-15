@@ -353,7 +353,7 @@ pub fn build_bump_fee_tx(
         Error::TxBuild("bump_fee: cannot calculate original fee (tx missing UTXO data)".into())
     })?;
     let original_weight = original_tx.weight();
-    let original_fee_rate_sat_per_vb = original_fee.to_sat() * 4 / original_weight.to_wu() as u64;
+    let original_fee_rate_sat_per_vb = original_fee.to_sat() * 4 / original_weight.to_wu();
     let new_fee_rate_sat_per_vb: u64 = fee_rate.to_sat_per_vb_ceil();
     if new_fee_rate_sat_per_vb <= original_fee_rate_sat_per_vb {
         return Err(Error::TxBuild(format!(

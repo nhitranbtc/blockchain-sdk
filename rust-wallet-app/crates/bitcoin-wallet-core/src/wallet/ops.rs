@@ -20,6 +20,7 @@ use crate::chain::esplora::EsploraClient;
 use crate::crypto::aad::Aad;
 use crate::crypto::mnemonic_cipher::{decrypt_mnemonic, encrypt_mnemonic, MnemonicCipherBlob};
 use crate::error::{Error, Result};
+#[allow(unused_imports)]
 use crate::keys::{AddressType, Mnemonic, Secret};
 use crate::wallet::id::WalletId;
 use crate::wallet::store::{
@@ -73,14 +74,27 @@ pub fn create_wallet(
 }
 
 /// Read the persisted address type sidecar (Story 20 / Issue #132).
+///
+/// **L13 commit-review MED fix:** treat all failures (parse error,
+/// IO error, security check) as the default `NativeSegwit` — the
+/// sidecar is best-effort metadata, not a security boundary.
+/// Refusing the entire decrypt path on a malformed sidecar would
+/// break the N2 closure (the secret-bearing blob is intact; the
+/// descriptor shape would just default to NativeSegwit).
+///
 /// Back-compat: absent sidecar (wallets created before Story 20)
-/// returns `NativeSegwit` default.
+/// also returns the default.
 pub fn read_address_type_or_default(
     base: &Path,
     network: Network,
     id: WalletId,
-) -> crate::Result<crate::keys::AddressType> {
-    Ok(read_address_type_at(base, network, id)?.unwrap_or(crate::keys::AddressType::NativeSegwit))
+) -> crate::keys::AddressType {
+    use crate::keys::AddressType;
+    match read_address_type_at(base, network, id) {
+        Ok(Some(t)) => t,
+        Ok(None) => AddressType::NativeSegwit,
+        Err(_) => AddressType::NativeSegwit,
+    }
 }
 
 /// Import an existing BIP-39 mnemonic phrase + persist the encrypted
@@ -162,7 +176,7 @@ pub async fn show_wallet(
     let wallet = Wallet::from_mnemonic_with_type(
         &mnemonic,
         network,
-        read_address_type_or_default(base, network, id)?,
+        read_address_type_or_default(base, network, id),
         db_path.map(|p| p.to_path_buf()),
     )?;
     wallet.sync(esplora).await?;
