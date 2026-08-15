@@ -3,7 +3,8 @@ import 'package:wallet_desktop/core/btc/btc_error.dart';
 
 void main() {
   test('wrongPassword maps to WrongPassword kind', () {
-    final err = BtcError.fromStderr('error: wrong password (try again)', exitCode: 2);
+    final err =
+        BtcError.fromStderr('error: wrong password (try again)', exitCode: 2);
     expect(err.kind, BtcErrorKind.wrongPassword);
   });
 
@@ -13,12 +14,14 @@ void main() {
   });
 
   test('unknown wallet maps to UnknownWallet', () {
-    final err = BtcError.fromStderr("error: wallet 'abc' not found", exitCode: 4);
+    final err =
+        BtcError.fromStderr("error: wallet 'abc' not found", exitCode: 4);
     expect(err.kind, BtcErrorKind.unknownWallet);
   });
 
   test('network/esplora unreachable maps to NetworkError', () {
-    final err = BtcError.fromStderr('error: esplora unreachable: 504', exitCode: 3);
+    final err =
+        BtcError.fromStderr('error: esplora unreachable: 504', exitCode: 3);
     expect(err.kind, BtcErrorKind.networkError);
   });
 
@@ -27,7 +30,8 @@ void main() {
     expect(err.kind, BtcErrorKind.other);
   });
 
-  test('cross-network address rejection maps to UnknownAddressType '
+  test(
+      'cross-network address rejection maps to UnknownAddressType '
       '(more-specific pattern wins over networkError)', () {
     final err = BtcError.fromStderr(
       'error: address tb1q... does not match network mainnet',

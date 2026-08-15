@@ -148,9 +148,13 @@ class WalletShow extends BtcCommand {
     final eu = esploraUrl;
     final ep = esploraSpkiPin;
     return [
-      'wallet', 'show', id,
-      '--network', network,
-      '--password-file', passwordFilePath,
+      'wallet',
+      'show',
+      id,
+      '--network',
+      network,
+      '--password-file',
+      passwordFilePath,
       if (eu != null) '--esplora-url',
       if (eu != null) eu,
       if (ep != null) '--pin-spki',
@@ -168,12 +172,14 @@ class WalletDelete extends BtcCommand {
 }
 
 class WalletRename extends BtcCommand {
-  const WalletRename({required this.id, required this.to, required this.network});
+  const WalletRename(
+      {required this.id, required this.to, required this.network});
   final String id;
   final String to;
   final String network;
   @override
-  List<String> get argv => ['wallet', 'rename', '--id', id, '--to', to, '--network', network];
+  List<String> get argv =>
+      ['wallet', 'rename', '--id', id, '--to', to, '--network', network];
 }
 
 class WalletCreate extends BtcCommand {
@@ -194,11 +200,16 @@ class WalletCreate extends BtcCommand {
   List<String> get argv {
     final cy = confirmYes;
     return [
-      'wallet', 'create',
-      '--words', '$words',
-      '--network', network,
-      '--type', addressType,
-      '--password-file', passwordFilePath,
+      'wallet',
+      'create',
+      '--words',
+      '$words',
+      '--network',
+      network,
+      '--type',
+      addressType,
+      '--password-file',
+      passwordFilePath,
       if (cy != null) '--confirm-yes',
       if (cy != null) cy,
     ];
@@ -216,10 +227,14 @@ class WalletImport extends BtcCommand {
   final String passwordFilePath;
   @override
   List<String> get argv => [
-        'wallet', 'import',
-        '--mnemonic', mnemonic,
-        '--network', network,
-        '--password-file', passwordFilePath,
+        'wallet',
+        'import',
+        '--mnemonic',
+        mnemonic,
+        '--network',
+        network,
+        '--password-file',
+        passwordFilePath,
       ];
 }
 
@@ -239,8 +254,8 @@ class WalletSend extends BtcCommand {
   });
   final String mnemonic;
   final String network;
-  final String? to;          // multi-recipient form (single OK too)
-  final String? address;     // single-recipient form (deprecated, use `to`)
+  final String? to; // multi-recipient form (single OK too)
+  final String? address; // single-recipient form (deprecated, use `to`)
   final int? amountSat;
   final int feeRateSatPerVb;
   final String passwordFilePath;
@@ -256,22 +271,29 @@ class WalletSend extends BtcCommand {
     final amt = amountSat;
     final cy = confirmYes;
     return [
-      'wallet', 'send',
-      '--mnemonic', mnemonic,
-      '--network', network,
+      'wallet',
+      'send',
+      '--mnemonic',
+      mnemonic,
+      '--network',
+      network,
       if (t != null) '--to',
       if (t != null) t,
       if (a != null) '--address',
       if (a != null) a,
       if (amt != null) '--amount-sat',
       if (amt != null) '$amt',
-      '--fee-rate', '$feeRateSatPerVb',
+      '--fee-rate',
+      '$feeRateSatPerVb',
       if (dryRun) '--dry-run',
       if (cy != null) '--confirm-yes',
       if (cy != null) cy,
-      '--password-file', passwordFilePath,
-      '--esplora-url', esploraUrl,
-      '--pin-spki', esploraSpkiPin,
+      '--password-file',
+      passwordFilePath,
+      '--esplora-url',
+      esploraUrl,
+      '--pin-spki',
+      esploraSpkiPin,
     ];
   }
 }
@@ -295,10 +317,14 @@ class TxList extends BtcCommand {
     final l = limit;
     return [
       'tx-list',
-      '--mnemonic', mnemonic,
-      '--network', network,
-      '--esplora-url', esploraUrl,
-      '--pin-spki', esploraSpkiPin,
+      '--mnemonic',
+      mnemonic,
+      '--network',
+      network,
+      '--esplora-url',
+      esploraUrl,
+      '--pin-spki',
+      esploraSpkiPin,
       if (l != null) '--limit',
       if (l != null) '$l',
       '--json',
@@ -319,9 +345,12 @@ class FeeEstimates extends BtcCommand {
   @override
   List<String> get argv => [
         'fee-estimates',
-        '--network', network,
-        '--esplora-url', esploraUrl,
-        '--pin-spki', esploraSpkiPin,
+        '--network',
+        network,
+        '--esplora-url',
+        esploraUrl,
+        '--pin-spki',
+        esploraSpkiPin,
         '--json',
       ];
 }

@@ -16,11 +16,17 @@ void main() {
       esploraSpkiPin: '0'.padLeft(64, '0'),
     );
     expect(cmd.argv, [
-      'wallet', 'show', 'abc-uuid',
-      '--network', 'testnet',
-      '--password-file', '/tmp/abc.pwd',
-      '--esplora-url', 'https://blockstream.info/testnet/api',
-      '--pin-spki', '0'.padLeft(64, '0'),
+      'wallet',
+      'show',
+      'abc-uuid',
+      '--network',
+      'testnet',
+      '--password-file',
+      '/tmp/abc.pwd',
+      '--esplora-url',
+      'https://blockstream.info/testnet/api',
+      '--pin-spki',
+      '0'.padLeft(64, '0'),
     ]);
   });
 
@@ -34,16 +40,26 @@ void main() {
       esploraUrl: 'https://blockstream.info/testnet/api',
       esploraSpkiPin: '0'.padLeft(64, '0'),
     );
-    expect(cmd.argv, containsAllInOrder([
-      'wallet', 'send',
-      '--mnemonic', 'abandon x11 about',
-      '--network', 'testnet',
-      '--to', 'tb1qaddr:10000',
-      '--fee-rate', '5',
-      '--password-file', '/tmp/pwd',
-      '--esplora-url', 'https://blockstream.info/testnet/api',
-      '--pin-spki', '0'.padLeft(64, '0'),
-    ]));
+    expect(
+        cmd.argv,
+        containsAllInOrder([
+          'wallet',
+          'send',
+          '--mnemonic',
+          'abandon x11 about',
+          '--network',
+          'testnet',
+          '--to',
+          'tb1qaddr:10000',
+          '--fee-rate',
+          '5',
+          '--password-file',
+          '/tmp/pwd',
+          '--esplora-url',
+          'https://blockstream.info/testnet/api',
+          '--pin-spki',
+          '0'.padLeft(64, '0'),
+        ]));
   });
 
   test('WalletCreate includes words + type + password-file', () {
@@ -53,13 +69,20 @@ void main() {
       addressType: 'native-segwit',
       passwordFilePath: '/tmp/pwd',
     );
-    expect(cmd.argv, containsAllInOrder([
-      'wallet', 'create',
-      '--words', '12',
-      '--network', 'testnet',
-      '--type', 'native-segwit',
-      '--password-file', '/tmp/pwd',
-    ]));
+    expect(
+        cmd.argv,
+        containsAllInOrder([
+          'wallet',
+          'create',
+          '--words',
+          '12',
+          '--network',
+          'testnet',
+          '--type',
+          'native-segwit',
+          '--password-file',
+          '/tmp/pwd',
+        ]));
   });
 
   test('TxList includes mnemonic + limit', () {
@@ -70,12 +93,20 @@ void main() {
       esploraSpkiPin: '0'.padLeft(64, '0'),
       limit: 10,
     );
-    expect(cmd.argv, containsAllInOrder([
-      'tx-list', '--mnemonic', 'abandon x11 about',
-      '--network', 'testnet',
-      '--esplora-url', 'https://blockstream.info/testnet/api',
-      '--pin-spki', '0'.padLeft(64, '0'),
-      '--limit', '10',
-    ]));
+    expect(
+        cmd.argv,
+        containsAllInOrder([
+          'tx-list',
+          '--mnemonic',
+          'abandon x11 about',
+          '--network',
+          'testnet',
+          '--esplora-url',
+          'https://blockstream.info/testnet/api',
+          '--pin-spki',
+          '0'.padLeft(64, '0'),
+          '--limit',
+          '10',
+        ]));
   });
 }
