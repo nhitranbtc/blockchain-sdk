@@ -772,7 +772,7 @@ citation in the header.
 | 1 L11 skill tag | Skill list scan | Same: load 3-5 relevant (flutter_lints, riverpod_generator, dart:io, package:logging, etc.) |
 | 2 Complexity self-detect | trivial / normal / critical | Same tiers; "critical" for L12 secret-handling, password fields, mnemonic lifecycle, network TLS pinning |
 | 3 Pick up issue | Read issue body | Same; check task is sub-task or top-level (plan §Task Index) |
-| 4 karpathy-guidelines + branch | Worktree + branch from main | **wallet-desktop uses direct commit on `main`** (per user direction 2026-08-15). No worktree, no feature branch. |
+| 4 karpathy-guidelines + branch | Worktree + branch from main | **Same — checkout new branch per task (e.g. `feat/wallet-desktop/task-3`). Direct commit on `main` is NOT permitted.** |
 | 4a Drift scan (L30) | `git log --all -- <path>` | Same |
 | 5-8 Skill pair | L11 map, domain-tag wins | Same |
 | **9 TDD red-green** | failing test → impl → pass | **Same for tasks 3-24**. **Skipped for** config tasks (Task 2 lint, Task 25 CI workflow) and asset-stub tasks (Task 1). For UI feature tasks (Tasks 17-23), write failing widget test FIRST (per design §8.3 widget test matrix). |
@@ -780,9 +780,9 @@ citation in the header.
 | **11 Verify gate** | `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test --workspace` | `dart format --set-exit-if-changed --output=none .` + `dart analyze --fatal-warnings --fatal-infos` + `flutter test` |
 | 11a Backlog triage | Same | Same |
 | **12 PAUSE commit approval** | Wait for explicit "yes commit" | Same |
-| **13 Commit + push + PR** | PR model | **Direct commit on `main`. No PR, no push.** Squash-merge steps 15-15d collapse. (Per user direction; deviation from canonical L13.) |
-| **14 Flip issue checkboxes** | `gh issue edit N --body` | `gh issue comment N --body "<progress + commit SHA + next task ref>"` (issue body has no checkboxes in our batch-created issues). |
-| 15-15d PR review + merge + tech doc + L24 cascade | PR model | **Skipped** (no PR). L24 CHANGELOG entry added in Task 26 (manual verification task). |
+| **13 Commit + push + PR** | PR model | **Same** — `commit-commands:commit-push-pr`. Branch + PR required for every task. |
+| **14 Flip issue checkboxes** | `gh issue edit N --body` | **Same** — flip issue checkboxes with artifact evidence per L13 step 14 rules. |
+| 15-15d PR review + merge + tech doc + L24 cascade | PR model | **Same** — full PR review + merge + close + L24 cascade. |
 | 16-19 Session-level | Same | Same |
 
 ### Verify gate details (Step 11)
