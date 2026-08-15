@@ -373,7 +373,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | 5   | Fix-loop limit: 3 rounds per task then PAUSE; round = one review + one fix commit pair. Shared budget across pre-commit (step 12) and post-PR-review (step 15). Exceed → PAUSE + revert-to-last-green + follow-up issue + ledger entry (Q9). |
 | 6   | Verify: double-gate (per-step + task-end)                                                                                                                                                                                                    |
 | 7   | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`)                                                                                                                                                                |
-| 8   | Review input: first commit on branch (not uncommitted, not squash-merge candidate)                                                                                                                                                           |
+| 8   | Review input: squash-candidate state (final commit on PR branch before merge) — not first commit, not uncommitted. For PRs that squash, reviewers see the combined final state. For PRs that merge commit-by-commit (rare), reviewers see the full history. (Re-grill 2026-08-15: corrected from "first commit" wording — Tasks 3-4 squash-merged multiple commits; reviewers read the combined state.)                                                                                                                                                  |
 | 9   | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry                                                                                                                                                         |
 | 10  | Complexity: self-detect + user confirm (hybrid of C + D)                                                                                                                                                                                     |
 
@@ -854,6 +854,7 @@ rg -n -e 'print\s*\(.*password|print\s*\(.*mnemonic'        # logging mnemonic-s
 - **Logging mnemonic-shaped strings** in widget code. L12 CRITICAL #2 is a hard gate; `BtcLogFilter` is the only path for secret-bearing logs.
 - **Committing secrets** to git (`.dart_tool/`, `coverage/`, `~/.local/share/flutter_btc_wallet/`). `.gitignore` is mandatory; verify with `git status --ignored` after scaffold.
 - **Spawning `btc` without stripping inherited env vars** (Task 10 `BtcInvoker`). L7: strip `BTC_WALLET_MNEMONIC`, `BTC_ENCRYPT_PASSWORD`, `BTC_DECRYPT_PASSWORD` from parent env before `Process.start`.
+- **Committing `dart analyze` auto-edits** to `analysis_options.yaml` (flutter-tools adds `build/`, `android/`, `ios/`, `web/`, `windows/`, `macos/`, `linux/` to `analyzer.exclude` on first run). Revert after verify gate unless intentional. Defer the platform excludes to Task 25 (CI workflow) where they belong with the GitHub Actions matrix.
 
 ### Apply
 
