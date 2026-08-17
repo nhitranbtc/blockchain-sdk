@@ -83,7 +83,6 @@ class EsploraConfigNotifier extends AsyncNotifier<EsploraConfig> {
     return EsploraConfig.defaults('testnet');
   }
 
-  @override
   Future<void> save(EsploraConfig cb) async {
     state = AsyncData(cb);
     final file = ref.read(esploraConfigFilePathProvider);
