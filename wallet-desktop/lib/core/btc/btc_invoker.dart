@@ -12,9 +12,12 @@ import 'btc_error.dart';
 /// 1. **L7 env-strip**: parent env is filtered to remove secret-bearing
 ///    keys (`BTC_WALLET_MNEMONIC`, `BTC_ENCRYPT_PASSWORD`,
 ///    `BTC_DECRYPT_PASSWORD`) before the child process inherits it.
-///    Without this, an env var exported by the calling shell would leak
-///    the user's mnemonic to a long-running daemon. The keys here match
-///    the btc CLI's documented env-var contract.
+///    `Process.start` is invoked with `includeParentEnvironment: false`
+///    so the filter is not silently re-overridden by the parent shell's
+///    own copies of the same keys. Without this, an env var exported
+///    by the calling shell would leak the user's mnemonic to a
+///    long-running daemon. The keys here match the btc CLI's
+///    documented env-var contract.
 ///
 /// 2. **Argv-not-logged**: [BtcCommand.argv] contains mnemonic in plaintext
 ///    (deferred to `withMnemonicFile` in v0.2 — see Task 8 backlog).
@@ -37,8 +40,12 @@ class BtcInvoker {
   final String? dataDirOverride;
 
   /// Wall-clock cap on a single `btc` invocation. Hung subprocesses are
-  /// killed and surface as `BtcError` with `exitCode: -1`.
+  /// killed (SIGTERM, then SIGKILL on escalation) and surface as
+  /// `BtcError` with `exitCode: -1`.
   static const _timeout = Duration(seconds: 30);
+
+  /// Time to wait after SIGTERM before escalating to SIGKILL.
+  static const _sigkillGrace = Duration(seconds: 2);
 
   /// Env-var keys that MUST NOT be inherited by the child process.
   /// Matches `btc` CLI's documented contract (F47-derived).
@@ -56,7 +63,7 @@ class BtcInvoker {
   /// - Non-zero exit code (raw stderr/stdout in `.stderr` field — callers
   ///   MUST redact via [BtcLogFilter] before logging).
   /// - `Process.start` failure (binary missing, not executable, EACCES).
-  /// - Invocation timeout (30 s; child killed).
+  /// - Invocation timeout (30 s; child killed SIGTERM → SIGKILL).
   /// - `jsonDecode` failure (`FormatException`) → falls back to raw-text
   ///   `parse(trimmed)`.
   /// - Exception thrown inside [parse] callback → rethrown as `BtcError`
@@ -81,6 +88,11 @@ class BtcInvoker {
           binaryPath,
           cmd.argv,
           environment: env,
+          // Critical: prevents the parent shell's env (which may contain
+          // BTC_WALLET_MNEMONIC etc.) from being merged back in AFTER our
+          // strip. With this flag, `env` above is the COMPLETE env the
+          // child sees.
+          includeParentEnvironment: false,
           runInShell: false,
         );
       } on ProcessException catch (e) {
@@ -92,10 +104,22 @@ class BtcInvoker {
 
       final stdoutFuture = process.stdout.transform(utf8.decoder).join();
       final stderrFuture = process.stderr.transform(utf8.decoder).join();
+      // Attach error handlers so a pipe-level failure doesn't surface as
+      // an unhandled async error after the timeout throws.
+      stdoutFuture.ignore();
+      stderrFuture.ignore();
+
       final exitCode =
-          await process.exitCode.timeout(_timeout, onTimeout: () {
+          await process.exitCode.timeout(_timeout, onTimeout: () async {
+        // SIGTERM first; escalate to SIGKILL if the child ignores it.
         try {
           process?.kill(ProcessSignal.sigterm);
+        } catch (_) {
+          // Process may already be dead; ignore.
+        }
+        await Future<void>.delayed(_sigkillGrace);
+        try {
+          process?.kill(ProcessSignal.sigkill);
         } catch (_) {
           // Process may already be dead; ignore.
         }
@@ -132,12 +156,18 @@ class BtcInvoker {
       }
     } on BtcError {
       rethrow;
-    } catch (e) {
-      // Wrap any other failure (parse-callback exception, etc.) as BtcError
-      // so all parser failures hit the same redaction path.
-      throw BtcError.fromStderr(
-        'btc invocation failed: $e',
+    } catch (_) {
+      // Defense-in-depth: wrap any other failure (parse-callback
+      // exception, etc.) as BtcError so all parser failures hit the
+      // same redaction path. Do NOT interpolate the exception's text into
+      // the message — the exception's `toString()` may embed field
+      // values that should be redacted via BtcLogFilter at the UI/log
+      // layer instead. The exception object is reachable via Dart's
+      // normal error path if a caller needs more.
+      throw const BtcError(
         exitCode: -1,
+        stderr: 'btc invocation failed (see Dart error for details)',
+        kind: BtcErrorKind.other,
       );
     } finally {
       // Defensive cleanup: kill any still-running child on cancellation,
