@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/btc/btc_error.dart';
+import '../../core/btc/btc_error_messages.dart';
+import '../../core/format/wallet_id.dart';
 import '../../core/logging/btc_log_filter.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
@@ -110,18 +112,26 @@ class WalletListScreen extends ConsumerWidget {
             child: asyncList.when(
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, st) {
-                // Log to dart:developer (ops observability) with the
-                // raw exception; render via a sanitised channel that
-                // BtcError funnels through a kind-mapped message and
-                // anything else runs through `BtcLogFilter.redact`.
+                // Defence-in-depth: `dart:developer.log` lands in
+                // DevTools / VM-service / OS syslog and bypasses the
+                // `package:logging` pipeline that `BtcLogFilter` sits
+                // behind. Pre-redact the exception's `toString()` so a
+                // non-BtcError reaching this branch can never echo a
+                // mnemonic or password string into an external log
+                // surface. (BtcError is safe by construction — see
+                // `BtcError.toString()` which deliberately omits stderr.)
+                // The `stackTrace` arg carries file/line info from Dart's
+                // catch site (BtcInvoker or `BtcLogFilter`) — not user
+                // input — so it is passed unredacted.
+                const filter = BtcLogFilter();
                 developer.log(
                   'wallet_list load failed',
                   name: 'WalletListScreen',
-                  error: e,
+                  error: filter.redact(e.toString()),
                   stackTrace: st,
                 );
                 final message = e is BtcError
-                    ? _userMessageForBtcError(e)
+                    ? userMessageForBtcError(e)
                     : 'Failed to load wallets';
                 final detail = e is BtcError
                     ? null
@@ -167,24 +177,25 @@ class WalletListScreen extends ConsumerWidget {
                     itemCount: list.length,
                     itemBuilder: (_, i) {
                       final w = list[i];
+                      final isValid =
+                          WalletRoutes.isValidWalletIdSegment(w.id);
                       return ListTile(
                         key: ValueKey(w.id),
                         title: Text(
-                          _displayWalletId(w.id),
+                          formatWalletId(w.id),
                           style: textTheme.bodyMedium
                               ?.copyWith(fontFamily: 'monospace'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Text('${w.network} • ${w.addressType}'),
-                        onTap: (openCb != null &&
-                                WalletRoutes.isValidWalletIdSegment(w.id))
-                            ? () => openCb(w.id)
-                            : (WalletRoutes.isValidWalletIdSegment(w.id)
-                                ? () => context.go(
+                        onTap: !isValid
+                            ? null
+                            : (openCb != null
+                                ? () => openCb(w.id)
+                                : () => context.go(
                                       WalletRoutes.detail(network, w.id),
-                                    )
-                                : null),
+                                    )),
                       );
                     },
                   ),
@@ -195,38 +206,5 @@ class WalletListScreen extends ConsumerWidget {
         ],
       ),
     );
-  }
-
-  /// Maps a [BtcError] into a UI-facing message based on its kind.
-  /// Does not expose the redacted stderr surface — that lives in the
-  /// log layer for ops triage. v0.2 backlog: per-kind actionable copy
-  /// + i18n key per kind.
-  String _userMessageForBtcError(BtcError err) {
-    switch (err.kind) {
-      case BtcErrorKind.wrongPassword:
-        return 'Wrong password.';
-      case BtcErrorKind.insufficientFunds:
-        return 'Not enough funds.';
-      case BtcErrorKind.unknownWallet:
-        return 'Wallet not found.';
-      case BtcErrorKind.networkError:
-        return 'Network error. Check your connection.';
-      case BtcErrorKind.unknownAddressType:
-        return 'Unsupported address type.';
-      case BtcErrorKind.confirmRequired:
-        return 'Confirmation required.';
-      case BtcErrorKind.other:
-        return 'Could not load wallets.';
-    }
-  }
-
-  /// Renders the wallet id as a legibly-truncated monospace string.
-  /// Wallet ids from `btc` are 32+ char hex/sha256 fingerprints; the
-  /// security-auditor (Task 17 review) flagged full-fingerprint display
-  /// as a shoulder-surfing / screen-recording hygiene concern. Show
-  /// `first4…last4` for ids > 12 chars, full string otherwise.
-  String _displayWalletId(String id) {
-    if (id.length <= 12) return id;
-    return '${id.substring(0, 4)}…${id.substring(id.length - 4)}';
   }
 }
