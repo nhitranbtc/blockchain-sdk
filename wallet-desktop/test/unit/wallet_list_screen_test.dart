@@ -166,7 +166,7 @@ void main() {
 
       // Kind-mapped message + retry button. The raw `panic: …` string
       // MUST NOT surface (security-auditor Task 17 review).
-      expect(find.text('Could not load wallets.'), findsOneWidget);
+      expect(find.text('Something went wrong.'), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
       expect(find.textContaining('panic'), findsNothing);
       expect(find.textContaining('db corrupted'), findsNothing);

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
@@ -108,17 +107,23 @@ class _WalletCreateScreenState extends ConsumerState<WalletCreateScreen> {
         ),
       );
       if (!mounted) return;
-      // Navigate back to the wallet list immediately. The
-      // walletsListProvider autoDispose family re-fetches when its
-      // next listener subscribes — but the user is already on the
-      // WalletListScreen route so we kick off an explicit refresh.
-      // Fire-and-forget via `unawaited` so navigation isn't blocked
-      // by the re-fetch (defence against UI lockups while btc CLI
-      // runs `wallet list`).
+      // **Unlock decision**: deliberately NOT calling
+      // `walletSessionProvider(r.id).unlock(mnemonic: r.mnemonic)`
+      // here. The v0.1 design leaves unlock to Task 20
+      // (WalletDetailScreen): the user backs up the mnemonic, is
+      // routed back to the list, taps the new wallet, re-enters
+      // the password on the detail screen. This minimizes the
+      // window during which the cleartext mnemonic sits in the
+      // `OpaqueMnemonic` handle — a one-tap dead-end, but a
+      // defence-in-depth choice. v0.2 may move the unlock here.
+      //
+      // **List refresh**: `ref.invalidate` (NOT `unawaited
+      // notifier.refresh()`) so a failing post-create re-fetch
+      // never leaks an uncaught zone error. The list screen's
+      // AsyncValue.error UI + Retry button already covers user-
+      // visible failure signalling.
       context.go(WalletRoutes.wallets(widget.network));
-      unawaited(
-        ref.read(walletsListProvider(widget.network).notifier).refresh(),
-      );
+      ref.invalidate(walletsListProvider(widget.network));
     } on BtcError catch (e) {
       if (mounted) setState(() => _error = e);
     } catch (e, st) {

@@ -19,6 +19,13 @@ import 'btc_error.dart';
 /// Maps a [BtcError] into a user-facing message based on its kind.
 /// Does not expose the redacted stderr surface — that lives in the
 /// log layer for ops triage.
+///
+/// The `other` arm returns a context-neutral phrase (correct in v0.1
+/// across all four call sites — Tasks 17/18/20/22): the older
+/// "Could not load wallets." copy was leaked across screens that
+/// also create / send / transact. Per L12 type-design post-PR
+/// (Task 18) we lifted the context specificity to each call site via
+/// `BtcError.toString()` fallbacks.
 String userMessageForBtcError(BtcError err) {
   switch (err.kind) {
     case BtcErrorKind.wrongPassword:
@@ -34,6 +41,6 @@ String userMessageForBtcError(BtcError err) {
     case BtcErrorKind.confirmRequired:
       return 'Confirmation required.';
     case BtcErrorKind.other:
-      return 'Could not load wallets.';
+      return 'Something went wrong.';
   }
 }
