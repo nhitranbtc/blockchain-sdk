@@ -891,6 +891,76 @@ For every wallet-desktop task, run this adapted pipeline. If a step doesn't appl
 - For v0.2: replace the string sentinel with a typed variant — either `OpaqueMnemonic.sentinel()` (a distinct static instance, not a String equality check) OR add `bool isUnlockedWithoutMnemonic` to `WalletSession` so the two empty-value states can't collide at the value level. Tracked in `wallet_providers.dart` doc above `unlockWithDetail`.
 - Apply the pattern beyond `WalletSession`: any `Notifier` with overloaded-string state (e.g., `unlock(mode: '', ...)`) should also lift the convention.
 
+## L33 — wallet-desktop Task 21 lessons (pure-build, hoist-controllers, extend-critical-dependents, argv-empty-mnemonic, override-btcInvoker-in-tests)
+
+**Trigger**: Session 2026-08-18 wallet-desktop Task 21 SendScreen pickup. Critical-tier screen (most security-sensitive in v0.1 — reads `OpaqueMnemonic` + pipes to `btc wallet send` via `withTempSecretFile`). All three L12 sub-agents (flutter-reviewer + type-design-analyzer + security-auditor) returned BLOCK verdicts with overlapping findings — every one of these lessons was caught by ≥2 reviewers independently. The Task 21 review pass took ~12 fixups to reach merge-clean; the patterns below would have caught the issues at design time.
+
+### 33.1 — `build()` MUST be pure: derive state, never cache
+
+**Trigger**: Task 21's first impl cached `session.mnemonic.value` in `_mnemonic` and `_wordCount` inside `build()`. flutter-reviewer + type-design-analyzer both flagged this CRITICAL — Flutter `build()` is contractually pure (called outside any `setState` cycle, may be invoked by the framework on any ancestor rebuild, and is supposed to be side-effect-free). Caching the mnemonic reference in a screen field also extended the cleartext lifetime past `lock()` — `OpaqueMnemonic.value` returns the same `String` reference, and the screen's `_mnemonic = ''` in `dispose` only cleared the State reference, not the underlying heap.
+
+**Rule**: every `build()` method must derive its rendered values from props / providers / `late final` fields. The State object holds only: (a) form-input fields the user is actively editing (`_address`, `_amountSat`), (b) `late final` controllers / keys, (c) flags derived from provider state on each build (no caching).
+
+**Why**: a non-pure `build()` causes infinite rebuilds on the second call, stale state when the parent rebuilds the screen with new args, and (in our case) extended cleartext lifetime past `lock()` — defeating `OpaqueMnemonic.dispose()` discipline.
+
+**How to apply**:
+- For wallet-desktop: derive everything that comes from a provider or a prop inside `build()` — no `_session` cache, no `_mnemonic` cache, no `_wordCount` cache.
+- Cleartext that must NOT be cached: any value from `OpaqueMnemonic.value`. Pass it directly into `withTempSecretFile(...)` inside `_submit` — the secret's lifetime tracks the CLI invocation, not the State.
+- Form-input fields the user is actively editing (`_address`, `_amountSat`, `_feeController.text`) are fine — those are user-controlled, not secret.
+- For other Flutter projects: enforce via the implicit framework contract; `flutter analyze` does NOT flag this, only a Flutter reviewer will.
+
+### 33.2 — Hoist `TextEditingController` (and similar controllers) to `late final` State fields
+
+**Trigger**: Task 21 constructed `TextEditingController(text: '$_feeRate')` *inside* `_buildSendForm` — every `build()` allocated a fresh controller, the previous one was never disposed (memory leak), and the cursor jumped to position 0 on every rebuild. Caught by flutter-reviewer + type-design-analyzer both as CRITICAL.
+
+**Rule**: any `TextEditingController`, `FocusNode`, `ScrollController`, or `AnimationController` MUST be a `late final` State field, allocated in `initState`, disposed in `dispose`. Never construct inside `build()`. Update the controller's `.text` directly when the data source changes (instead of `setState(() => _feeRate = ...)` + re-rendering the field with a new controller).
+
+**Why**: Flutter's `TextField` calls `dispose()` on the controller when the field rebuilds with a different controller instance, which clears the user's caret/selection state. A per-build allocation also leaks (the old controller is orphaned, never disposed, holds references to the field's input buffer).
+
+**How to apply**:
+- For wallet-desktop: every `TextField` / `TextFormField` needs a `StatefulWidget` parent that owns the controller. Convert screens with inline controllers to use the `late final` pattern.
+- The Task 20 `PasswordField` already follows this pattern (Task 15); mirror it everywhere.
+- v0.2 backlog: a `HookConsumerWidget` (flutter_hooks) would let controllers be declared as `useTextEditingController()` without a `StatefulWidget` wrapper — v0.2 only.
+
+### 33.3 — On critical-tier surfaces, extend dependents to wire the path (no unwired branches)
+
+**Trigger**: Task 21's `MnemonicPasteField` (Task 15) exposed only `onChanged: ValueChanged<String>`. The re-entry view needed to capture the user's mnemonic at submit-time and route it to `notifier.unlock(mnemonic: x, detail: priorDetail)`. The first impl passed `onChanged: (_) {}` (no-op) and left the "Unlock for signing" button as `() {}` — the user landed on a dead-end screen on a CRITICAL-tier surface. Security-auditor + type-design-analyzer both flagged this as CRITICAL.
+
+**Rule**: a critical-tier screen renders a branch only if that branch is reachable end-to-end. If the branch requires a widget API that doesn't exist, ADD it to the widget (extend the contract) — don't leave the UI as a dead-end. Every rendered state must advance the user toward a CLI invocation or a safe refusal.
+
+**Why**: on a critical-tier surface, a stuck submit button is a worse failure than no UI at all — the user thinks the broadcast happened, but the screen silently does nothing. Security-auditor flagged this as "no path from this UI to a CLI invocation; rendering the form is functionally a noop."
+
+**How to apply**:
+- For wallet-desktop: every branch in `_build*` helper methods on critical-tier screens (Task 21 SendScreen + any future Task 23 SettingsScreen or Task 24 Integration test scaffolding) must reach a CLI invocation OR a documented v0.2 follow-up that's marked with `// v0.2:` in the code.
+- The fix for Task 21 was `MnemonicPasteField.onSubmit: ValueChanged<String>?` + public `void submit()` method on State — small extension, fully backward-compatible.
+- Don't ship unwired branches with a "v0.2" comment alone — the comment is invisible at runtime.
+
+### 33.4 — `argv`-mnemonic empty-string is still an L12 CRITICAL #2 violation
+
+**Trigger**: Task 21's `WalletSend.argv` unconditionally emitted `['--mnemonic', mnemonic]` — even when `SendScreen` passed `mnemonic: ''` (the v0.1 workaround of passing the mnemonic via `passwordFilePath`). The cleartext didn't appear (the string was empty), but the flag was still emitted, which security-auditor flagged as CRITICAL: "the actual flagged invariant (L12 CRITICAL #2 `mnemonic NEVER enters argv`) is *not satisfied*."
+
+**Rule**: the L12 CRITICAL #2 invariant is "mnemonic NEVER enters argv" — interpreted strictly, this means the `--mnemonic` flag itself must NOT appear in argv when the mnemonic is being passed via a different channel. Empty-string-in-argv is still a violation.
+
+**Why**: a future change that flips `passwordFilePath` to `--password-file` semantics would silently start sending `--mnemonic ''` to the CLI — and the CLI's behaviour on empty mnemonic + `--password-file` is undocumented (the v0.1 workaround was a Task 8 patch on the CLI side, not a documented btc contract).
+
+**How to apply**:
+- For wallet-desktop: `WalletSend.argv` now uses `if (mnemonic.isNotEmpty) '--mnemonic', if (mnemonic.isNotEmpty) mnemonic` — the flag-pair is conditional on the channel.
+- v0.2 follow-up: introduce `sealed class MnemonicChannel { class Inline extends MnemonicChannel; class PasswordFile extends MnemonicChannel; }` and `WalletSend.fromChannel(...)` so an empty-mnemonic + password-file pairing is a single constructor, not a coincidental parameter combination. Tracked in `wallet_providers.dart` doc.
+- Apply to every other `BtcCommand` subclass that takes an optional secret-bearing flag: `TxList.mnemonic` (already required, no fix needed), `walletImport.mnemonic` (already required), but if v0.2 adds `--password-stdin` or similar conditional flags, the same conditional-emit pattern applies.
+
+### 33.5 — Tests must override `btcInvokerProvider` (silent catches hide missing overrides)
+
+**Trigger**: Task 21's tests #2 and #3 (sentinel reentry + mainnet confirm) do NOT override `btcInvokerProvider`. The screen's `initState` calls `_fetchFeeEstimate` which awaits `ref.read(btcInvokerProvider.future)` → `extractBtc()` fails because the test assetBundle has no bundled binary. Today the `catch (_)` silently swallows it and the test passes by accident — any future change to the catch (rethrow, Sentry.report, logging) breaks these tests in CI without any visible regression.
+
+**Rule**: any widget test that pumps a screen which has an `initState` / `didChangeDependencies` / async-await that touches a `FutureProvider` (especially `btcInvokerProvider` which spawns a subprocess) MUST override the provider with a stub before `pumpWidget`. Use the `_FakeBtcInvoker` test double (established Task 13/17) wired into the `ProviderContainer(overrides: [...])`.
+
+**Why**: silent catches in async-init paths hide real test-environment bugs. The test passes today only by accident — if anyone tightens the catch (rightly!) to log the error, the test breaks in CI with no local repro.
+
+**How to apply**:
+- For wallet-desktop: every screen test (`wallet_list_screen_test.dart`, `wallet_detail_screen_test.dart`, `wallet_import_screen_test.dart`, `send_screen_test.dart`, future `transactions_screen_test.dart` + `settings_screen_test.dart`) needs a `_FakeBtcInvoker` override in the `ProviderContainer` if the screen has any async-init that reaches the invoker.
+- v0.2 follow-up: a `testBtcInvoker()` named-constructor on `BtcInvoker` returning a `BtcInvoker` instance with `binaryPath: 'echo'` so tests don't need a custom subclass.
+- Apply to other FutureProvider-backed dependencies too: `esploraConfigProvider`, `appPathsProvider` (file-system tests need to override too).
+
 ### 32.2 — Capture widget identity at top of async-await chains + re-assert before mutating shared state
 
 **Trigger**: Task 20 `_unlock()` reads `widget.walletId` and `widget.network` inside the `await withPasswordFile(...)` callback (after `await invoker.invoke(...)`) AND again at the `walletSessionProvider(widget.walletId).notifier.unlockWithDetail(...)` call site. L12 type-design MEDIUM caught a mid-await widget-rebuild race: if the parent rebuilds the screen with a different `walletId` mid-await, the CLI invocation runs against wallet A but the provider mutation lands in wallet B's family — the detail is mis-attributed AND the mode-0600 password file's contents are consumed by the wrong-wallet CLI process.
