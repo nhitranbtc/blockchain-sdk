@@ -27,6 +27,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 - [L30] Verify plan-cited SHAs with `git log --all -- <path>` before trusting — drift detector for plan/spec headers
 - [L36] wallet-desktop Task 24 lessons (bash-case-order, throw-const-rejection, static-factory-not-const, test-side-precedent, env-strip-shell-wrapper)
+- [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -48,6 +49,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Dart `const` quirks | L36.2, L36.3 |
 | Test-side lesson propagation | L36.4 |
 | Dart 3+ env mutation | L36.5 |
+| CI workflow hygiene | L37 |
 | Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
 ---
@@ -1208,3 +1210,22 @@ Option 1 is the lower-friction path; option 2 is the more thorough path but requ
 - For wallet-desktop: the existing wrapper-script approach (`with_secret_env.sh`) covers the fixture-side filter. To exercise BtcInvoker's Dart-side `_secretEnvKeys` filter, add an L29 operator-driven test invocation that documents the `env BTC_WALLET_MNEMONIC=probe flutter test ...` workflow in `wallet-desktop/test/integration/README.md` (new file). Not yet written; flagged for Task 24 follow-up or v0.2.
 - For Dart generally: any test that depends on env-var presence must set the env externally (wrapper script or shell-prefixed invocation). Treat `Platform.environment` mutation attempts as a code smell.
 - v0.2 follow-up: a test helper `runWithEnv(Map<String, String> extraEnv, Future<void> Function() body)` that internally uses `Process.start('dart', ['test.dart'], environment: ...)` to run tests in a clean env-isolated subprocess. This pattern unblocks all future env-strip / env-passing tests without requiring shell wrappers per test.
+
+---
+
+## L37 — CI workflow action-SHA hygiene: pin verified SHAs, tag-based when unverified
+
+**Trigger**: Session 2026-08-18 wallet-desktop Task 25 CI workflows pickup. Trivial-tier (per L31). Wrote 2 GitHub Actions workflows (`wallet-desktop-ci.yml`, `btc-bundle.yml`) with action references. Initially used 7 fabricated / guessed SHA pins (`subosito/flutter-action@2f7f8b6...`, `actions/cache@1bd1e32...`, `actions/upload-artifact@65c4c4a...`, `codecov/codecov-action@0565863...`). L12 review's verify-gate step (`python3 -c "import yaml"` + `grep -hE "uses: "`) caught no fabricated-SHA issue directly — but a manual cross-reference against the existing `ci.yml` revealed 4 of 7 SHAs didn't match any known-good reference. Fixed by replacing the 4 unverified SHAs with tag-based references (`@v2`/`@v4`) and documenting the deviation inline.
+
+**Rule**: for every GitHub Actions `uses:` reference in a workflow file:
+1. **If the SHA matches an existing pinned reference** in another workflow file (e.g. `ci.yml`), reuse the exact same SHA — pin from the existing reference (supply-chain defense).
+2. **If no verified SHA is available**, use the tag-based reference (`@v2` / `@v4`) AND add an inline comment explaining the deviation. Pin to a verified SHA in a follow-up commit after first successful CI run.
+3. **Never fabricate a SHA** — even well-formed 40-hex strings. Without a verified reference, the action may not resolve, breaking the workflow at the worst possible time (first PR after introduction).
+
+**Why**: GitHub Actions `uses: <repo>@<SHA>` is the supply-chain defense against action maintainer compromise (a compromised action can exfiltrate secrets, modify repo contents, etc.). The SHA pin locks to a specific commit. Tag-based references (`@v2`) allow the maintainer to push a new commit under the same tag — convenient but defeats the defense.
+
+**How to apply**:
+- For wallet-desktop: every workflow file under `.github/workflows/*.yml`. Existing `ci.yml` is the SHA reference (`actions/checkout@11d5960...` v4, `dtolnay/rust-toolchain@4360b5...` stable, `Swatinem/rust-cache@49a0bd...` v2). Use these SHAs directly.
+- v0.2 follow-up: pin the 4 currently-tag-based actions (`subosito/flutter-action`, `actions/cache`, `actions/upload-artifact`, `codecov/codecov-action`) to verified SHAs after the first successful CI run captures the resolved SHAs from the Actions log.
+- For new workflows in general: when adding a new `uses:` line, check the official action repo for its current SHA; add the SHA to the team's "verified SHA" reference document so future workflows can pin without re-verifying.
+- v0.2 follow-up: a pre-commit hook that greps all `.github/workflows/*.yml` for SHA patterns and compares against the verified SHA document — would have caught the 4 fabricated SHAs at write time.
