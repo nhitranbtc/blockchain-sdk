@@ -1022,6 +1022,84 @@ try {
 - For other Flutter projects: same rule. The `_` prefix on a State class is documentation of intent ("internal only"); if external code needs it, drop the prefix.
 - The alternative (`@visibleForTesting` on a typedef) is a workaround for tests-only access, not for production callers. For production callers, public class.
 
+## L35 — wallet-desktop Task 23 lessons (save-try-catch, defaults-cover-dropdown, known-network-allowlist)
+
+**Trigger**: Session 2026-08-18 wallet-desktop Task 23 SettingsScreen pickup. Normal-tier screen. All three L12 sub-agents (flutter-reviewer + type-design-analyzer + pr-test-analyzer) converged on the same MEDIUM findings — a sign the patterns are load-bearing enough to elevate into the project lesson ledger. Three new lessons, all defense-in-depth patterns that don't require the screen itself to be secret-handling.
+
+### 35.1 — Wrap `provider.notifier.save(...)` in try/catch; never show "Saved" before confirming the write
+
+**Trigger**: Task 23's `_save()` originally did `await ref.read(esploraConfigProvider.notifier).save(cfg); ScaffoldMessenger.showSnackBar('Saved')`. The `save()` method writes JSON to disk via `file.writeAsString` — which can throw on disk full / permission denied / parent locked. Without try/catch, the exception propagated as an unhandled async error AND the "Saved" SnackBar fired in the success path that never reached.
+
+**Rule**: every screen-side `_save` (or equivalent provider-mutate) method must:
+1. Wrap the `await ... .save(...)` in `try { ... } catch (e, st) { ... }`.
+2. Show the "Saved" SnackBar ONLY in the success branch (inside the try, after the await).
+3. In the catch branch: `developer.log('xxx save failed', name: 'XxxScreen', error: e, stackTrace: st)` (L21 redacted-error pattern), then show an error SnackBar (e.g., `'Save failed.'`).
+4. Guard both SnackBar calls with `if (mounted)` (L32.2 widget-disposal check).
+
+The pattern (matches Task 23 fix):
+```dart
+Future<void> _save() async {
+  try {
+    await ref.read(xProvider.notifier).save(cfg);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Saved')),
+      );
+    }
+  } catch (e, st) {
+    developer.log('save failed', name: 'XxxScreen', error: e, stackTrace: st);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Save failed.')),
+      );
+    }
+  }
+}
+```
+
+**Why**: silent-failure UX bug — user thinks the config was persisted when in fact the disk write failed. Worse than no snackbar at all because the false-positive confirmation hides the failure from the user.
+
+**How to apply**:
+- For wallet-desktop: audit every screen that calls `ref.read(provider.notifier).save/update/set/...`. Each one must guard with try/catch.
+- For general Flutter: same pattern for any `await` on provider mutations that hit IO (file, network, shared_prefs). The pattern is NOT needed for in-memory mutations (no failure surface).
+- v0.2 follow-up: a custom_lint rule that flags `ref.read(...).notifier.save()` without a wrapping try/catch.
+
+### 35.2 — Canonical `defaults(network)` must cover every dropdown option, not just the documented ones
+
+**Trigger**: Task 23's network dropdown includes `regtest` as an option. The `EsploraConfig.defaults(String network)` factory only had explicit cases for `bitcoin` / `testnet` / `testnet4` / `signet` — `regtest` fell through to the `default:` branch which returns `EsploraConfig(network: 'regtest', url: '', spkiPin: '')`. Selecting regtest in the dropdown silently persisted an invalid config (empty URL) — the wallet could never reach the chain.
+
+**Rule**: every UI option (dropdown item, radio choice, checkbox) MUST have a corresponding canonical default. The `default:` branch in a switch should be the **error path** (throw or return a typed-failure), not the fallback path. A missing canonical default = a UX bug, not a "we don't know about this value" edge case.
+
+**Why**: the type system lets you pass any string to `defaults(network)`. The UI invites the user to select regtest. The two together produce an invalid business state that the type system doesn't catch and the UI doesn't warn about.
+
+**How to apply**:
+- For wallet-desktop: `EsploraConfig.defaults` now covers all 5 networks. Audit any other "defaults by string" lookup tables in the codebase (none currently, but v0.2 might add `AddressType.defaults` etc.).
+- For general Flutter: any UI choice (color picker, theme selector, language picker) that maps to a configuration value should have its default defined inline. A missing default = a bug, not an edge case.
+- v0.2 follow-up: replace the `String network` parameter on `defaults` with a `Network` enum (cross-cutting refactor; eliminates the missing-case class of bug at the type level).
+
+### 35.3 — Known-network allowlist defends against hand-edited config files / schema drift
+
+**Trigger**: Task 23's `initState` postFrameCallback reads `esploraConfigProvider` (which deserializes from disk) and assigns `cfg.network` directly to `_network`. If a user hand-edits the JSON config file (or a previous version persisted an unknown network string), the dropdown's `initialValue: _network` would assert in DEBUG mode and silently fall back to testnet in PROFILE/RELEASE without surfacing the issue. The user wouldn't know their config was corrupted.
+
+**Rule**: when seeding a dropdown / enum-style form field from persisted state, validate the value against the known set before assigning. If the value is unrecognized, fall back to a safe default + surface a warning (SnackBar or `developer.log`).
+
+The pattern (matches Task 23 fix):
+```dart
+final knownNetworks = const {
+  'bitcoin', 'testnet', 'testnet4', 'signet', 'regtest',
+};
+final network = knownNetworks.contains(cfg.network)
+    ? cfg.network
+    : 'testnet';
+```
+
+**Why**: defensive parsing — the deserialized `cfg.network` is `String` (raw JSON), but the dropdown's `items` list is closed. The type system doesn't catch the mismatch because both are `String`. Runtime fallback (without surfacing) hides the issue; runtime assert (with no fallback) crashes the screen.
+
+**How to apply**:
+- For wallet-desktop: apply to every form field whose value is one-of-N choices. Task 23 sets the pattern; future screens with persisted enum-like values should follow.
+- v0.2 follow-up: the `Network` enum (already on the backlog) eliminates this pattern entirely — the type system catches unknown values at parse time.
+- For general Flutter: same pattern when seeding `DropdownButtonFormField` / `Radio` / `Checkbox` / etc. from persisted state.
+
 ### 32.2 — Capture widget identity at top of async-await chains + re-assert before mutating shared state
 
 **Trigger**: Task 20 `_unlock()` reads `widget.walletId` and `widget.network` inside the `await withPasswordFile(...)` callback (after `await invoker.invoke(...)`) AND again at the `walletSessionProvider(widget.walletId).notifier.unlockWithDetail(...)` call site. L12 type-design MEDIUM caught a mid-await widget-rebuild race: if the parent rebuilds the screen with a different `walletId` mid-await, the CLI invocation runs against wallet A but the provider mutation lands in wallet B's family — the detail is mis-attributed AND the mode-0600 password file's contents are consumed by the wrong-wallet CLI process.
