@@ -961,6 +961,67 @@ For every wallet-desktop task, run this adapted pipeline. If a step doesn't appl
 - v0.2 follow-up: a `testBtcInvoker()` named-constructor on `BtcInvoker` returning a `BtcInvoker` instance with `binaryPath: 'echo'` so tests don't need a custom subclass.
 - Apply to other FutureProvider-backed dependencies too: `esploraConfigProvider`, `appPathsProvider` (file-system tests need to override too).
 
+## L34 — wallet-desktop Task 22 lessons (defensive-parse-null, identity-catch-finally, typed-globalkey)
+
+**Trigger**: Session 2026-08-18 wallet-desktop Task 22 TransactionsScreen pickup. Normal-tier screen (read-only tx history). All three L12 sub-agents returned clean findings on first pass — the patterns from L32 + L33 made the design robust. Three carry-over lessons, each caught by 1+ reviewers.
+
+### 34.1 — Always use defensive `j is List` parse check, never `(j as List)`
+
+**Trigger**: Task 22's first parse callback was `(j) => (j as List).map(...).toList()`. The `BtcInvoker` invokes `parse(null)` on empty stdout (`btc_invoker.dart:146`); the `(j as List)` cast threw TypeError on `null`, BtcInvoker wrapped it as `BtcError(kind: other)`, and the screen surfaced "Something went wrong." for empty wallets instead of the expected empty-state "No transactions yet" message.
+
+**Rule**: every `parse:` callback in a `BtcInvoker.invoke<T>` call site must guard against `null` and against a non-List JSON. Pattern: `parse: (j) => j is List ? j.map(...).toList(growable: false) : const <T>[]` — same defensive shape Task 17 `WalletsListNotifier` (line 28-32 of `wallet_providers.dart`) uses for the wallet-list empty/null fallback.
+
+**Why**: `_FakeBtcInvoker` test doubles call `parse(<Map<String, dynamic>>[])` directly, bypassing the `BtcInvoker.invoke` empty-stdout path. Tests pass; production breaks on the first empty wallet. This is a class of bug that unit tests with `_FakeBtcInvoker` systematically mask.
+
+**How to apply**:
+- For wallet-desktop: audit every `parse:` callback in screens + providers. Each one MUST guard `j is List` (or `j is Map` for DTOs) and return a typed empty fallback.
+- For other projects: any `invoke<T>(cmd, parse: ...)` call site that decodes JSON arrays. The fallback to `const <T>[]` is type-safe at the parser boundary.
+- v0.2 follow-up: add a lint rule (custom_lint) that flags `(j as List)` casts inside `parse:` callbacks — the rule would emit at parse-callback lint scope.
+
+### 34.2 — Identity re-assert in catch + finally (not just pre-await)
+
+**Trigger**: Task 22's `_load` correctly captured `walletId/network` at the top of the async-await chain (Lesson 32.2) and re-asserted before the pre-await `setState` and the post-invocation `setState`. But the `catch` (BtcError + non-BtcError) and `finally` branches only checked `mounted`. type-design Task 22 HIGH: if the user deep-linked to a different wallet family mid-load, `_error` from wallet A leaks into wallet B's view (line 138), a stale SnackBar surfaces under wallet B's `ScaffoldMessenger` (lines 147-151), and `_running = false` resets wallet B's spinner to wallet A's tempo (line 153).
+
+**Rule**: every post-await branch (success, BtcError, non-BtcError, finally) must re-assert `widget.walletId == walletId && widget.network == network` before mutating any screen state OR calling `ScaffoldMessenger.of(context).showSnackBar`. The pattern is:
+```dart
+final walletId = widget.walletId;
+final network = widget.network;
+try {
+  // ... await ...
+  if (!mounted) return;
+  if (widget.walletId != walletId || widget.network != network) return;
+  setState(() => ...);
+} on BtcError catch (e) {
+  if (mounted && widget.walletId == walletId && widget.network == network) {
+    setState(() => _error = e);
+  }
+} finally {
+  if (mounted && widget.walletId == walletId && widget.network == network) {
+    setState(() => _running = false);
+  }
+}
+```
+
+**Why**: the `mounted` check covers widget-disposal but NOT widget-property-change while still mounted (the Lesson 32.2 distinction). A re-assert is a separate check; missing it is a class of bug that the unit tests' single-wallet scenarios don't expose.
+
+**How to apply**:
+- For wallet-desktop: every screen that has an async-await handler touching `widget.X` for a path-param-derived key. Apply to Tasks 20/21 already-merged code in a follow-up sweep if missing.
+- For other Flutter projects: same pattern — capture identity at top, re-assert in EVERY post-await mutation site, not just the success path.
+- v0.2 follow-up: a custom_lint rule that flags async-await methods that read `widget.X` after `await` without a re-assert guard.
+
+### 34.3 — Expose typed `State<>` class for typed `GlobalKey`
+
+**Trigger**: Task 21's reentry path used `final GlobalKey<State> _mnemonicFieldKey = GlobalKey<State>();` + `_mnemonicFieldKey.currentState as dynamic; state?.submit();` — the `as dynamic` cast hides future renames of `submit()` (no compile error, runtime `NoSuchMethodError`). type-design Task 22 MEDIUM: type the key as `GlobalKey<State<MnemonicPasteField>>` — but that requires `MnemonicPasteFieldState` (the actual State class) to be public. The original `_MnemonicPasteFieldState` was private (underscore-prefixed), so external code couldn't reference it.
+
+**Rule**: when a widget's State class needs to be referenced externally (for typed GlobalKey access, programmatic controller access, parent-driven callbacks), expose the State class as public. The `_` prefix is fine for purely-internal state; for cross-widget access, drop the underscore.
+
+**Why**: a typed `GlobalKey<State<T>>` (where `T` is the State class) gives compile-time checks on all method calls (`currentState?.submit()` is type-checked). A rename of `submit()` → `validate()` would break the call site at compile time, not silently at runtime. The cost is the underscore-prefix loss (an `unintended-public` lint rule, if present, would flag it — but it's a worthwhile trade).
+
+**How to apply**:
+- For wallet-desktop: any widget whose State needs cross-widget access (GlobalKey, parent-driven callbacks) must expose the State class publicly. `_MnemonicPasteFieldState` → `MnemonicPasteFieldState` (Task 22 fix).
+- For other Flutter projects: same rule. The `_` prefix on a State class is documentation of intent ("internal only"); if external code needs it, drop the prefix.
+- The alternative (`@visibleForTesting` on a typedef) is a workaround for tests-only access, not for production callers. For production callers, public class.
+
 ### 32.2 — Capture widget identity at top of async-await chains + re-assert before mutating shared state
 
 **Trigger**: Task 20 `_unlock()` reads `widget.walletId` and `widget.network` inside the `await withPasswordFile(...)` callback (after `await invoker.invoke(...)`) AND again at the `walletSessionProvider(widget.walletId).notifier.unlockWithDetail(...)` call site. L12 type-design MEDIUM caught a mid-await widget-rebuild race: if the parent rebuilds the screen with a different `walletId` mid-await, the CLI invocation runs against wallet A but the provider mutation lands in wallet B's family — the detail is mis-attributed AND the mode-0600 password file's contents are consumed by the wrong-wallet CLI process.
