@@ -1,0 +1,77 @@
+name: wallet-desktop-ci
+
+# Flutter desktop UI CI for `wallet-desktop/`. Real-btc CLI builds
+# run in `ci.yml` (Rust side). This workflow covers Flutter-side
+# concerns only: pub get, dart analyze, flutter test --coverage.
+on:
+  pull_request:
+    paths:
+      - 'wallet-desktop/**'
+      - '.github/workflows/wallet-desktop-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'wallet-desktop/**'
+      - '.github/workflows/wallet-desktop-ci.yml'
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same branch — saves CI minutes when
+# pushing rapid follow-ups to a PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test + analyze + coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5836476c08aa5b7b4a23e0a9  # v4
+        with:
+          persist-credentials: false
+
+      # subosito/flutter-action: tag-based (no pinned SHA available at
+      # this commit; pin to a verified SHA after first successful CI run).
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.22.0'
+
+      # actions/cache: tag-based (same reasoning).
+      - name: Cache pub
+        uses: actions/cache@v4
+        with:
+          path: wallet-desktop/.dart_tool
+          key: ${{ runner.os }}-pub-${{ hashFiles('wallet-desktop/pubspec.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: flutter pub get
+        working-directory: wallet-desktop
+        run: flutter pub get
+
+      - name: Build fake_btc (operator smoke shim)
+        working-directory: wallet-desktop
+        run: bash scripts/build_fake_btc.sh
+
+      - name: dart analyze
+        working-directory: wallet-desktop
+        run: dart analyze --fatal-warnings --fatal-infos
+
+      - name: flutter test
+        working-directory: wallet-desktop
+        run: flutter test --coverage
+
+      # codecov/codecov-action: tag-based (same reasoning).
+      - name: Upload coverage
+        if: always()
+        uses: codecov/codecov-action@v4
+        with:
+          directory: wallet-desktop/coverage
+          flags: wallet-desktop
+          fail_ci_if_error: false
