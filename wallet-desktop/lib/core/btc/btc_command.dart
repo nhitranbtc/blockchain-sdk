@@ -120,6 +120,17 @@ sealed class BtcCommand {
         esploraSpkiPin: esploraSpkiPin,
         limit: limit,
       );
+
+  static FeeEstimates feeEstimates({
+    required String network,
+    required String esploraUrl,
+    required String esploraSpkiPin,
+  }) =>
+      FeeEstimates(
+        network: network,
+        esploraUrl: esploraUrl,
+        esploraSpkiPin: esploraSpkiPin,
+      );
 }
 
 class WalletList extends BtcCommand {
@@ -273,8 +284,14 @@ class WalletSend extends BtcCommand {
     return [
       'wallet',
       'send',
-      '--mnemonic',
-      mnemonic,
+      // L12 CRITICAL #2: only emit `--mnemonic` when present. v0.1
+      // workaround passes the mnemonic via `passwordFilePath`; in
+      // that mode the cleartext must NOT also appear in argv as
+      // `--mnemonic ''`. v0.2 will introduce a typed `MnemonicChannel`
+      // (Task 8 backlog) so this dual-rail can't be specified
+      // accidentally.
+      if (mnemonic.isNotEmpty) '--mnemonic',
+      if (mnemonic.isNotEmpty) mnemonic,
       '--network',
       network,
       if (t != null) '--to',
