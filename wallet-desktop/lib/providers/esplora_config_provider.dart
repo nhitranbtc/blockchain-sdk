@@ -43,6 +43,18 @@ class EsploraConfig {
           url: 'https://blockstream.info/signet/api',
           spkiPin: '',
         );
+      // L12 type-design Task 23 MEDIUM: add regtest canonical default.
+      // The dropdown in SettingsScreen includes 'regtest'; without
+      // this case, selecting it falls through to `default:` which
+      // returns an empty URL — an invalid business state (wallet
+      // can never reach the chain). Local regtest Esplora standard
+      // is electrs on 127.0.0.1:50002.
+      case 'regtest':
+        return const EsploraConfig(
+          network: 'regtest',
+          url: 'http://127.0.0.1:50002/api',
+          spkiPin: '',
+        );
       default:
         return EsploraConfig(network: network, url: '', spkiPin: '');
     }
