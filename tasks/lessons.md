@@ -26,6 +26,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 - [L30] Verify plan-cited SHAs with `git log --all -- <path>` before trusting — drift detector for plan/spec headers
+- [L36] wallet-desktop Task 24 lessons (bash-case-order, throw-const-rejection, static-factory-not-const, test-side-precedent, env-strip-shell-wrapper)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -43,6 +44,10 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Client product | L28 |
 | Live testnet smoke | L29 |
 | Doc drift detection | L30 |
+| Shell fixture hygiene | L36.1 |
+| Dart `const` quirks | L36.2, L36.3 |
+| Test-side lesson propagation | L36.4 |
+| Dart 3+ env mutation | L36.5 |
 | Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
 ---
@@ -1128,3 +1133,78 @@ final network = knownNetworks.contains(cfg.network)
 - For general Flutter: any `Screen({required this.id})` pattern where `id` flows into CLI commands or DB keys should have a corresponding `assert` at the build boundary.
 - Asserts cost nothing in release builds (Dart strips them); use them liberally as defense-in-depth.
 
+
+---
+
+## L36 — wallet-desktop Task 24 lessons (shell fixture + Dart test-side quirks surfaced by L12 review)
+
+**Trigger**: Session 2026-08-18 wallet-desktop Task 24 Integration test pickup. Normal-tier infrastructure task (no new Dart widget, no new Riverpod provider). 3 L12 sub-agents (flutter-reviewer + pr-test-analyzer + silent-failure-hunter) returned 2 HIGH findings (both blocking) + 3 MEDIUM + 3 LOW. The HIGHs were invisible until the L12 review ran — neither the TDD red→green cycle nor the first verify-gate pass caught them. All 5 lessons below are NEW patterns that didn't exist before Task 24.
+
+### L36.1 — Bash `case` catch-all (`*)`) MUST be the LAST pattern — bash picks first match
+
+**Trigger**: my fake_btc.sh fixture added a `*)` defense-in-depth default to the inner `wallet)` case (catches unknown subcommands). I placed it BEFORE the specific `list|show|create|import|...` branches. Bash `case` is a first-match-wins structure — the misplaced `*)` always won, every specific branch was unreachable, and 5 of 7 e2e tests failed at runtime with `unknownWallet` BtcError. The 2 tests that passed (`tx-list`, `fee-estimates`) used the OUTER case, which doesn't have an inner `*)` — so they bypassed the bug.
+
+**Rule**: in any bash `case x in A) ... ;; B) ... ;; *) ... ;; esac`, the `*)` catch-all MUST be the LAST pattern before `esac`. Bash evaluates patterns top-to-bottom and executes the first match. A misplaced `*)` is a SILENT bug — `set -u` doesn't catch it, `set -e` doesn't catch it, `bash -n` syntax check doesn't catch it. Only an actual invocation with an unmatched argv (or an e2e test exercising the case branches) surfaces it.
+
+**Why**: defense-in-depth default branches are tempting to put "first" for visibility, but they MUST go last. The bug is particularly insidious in fixtures because unit tests of the bash script's surface (e.g. `bash -c 'echo "wallet list" | ./fake_btc.sh'`) often exercise only ONE branch at a time and miss the ordering regression.
+
+**How to apply**:
+- For wallet-desktop: every bash `case` in `test/integration/fixtures/*.sh` MUST end with `*) ... exit 1 ;;` immediately before `esac`. Audit existing fixtures for ordering.
+- For general bash: every nested `case` (and every outer `case`) follows the same rule. Add a `shellcheck` rule (or custom_lint equivalent) that flags `*)` not at end of `case` block — already in `wallet-desktop/scripts/` for future expansion.
+- v0.2 follow-up: a small e2e test that runs every `case` branch at least once (positive-control coverage) would catch this class of regression.
+
+### L36.2 — `const` cannot wrap `throw <expression>` — `throw const FormatException(...)` is a Dart compile error
+
+**Trigger**: my L12 reviewer fixes added `throw const FormatException('empty wallet detail')` to test parse callbacks (L34.1 defensive `is Map` guards). Dart's compiler rejected every `throw const FormatException(...)` with `const_initialized_with_non_constant_value` + `invalid_constant` (8 errors total — 4 sites × 2 errors each).
+
+**Rule**: `throw` is a statement in Dart, not an expression. The operand can be ANY object (including a non-const one), but the `const` keyword on the operand is rejected — Dart tries to fold the throw into a const context and fails because `throw` itself is not const-foldable. Use `throw FormatException(...)` (no `const`).
+
+**Why**: the `const` keyword is a Dart reflex for "make this a compile-time constant if possible". For `throw` operands, it's always wrong — exceptions are runtime values. The compiler error message ("Const variables must be initialized with a constant value") is misleading; the fix is to drop `const`.
+
+**How to apply**:
+- For wallet-desktop: grep for `throw const ` in `test/`. None should exist. The 4 occurrences I added were all fixed to plain `throw`.
+- For Dart generally: `const` belongs on variable declarations and constructor invocations in const contexts (collection literals, `const` constructors). NEVER on `throw` operands.
+- v0.2 follow-up: a custom_lint rule that flags `throw const ` — single-pass detection.
+
+### L36.3 — `BtcCommand`'s static factory methods (`walletList`, `walletCreate`, ...) are NOT const-constructors — `prefer_const_constructors` cannot be honored
+
+**Trigger**: I added `const BtcCommand.walletList(network: 'testnet')` to test files (thinking the static factory was const-eligible since the underlying `WalletList` constructor is const). Dart rejected with `const_with_undefined_constructor` — the error names `walletList` as a constructor, but it's actually a static method. `BtcCommand`'s class-level `const BtcCommand()` constructor is const, but each static factory method is a regular `static Foo foo(...) => Foo(...)` — not a const factory.
+
+**Rule**: `static` factory methods on a sealed class are NOT const-constructors, even if the returned subtype's constructor IS const. The `prefer_const_constructors` analyzer hint CANNOT be honored for `BtcCommand.walletList(...)` etc. — `const BtcCommand.walletList(...)` is a compile error. Use `// ignore_for_file: prefer_const_constructors` in test files that exercise the BtcCommand API (the only legitimate use is when the static factory is on a class with a real `const` constructor named the same as the factory, which Dart treats as a constructor — rare).
+
+**Why**: the analyzer hint is misleading — it sees `BtcCommand.walletList(...)` and thinks "you could make this const", but the static method's signature doesn't allow it. Without `// ignore_for_file`, every `dart analyze` run trips 5 infos (one per `BtcCommand.*` call in test files). With `--fatal-infos`, those become blocking errors.
+
+**How to apply**:
+- For wallet-desktop: `test/integration/wallet_lifecycle_test.dart` already has `// ignore_for_file: prefer_const_constructors` at the top. Any future test file that calls `BtcCommand.foo(...)` should follow the same pattern.
+- For general Dart: when a sealed class exposes static factory methods, audit whether the analyzer hint applies. If `const` invocation fails, add the file-level ignore OR convert the static factory to a `const` factory (requires the underlying subtype's constructor to be const AND all params to be const-foldable).
+- v0.2 follow-up: refactor `BtcCommand` to expose `const` factories (`static const WalletList walletList(...) => ...`) so the test-side can use `const` invocations consistently with the rest of the codebase. Trade-off: every subtype's constructor must already be const.
+
+### L36.4 — L34.1 (`is Map<String, dynamic>` guards) + L33.4 (no empty-mnemonic argv) MUST propagate to test-side parse callbacks — tests bake precedent
+
+**Trigger**: my L12 review found that 4 of 7 e2e test parse callbacks in `wallet_lifecycle_test.dart` did NOT apply the L34.1 `is Map` guard (production code has had it since Task 22). The previous test parse for `tx-list` also passed `mnemonic: ''`, perpetuating the L33.4 violation that Task 21 closed for production code. Both patterns would have shipped in test files that future contributors copy-paste from — the precedent is set by the test, not the production code.
+
+**Rule**: when adding a new lesson (L34.x, L33.x) that applies to production code, AUDIT every existing test file's analogous parse callback / invocation site for the same pattern. Test files are read more often than production code (run on every `flutter test`); their shape IS the project's de-facto convention.
+
+**Why**: tests are the canonical example for "how to use this API correctly". A test that uses `mnemonic: ''` to `tx-list` is a future contributor's reference implementation — they'll copy that into their own code. The defensive `is Map` guard on production parse callbacks is meaningless if every test demonstrates the unguarded pattern.
+
+**How to apply**:
+- For wallet-desktop: every test parse callback MUST apply the L34.1 defensive `is Map` / `is List` guards. Every test invocation of `BtcCommand.txList(...)` / `BtcCommand.walletSend(...)` MUST pass a non-empty mnemonic (a fake value the fixture never echoes).
+- For new lessons generally: when promoting a pattern to the project ledger, scan `test/` for analogous sites and apply the pattern there too. Treat the test file as a "must follow" reference implementation, not just a coverage check.
+- v0.2 follow-up: a custom_lint rule that flags unguarded parse callbacks (`(j) => Foo.fromJson(j as Map<...>)` without an `is` guard) — would have caught this in CI.
+
+### L36.5 — `Platform.environment` is UNMODIFIABLE in Dart 3+; secret-env-strip tests must spawn a shell wrapper, not mutate from Dart
+
+**Trigger**: my L12 review found the existing `btc_invoker_test.dart` env-strip test (`invoke does NOT inherit BTC_WALLET_MNEMONIC even when set in parent shell`) was VACUOUSLY TRUE — the test never set the secret env var in the first place, so the assertion `expect(env, isNot(contains('BTC_WALLET_MNEMONIC')))` always passed regardless of whether `BtcInvoker._secretEnvKeys` actually filtered. The previous test even tried `Platform.environment['BTC_WALLET_MNEMONIC'] = 'should-be-stripped'` — Dart 3+ throws `UnsupportedError` on that mutation (the view is read-only).
+
+**Rule**: for env-strip / env-passing tests in Dart 3+, the secret env var MUST be set OUTSIDE the Dart process — either:
+1. A wrapper shell script that does `export BTC_WALLET_MNEMONIC=probe; exec fixture "$@"` and is invoked as `binaryPath:` by the test (test fixture-side filter coverage).
+2. Launching `flutter test` with the env var set in the launch shell (`env BTC_WALLET_MNEMONIC=probe flutter test ...`) — full Dart-side filter coverage.
+
+Option 1 is the lower-friction path; option 2 is the more thorough path but requires operator-driven test invocation per L29.
+
+**Why**: Dart 3+ `Platform.environment` is an unmodifiable view of the inherited env. Any attempt to mutate it for testing purposes throws at runtime. Tests that LOOK like they exercise env-strip behavior but actually don't set the env are vacuously true — the assertion always passes, the test passes, the production bug persists. This is the silent-failure analog for test coverage: a test that runs tests ≠ a test that tests anything.
+
+**How to apply**:
+- For wallet-desktop: the existing wrapper-script approach (`with_secret_env.sh`) covers the fixture-side filter. To exercise BtcInvoker's Dart-side `_secretEnvKeys` filter, add an L29 operator-driven test invocation that documents the `env BTC_WALLET_MNEMONIC=probe flutter test ...` workflow in `wallet-desktop/test/integration/README.md` (new file). Not yet written; flagged for Task 24 follow-up or v0.2.
+- For Dart generally: any test that depends on env-var presence must set the env externally (wrapper script or shell-prefixed invocation). Treat `Platform.environment` mutation attempts as a code smell.
+- v0.2 follow-up: a test helper `runWithEnv(Map<String, String> extraEnv, Future<void> Function() body)` that internally uses `Process.start('dart', ['test.dart'], environment: ...)` to run tests in a clean env-isolated subprocess. This pattern unblocks all future env-strip / env-passing tests without requiring shell wrappers per test.
