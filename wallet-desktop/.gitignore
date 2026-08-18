@@ -11,3 +11,8 @@ build/
 .fvm/
 coverage/
 *.log
+
+# Test fixture runtime artifacts — the fake_btc.sh fixture writes its
+# inherited (filtered) env to `.last_env` so the L7 env-strip test can
+# verify BtcInvoker's filter. Per-run; never commit.
+test/integration/fixtures/.last_env
