@@ -31,10 +31,10 @@ class MnemonicPasteField extends StatefulWidget {
   final ValueChanged<String>? onSubmit;
 
   @override
-  State<MnemonicPasteField> createState() => _MnemonicPasteFieldState();
+  State<MnemonicPasteField> createState() => MnemonicPasteFieldState();
 }
 
-class _MnemonicPasteFieldState extends State<MnemonicPasteField> {
+class MnemonicPasteFieldState extends State<MnemonicPasteField> {
   late final TextEditingController _controller;
   bool _ackChecked = false;
 
