@@ -136,6 +136,32 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
     );
   }
 
+  /// Read-only unlock: detail is loaded but no mnemonic is cached.
+  /// Used by `WalletDetailScreen` (Task 20) after `btc wallet show`
+  /// returns the parsed detail — the CLI does NOT return the mnemonic
+  /// (it re-decrypts per call), so the session's `mnemonic` is set to
+  /// the empty-string sentinel. Task 21 SendScreen detects
+  /// `state.mnemonic.value.isEmpty` and prompts the user to paste the
+  /// mnemonic before signing.
+  ///
+  /// **Sentinel encoding** (L12 type-design post-PR Task 20 HIGH):
+  /// the empty-string value is overloaded between "sentinel" and
+  /// "post-`dispose()`" — both currently signal `value.isEmpty`. v0.2
+  /// follow-up: replace with a typed `OpaqueMnemonic.sentinel()` or a
+  /// dedicated `bool isUnlockedWithoutMnemonic` flag on
+  /// [WalletSession] so the two states can't collide at the value
+  /// level. For v0.1 the convention lives in one place (this method)
+  /// instead of leaking to every caller of `unlock(mnemonic: '', …)`.
+  void unlockWithDetail(WalletDetail detail) {
+    final prev = state;
+    prev?.mnemonic.dispose(); // never leak a prior mnemonic
+    state = WalletSession(
+      walletId: arg, // family key, not user input
+      mnemonic: OpaqueMnemonic(''), // sentinel — see doc above
+      detail: detail,
+    );
+  }
+
   void updateDetail(WalletDetail detail) {
     final current = state;
     if (current == null) return;
