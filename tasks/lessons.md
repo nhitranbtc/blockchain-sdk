@@ -871,3 +871,51 @@ rg -n -e 'print\s*\(.*password|print\s*\(.*mnemonic'        # logging mnemonic-s
 
 For every wallet-desktop task, run this adapted pipeline. If a step doesn't apply (e.g., TDD skipped for trivial config), log why in the ledger. If a step fails, escalate per L13 Q9. Re-grill after 5 tasks or when a Flutter-specific pattern emerges.
 
+## L32 — wallet-desktop Task 20 lessons (sentinel-at-API-surface, capture-identity-before-await, assert-route-validated-ids)
+
+**Trigger**: Session 2026-08-18 wallet-desktop Task 20 WalletDetailScreen pickup. Three L12 review findings (type-design HIGH × 2, type-design MEDIUM, type-design LOW) + flutter-reviewer MEDIUM, all resolved before PR merge. Lessons below apply to every wallet-desktop screen that:
+- calls a `walletSessionProvider(walletId).notifier` API that mutates state, OR
+- has an `await` between `widget.foo` reads and a provider mutation, OR
+- takes a `walletId` from a `pathParameters` lookup.
+
+### 32.1 — Lift sentinel-state conventions into the API surface
+
+**Trigger**: Task 20 needed `walletSessionProvider(walletId).notifier.unlock(mnemonic: '', detail: parsed)` — a "read-only unlock" where the empty-string mnemonic signals "unlocked but no mnemonic cached". The string-convention leaked: every caller of `unlock(mnemonic: ...)` had to independently know that `''` means sentinel.
+
+**Rule**: when a call site needs a non-default value to encode a domain state, expose that state as a named factory on the receiver — never as a magic-value argument at the call site. The convention lives in one place; typos and stale comments can't diverge across the codebase.
+
+**Why**: L12 type-design HIGH (Task 20). The empty-string value was overloaded: `OpaqueMnemonic('')` means BOTH "session-unlock sentinel" AND "post-`dispose()`" — Task 21 SendScreen's `state.mnemonic.value.isEmpty` check happens to work today because `lock()` also nulls the parent `WalletSession`, but the type-level invariant is broken. A future caller that constructs `OpaqueMnemonic('')` directly without going through `lock()` would silently collide with the sentinel.
+
+**How to apply**:
+- For wallet-desktop: when introducing a new mutation on `WalletSessionNotifier`, prefer a named factory (`unlockWithDetail`, future: `unlockWithMnemonicAndDetail`) over an overload of `unlock(mnemonic: '', ...)`. Document the convention at the factory's docstring (not at the call site).
+- For v0.2: replace the string sentinel with a typed variant — either `OpaqueMnemonic.sentinel()` (a distinct static instance, not a String equality check) OR add `bool isUnlockedWithoutMnemonic` to `WalletSession` so the two empty-value states can't collide at the value level. Tracked in `wallet_providers.dart` doc above `unlockWithDetail`.
+- Apply the pattern beyond `WalletSession`: any `Notifier` with overloaded-string state (e.g., `unlock(mode: '', ...)`) should also lift the convention.
+
+### 32.2 — Capture widget identity at top of async-await chains + re-assert before mutating shared state
+
+**Trigger**: Task 20 `_unlock()` reads `widget.walletId` and `widget.network` inside the `await withPasswordFile(...)` callback (after `await invoker.invoke(...)`) AND again at the `walletSessionProvider(widget.walletId).notifier.unlockWithDetail(...)` call site. L12 type-design MEDIUM caught a mid-await widget-rebuild race: if the parent rebuilds the screen with a different `walletId` mid-await, the CLI invocation runs against wallet A but the provider mutation lands in wallet B's family — the detail is mis-attributed AND the mode-0600 password file's contents are consumed by the wrong-wallet CLI process.
+
+**Rule**: any time an async-suspending function reads `widget.X` (or `this.X` for `State`/`StatefulWidget`) AFTER an `await`, do both:
+1. Capture `final X = widget.X;` at the top of the method BEFORE any await.
+2. Re-assert `if (widget.X != X) return;` before mutating shared state (providers, navigator, global caches).
+
+**Why**: Riverpod's family providers are keyed by the value passed in. A mis-keyed mutation silently succeeds — no compile error, no runtime warning, just a wrong-wallet session. The cross-key footgun is the same shape as `walletSessionProvider('abc').notifier.unlock(walletId: 'xyz', ...)` that Task 14 explicitly closed. Adding the identity re-assert closes the analogous mid-await variant.
+
+**How to apply**:
+- For wallet-desktop: every `ConsumerStatefulWidget._asyncHandler()` method that touches `widget.network`, `widget.walletId`, or any `widget` property used to key a provider or router call must follow the capture-then-re-assert pattern. Apply to Tasks 21+ SendScreen (which reads `widget.walletId` + `state.mnemonic.value` after awaits), 22 TransactionsScreen, 23 SettingsScreen.
+- For Riverpod family providers more broadly: any `ref.read(providerFamily(arg).notifier)` where `arg` is widget-derived should capture `arg` first.
+- The `mounted` check after `await` covers widget-disposal but NOT widget-property-change while still mounted — re-assert is a separate check.
+
+### 32.3 — `assert` route-validated ids in `build` as defense-in-depth
+
+**Trigger**: Task 20 `build()` did not validate `widget.walletId` against `WalletRoutes.isValidWalletIdSegment` — only the router-level `redirect:` did. L12 type-design LOW: a parent that bypasses the router (deep link, programmatic navigation, test harness, future refactor that swaps `redirect:` for one that doesn't run on initial-load) could surface a path-injection-shaped id.
+
+**Rule**: for any widget that takes a `String id` from a `pathParameters` lookup AND has a `WalletRoutes.isValidXxxSegment` (or equivalent allowlist) validator, add `assert(WalletRoutes.isValidXxxSegment(widget.id), 'invalid id: ${widget.id}')` at the top of `build`. Asserts fire in debug + profile builds; the failure mode is a visible runtime error rather than a silently-truncated format or a downstream `BtcError`.
+
+**Why**: validators at the router boundary can be bypassed by direct widget instantiation (tests, programmatic navigation from a non-router entry point). The widget-level assert catches the bypass at the widget's own boundary, with a message that includes the offending id so ops can diagnose.
+
+**How to apply**:
+- For wallet-desktop: apply to every screen with a `walletId` or `network` parameter — Tasks 20, 21, 22 already in this shape. Also `address` if a future screen takes one (not yet, but Task 21 SendScreen's address field has its own btc-side validation in `BtcInvoker`).
+- For general Flutter: any `Screen({required this.id})` pattern where `id` flows into CLI commands or DB keys should have a corresponding `assert` at the build boundary.
+- Asserts cost nothing in release builds (Dart strips them); use them liberally as defense-in-depth.
+
