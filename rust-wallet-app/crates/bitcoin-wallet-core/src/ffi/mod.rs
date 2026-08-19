@@ -10,6 +10,7 @@
 
 #![allow(unsafe_code)] // FFI surface; safe `extern "C" fn` only.
 
+pub mod bdk_extras;
 pub mod error;
 pub mod panic;
 pub mod runtime;
@@ -17,5 +18,5 @@ pub mod wallet;
 pub mod wallet_ops;
 
 pub use error::{ffi_last_error_message, set_last_error, FfiError};
-pub use panic::ffi_catch_unwind;
+pub use panic::{ffi_catch_unwind, scrub_panic_message};
 pub use runtime::{runtime_block_on, runtime_drop, runtime_new, runtime_or_unknown, RuntimeHandle};
