@@ -55,7 +55,7 @@ use super::error::{set_last_error, FfiError};
 /// The regex-based scrubber is intentionally conservative — false
 /// positives (redacting a non-secret) are acceptable; false negatives
 /// (leaking a secret) are not. L12 CRITICAL #2 prefers the former.
-pub(crate) fn scrub_panic_message(msg: &str) -> String {
+pub fn scrub_panic_message(msg: &str) -> String {
     use once_cell::sync::Lazy;
     use regex::Regex;
 
