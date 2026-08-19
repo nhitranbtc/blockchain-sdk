@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5836476c08aa5b7b4a23e0a9  # v4
+      - uses: actions/checkout@v4  # v4
         with:
           persist-credentials: false
 
@@ -40,7 +40,7 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: '3.22.0'
+          flutter-version: '3.35.0'
 
       # actions/cache: tag-based (same reasoning).
       - name: Cache pub
@@ -59,6 +59,19 @@ jobs:
         working-directory: wallet-desktop
         run: bash scripts/build_fake_btc.sh
 
+      # Task 1 spike + Phase 2 of 2026-08-19 FFI integration plan:
+      # bitcoin-wallet-core cdylib loaded by dart:ffi in wallet-desktop.
+      # Build the cdylib + copy to native/ before flutter test runs.
+      - name: Build bitcoin-wallet-core cdylib
+        working-directory: rust-wallet-app
+        run: cargo build --release -p bitcoin-wallet-core
+
+      - name: Copy cdylib to Flutter native dir
+        run: |
+          mkdir -p wallet-desktop/native/linux-x64
+          cp rust-wallet-app/target/release/libbitcoin_wallet_core.so \
+             wallet-desktop/native/linux-x64/librust_wallet_core.so
+
       - name: dart analyze
         working-directory: wallet-desktop
         run: dart analyze --fatal-warnings --fatal-infos
@@ -68,8 +81,13 @@ jobs:
         run: flutter test --coverage
 
       # codecov/codecov-action: tag-based (same reasoning).
+      # continue-on-error: codecov requires a repo secret (CODECOV_TOKEN);
+      # absent token, the upload fails and propagates as workflow failure
+      # even with fail_ci_if_error: false. Treat the upload as best-effort
+      # until a token is configured.
       - name: Upload coverage
         if: always()
+        continue-on-error: true
         uses: codecov/codecov-action@v4
         with:
           directory: wallet-desktop/coverage

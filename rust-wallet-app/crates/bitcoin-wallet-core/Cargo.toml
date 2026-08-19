@@ -10,6 +10,10 @@ license.workspace = true
 default = []
 regtest-tests = []  # per F3
 
+[lib]
+# rlib for Rust callers (btc CLI), cdylib for FFI (wallet-desktop dart:ffi).
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 bdk_wallet = { workspace = true, features = ["keys-bip39"] }
 bdk_chain = { workspace = true }
@@ -42,3 +46,6 @@ directories = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tokio = { workspace = true }
+
+[build-dependencies]
+cbindgen = { workspace = true }

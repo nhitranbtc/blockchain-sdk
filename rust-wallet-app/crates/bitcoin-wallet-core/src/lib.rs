@@ -15,6 +15,7 @@ pub mod chain;
 pub mod config;
 pub mod crypto;
 pub mod error;
+pub mod ffi;
 pub mod keys;
 pub mod script;
 pub mod threat;
