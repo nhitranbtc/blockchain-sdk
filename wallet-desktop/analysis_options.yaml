@@ -32,4 +32,3 @@ linter:
     - prefer_const_declarations
     - prefer_final_locals
     - unawaited_futures
-    - unsafe_html

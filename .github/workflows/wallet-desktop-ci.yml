@@ -68,8 +68,13 @@ jobs:
         run: flutter test --coverage
 
       # codecov/codecov-action: tag-based (same reasoning).
+      # continue-on-error: codecov requires a repo secret (CODECOV_TOKEN);
+      # absent token, the upload fails and propagates as workflow failure
+      # even with fail_ci_if_error: false. Treat the upload as best-effort
+      # until a token is configured.
       - name: Upload coverage
         if: always()
+        continue-on-error: true
         uses: codecov/codecov-action@v4
         with:
           directory: wallet-desktop/coverage
