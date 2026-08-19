@@ -12,8 +12,7 @@ import 'package:wallet_desktop/providers/wallet_providers.dart';
 
 const _kTestnet = 'testnet';
 const _kWalletId = 'wlt-abc';
-const _kMnemonic =
-    'legal winner thank year wave sausage worth useful legal '
+const _kMnemonic = 'legal winner thank year wave sausage worth useful legal '
     'winner thank yellow';
 
 /// Test double — returns canned tx list (or empty) without spawning a
@@ -218,8 +217,8 @@ void main() {
       }
 
       // Kind-mapped user message surfaces; raw `stderr` MUST NOT.
-      expect(find.text('Network error. Check your connection.'),
-          findsOneWidget);
+      expect(
+          find.text('Network error. Check your connection.'), findsOneWidget);
       expect(find.textContaining('esplora'), findsNothing);
       expect(find.textContaining('unreachable'), findsNothing);
     },

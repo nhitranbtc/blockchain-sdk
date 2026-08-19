@@ -47,8 +47,7 @@ void main() {
     );
   });
 
-  test(
-      'btcInvokerProvider yields a BtcInvoker with a path containing /btc/',
+  test('btcInvokerProvider yields a BtcInvoker with a path containing /btc/',
       () async {
     // Requires the real `btc` binary extracted (Task 24 builds
     // fake_btc.sh or bundles the actual btc binary). For v0.1 with

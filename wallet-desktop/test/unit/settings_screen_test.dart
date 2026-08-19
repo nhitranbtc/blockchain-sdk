@@ -93,8 +93,8 @@ void main() {
       // state assertion above is the load-bearing check for v0.1.
       final file = File('${tempDir.path}/esplora.json');
       if (file.existsSync()) {
-        final json = jsonDecode(file.readAsStringSync())
-            as Map<String, dynamic>;
+        final json =
+            jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
         expect(json['network'], 'testnet');
         expect(json['url'], 'https://blockstream.info/testnet/api');
         expect(json['spki_pin'], '');

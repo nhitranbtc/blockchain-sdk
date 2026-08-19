@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wallet_desktop/core/btc/models/wallet_detail.dart' show Utxo, WalletDetail, Balance;
+import 'package:wallet_desktop/core/btc/models/wallet_detail.dart'
+    show Utxo, WalletDetail, Balance;
 import 'package:wallet_desktop/features/wallet_send/send_screen.dart';
 import 'package:wallet_desktop/providers/wallet_providers.dart';
 
 const _kTestnet = 'testnet';
 const _kWalletId = 'wlt-abc';
-const _kMnemonic =
-    'legal winner thank year wave sausage worth useful legal '
+const _kMnemonic = 'legal winner thank year wave sausage worth useful legal '
     'winner thank yellow';
 
 void main() {
@@ -24,8 +24,7 @@ void main() {
               id: _kWalletId,
               network: _kTestnet,
               addressType: 'native-segwit',
-              firstAddress:
-                  'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
+              firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 0,
                 trustedPendingSat: 0,
@@ -70,8 +69,7 @@ void main() {
               id: _kWalletId,
               network: _kTestnet,
               addressType: 'native-segwit',
-              firstAddress:
-                  'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
+              firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 0,
                 trustedPendingSat: 0,

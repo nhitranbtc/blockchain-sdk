@@ -42,8 +42,7 @@ void main() {
   // canned mnemonic output. PINNED explicitly per L12 CRITICAL #2: a
   // future fixture regression that emits a different phrase (or any
   // real-looking mnemonic) will fail this test loudly.
-  const canonicalMnemonic =
-      'abandon abandon abandon abandon abandon abandon '
+  const canonicalMnemonic = 'abandon abandon abandon abandon abandon abandon '
       'abandon abandon abandon abandon abandon about';
 
   test('e2e: list wallets against fake btc', () async {
@@ -84,7 +83,7 @@ void main() {
         passwordFilePath: '/dev/null',
       ),
       // L34.1: defensive `is Map` guard. Empty stdout would otherwise
-        // surface as a swallowed BtcError(other) at the UI layer.
+      // surface as a swallowed BtcError(other) at the UI layer.
       parse: (j) => j is Map<String, dynamic>
           ? WalletDetail.fromJson(j)
           : throw FormatException('empty wallet detail'),

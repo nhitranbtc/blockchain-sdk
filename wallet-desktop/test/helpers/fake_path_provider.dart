@@ -24,32 +24,29 @@ abstract class ThrowingPathProvider extends PathProviderPlatform {
       );
 
   @override
-  Future<String?> getTemporaryPath() async =>
-      throw UnimplementedError(
+  Future<String?> getTemporaryPath() async => throw UnimplementedError(
         'Test fake: getTemporaryPath not configured',
       );
 
   @override
-  Future<String?> getDownloadsPath() async =>
-      throw UnimplementedError(
+  Future<String?> getDownloadsPath() async => throw UnimplementedError(
         'Test fake: getDownloadsPath not configured',
       );
 
   @override
-  Future<String?> getLibraryPath() async =>
-      throw UnimplementedError(
+  Future<String?> getLibraryPath() async => throw UnimplementedError(
         'Test fake: getLibraryPath not configured',
       );
 
   @override
-  Future<List<String>?> getExternalStoragePaths({StorageDirectory? type}) async =>
+  Future<List<String>?> getExternalStoragePaths(
+          {StorageDirectory? type}) async =>
       throw UnimplementedError(
         'Test fake: getExternalStoragePaths not configured',
       );
 
   @override
-  Future<String?> getExternalStoragePath() async =>
-      throw UnimplementedError(
+  Future<String?> getExternalStoragePath() async => throw UnimplementedError(
         'Test fake: getExternalStoragePath not configured',
       );
 

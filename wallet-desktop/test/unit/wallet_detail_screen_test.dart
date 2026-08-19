@@ -85,8 +85,7 @@ void main() {
               id: _kWalletId,
               network: _kTestnet,
               addressType: 'native-segwit',
-              firstAddress:
-                  'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
+              firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 12345,
                 trustedPendingSat: 0,
@@ -100,10 +99,7 @@ void main() {
       // re-populates the mnemonic (e.g., a future "cache on unlock"
       // change) would silently bypass Task 21's `isEmpty` check.
       expect(
-        container
-            .read(walletSessionProvider(_kWalletId))!
-            .mnemonic
-            .value,
+        container.read(walletSessionProvider(_kWalletId))!.mnemonic.value,
         isEmpty,
         reason: 'Task 20 v0.1 sentinel: read-only unlock uses '
             'OpaqueMnemonic("") so Task 21 SendScreen can detect '
@@ -142,8 +138,7 @@ void main() {
       // Send + transactions + lock nav buttons render in the AppBar
       // actions.
       expect(find.byKey(const Key('wallet_detail_send')), findsOneWidget);
-      expect(
-          find.byKey(const Key('wallet_detail_history')), findsOneWidget);
+      expect(find.byKey(const Key('wallet_detail_history')), findsOneWidget);
       expect(find.byKey(const Key('wallet_detail_lock')), findsOneWidget);
     },
   );
@@ -165,8 +160,7 @@ void main() {
               id: _kWalletId,
               network: _kTestnet,
               addressType: 'native-segwit',
-              firstAddress:
-                  'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
+              firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 12345,
                 trustedPendingSat: 0,
@@ -180,10 +174,7 @@ void main() {
       // re-populates the mnemonic (e.g., a future "cache on unlock"
       // change) would silently bypass Task 21's `isEmpty` check.
       expect(
-        container
-            .read(walletSessionProvider(_kWalletId))!
-            .mnemonic
-            .value,
+        container.read(walletSessionProvider(_kWalletId))!.mnemonic.value,
         isEmpty,
         reason: 'Task 20 v0.1 sentinel: read-only unlock uses '
             'OpaqueMnemonic("") so Task 21 SendScreen can detect '
