@@ -14,7 +14,8 @@ import 'package:wallet_desktop/routing/wallet_routes.dart';
 /// `wallets_list_provider_test.dart`: override `btcInvokerProvider`
 /// (the only async dep `WalletsListNotifier` reaches for).
 class _FakeBtcInvoker extends BtcInvoker {
-  _FakeBtcInvoker({this.fixture = const [], this.throwError}) : super(binaryPath: '');
+  _FakeBtcInvoker({this.fixture = const [], this.throwError})
+      : super(binaryPath: '');
 
   /// Either a list of wallet JSON maps (snake_case: `address_type`) or
   /// an empty `const []`. The real [WalletsListNotifier] parses this
@@ -224,7 +225,11 @@ void main() {
         btcInvokerProvider.overrideWith(
           (_) async => _FakeBtcInvoker(fixture: const [
             // `../settings` would otherwise hijack navigation.
-            {'id': '../settings', 'network': 'testnet', 'address_type': 'taproot'},
+            {
+              'id': '../settings',
+              'network': 'testnet',
+              'address_type': 'taproot'
+            },
           ]),
         ),
       ]);

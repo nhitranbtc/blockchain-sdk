@@ -34,8 +34,7 @@ void main() {
     'MnemonicDisplayDialog masks mnemonic by default; Reveal checkbox '
     'shows cleartext; Done disabled until ack',
     (t) async {
-      const mnemonic =
-          'legal winner thank year wave sausage worth useful '
+      const mnemonic = 'legal winner thank year wave sausage worth useful '
           'legal winner thank yellow';
 
       await t.pumpWidget(

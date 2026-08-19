@@ -116,7 +116,7 @@ void main() {
     final record = LogRecord(
       Level.INFO,
       'sign with: abandon abandon abandon abandon '
-      'abandon abandon abandon abandon abandon abandon abandon about',
+          'abandon abandon abandon abandon abandon abandon abandon about',
       'wallet',
     );
     final out = filter.format(record);

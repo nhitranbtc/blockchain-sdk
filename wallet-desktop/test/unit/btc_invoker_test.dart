@@ -57,8 +57,7 @@ void main() {
     );
   });
 
-  test(
-      'invoke strips BTC_WALLET_MNEMONIC from child env via wrapper fixture',
+  test('invoke strips BTC_WALLET_MNEMONIC from child env via wrapper fixture',
       () async {
     // L12 reviewer fix (HIGH): the previous version was vacuously true —
     // no wrapper set BTC_WALLET_MNEMONIC, so the assertion always passed
