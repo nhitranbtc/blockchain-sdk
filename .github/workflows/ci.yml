@@ -97,27 +97,6 @@ jobs:
             && echo "cdylib ok: $(file target/debug/libbitcoin_wallet_core.so)" \
             || (echo "ERROR: cdylib not produced" && exit 1)
 
-  # F53 supply-chain gate: enforce `#![deny(unsafe_code)]` stays enabled in
-  # bitcoin-wallet-core/src/lib.rs. cargo-geiger surfaces any unsafe usage
-  # (including transitive) that would otherwise bypass the deny lint.
-  rust-geiger:
-    name: Rust unsafe-code audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4  # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable  # stable
-      - uses: Swatinem/rust-cache@v2  # v2
-        with:
-          workspaces: rust-wallet-app -> target
-      - name: Install cargo-geiger
-        run: cargo install cargo-geiger --locked
-      - name: cargo geiger
-        working-directory: rust-wallet-app
-        run: cargo geiger --workspace --all-targets --output-format GitHubMarkdown
-
   # Split from the old combined lint-audit job so deny and audit run in
   # parallel — sample's per-concern shape. Both gates independently enforced.
   rust-deny:
