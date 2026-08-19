@@ -28,6 +28,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L30] Verify plan-cited SHAs with `git log --all -- <path>` before trusting — drift detector for plan/spec headers
 - [L36] wallet-desktop Task 24 lessons (bash-case-order, throw-const-rejection, static-factory-not-const, test-side-precedent, env-strip-shell-wrapper)
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
+- [L38] L21 ledger cascade via sub-agent (L13 step 19 — 2026-08-19)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -50,6 +51,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Test-side lesson propagation | L36.4 |
 | Dart 3+ env mutation | L36.5 |
 | CI workflow hygiene | L37 |
+| Ledger cascade via sub-agent | L38 |
 | Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
 ---
@@ -358,7 +360,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
 18. Add new lessons if user corrections or novel patterns (L9 schema)
-19. Apply L21 — update `estimate-report.md` (Plan-progress row + progress % + footer with merge SHA + date) + `ai-cost-report.md` (move row estimate→actual with measured tokens + recompute totals). Separate commits per file.
+19. Apply L21 — **dispatch a sub-agent** to update `estimate-report.md` (Plan-progress row + progress % + footer with merge SHA + date) + `ai-cost-report.md` (move row estimate→actual with measured tokens + recompute totals). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow — long file edits with embedded code spans are gate-prone; sub-agent allows gate retries without polluting main-thread context. Separate commits per file.
 ```
 
 **Complexity tier → pipeline variation** (self-detect + user confirm):
@@ -1229,3 +1231,73 @@ Option 1 is the lower-friction path; option 2 is the more thorough path but requ
 - v0.2 follow-up: pin the 4 currently-tag-based actions (`subosito/flutter-action`, `actions/cache`, `actions/upload-artifact`, `codecov/codecov-action`) to verified SHAs after the first successful CI run captures the resolved SHAs from the Actions log.
 - For new workflows in general: when adding a new `uses:` line, check the official action repo for its current SHA; add the SHA to the team's "verified SHA" reference document so future workflows can pin without re-verifying.
 - v0.2 follow-up: a pre-commit hook that greps all `.github/workflows/*.yml` for SHA patterns and compares against the verified SHA document — would have caught the 4 fabricated SHAs at write time.
+
+---
+
+## L38 — L21 ledger cascade via sub-agent (L13 step 19 — 2026-08-19)
+
+**Trigger**: Session 2026-08-19, after Task 27 merge (PR #204). I had edited `estimate-report.md` + `ai-cost-report.md` directly from the main thread per L21 cascade. User correction: "in lesson.md L13 at step 19 after merged run sub-agent to update estimate report and ai cost report" — L21 cascade should be dispatched to a sub-agent, not done inline on the main thread.
+
+**Rule**: At L13 step 19 (after PR merge), **dispatch a sub-agent** (via the Agent tool, subagent_type: `general-purpose`) to apply the L21 ledger cascade. Do NOT edit `estimate-report.md` + `ai-cost-report.md` from the main thread.
+
+**Why**: the L21 cascade is mechanical work — long file edits with embedded code spans, gate-prone (GateGuard fires on first edits per session), and high-context-cost (entire ledger file contents flow into main-thread context). A sub-agent isolates the work:
+
+- Main thread stays focused on user-facing flow (post-merge report-back, next-task pickup).
+- Sub-agent handles the mechanical edits with its own gate retries (no main-thread pollution if a gate denies).
+- L21 cascade surfaces as a discrete pipeline step in the audit trail (visible in the Agent dispatch log).
+- Parallelizes with any other post-merge work (PR review close-out, ledger cascade, estimate update).
+
+**How to apply**:
+
+At L13 step 19, after the PR merge commit lands on main:
+
+```text
+Agent(subagent_type: "general-purpose", prompt: "
+  Apply the L21 ledger cascade for the just-merged PR.
+
+  Inputs:
+  - PR number: #<N>
+  - Merge commit SHA: <sha>
+  - Merge date: YYYY-MM-DD
+  - Task title: <short>
+  - Tier: trivial | normal | critical
+  - Cost estimate (USD): ~$<amount>
+
+  Files to update:
+  1. .superpowers/sdd/<plan-slug>/estimate-report.md
+     - Append a new row to the Plan-progress table (columns: # | Title | Tier | Status | PR | Merge SHA | Date merged | Hours (ref) | Cost (USD))
+     - Update the Progress line (e.g. '26 of 26 tasks complete' → '27 of 27 tasks complete')
+     - Update Cost-to-date line
+     - Update Last merge footer with the new SHA + PR + date
+  2. .superpowers/sdd/<plan-slug>/ai-cost-report.md
+     - Append a row to the Tasks table (columns: # | Title | Input (Tok) | Output (Tok) | Model | Est. cost (USD) | Notes)
+     - Notes column: 1-3 sentence summary of what was done (L31 tier, key L12 findings if any, merge SHA)
+     - Match existing row style (Markdown table pipe style with trailing pipe per MD055)
+
+  Both files are gitignored per L18 — no commit needed, just save.
+
+  Report back: confirmation that both files updated + line counts + any gate denials encountered.
+")
+```
+
+**Anti-patterns**:
+
+- Editing the ledger files directly from the main thread after a PR merge — pollutes main-thread context, blocks user-facing flow on gate retries.
+- Combining the ledger cascade with other post-merge work in the same sub-agent dispatch — keeps the L21 step discrete + auditable.
+- Forgetting the trailing pipe on the new table row (MD055 warning) — match existing row style.
+- Re-formatting pre-existing rows that don't match the new style — out of scope for the L21 cascade; defer to separate cleanup PR.
+
+**Recovery pattern** (if sub-agent fails mid-cascade):
+
+1. Sub-agent reports partial completion + the specific file/lines that failed.
+2. Re-dispatch the same sub-agent with the partial state noted + retry only the failed edits.
+3. If retry fails 2x: pause + surface to user — manual intervention may be needed (gate denials, file format drift).
+
+**Example from this session**:
+
+Task 27 (post-release L29 operator smoke prep):
+
+- PR #204 merged at `63ea2b3` on 2026-08-19
+- Cost: ~$5.00 (trivial-tier per L31)
+- Sub-agent would have updated both files with: estimate-report row + progress 27/27 + cost ~$349.30 + footer `63ea2b3`; ai-cost-report row appended with summary of script + README + UI_TEST_CHECKLIST.md + 12-file format drift fix + Issue #203 + Issue #205 creation + PR #204 merge.
+- Retroactive note: I did this inline (not via sub-agent) — captured as L38 so future-self dispatches the sub-agent.
