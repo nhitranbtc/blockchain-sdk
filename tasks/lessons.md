@@ -25,10 +25,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
-- [L30] Verify plan-cited SHAs with `git log --all -- <path>` before trusting — drift detector for plan/spec headers
-- [L36] wallet-desktop Task 24 lessons (bash-case-order, throw-const-rejection, static-factory-not-const, test-side-precedent, env-strip-shell-wrapper)
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
-- [L38] L21 ledger cascade via sub-agent (L13 step 19 — 2026-08-19)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -45,13 +42,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Post-merge bookkeeping | L21, L24 |
 | Client product | L28 |
 | Live testnet smoke | L29 |
-| Doc drift detection | L30 |
-| Shell fixture hygiene | L36.1 |
-| Dart `const` quirks | L36.2, L36.3 |
-| Test-side lesson propagation | L36.4 |
-| Dart 3+ env mutation | L36.5 |
 | CI workflow hygiene | L37 |
-| Ledger cascade via sub-agent | L38 |
 | Flutter verify gate | L39 |
 | Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
@@ -274,15 +265,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - **Workaround when workflow isn't yet pinned:** if CI fails Format check despite local pass, run `cargo fmt --all` and commit the diff — that's the format CI is asking for.
     - **Post-bulk-edit caveat (PR #85):** the Edit-tool hook auto-formats on save, but bulk-script edits (Python `cat <<EOF` / `sed` / `git checkout --`) bypass the hook. After ANY non-Edit-tool change to a `.rs` file, run `cargo fmt -p <crate>` explicitly before the verify gate. The hook is a safety net, not a guarantee.
     - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full triple gate (`fmt` + `clippy --all-targets` + `test`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
-    - **Hardcode-sweep gate** (Issue #148, 2026-08-15): in addition to fmt/clippy/test, sweep the diff for runtime hardcoded values that bypass operator config. Grep targets:
-        ```bash
-        # From repo root:
-        rg -n --type rust -e '127\.0\.0\.1|localhost|0\.0\.0\.0' rust-wallet-app/crates/
-        rg -n --type rust -e 'blockstream\.info|mempool\.space|blockchair|btc\.com' rust-wallet-app/crates/
-        rg -n --type rust -e 'm/.*'\''/[0-9]+'\''/[0-9]+'\''' rust-wallet-app/crates/
-        rg -n --type rust -e '/tmp/|/usr/share/|/etc/|XDG_(DATA|CONFIG)' rust-wallet-app/crates/
-        ```
-        **Rule**: anything outside `#[cfg(test)]`, doc comments, or named cryptographic constants (BIP-32 `0x80000000`, BIP-44/86 paths) is a defect — either route through `WalletConfig` (Esplora URL) or extract a named `const`. `WalletConfig` has no `Default` impl and no `const DEFAULT_ESPLORA_URL`; every URL must arrive via the `--esplora-url` CLI flag. Tests legitimately bake `https://blockstream.info/testnet/api` and `/tmp/db` in `#[cfg(test)]` blocks — those are fixtures, not defects. The sweep must distinguish "test fixture" from "production hardcode" — the `#[cfg(test)]` boundary is the discriminator.
+    - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
     - **Format-verification plugin** (2026-08-12 grill): the `cargo fmt --check` gate is the only Rust-quality check bundled into a dedicated plugin. Subagent `ecc:rust-build-resolver` runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` + `cargo tree --duplicates` (+ `cargo audit` if installed) in one invocation; slash command `/ecc:rust-build` wraps the same agent. `ecc:rust-reviewer` (or `/ecc:rust-review`) runs the same fmt check on modified `.rs` files after a code-review pass. Other Rust-engineer agents (`compass:rust-engineer`, `voltagent-lang:rust-engineer`) apply style by writing idiomatic code on first pass — they do NOT expose a discrete `cargo fmt --check` step. `caveman:cavecrew-reviewer` intentionally skips formatting nits unless they change meaning — wrong tool for rustfmt policing. Use `/ecc:rust-build` for one-shot verify; use `/ecc:rust-review` for fmt-check paired with review.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
@@ -360,7 +343,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 ## Per session
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
-18. Add new lessons if user corrections or novel patterns (L9 schema)
+18. Add new lessons if user corrections or novel patterns (L9 schema) — **PAUSE first**: surface candidate + rationale, await explicit user approval before writing to lessons.md
 19. Apply L21 — **dispatch a sub-agent** to update `estimate-report.md` (Plan-progress row + progress % + footer with merge SHA + date) + `ai-cost-report.md` (move row estimate→actual with measured tokens + recompute totals). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow — long file edits with embedded code spans are gate-prone; sub-agent allows gate retries without polluting main-thread context. Separate commits per file.
 ```
 
@@ -386,6 +369,70 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | 8   | Review input: squash-candidate state (final commit on PR branch before merge) — not first commit, not uncommitted. For PRs that squash, reviewers see the combined final state. For PRs that merge commit-by-commit (rare), reviewers see the full history. (Re-grill 2026-08-15: corrected from "first commit" wording — Tasks 3-4 squash-merged multiple commits; reviewers read the combined state.)                                                                                                                                                  |
 | 9   | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry                                                                                                                                                         |
 | 10  | Complexity: self-detect + user confirm (hybrid of C + D)                                                                                                                                                                                     |
+
+## Flutter / Dart adaptation (wallet-desktop)
+
+Same 19-step spec as L13, with toolchain + reviewer + sweep substitutions. Applies to every `wallet-desktop/` task. Formerly L31; merged into L13 per user direction.
+
+### Toolchain substitutions (L13 step 11)
+
+| L13 element | Rust (`rust-wallet-app/`) | Flutter (`wallet-desktop/`) |
+|---|---|---|
+| Format | `cargo fmt --check` | `dart format --set-exit-if-changed --output=none .` |
+| Static analysis | `cargo clippy --workspace --all-targets -- -D warnings` | `dart analyze --fatal-warnings --fatal-infos` |
+| Tests | `cargo test --workspace` | `flutter test` |
+| Reviewer (L13 step 10) | `ecc:rust-reviewer` | `ecc:flutter-reviewer` |
+| Branch prefix | `feat/<domain>/<task>` | `feat/wallet-desktop/task-N` |
+
+### Verify gate (Flutter) — all three must pass before commit
+
+```bash
+export PATH="$HOME/flutter/bin:$PATH"
+cd wallet-desktop
+dart format --set-exit-if-changed --output=none .
+dart analyze --fatal-warnings --fatal-infos
+flutter test
+```
+
+**No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `test/` blocks only. Production routes through `EsploraConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
+
+### Secret-leak sweep (Flutter L12 CRITICAL #2 mirror)
+
+```bash
+cd wallet-desktop/lib
+rg -n -e '(password|mnemonic|secret)\s*[:=]\s*"[^"]+"'
+rg -n -e 'print\s*\(.*password|print\s*\(.*mnemonic'
+```
+
+**Rule**: zero matches outside `test/`. Mnemonic-shaped strings (12/15/18/21/24 lowercase words) in source = defect. Routes through `BtcLogFilter` (Task 7) before any logger call.
+
+### Complexity tier variation (Flutter)
+
+| Tier | Pipeline variation |
+|---|---|
+| `trivial` (lint config, asset stubs) | Skip TDD; verify gate only; no L12 review subagent |
+| `normal` (DTOs, providers, widgets) | Full: failing test → impl → pass → L12 review → verify → PAUSE → commit |
+| `critical` (BtcInvoker, TempSecretFile, BtcLogFilter, password/mnemonic widgets) | Full + `pr-review-toolkit:security-auditor` subagent + explicit L12 CRITICAL #2 sweep + custom lint for mnemonic-shaped strings |
+
+### Flutter-specific anti-patterns
+
+- **Skipping widget tests for feature tasks.** Per design §8.3, every screen has a widget test matrix (loading/data/error/validation/dispose).
+- **Bypassing verify gate** to ship faster. Analyzer debt compounds like clippy debt.
+- **Logging mnemonic-shaped strings** in widget code. `BtcLogFilter` is the only path.
+- **Committing secrets** to git (`.dart_tool/`, `coverage/`). `.gitignore` mandatory; verify `git status --ignored` after scaffold.
+- **Spawning `btc` without stripping inherited env vars** (Task 10 `BtcInvoker`). Strip `BTC_WALLET_MNEMONIC`, `BTC_ENCRYPT_PASSWORD`, `BTC_DECRYPT_PASSWORD` from parent env before `Process.start`.
+- **Committing `dart analyze` auto-edits** to `analysis_options.yaml` (flutter-tools adds platform excludes on first run). Revert after verify gate; defer platform excludes to CI workflow task.
+- **Pre-warming async providers before `pumpWidget`** trips `!timersPending` (Task 17). `container.read(provider.future)` before `pumpWidget` leaves autoDispose provider without listener; idle-dispose timer stays pending. Fix: drive loading → data via widget's own `ref.watch` (`pumpWidget` + `pumpAndSettle`).
+- **Test fakes that mock `BtcInvoker.invoke` MUST override `invoke`** (Task 17). Without override, real `Process.start` → timeout. Always override `invoke<T>(cmd, parse)` to return `parse(fixture)` synchronously.
+- **`BlockSemantics` ≠ `ExcludeSemantics`** (Task 18). `BlockSemantics` strips siblings painted BEFORE it, NOT descendants. For "drop my subtree", use `ExcludeSemantics(child: ...)`. Audit `BlockSemantics` near any secret/credential surface.
+- **`unawaited(notifier.refresh())` leaks uncaught zone errors** (Task 18). `AsyncNotifier.refresh()` returns Future; `unawaited` doesn't attach `.catchError`. Use `ref.invalidate(provider)` (void; cannot leak).
+- **`flutter_test`'s `enterText` unreliable on `obscureText: true`** (Task 18). `enterText` doesn't trigger `onChanged`. Workaround: bypass form, drive `_submit` via test seam OR use real `fake_btc.sh` integration test (L29 operator-driven).
+- **`SelectableText` is clipboard + screen-reader exfil vector for secrets** (Task 18). Long-press → Copy leaks to OS pasteboard. Fix: `SelectionContainer.disabled(child: ExcludeSemantics(child: Text(secret)))`.
+- **Verify L12 review suggestions against type system** before applying (Task 19). Paste suggestion, run `dart analyze`, commit only if clean.
+
+### Branch + PR model (Flutter)
+
+Originally scoped as direct-commit-on-main deviation (2026-08-15 early session, speed-over-reversibility rationale). User reversed same day → canonical L13 model adopted: per-task branch + L13 steps 13-15d fire as canonical. Tasks 1-2 (`26dfec9`, `a342597`) remain on main as historical deviation artifacts; Task 3+ follows canonical L13.
 
 **Apply**: every new task follows this spec literally. If a step doesn't apply, log why in the ledger. If a step fails, escalate per Q9. Re-grill the pipeline after 5 tasks (or when a pattern emerges that the spec doesn't cover).
 
@@ -468,6 +515,54 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - Update the total fixed-fee on every merge — defeats the purpose of fixed-fee billing.
 - Skip update because "the bill is a snapshot" — the bill IS the source of truth for client; update it.
 - Update ai-cost-report without per-task token usage data — falls back to estimates; mark `~` qualified until measured.
+
+### Sub-agent dispatch at L13 step 19
+
+**Trigger**: Session 2026-08-19, post-Task 27 merge (PR #204). User correction: "in lesson.md L13 at step 19 after merged run sub-agent to update estimate report and ai cost report" — L21 cascade belongs in a sub-agent, not main thread.
+
+**Rule**: dispatch a `general-purpose` sub-agent (via Agent tool) at L13 step 19 to apply the L21 ledger cascade. Do NOT edit `estimate-report.md` + `ai-cost-report.md` from the main thread.
+
+**Why**: mechanical long-file edits, gate-prone (GateGuard fires on first edits per session), high-context-cost. Sub-agent isolates:
+- Main thread stays on user-facing flow (post-merge report, next-task pickup).
+- Sub-agent handles gate retries independently (no main-thread pollution if gate denies).
+- Cascade surfaces as discrete pipeline step in Agent dispatch log.
+- Parallelizes with other post-merge work.
+
+**Apply** — Agent prompt template:
+
+```text
+Agent(subagent_type: "general-purpose", prompt: "
+  Apply the L21 ledger cascade for the just-merged PR.
+
+  Inputs:
+  - PR number: #<N>
+  - Merge commit SHA: <sha>
+  - Merge date: YYYY-MM-DD
+  - Task title: <short>
+  - Tier: trivial | normal | critical
+  - Cost estimate (USD): ~$<amount>
+
+  Files:
+  1. .superpowers/sdd/<plan-slug>/estimate-report.md — append row to Plan-progress table; update Progress line; update Cost-to-date; update Last-merge footer with new SHA + PR + date.
+  2. .superpowers/sdd/<plan-slug>/ai-cost-report.md — append row to Tasks table (1-3 sentence summary, merge SHA in Notes); match existing pipe style with trailing pipe (MD055).
+
+  Both gitignored per L18 — save only, no commit.
+
+  Report: confirmation + line counts + any gate denials.
+")
+```
+
+**Anti-patterns**:
+- Edit ledger files inline post-merge — pollutes main-thread context, blocks user flow on gate retries.
+- Combine L21 cascade with other post-merge work in same dispatch — keep L21 step discrete + auditable.
+- Reformat pre-existing rows that don't match new style — out of scope; defer to cleanup PR.
+
+**Recovery** (sub-agent fails mid-cascade):
+1. Sub-agent reports partial + which file/lines failed.
+2. Re-dispatch with partial state noted + retry only failed edits.
+3. Retry fails 2x → pause + surface to user (gate denials, file format drift).
+
+**Example**: Task 27 (post-release L29 operator smoke prep), PR #204 at `63ea2b3` on 2026-08-19, ~$5.00 (trivial). Sub-agent would have updated estimate-report (27/27, ~$349.30, footer `63ea2b3`) + ai-cost-report (script + README + UI_TEST_CHECKLIST + 12-file format drift + Issues #203/#205 + PR #204 merge). Inline execution captured as L38 retroactive; future-self dispatches sub-agent.
 
 ---
 
@@ -724,497 +819,6 @@ Operator confirms via PR comment + flips the `L29` acceptance box.
 
 ---
 
-## L30 — Verify plan-cited SHAs with `git log --all -- <path>` before trusting
-
-**Trigger**: Session 2026-08-12 PR #88 triage. Plan header cited
-`e2d51ec` (design spec) and `0c20f77` (tangem research). `git log --all
--- <path>` returned empty for both — files existed on disk but were
-never `git add`-ed. Plan referenced SHAs that resolved to nothing.
-PR #88 landed both files at squash-merge SHA `d846564`.
-
-**Rule**: At task pickup, scan plan / spec / review headers for SHA
-citations. For each cited SHA, verify with `git log --all -- <path>`:
-
-- **Returns ≥1 commit**: SHA is real; cross-ref works.
-- **Returns empty**: drift; the cited SHA never existed. Either commit
-  the artifact (resolve the drift) or update the header to point to a
-  real SHA / a PR number.
-
-**Why**: Plan headers are written once and referenced often. A future
-self chasing a plan-cited SHA finds nothing — wasted investigation or
-worse, silently broken cross-refs in published docs. The drift class is
-silent: cargo fmt / clippy / test don't surface it; only `git log`
-against the cited path reveals the gap.
-
-**Apply**:
-
-```bash
-# At task pickup, before trusting any plan-cited SHA:
-for path in $(grep -oE 'docs/[^ )]+\.md' plans/*.md specs/*.md reviews/*.md 2>/dev/null); do
-  hits=$(git log --oneline --all -- "$path" | wc -l)
-  if [ "$hits" -eq 0 ]; then
-    echo "DRIFT: $path has no git history"
-  fi
-done
-```
-
-Or per-file: `git log --all -- <path>` after spotting a `(commit \`SHA\`)`
-citation in the header.
-
-**Anti-patterns**:
-
-- Trusting a SHA citation without verification — broken cross-ref silently propagates.
-- Citing a SHA "aspirationally" (file doesn't exist yet) — drift class repeats on every reference.
-- Removing the SHA citation instead of resolving the drift — hides the cross-ref problem rather than fixing it.
-
----
-
-## L31 — L13 per-task pipeline adapted for Flutter / Dart (`wallet-desktop`)
-
-**Trigger**: Session 2026-08-15 wallet-desktop execution. L13 (Rust pipeline) is the canonical per-task spec, but its toolchain references (`cargo fmt`, `cargo clippy`, `cargo test`) and PR model don't apply to the Flutter project at `wallet-desktop/`. Adapted below; **apply for every wallet-desktop task**.
-
-**Rule**: Run the L13 pipeline with these substitutions. Where the rule diverges, the divergence is noted.
-
-### Step-by-step mapping (L13 → wallet-desktop)
-
-| L13 step | Rust equivalent | Flutter/Dart equivalent (wallet-desktop) |
-|---|---|---|
-| 1 L11 skill tag | Skill list scan | Same: load 3-5 relevant (flutter_lints, riverpod_generator, dart:io, package:logging, etc.) |
-| 2 Complexity self-detect | trivial / normal / critical | Same tiers; "critical" for L12 secret-handling, password fields, mnemonic lifecycle, network TLS pinning |
-| 3 Pick up issue | Read issue body | Same; check task is sub-task or top-level (plan §Task Index) |
-| 4 karpathy-guidelines + branch | Worktree + branch from main | **Same — checkout new branch per task (e.g. `feat/wallet-desktop/task-3`). Direct commit on `main` is NOT permitted.** |
-| 4a Drift scan (L30) | `git log --all -- <path>` | Same |
-| 5-8 Skill pair | L11 map, domain-tag wins | Same |
-| **9 TDD red-green** | failing test → impl → pass | **Same for tasks 3-24**. **Skipped for** config tasks (Task 2 lint, Task 25 CI workflow) and asset-stub tasks (Task 1). For UI feature tasks (Tasks 17-23), write failing widget test FIRST (per design §8.3 widget test matrix). |
-| **10 L12 pre-PR review** | code-review + type-design parallel | **Same; but invoke `ecc:flutter-reviewer`** instead of `ecc:rust-reviewer`. For "critical" tier, add `pr-review-toolkit:security-auditor`. |
-| **11 Verify gate** | `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test --workspace` | `dart format --set-exit-if-changed --output=none .` + `dart analyze --fatal-warnings --fatal-infos` + `flutter test` |
-| 11a Backlog triage | Same | Same |
-| **12 PAUSE commit approval** | Wait for explicit "yes commit" | Same |
-| **13 Commit + push + PR** | PR model | **Same** — `commit-commands:commit-push-pr`. Branch + PR required for every task. |
-| **14 Flip issue checkboxes** | `gh issue edit N --body` | **Same** — flip issue checkboxes with artifact evidence per L13 step 14 rules. |
-| 15-15d PR review + merge + tech doc + L24 cascade | PR model | **Same** — full PR review + merge + close + L24 cascade. |
-| 16-19 Session-level | Same | Same |
-
-### Verify gate details (Step 11)
-
-```bash
-# Format check (idempotent — re-run after any non-Edit tool change)
-export PATH="$HOME/flutter/bin:$PATH"
-cd wallet-desktop
-dart format --set-exit-if-changed --output=none .
-
-# Static analysis (CLAUDE.md `-D warnings` equivalent)
-dart analyze --fatal-warnings --fatal-infos
-
-# Unit + widget tests (L29: live smoke excluded)
-flutter test
-```
-
-**All three must pass before commit.** A single failing gate = task is not done.
-
-### Hardcode sweep (L13 step 11 Flutter adaptation)
-
-Mirrors Rust hardcode-sweep, scoped to Dart files:
-
-```bash
-# From wallet-desktop/lib:
-rg -n -e '127\.0\.0\.1|localhost|0\.0\.0\.0'
-rg -n -e 'blockstream\.info|mempool\.space|blockchair|btc\.com'
-rg -n -e '/tmp/|XDG_(DATA|CONFIG)'
-```
-
-**Rule**: anything outside `// @TestOn('vm')` or `test/` blocks is a defect — route through `EsploraConfig` (already in Task 12) or extract a named constant. Tests legitimately bake fixtures in `test/` blocks — those are fixtures, not defects.
-
-### Secret-leak sweep (L12 CRITICAL #2 mirror)
-
-```bash
-# From wallet-desktop/lib:
-rg -n -e '(password|mnemonic|secret)\s*[:=]\s*"[^"]+"'   # string literal assignment
-rg -n -e 'print\s*\(.*password|print\s*\(.*mnemonic'        # logging mnemonic-shaped
-```
-
-**Rule**: zero matches outside `test/`. Mnemonic-shaped strings (12/15/18/21/24 lowercase words) in source = defect. Routes through `BtcLogFilter` (Task 7) before any logger call.
-
-### Complexity tier variation
-
-| Tier | Pipeline variation for wallet-desktop |
-|---|---|
-| `trivial` (lint config, asset stubs) | Skip TDD; verify gate only; no L12 review subagent (self-review); commit + push to PR |
-| `normal` (DTOs, providers, widgets) | Full: failing test → impl → pass → L12 review → verify → PAUSE → commit |
-| `critical` (BtcInvoker, TempSecretFile, BtcLogFilter, password/mnemonic widgets) | Full + `pr-review-toolkit:security-auditor` subagent + explicit L12 CRITICAL #2 sweep + flutter analyze with extra `unsafe_html` + custom lint rule for mnemonic-shaped strings |
-
-### Branch + PR model — historical archive
-
-**2026-08-15 (early session):** wallet-desktop was originally scoped with a "direct commit on `main`" deviation, skipping canonical L13's branch + PR model. Reasoning captured in the original L31 draft: speed over reversibility, single developer, no merge queue.
-
-**2026-08-15 (same day):** user reversed the deviation. `feat/wallet-desktop/task-N` branches now follow canonical L13:
-
-1. Each task branches off `main` (`git checkout -b feat/wallet-desktop/task-N`).
-2. L13 steps 13 (commit-push-pr), 14 (issue edit), 15 (PR review), 15a (10-section tech doc), 15b-15c (L24 cascade + L13 audit), 15d (merge + close) all fire as canonical.
-3. L21 (estimate-report + ai-cost-report) updates on every PR merge — recorded in PR body.
-4. L24 (CHANGELOG `[Unreleased]` + User Stories table) cascade runs on each PR merge; accumulated entries release-cut at Task 26.
-5. Tasks 1 + 2 (`26dfec9`, `a342597`) remain on `main` as historical artifacts of the original deviation. Task 3 onwards follows canonical L13.
-
-**Rationale for reversal:** even on solo dev branches, the L12 review + L24 cascade + L21 cost tracking provide audit trail value that direct commits lack. Reverting to canonical L13 trades ~2 min/branch for a complete per-task audit record.
-
-### Anti-patterns
-
-- **Skipping widget tests** for feature tasks (17-23). Per design §8.3, every screen has a widget test matrix (loading/data/error/validation/dispose).
-- **Bypassing the verify gate** to ship faster. Flutter analyzer debt (`unused_element`, `prefer_const_constructors`) compounds the same way clippy debt does.
-- **Logging mnemonic-shaped strings** in widget code. L12 CRITICAL #2 is a hard gate; `BtcLogFilter` is the only path for secret-bearing logs.
-- **Committing secrets** to git (`.dart_tool/`, `coverage/`, `~/.local/share/flutter_btc_wallet/`). `.gitignore` is mandatory; verify with `git status --ignored` after scaffold.
-- **Spawning `btc` without stripping inherited env vars** (Task 10 `BtcInvoker`). L7: strip `BTC_WALLET_MNEMONIC`, `BTC_ENCRYPT_PASSWORD`, `BTC_DECRYPT_PASSWORD` from parent env before `Process.start`.
-- **Committing `dart analyze` auto-edits** to `analysis_options.yaml` (flutter-tools adds `build/`, `android/`, `ios/`, `web/`, `windows/`, `macos/`, `linux/` to `analyzer.exclude` on first run). Revert after verify gate unless intentional. Defer the platform excludes to Task 25 (CI workflow) where they belong with the GitHub Actions matrix.
-- **Merging blind on missing PR review notifications (Task 6, PR #182)**: post-PR review sub-agents (code-reviewer + type-design-analyzer) launched but did not return verdicts before merge command ran. Merged on pre-PR L12 pass + user pre-authorized admin bypass. Fix: surface "PR review not received — proceed?" before merging blind. Don't assume pre-PR pass means post-PR is unneeded. If notification doesn't arrive within ~3 min, ask user instead of merging.
-- **L13 step 15 PR review — always launch security-auditor (Task 8+)**: PR review (L13 step 15) traditionally launched 2 sub-agents (`code-reviewer` + `type-design-analyzer`) per L13 Q4 max-2 limit. For *all* tiers — including normal — defense-in-depth requires a third sub-agent: `compass:security-auditor` (or `pr-review-toolkit:security-auditor` for critical). Apply per L13 step 15: launch sub-agents + CONFIRM agents launched (do not assume pre-PR L12 pass replaces step 15). Capture notifications before acting on merge.
-- **Pre-warming async providers before pumpWidget trips `!timersPending` (Task 17)**: `container.read(provider.future)` before `pumpWidget` leaves the autoDispose provider without a listener; its idle-dispose timer stays pending and trips the widget-binding tear-down invariant. Fix: drive loading → data via the widget's own `ref.watch` (i.e. `pumpWidget` + `pumpAndSettle`). Never pre-warm when the screen will be the listener.
-- **Test fakes that mock `BtcInvoker.invoke` MUST override the method (Task 17)**: `_FakeBtcInvoker extends BtcInvoker(binaryPath: '/tmp/fake_btc')` without `invoke` override inherits the real `Process.start` path → test hangs until `BtcInvoker._timeout` (30s). Fix: always override `invoke<T>(cmd, parse)` to return `parse(fixture)` synchronously (or throw) so the parent's subprocess path is short-circuited. Misleading `binaryPath` string is a secondary issue (deferred — the value is unused if `invoke` is overridden).
-- **Extract format / error-mapping helpers BEFORE the second screen needs them (Task 17 type-design post-PR feedback)**: `_displayWalletId` and `_userMessageForBtcError` started private to Task 17; the type-design post-PR sub-agent correctly flagged that Tasks 18/20/21/22 would copy-paste. Fix: lift to `lib/core/format/wallet_id.dart` and `lib/core/btc/btc_error_messages.dart` at Task 17 (before Tasks 18+ pickup), not after a copy-paste incident. L11 lesson: pre-emptive abstraction when 3+ call sites are within one task pickup cycle.
-- **Dart `dart:developer.log` bypasses `package:logging` redaction (Task 17 sec-auditor post-PR)**: `BtcLogFilter.redact` sits behind `Logger.root.onRecord`; `developer.log(...)` lands in DevTools / VM-service / OS syslog and skips that pipeline. Fix: pipe the exception's `toString()` through `BtcLogFilter().redact(...)` before passing to `developer.log`. The `stackTrace` arg (StackTrace object, not String) carries file/line info from Dart's catch site — not user input — pass unredacted. Mirror in main.dart's `runZonedGuarded` block before Task 26 ships.
-- **`BlockSemantics` ≠ `ExcludeSemantics` — Flutter semantics contract** (Task 18 type-design post-PR HIGH #1, must-fix): `BlockSemantics` strips semantics of widgets painted BEFORE it in the same semantic container, NOT its descendants. Using it around a `Text` subtree LEAVES the subtree fully accessible to TalkBack/VoiceOver/NVDA while silently dropping the warning text above it. `ExcludeSemantics(child: ...)` is the correct wrapper for "drop my subtree from the semantics tree." Fix: any time you see `BlockSemantics` in this repo, audit whether the intent was descendants. L31 dev audit gate should flag `BlockSemantics` near any secret/credential surface.
-- **`unawaited(notifier.refresh())` leaks uncaught zone errors** (Task 18 type-design post-PR HIGH #2, must-fix): `AsyncNotifier.refresh()` returns a `Future<...>`; the awaited error rethrows into that future. `unawaited(...)` does not attach `.catchError`, so a CLI failure or autoDispose-race (`ref.read` retains no listener and the family can dispose mid-refresh with `orElseError()`) becomes an uncaught async error. Fix: use `ref.invalidate(provider)` (returns void; cannot leak). The list screen's existing `AsyncValue.error` UI surfaces the failure for the user. The `notifier.refresh()` method is fine when awaited inside an `async` handler that already has a try/catch.
-- **`flutter_test`'s `enterText` is unreliable on `obscureText: true` TextFields** (Task 18): `enterText(find.byType(TextField), 'password')` does not consistently trigger `onChanged` when the TextField is obscure. Result: `_submit`'s `if (_password.isEmpty) return;` early-returns and the form submit path silently no-ops. `flutter_test` issue tracker has the bug. Workaround in unit tests: bypass the form and drive `_submit` via a test seam OR use a real `fake_btc.sh` integration test (Task 24, operator-driven per L29). Direct unit-testable widget state (mnemonic display, password obscureText toggle) is fine.
-- **`SelectableText` is a clipboard + screen-reader exfiltration vector for secrets** (Task 18 sec-auditor + flutter-reviewer): the long-press → Copy path leaks to OS pasteboard; the Flutter semantics tree exposes the rendered text to assistive tech. Fix for secret-bearing text: `SelectionContainer.disabled(child: ExcludeSemantics(child: Text(secret)))`. The `SelectionContainer.disabled` wrapper is Flutter 3.3+; for older versions, use a plain `Text` (no selectability) and gate on a `_visible` flag.
-- **Verify L12 review suggestions against the type system before applying** (Task 19 flutter-reviewer MEDIUM #2): the reviewer suggested `stackTrace: filter.redact(st.toString())` — `filter.redact()` returns `String`, but `dart:developer.log(stackTrace:)` requires `StackTrace?`. Type-mismatch would fail at compile. Fix workflow: paste the suggestion into the editor, run `dart analyze`, then commit only if clean. The Task 18 lesson resolved `stackTrace: st` (unredacted) deliberately — structural file/line info from Dart's catch site is not user input. The right fix here was no fix (consistency with Task 18).
-
-### Apply
-
-For every wallet-desktop task, run this adapted pipeline. If a step doesn't apply (e.g., TDD skipped for trivial config), log why in the ledger. If a step fails, escalate per L13 Q9. Re-grill after 5 tasks or when a Flutter-specific pattern emerges.
-
-## L32 — wallet-desktop Task 20 lessons (sentinel-at-API-surface, capture-identity-before-await, assert-route-validated-ids)
-
-**Trigger**: Session 2026-08-18 wallet-desktop Task 20 WalletDetailScreen pickup. Three L12 review findings (type-design HIGH × 2, type-design MEDIUM, type-design LOW) + flutter-reviewer MEDIUM, all resolved before PR merge. Lessons below apply to every wallet-desktop screen that:
-- calls a `walletSessionProvider(walletId).notifier` API that mutates state, OR
-- has an `await` between `widget.foo` reads and a provider mutation, OR
-- takes a `walletId` from a `pathParameters` lookup.
-
-### 32.1 — Lift sentinel-state conventions into the API surface
-
-**Trigger**: Task 20 needed `walletSessionProvider(walletId).notifier.unlock(mnemonic: '', detail: parsed)` — a "read-only unlock" where the empty-string mnemonic signals "unlocked but no mnemonic cached". The string-convention leaked: every caller of `unlock(mnemonic: ...)` had to independently know that `''` means sentinel.
-
-**Rule**: when a call site needs a non-default value to encode a domain state, expose that state as a named factory on the receiver — never as a magic-value argument at the call site. The convention lives in one place; typos and stale comments can't diverge across the codebase.
-
-**Why**: L12 type-design HIGH (Task 20). The empty-string value was overloaded: `OpaqueMnemonic('')` means BOTH "session-unlock sentinel" AND "post-`dispose()`" — Task 21 SendScreen's `state.mnemonic.value.isEmpty` check happens to work today because `lock()` also nulls the parent `WalletSession`, but the type-level invariant is broken. A future caller that constructs `OpaqueMnemonic('')` directly without going through `lock()` would silently collide with the sentinel.
-
-**How to apply**:
-- For wallet-desktop: when introducing a new mutation on `WalletSessionNotifier`, prefer a named factory (`unlockWithDetail`, future: `unlockWithMnemonicAndDetail`) over an overload of `unlock(mnemonic: '', ...)`. Document the convention at the factory's docstring (not at the call site).
-- For v0.2: replace the string sentinel with a typed variant — either `OpaqueMnemonic.sentinel()` (a distinct static instance, not a String equality check) OR add `bool isUnlockedWithoutMnemonic` to `WalletSession` so the two empty-value states can't collide at the value level. Tracked in `wallet_providers.dart` doc above `unlockWithDetail`.
-- Apply the pattern beyond `WalletSession`: any `Notifier` with overloaded-string state (e.g., `unlock(mode: '', ...)`) should also lift the convention.
-
-## L33 — wallet-desktop Task 21 lessons (pure-build, hoist-controllers, extend-critical-dependents, argv-empty-mnemonic, override-btcInvoker-in-tests)
-
-**Trigger**: Session 2026-08-18 wallet-desktop Task 21 SendScreen pickup. Critical-tier screen (most security-sensitive in v0.1 — reads `OpaqueMnemonic` + pipes to `btc wallet send` via `withTempSecretFile`). All three L12 sub-agents (flutter-reviewer + type-design-analyzer + security-auditor) returned BLOCK verdicts with overlapping findings — every one of these lessons was caught by ≥2 reviewers independently. The Task 21 review pass took ~12 fixups to reach merge-clean; the patterns below would have caught the issues at design time.
-
-### 33.1 — `build()` MUST be pure: derive state, never cache
-
-**Trigger**: Task 21's first impl cached `session.mnemonic.value` in `_mnemonic` and `_wordCount` inside `build()`. flutter-reviewer + type-design-analyzer both flagged this CRITICAL — Flutter `build()` is contractually pure (called outside any `setState` cycle, may be invoked by the framework on any ancestor rebuild, and is supposed to be side-effect-free). Caching the mnemonic reference in a screen field also extended the cleartext lifetime past `lock()` — `OpaqueMnemonic.value` returns the same `String` reference, and the screen's `_mnemonic = ''` in `dispose` only cleared the State reference, not the underlying heap.
-
-**Rule**: every `build()` method must derive its rendered values from props / providers / `late final` fields. The State object holds only: (a) form-input fields the user is actively editing (`_address`, `_amountSat`), (b) `late final` controllers / keys, (c) flags derived from provider state on each build (no caching).
-
-**Why**: a non-pure `build()` causes infinite rebuilds on the second call, stale state when the parent rebuilds the screen with new args, and (in our case) extended cleartext lifetime past `lock()` — defeating `OpaqueMnemonic.dispose()` discipline.
-
-**How to apply**:
-- For wallet-desktop: derive everything that comes from a provider or a prop inside `build()` — no `_session` cache, no `_mnemonic` cache, no `_wordCount` cache.
-- Cleartext that must NOT be cached: any value from `OpaqueMnemonic.value`. Pass it directly into `withTempSecretFile(...)` inside `_submit` — the secret's lifetime tracks the CLI invocation, not the State.
-- Form-input fields the user is actively editing (`_address`, `_amountSat`, `_feeController.text`) are fine — those are user-controlled, not secret.
-- For other Flutter projects: enforce via the implicit framework contract; `flutter analyze` does NOT flag this, only a Flutter reviewer will.
-
-### 33.2 — Hoist `TextEditingController` (and similar controllers) to `late final` State fields
-
-**Trigger**: Task 21 constructed `TextEditingController(text: '$_feeRate')` *inside* `_buildSendForm` — every `build()` allocated a fresh controller, the previous one was never disposed (memory leak), and the cursor jumped to position 0 on every rebuild. Caught by flutter-reviewer + type-design-analyzer both as CRITICAL.
-
-**Rule**: any `TextEditingController`, `FocusNode`, `ScrollController`, or `AnimationController` MUST be a `late final` State field, allocated in `initState`, disposed in `dispose`. Never construct inside `build()`. Update the controller's `.text` directly when the data source changes (instead of `setState(() => _feeRate = ...)` + re-rendering the field with a new controller).
-
-**Why**: Flutter's `TextField` calls `dispose()` on the controller when the field rebuilds with a different controller instance, which clears the user's caret/selection state. A per-build allocation also leaks (the old controller is orphaned, never disposed, holds references to the field's input buffer).
-
-**How to apply**:
-- For wallet-desktop: every `TextField` / `TextFormField` needs a `StatefulWidget` parent that owns the controller. Convert screens with inline controllers to use the `late final` pattern.
-- The Task 20 `PasswordField` already follows this pattern (Task 15); mirror it everywhere.
-- v0.2 backlog: a `HookConsumerWidget` (flutter_hooks) would let controllers be declared as `useTextEditingController()` without a `StatefulWidget` wrapper — v0.2 only.
-
-### 33.3 — On critical-tier surfaces, extend dependents to wire the path (no unwired branches)
-
-**Trigger**: Task 21's `MnemonicPasteField` (Task 15) exposed only `onChanged: ValueChanged<String>`. The re-entry view needed to capture the user's mnemonic at submit-time and route it to `notifier.unlock(mnemonic: x, detail: priorDetail)`. The first impl passed `onChanged: (_) {}` (no-op) and left the "Unlock for signing" button as `() {}` — the user landed on a dead-end screen on a CRITICAL-tier surface. Security-auditor + type-design-analyzer both flagged this as CRITICAL.
-
-**Rule**: a critical-tier screen renders a branch only if that branch is reachable end-to-end. If the branch requires a widget API that doesn't exist, ADD it to the widget (extend the contract) — don't leave the UI as a dead-end. Every rendered state must advance the user toward a CLI invocation or a safe refusal.
-
-**Why**: on a critical-tier surface, a stuck submit button is a worse failure than no UI at all — the user thinks the broadcast happened, but the screen silently does nothing. Security-auditor flagged this as "no path from this UI to a CLI invocation; rendering the form is functionally a noop."
-
-**How to apply**:
-- For wallet-desktop: every branch in `_build*` helper methods on critical-tier screens (Task 21 SendScreen + any future Task 23 SettingsScreen or Task 24 Integration test scaffolding) must reach a CLI invocation OR a documented v0.2 follow-up that's marked with `// v0.2:` in the code.
-- The fix for Task 21 was `MnemonicPasteField.onSubmit: ValueChanged<String>?` + public `void submit()` method on State — small extension, fully backward-compatible.
-- Don't ship unwired branches with a "v0.2" comment alone — the comment is invisible at runtime.
-
-### 33.4 — `argv`-mnemonic empty-string is still an L12 CRITICAL #2 violation
-
-**Trigger**: Task 21's `WalletSend.argv` unconditionally emitted `['--mnemonic', mnemonic]` — even when `SendScreen` passed `mnemonic: ''` (the v0.1 workaround of passing the mnemonic via `passwordFilePath`). The cleartext didn't appear (the string was empty), but the flag was still emitted, which security-auditor flagged as CRITICAL: "the actual flagged invariant (L12 CRITICAL #2 `mnemonic NEVER enters argv`) is *not satisfied*."
-
-**Rule**: the L12 CRITICAL #2 invariant is "mnemonic NEVER enters argv" — interpreted strictly, this means the `--mnemonic` flag itself must NOT appear in argv when the mnemonic is being passed via a different channel. Empty-string-in-argv is still a violation.
-
-**Why**: a future change that flips `passwordFilePath` to `--password-file` semantics would silently start sending `--mnemonic ''` to the CLI — and the CLI's behaviour on empty mnemonic + `--password-file` is undocumented (the v0.1 workaround was a Task 8 patch on the CLI side, not a documented btc contract).
-
-**How to apply**:
-- For wallet-desktop: `WalletSend.argv` now uses `if (mnemonic.isNotEmpty) '--mnemonic', if (mnemonic.isNotEmpty) mnemonic` — the flag-pair is conditional on the channel.
-- v0.2 follow-up: introduce `sealed class MnemonicChannel { class Inline extends MnemonicChannel; class PasswordFile extends MnemonicChannel; }` and `WalletSend.fromChannel(...)` so an empty-mnemonic + password-file pairing is a single constructor, not a coincidental parameter combination. Tracked in `wallet_providers.dart` doc.
-- Apply to every other `BtcCommand` subclass that takes an optional secret-bearing flag: `TxList.mnemonic` (already required, no fix needed), `walletImport.mnemonic` (already required), but if v0.2 adds `--password-stdin` or similar conditional flags, the same conditional-emit pattern applies.
-
-### 33.5 — Tests must override `btcInvokerProvider` (silent catches hide missing overrides)
-
-**Trigger**: Task 21's tests #2 and #3 (sentinel reentry + mainnet confirm) do NOT override `btcInvokerProvider`. The screen's `initState` calls `_fetchFeeEstimate` which awaits `ref.read(btcInvokerProvider.future)` → `extractBtc()` fails because the test assetBundle has no bundled binary. Today the `catch (_)` silently swallows it and the test passes by accident — any future change to the catch (rethrow, Sentry.report, logging) breaks these tests in CI without any visible regression.
-
-**Rule**: any widget test that pumps a screen which has an `initState` / `didChangeDependencies` / async-await that touches a `FutureProvider` (especially `btcInvokerProvider` which spawns a subprocess) MUST override the provider with a stub before `pumpWidget`. Use the `_FakeBtcInvoker` test double (established Task 13/17) wired into the `ProviderContainer(overrides: [...])`.
-
-**Why**: silent catches in async-init paths hide real test-environment bugs. The test passes today only by accident — if anyone tightens the catch (rightly!) to log the error, the test breaks in CI with no local repro.
-
-**How to apply**:
-- For wallet-desktop: every screen test (`wallet_list_screen_test.dart`, `wallet_detail_screen_test.dart`, `wallet_import_screen_test.dart`, `send_screen_test.dart`, future `transactions_screen_test.dart` + `settings_screen_test.dart`) needs a `_FakeBtcInvoker` override in the `ProviderContainer` if the screen has any async-init that reaches the invoker.
-- v0.2 follow-up: a `testBtcInvoker()` named-constructor on `BtcInvoker` returning a `BtcInvoker` instance with `binaryPath: 'echo'` so tests don't need a custom subclass.
-- Apply to other FutureProvider-backed dependencies too: `esploraConfigProvider`, `appPathsProvider` (file-system tests need to override too).
-
-## L34 — wallet-desktop Task 22 lessons (defensive-parse-null, identity-catch-finally, typed-globalkey)
-
-**Trigger**: Session 2026-08-18 wallet-desktop Task 22 TransactionsScreen pickup. Normal-tier screen (read-only tx history). All three L12 sub-agents returned clean findings on first pass — the patterns from L32 + L33 made the design robust. Three carry-over lessons, each caught by 1+ reviewers.
-
-### 34.1 — Always use defensive `j is List` parse check, never `(j as List)`
-
-**Trigger**: Task 22's first parse callback was `(j) => (j as List).map(...).toList()`. The `BtcInvoker` invokes `parse(null)` on empty stdout (`btc_invoker.dart:146`); the `(j as List)` cast threw TypeError on `null`, BtcInvoker wrapped it as `BtcError(kind: other)`, and the screen surfaced "Something went wrong." for empty wallets instead of the expected empty-state "No transactions yet" message.
-
-**Rule**: every `parse:` callback in a `BtcInvoker.invoke<T>` call site must guard against `null` and against a non-List JSON. Pattern: `parse: (j) => j is List ? j.map(...).toList(growable: false) : const <T>[]` — same defensive shape Task 17 `WalletsListNotifier` (line 28-32 of `wallet_providers.dart`) uses for the wallet-list empty/null fallback.
-
-**Why**: `_FakeBtcInvoker` test doubles call `parse(<Map<String, dynamic>>[])` directly, bypassing the `BtcInvoker.invoke` empty-stdout path. Tests pass; production breaks on the first empty wallet. This is a class of bug that unit tests with `_FakeBtcInvoker` systematically mask.
-
-**How to apply**:
-- For wallet-desktop: audit every `parse:` callback in screens + providers. Each one MUST guard `j is List` (or `j is Map` for DTOs) and return a typed empty fallback.
-- For other projects: any `invoke<T>(cmd, parse: ...)` call site that decodes JSON arrays. The fallback to `const <T>[]` is type-safe at the parser boundary.
-- v0.2 follow-up: add a lint rule (custom_lint) that flags `(j as List)` casts inside `parse:` callbacks — the rule would emit at parse-callback lint scope.
-
-### 34.2 — Identity re-assert in catch + finally (not just pre-await)
-
-**Trigger**: Task 22's `_load` correctly captured `walletId/network` at the top of the async-await chain (Lesson 32.2) and re-asserted before the pre-await `setState` and the post-invocation `setState`. But the `catch` (BtcError + non-BtcError) and `finally` branches only checked `mounted`. type-design Task 22 HIGH: if the user deep-linked to a different wallet family mid-load, `_error` from wallet A leaks into wallet B's view (line 138), a stale SnackBar surfaces under wallet B's `ScaffoldMessenger` (lines 147-151), and `_running = false` resets wallet B's spinner to wallet A's tempo (line 153).
-
-**Rule**: every post-await branch (success, BtcError, non-BtcError, finally) must re-assert `widget.walletId == walletId && widget.network == network` before mutating any screen state OR calling `ScaffoldMessenger.of(context).showSnackBar`. The pattern is:
-```dart
-final walletId = widget.walletId;
-final network = widget.network;
-try {
-  // ... await ...
-  if (!mounted) return;
-  if (widget.walletId != walletId || widget.network != network) return;
-  setState(() => ...);
-} on BtcError catch (e) {
-  if (mounted && widget.walletId == walletId && widget.network == network) {
-    setState(() => _error = e);
-  }
-} finally {
-  if (mounted && widget.walletId == walletId && widget.network == network) {
-    setState(() => _running = false);
-  }
-}
-```
-
-**Why**: the `mounted` check covers widget-disposal but NOT widget-property-change while still mounted (the Lesson 32.2 distinction). A re-assert is a separate check; missing it is a class of bug that the unit tests' single-wallet scenarios don't expose.
-
-**How to apply**:
-- For wallet-desktop: every screen that has an async-await handler touching `widget.X` for a path-param-derived key. Apply to Tasks 20/21 already-merged code in a follow-up sweep if missing.
-- For other Flutter projects: same pattern — capture identity at top, re-assert in EVERY post-await mutation site, not just the success path.
-- v0.2 follow-up: a custom_lint rule that flags async-await methods that read `widget.X` after `await` without a re-assert guard.
-
-### 34.3 — Expose typed `State<>` class for typed `GlobalKey`
-
-**Trigger**: Task 21's reentry path used `final GlobalKey<State> _mnemonicFieldKey = GlobalKey<State>();` + `_mnemonicFieldKey.currentState as dynamic; state?.submit();` — the `as dynamic` cast hides future renames of `submit()` (no compile error, runtime `NoSuchMethodError`). type-design Task 22 MEDIUM: type the key as `GlobalKey<State<MnemonicPasteField>>` — but that requires `MnemonicPasteFieldState` (the actual State class) to be public. The original `_MnemonicPasteFieldState` was private (underscore-prefixed), so external code couldn't reference it.
-
-**Rule**: when a widget's State class needs to be referenced externally (for typed GlobalKey access, programmatic controller access, parent-driven callbacks), expose the State class as public. The `_` prefix is fine for purely-internal state; for cross-widget access, drop the underscore.
-
-**Why**: a typed `GlobalKey<State<T>>` (where `T` is the State class) gives compile-time checks on all method calls (`currentState?.submit()` is type-checked). A rename of `submit()` → `validate()` would break the call site at compile time, not silently at runtime. The cost is the underscore-prefix loss (an `unintended-public` lint rule, if present, would flag it — but it's a worthwhile trade).
-
-**How to apply**:
-- For wallet-desktop: any widget whose State needs cross-widget access (GlobalKey, parent-driven callbacks) must expose the State class publicly. `_MnemonicPasteFieldState` → `MnemonicPasteFieldState` (Task 22 fix).
-- For other Flutter projects: same rule. The `_` prefix on a State class is documentation of intent ("internal only"); if external code needs it, drop the prefix.
-- The alternative (`@visibleForTesting` on a typedef) is a workaround for tests-only access, not for production callers. For production callers, public class.
-
-## L35 — wallet-desktop Task 23 lessons (save-try-catch, defaults-cover-dropdown, known-network-allowlist)
-
-**Trigger**: Session 2026-08-18 wallet-desktop Task 23 SettingsScreen pickup. Normal-tier screen. All three L12 sub-agents (flutter-reviewer + type-design-analyzer + pr-test-analyzer) converged on the same MEDIUM findings — a sign the patterns are load-bearing enough to elevate into the project lesson ledger. Three new lessons, all defense-in-depth patterns that don't require the screen itself to be secret-handling.
-
-### 35.1 — Wrap `provider.notifier.save(...)` in try/catch; never show "Saved" before confirming the write
-
-**Trigger**: Task 23's `_save()` originally did `await ref.read(esploraConfigProvider.notifier).save(cfg); ScaffoldMessenger.showSnackBar('Saved')`. The `save()` method writes JSON to disk via `file.writeAsString` — which can throw on disk full / permission denied / parent locked. Without try/catch, the exception propagated as an unhandled async error AND the "Saved" SnackBar fired in the success path that never reached.
-
-**Rule**: every screen-side `_save` (or equivalent provider-mutate) method must:
-1. Wrap the `await ... .save(...)` in `try { ... } catch (e, st) { ... }`.
-2. Show the "Saved" SnackBar ONLY in the success branch (inside the try, after the await).
-3. In the catch branch: `developer.log('xxx save failed', name: 'XxxScreen', error: e, stackTrace: st)` (L21 redacted-error pattern), then show an error SnackBar (e.g., `'Save failed.'`).
-4. Guard both SnackBar calls with `if (mounted)` (L32.2 widget-disposal check).
-
-The pattern (matches Task 23 fix):
-```dart
-Future<void> _save() async {
-  try {
-    await ref.read(xProvider.notifier).save(cfg);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Saved')),
-      );
-    }
-  } catch (e, st) {
-    developer.log('save failed', name: 'XxxScreen', error: e, stackTrace: st);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Save failed.')),
-      );
-    }
-  }
-}
-```
-
-**Why**: silent-failure UX bug — user thinks the config was persisted when in fact the disk write failed. Worse than no snackbar at all because the false-positive confirmation hides the failure from the user.
-
-**How to apply**:
-- For wallet-desktop: audit every screen that calls `ref.read(provider.notifier).save/update/set/...`. Each one must guard with try/catch.
-- For general Flutter: same pattern for any `await` on provider mutations that hit IO (file, network, shared_prefs). The pattern is NOT needed for in-memory mutations (no failure surface).
-- v0.2 follow-up: a custom_lint rule that flags `ref.read(...).notifier.save()` without a wrapping try/catch.
-
-### 35.2 — Canonical `defaults(network)` must cover every dropdown option, not just the documented ones
-
-**Trigger**: Task 23's network dropdown includes `regtest` as an option. The `EsploraConfig.defaults(String network)` factory only had explicit cases for `bitcoin` / `testnet` / `testnet4` / `signet` — `regtest` fell through to the `default:` branch which returns `EsploraConfig(network: 'regtest', url: '', spkiPin: '')`. Selecting regtest in the dropdown silently persisted an invalid config (empty URL) — the wallet could never reach the chain.
-
-**Rule**: every UI option (dropdown item, radio choice, checkbox) MUST have a corresponding canonical default. The `default:` branch in a switch should be the **error path** (throw or return a typed-failure), not the fallback path. A missing canonical default = a UX bug, not a "we don't know about this value" edge case.
-
-**Why**: the type system lets you pass any string to `defaults(network)`. The UI invites the user to select regtest. The two together produce an invalid business state that the type system doesn't catch and the UI doesn't warn about.
-
-**How to apply**:
-- For wallet-desktop: `EsploraConfig.defaults` now covers all 5 networks. Audit any other "defaults by string" lookup tables in the codebase (none currently, but v0.2 might add `AddressType.defaults` etc.).
-- For general Flutter: any UI choice (color picker, theme selector, language picker) that maps to a configuration value should have its default defined inline. A missing default = a bug, not an edge case.
-- v0.2 follow-up: replace the `String network` parameter on `defaults` with a `Network` enum (cross-cutting refactor; eliminates the missing-case class of bug at the type level).
-
-### 35.3 — Known-network allowlist defends against hand-edited config files / schema drift
-
-**Trigger**: Task 23's `initState` postFrameCallback reads `esploraConfigProvider` (which deserializes from disk) and assigns `cfg.network` directly to `_network`. If a user hand-edits the JSON config file (or a previous version persisted an unknown network string), the dropdown's `initialValue: _network` would assert in DEBUG mode and silently fall back to testnet in PROFILE/RELEASE without surfacing the issue. The user wouldn't know their config was corrupted.
-
-**Rule**: when seeding a dropdown / enum-style form field from persisted state, validate the value against the known set before assigning. If the value is unrecognized, fall back to a safe default + surface a warning (SnackBar or `developer.log`).
-
-The pattern (matches Task 23 fix):
-```dart
-final knownNetworks = const {
-  'bitcoin', 'testnet', 'testnet4', 'signet', 'regtest',
-};
-final network = knownNetworks.contains(cfg.network)
-    ? cfg.network
-    : 'testnet';
-```
-
-**Why**: defensive parsing — the deserialized `cfg.network` is `String` (raw JSON), but the dropdown's `items` list is closed. The type system doesn't catch the mismatch because both are `String`. Runtime fallback (without surfacing) hides the issue; runtime assert (with no fallback) crashes the screen.
-
-**How to apply**:
-- For wallet-desktop: apply to every form field whose value is one-of-N choices. Task 23 sets the pattern; future screens with persisted enum-like values should follow.
-- v0.2 follow-up: the `Network` enum (already on the backlog) eliminates this pattern entirely — the type system catches unknown values at parse time.
-- For general Flutter: same pattern when seeding `DropdownButtonFormField` / `Radio` / `Checkbox` / etc. from persisted state.
-
-### 32.2 — Capture widget identity at top of async-await chains + re-assert before mutating shared state
-
-**Trigger**: Task 20 `_unlock()` reads `widget.walletId` and `widget.network` inside the `await withPasswordFile(...)` callback (after `await invoker.invoke(...)`) AND again at the `walletSessionProvider(widget.walletId).notifier.unlockWithDetail(...)` call site. L12 type-design MEDIUM caught a mid-await widget-rebuild race: if the parent rebuilds the screen with a different `walletId` mid-await, the CLI invocation runs against wallet A but the provider mutation lands in wallet B's family — the detail is mis-attributed AND the mode-0600 password file's contents are consumed by the wrong-wallet CLI process.
-
-**Rule**: any time an async-suspending function reads `widget.X` (or `this.X` for `State`/`StatefulWidget`) AFTER an `await`, do both:
-1. Capture `final X = widget.X;` at the top of the method BEFORE any await.
-2. Re-assert `if (widget.X != X) return;` before mutating shared state (providers, navigator, global caches).
-
-**Why**: Riverpod's family providers are keyed by the value passed in. A mis-keyed mutation silently succeeds — no compile error, no runtime warning, just a wrong-wallet session. The cross-key footgun is the same shape as `walletSessionProvider('abc').notifier.unlock(walletId: 'xyz', ...)` that Task 14 explicitly closed. Adding the identity re-assert closes the analogous mid-await variant.
-
-**How to apply**:
-- For wallet-desktop: every `ConsumerStatefulWidget._asyncHandler()` method that touches `widget.network`, `widget.walletId`, or any `widget` property used to key a provider or router call must follow the capture-then-re-assert pattern. Apply to Tasks 21+ SendScreen (which reads `widget.walletId` + `state.mnemonic.value` after awaits), 22 TransactionsScreen, 23 SettingsScreen.
-- For Riverpod family providers more broadly: any `ref.read(providerFamily(arg).notifier)` where `arg` is widget-derived should capture `arg` first.
-- The `mounted` check after `await` covers widget-disposal but NOT widget-property-change while still mounted — re-assert is a separate check.
-
-### 32.3 — `assert` route-validated ids in `build` as defense-in-depth
-
-**Trigger**: Task 20 `build()` did not validate `widget.walletId` against `WalletRoutes.isValidWalletIdSegment` — only the router-level `redirect:` did. L12 type-design LOW: a parent that bypasses the router (deep link, programmatic navigation, test harness, future refactor that swaps `redirect:` for one that doesn't run on initial-load) could surface a path-injection-shaped id.
-
-**Rule**: for any widget that takes a `String id` from a `pathParameters` lookup AND has a `WalletRoutes.isValidXxxSegment` (or equivalent allowlist) validator, add `assert(WalletRoutes.isValidXxxSegment(widget.id), 'invalid id: ${widget.id}')` at the top of `build`. Asserts fire in debug + profile builds; the failure mode is a visible runtime error rather than a silently-truncated format or a downstream `BtcError`.
-
-**Why**: validators at the router boundary can be bypassed by direct widget instantiation (tests, programmatic navigation from a non-router entry point). The widget-level assert catches the bypass at the widget's own boundary, with a message that includes the offending id so ops can diagnose.
-
-**How to apply**:
-- For wallet-desktop: apply to every screen with a `walletId` or `network` parameter — Tasks 20, 21, 22 already in this shape. Also `address` if a future screen takes one (not yet, but Task 21 SendScreen's address field has its own btc-side validation in `BtcInvoker`).
-- For general Flutter: any `Screen({required this.id})` pattern where `id` flows into CLI commands or DB keys should have a corresponding `assert` at the build boundary.
-- Asserts cost nothing in release builds (Dart strips them); use them liberally as defense-in-depth.
-
-
----
-
-## L36 — wallet-desktop Task 24 lessons (shell fixture + Dart test-side quirks surfaced by L12 review)
-
-**Trigger**: Session 2026-08-18 wallet-desktop Task 24 Integration test pickup. Normal-tier infrastructure task (no new Dart widget, no new Riverpod provider). 3 L12 sub-agents (flutter-reviewer + pr-test-analyzer + silent-failure-hunter) returned 2 HIGH findings (both blocking) + 3 MEDIUM + 3 LOW. The HIGHs were invisible until the L12 review ran — neither the TDD red→green cycle nor the first verify-gate pass caught them. All 5 lessons below are NEW patterns that didn't exist before Task 24.
-
-### L36.1 — Bash `case` catch-all (`*)`) MUST be the LAST pattern — bash picks first match
-
-**Trigger**: my fake_btc.sh fixture added a `*)` defense-in-depth default to the inner `wallet)` case (catches unknown subcommands). I placed it BEFORE the specific `list|show|create|import|...` branches. Bash `case` is a first-match-wins structure — the misplaced `*)` always won, every specific branch was unreachable, and 5 of 7 e2e tests failed at runtime with `unknownWallet` BtcError. The 2 tests that passed (`tx-list`, `fee-estimates`) used the OUTER case, which doesn't have an inner `*)` — so they bypassed the bug.
-
-**Rule**: in any bash `case x in A) ... ;; B) ... ;; *) ... ;; esac`, the `*)` catch-all MUST be the LAST pattern before `esac`. Bash evaluates patterns top-to-bottom and executes the first match. A misplaced `*)` is a SILENT bug — `set -u` doesn't catch it, `set -e` doesn't catch it, `bash -n` syntax check doesn't catch it. Only an actual invocation with an unmatched argv (or an e2e test exercising the case branches) surfaces it.
-
-**Why**: defense-in-depth default branches are tempting to put "first" for visibility, but they MUST go last. The bug is particularly insidious in fixtures because unit tests of the bash script's surface (e.g. `bash -c 'echo "wallet list" | ./fake_btc.sh'`) often exercise only ONE branch at a time and miss the ordering regression.
-
-**How to apply**:
-- For wallet-desktop: every bash `case` in `test/integration/fixtures/*.sh` MUST end with `*) ... exit 1 ;;` immediately before `esac`. Audit existing fixtures for ordering.
-- For general bash: every nested `case` (and every outer `case`) follows the same rule. Add a `shellcheck` rule (or custom_lint equivalent) that flags `*)` not at end of `case` block — already in `wallet-desktop/scripts/` for future expansion.
-- v0.2 follow-up: a small e2e test that runs every `case` branch at least once (positive-control coverage) would catch this class of regression.
-
-### L36.2 — `const` cannot wrap `throw <expression>` — `throw const FormatException(...)` is a Dart compile error
-
-**Trigger**: my L12 reviewer fixes added `throw const FormatException('empty wallet detail')` to test parse callbacks (L34.1 defensive `is Map` guards). Dart's compiler rejected every `throw const FormatException(...)` with `const_initialized_with_non_constant_value` + `invalid_constant` (8 errors total — 4 sites × 2 errors each).
-
-**Rule**: `throw` is a statement in Dart, not an expression. The operand can be ANY object (including a non-const one), but the `const` keyword on the operand is rejected — Dart tries to fold the throw into a const context and fails because `throw` itself is not const-foldable. Use `throw FormatException(...)` (no `const`).
-
-**Why**: the `const` keyword is a Dart reflex for "make this a compile-time constant if possible". For `throw` operands, it's always wrong — exceptions are runtime values. The compiler error message ("Const variables must be initialized with a constant value") is misleading; the fix is to drop `const`.
-
-**How to apply**:
-- For wallet-desktop: grep for `throw const ` in `test/`. None should exist. The 4 occurrences I added were all fixed to plain `throw`.
-- For Dart generally: `const` belongs on variable declarations and constructor invocations in const contexts (collection literals, `const` constructors). NEVER on `throw` operands.
-- v0.2 follow-up: a custom_lint rule that flags `throw const ` — single-pass detection.
-
-### L36.3 — `BtcCommand`'s static factory methods (`walletList`, `walletCreate`, ...) are NOT const-constructors — `prefer_const_constructors` cannot be honored
-
-**Trigger**: I added `const BtcCommand.walletList(network: 'testnet')` to test files (thinking the static factory was const-eligible since the underlying `WalletList` constructor is const). Dart rejected with `const_with_undefined_constructor` — the error names `walletList` as a constructor, but it's actually a static method. `BtcCommand`'s class-level `const BtcCommand()` constructor is const, but each static factory method is a regular `static Foo foo(...) => Foo(...)` — not a const factory.
-
-**Rule**: `static` factory methods on a sealed class are NOT const-constructors, even if the returned subtype's constructor IS const. The `prefer_const_constructors` analyzer hint CANNOT be honored for `BtcCommand.walletList(...)` etc. — `const BtcCommand.walletList(...)` is a compile error. Use `// ignore_for_file: prefer_const_constructors` in test files that exercise the BtcCommand API (the only legitimate use is when the static factory is on a class with a real `const` constructor named the same as the factory, which Dart treats as a constructor — rare).
-
-**Why**: the analyzer hint is misleading — it sees `BtcCommand.walletList(...)` and thinks "you could make this const", but the static method's signature doesn't allow it. Without `// ignore_for_file`, every `dart analyze` run trips 5 infos (one per `BtcCommand.*` call in test files). With `--fatal-infos`, those become blocking errors.
-
-**How to apply**:
-- For wallet-desktop: `test/integration/wallet_lifecycle_test.dart` already has `// ignore_for_file: prefer_const_constructors` at the top. Any future test file that calls `BtcCommand.foo(...)` should follow the same pattern.
-- For general Dart: when a sealed class exposes static factory methods, audit whether the analyzer hint applies. If `const` invocation fails, add the file-level ignore OR convert the static factory to a `const` factory (requires the underlying subtype's constructor to be const AND all params to be const-foldable).
-- v0.2 follow-up: refactor `BtcCommand` to expose `const` factories (`static const WalletList walletList(...) => ...`) so the test-side can use `const` invocations consistently with the rest of the codebase. Trade-off: every subtype's constructor must already be const.
-
-### L36.4 — L34.1 (`is Map<String, dynamic>` guards) + L33.4 (no empty-mnemonic argv) MUST propagate to test-side parse callbacks — tests bake precedent
-
-**Trigger**: my L12 review found that 4 of 7 e2e test parse callbacks in `wallet_lifecycle_test.dart` did NOT apply the L34.1 `is Map` guard (production code has had it since Task 22). The previous test parse for `tx-list` also passed `mnemonic: ''`, perpetuating the L33.4 violation that Task 21 closed for production code. Both patterns would have shipped in test files that future contributors copy-paste from — the precedent is set by the test, not the production code.
-
-**Rule**: when adding a new lesson (L34.x, L33.x) that applies to production code, AUDIT every existing test file's analogous parse callback / invocation site for the same pattern. Test files are read more often than production code (run on every `flutter test`); their shape IS the project's de-facto convention.
-
-**Why**: tests are the canonical example for "how to use this API correctly". A test that uses `mnemonic: ''` to `tx-list` is a future contributor's reference implementation — they'll copy that into their own code. The defensive `is Map` guard on production parse callbacks is meaningless if every test demonstrates the unguarded pattern.
-
-**How to apply**:
-- For wallet-desktop: every test parse callback MUST apply the L34.1 defensive `is Map` / `is List` guards. Every test invocation of `BtcCommand.txList(...)` / `BtcCommand.walletSend(...)` MUST pass a non-empty mnemonic (a fake value the fixture never echoes).
-- For new lessons generally: when promoting a pattern to the project ledger, scan `test/` for analogous sites and apply the pattern there too. Treat the test file as a "must follow" reference implementation, not just a coverage check.
-- v0.2 follow-up: a custom_lint rule that flags unguarded parse callbacks (`(j) => Foo.fromJson(j as Map<...>)` without an `is` guard) — would have caught this in CI.
-
-### L36.5 — `Platform.environment` is UNMODIFIABLE in Dart 3+; secret-env-strip tests must spawn a shell wrapper, not mutate from Dart
-
-**Trigger**: my L12 review found the existing `btc_invoker_test.dart` env-strip test (`invoke does NOT inherit BTC_WALLET_MNEMONIC even when set in parent shell`) was VACUOUSLY TRUE — the test never set the secret env var in the first place, so the assertion `expect(env, isNot(contains('BTC_WALLET_MNEMONIC')))` always passed regardless of whether `BtcInvoker._secretEnvKeys` actually filtered. The previous test even tried `Platform.environment['BTC_WALLET_MNEMONIC'] = 'should-be-stripped'` — Dart 3+ throws `UnsupportedError` on that mutation (the view is read-only).
-
-**Rule**: for env-strip / env-passing tests in Dart 3+, the secret env var MUST be set OUTSIDE the Dart process — either:
-1. A wrapper shell script that does `export BTC_WALLET_MNEMONIC=probe; exec fixture "$@"` and is invoked as `binaryPath:` by the test (test fixture-side filter coverage).
-2. Launching `flutter test` with the env var set in the launch shell (`env BTC_WALLET_MNEMONIC=probe flutter test ...`) — full Dart-side filter coverage.
-
-Option 1 is the lower-friction path; option 2 is the more thorough path but requires operator-driven test invocation per L29.
-
-**Why**: Dart 3+ `Platform.environment` is an unmodifiable view of the inherited env. Any attempt to mutate it for testing purposes throws at runtime. Tests that LOOK like they exercise env-strip behavior but actually don't set the env are vacuously true — the assertion always passes, the test passes, the production bug persists. This is the silent-failure analog for test coverage: a test that runs tests ≠ a test that tests anything.
-
-**How to apply**:
-- For wallet-desktop: the existing wrapper-script approach (`with_secret_env.sh`) covers the fixture-side filter. To exercise BtcInvoker's Dart-side `_secretEnvKeys` filter, add an L29 operator-driven test invocation that documents the `env BTC_WALLET_MNEMONIC=probe flutter test ...` workflow in `wallet-desktop/test/integration/README.md` (new file). Not yet written; flagged for Task 24 follow-up or v0.2.
-- For Dart generally: any test that depends on env-var presence must set the env externally (wrapper script or shell-prefixed invocation). Treat `Platform.environment` mutation attempts as a code smell.
-- v0.2 follow-up: a test helper `runWithEnv(Map<String, String> extraEnv, Future<void> Function() body)` that internally uses `Process.start('dart', ['test.dart'], environment: ...)` to run tests in a clean env-isolated subprocess. This pattern unblocks all future env-strip / env-passing tests without requiring shell wrappers per test.
-
----
 
 ## L37 — CI workflow action-SHA hygiene: pin verified SHAs, tag-based when unverified
 
@@ -1235,220 +839,3 @@ Option 1 is the lower-friction path; option 2 is the more thorough path but requ
 
 ---
 
-## L39 — Flutter verify gate (L13 step 11-flutter — 2026-08-19)
-
-**Trigger**: Session 2026-08-19 wallet-desktop FFI Task 2 work. L13 step 11 spec'd the Rust verify gate (`cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace`). L31 documented a brief Flutter adaptation (`dart format --set-exit-if-changed --output=none .` + `dart analyze --fatal-warnings --fatal-infos` + `flutter test`). Neither spelled out the **Flutter-specific failure modes, secret-leak sweep, hardcode sweep, coverage threshold, or the version-drift trap** that bit during Task 24 + Task 1 spike. This lesson is the explicit Flutter port of L13 step 11 — the version L31 defers to.
-
-**Rule**: For every `wallet-desktop/` task pickup, run the **Flutter verify gate** before declaring "done". A single failing gate = task is not done.
-
-### Gate commands (must all pass before commit)
-
-Run from `wallet-desktop/` after each fix commit AND at task-end (before final commit-push-pr). Order matters — format first (cheapest), then analyze (catches most lints), then test (slowest, depends on the above being clean).
-
-```bash
-# 1. Format check (BLOCKING — exit 1 means drift exists)
-export PATH="$PATH:/home/nhitran/flutter/bin"
-dart format --set-exit-if-changed --output=none lib test
-# Note: scope to lib test, NOT the whole repo — repo-wide check picks up
-# non-Dart files. Use lib test for wallet-desktop specifically.
-
-# 2. Static analysis (BLOCKING — --fatal-warnings --fatal-infos makes infos errors)
-dart analyze --fatal-warnings --fatal-infos lib test
-
-# 3. Unit + widget + integration tests (BLOCKING — 100% pass required)
-flutter test
-# Or per-target:
-flutter test test/unit/
-flutter test test/integration/   # hermetic; uses fake_btc.sh until Task 17 removes it
-flutter test test/widget_test.dart
-flutter test test/ffi/            # FFI spike tests (Task 1+)
-```
-
-### Format check details
-
-- **`--set-exit-if-changed` is a blocking gate**, not a convenience. Exit 1 = unformatted files exist; CI's `Format check` job fails the PR.
-- **`dart format <files>`** (without `--set-exit-if-changed`) auto-fixes drift. Safe to run pre-commit; safe to commit the resulting diff in the same task.
-- **`--output=none`** suppresses the diff print to stdout (CI-friendly); we want the exit code, not the diff.
-
-### Analysis details
-
-- **`--fatal-warnings`** elevates `warning` lints to errors. Off-by-default lints that would normally be warnings become blocking.
-- **`--fatal-infos`** elevates `info` lints to errors. Per L31 dev audit gate: `prefer_const_constructors`, `unawaited_futures`, etc. become blocking.
-- **Scope to lib test** — repo-wide `dart analyze` picks up `tool/` scripts, `example/`, etc. that aren't part of the shipping surface.
-- **Pre-existing lints in new files are caught at write time** — if a newly-written file has 3 lint warnings, the next commit fails until they're fixed. This is the desired behavior (catches drift early).
-
-### Test details
-
-- **`flutter test`** runs every file in `test/` matching `*_test.dart`. Includes unit, widget, integration, FFI spike.
-- **Coverage** (when `--coverage` flag added): L31 sets ≥80% threshold on `lib/core/` (the FFI/security boundary layer). Other modules (screens, widgets) are best-effort; widget-test coverage is harder to write.
-- **Per-target runs** (above) for faster iteration when iterating on a single layer.
-
-### Hardcode sweep (L31 mirror, Flutter-scoped)
-
-In addition to the 3 blocking commands, run these grep sweeps before committing. Match anything OUTSIDE `test/` or `// @TestOn('vm')` blocks.
-
-```bash
-# IP literals (should route through EsploraConfig / app config)
-rg -nE '127\.0\.0\.1|localhost|0\.0\.0\.0' wallet-desktop/lib
-
-# Hardcoded Esplora endpoints (defeats F20 SPKI pinning + per-network config)
-rg -nE 'blockstream\.info|mempool\.space|blockchair|btc\.com' wallet-desktop/lib
-
-# Hardcoded derivation paths outside named constants
-rg -nE "m/.*'/'[0-9]+'/'[0-9]+'" wallet-desktop/lib
-
-# XDG paths outside helpers (should route through path_provider)
-rg -nE '/tmp/|/usr/share/|/etc/|XDG_(DATA|CONFIG)' wallet-desktop/lib
-
-# Native lib search paths outside NativeLib.open()
-rg -nE '(librust_wallet_core|libbitcoin_wallet_core)' wallet-desktop/lib
-```
-
-**Rule**: any match is a defect — route through `EsploraConfig` (already in Task 12), `AppPaths` (Task 11), or extract a named constant. `lib/core/` is the security boundary; matches outside that are highest priority.
-
-### Secret-leak sweep (L31 mirror, Flutter-scoped — L12 CRITICAL #2)
-
-The L12 CRITICAL #2 invariant: **mnemonic + password never logged**. The Flutter side mirrors the Rust side's defense — the `BtcLogFilter` (Task 7) scrubs before any logger surface. These greps catch regressions:
-
-```bash
-# String literal assignment of secret-shaped values
-rg -nE '(password|mnemonic|secret)\s*[:=]\s*"[^"]+"' wallet-desktop/lib
-
-# Logging of secret-shaped values
-rg -nE 'print\s*\(.*(password|mnemonic)' wallet-desktop/lib
-rg -nE 'developer\.log\s*\(.*(password|mnemonic)' wallet-desktop/lib
-```
-
-**Rule**: zero matches outside `test/`. Mnemonic-shaped strings (12/15/18/21/24 lowercase words) in `lib/` source = defect. Routes through `BtcLogFilter` (Task 7) before any logger call.
-
-### CI integration (post-Task 25)
-
-The `wallet-desktop-ci.yml` workflow runs:
-
-```yaml
-- name: Test + analyze + coverage
-  steps:
-    - uses: actions/checkout@v4
-    - uses: subosito/flutter-action@v2  # pinned to 3.35.0+ (per L31)
-    - name: flutter pub get
-    - name: Build fake_btc (operator smoke shim)  # until Task 17 removes btc CLI
-    - name: Build bitcoin-wallet-core cdylib        # Task 1+ — FFI tests need it
-    - name: Copy cdylib to Flutter native dir       # Task 1+ — wallet-desktop/native/<arch>/
-    - name: dart analyze --fatal-warnings --fatal-infos
-    - name: flutter test --coverage
-    - name: Upload coverage
-      continue-on-error: true                      # codecov upload is best-effort until secret provisioned
-```
-
-**PR merges only when this workflow's `Test + analyze + coverage` job passes.** Format check is a separate parallel job (`dart format --set-exit-if-changed`) — both must pass.
-
-### Version-drift trap (Flutter SDK — analogous to rustfmt L13 note)
-
-- **Local Flutter 3.47.0 + Dart 3.13.0** may pass `dart format` + `dart analyze` cleanly while **CI's pinned Flutter 3.22.0 (Dart 3.4.0)** fails on the same code. Causes:
-  - API removals in newer Flutter (e.g., `DropdownButtonFormField.initialValue` was added in 3.33; older Flutter doesn't have it — see Task 25 PR #227 fix chain).
-  - Removed lints (e.g., `unsafe_html` removed in Dart 3.7.0).
-  - New lints (e.g., `avoid_renaming_method_parameters` stricter in newer Dart).
-- **Diagnostic when CI fails local-pass**: read CI's `Test + analyze + coverage` log for the Flutter SDK version line + the specific error; fix per upstream release notes.
-- **Permanent fix**: pin the workflow's Flutter to match the local dev version (or vice versa). The wallet-desktop workflow now uses `flutter-version: '3.35.0'` (per Task 25 fix) — match local or bump local to match CI.
-
-### Pre-commit hook (recommended, not yet shipped)
-
-A `.git/hooks/pre-commit` or `.husky/pre-commit` (Flutter-side equivalent) that runs the 3 commands + the 2 grep sweeps before allowing commit. Catches drift at write time, not at PR review time. Defer to v0.2.
-
-### Anti-patterns
-
-- **Run `dart format` only** and skip `dart analyze` — format doesn't catch lints (unused_field, deprecated_member_use, missing_safety_doc).
-- **Run `flutter test` only** and skip the other two — tests can pass while lint debt accumulates (the L13 anti-pattern for Rust clippy).
-- **Bump Dart SDK constraint in pubspec.yaml to make analysis pass** — masks the real problem (the code uses an outdated API); fix the code instead.
-- **Commit with `dart format` changes in a separate "format" commit** — drift should be in the same commit as the change that introduced it (cleaner audit trail).
-- **Treat `flutter test` warnings (deprecation notices) as acceptable** — they're already warnings; if you want them gone, fix them; don't add `// ignore:` comments as a habit.
-
-### Examples from this session
-
-- ✅ **Task 24** (`test/integration/fixtures/fake_btc.sh` + integration tests): passed all 3 gates; merged at PR #200 (`5839cf9`).
-- ✅ **Task 25** (`wallet-desktop-ci.yml`): CI workflow fix shipped; gates now enforced.
-- ✅ **Task 1 spike (PR #227)**: passed `dart analyze --fatal-warnings --fatal-infos` after fixing 2 lint warnings (`unused_field` on `_lib` anchor, `unused_import` on `dart:io`).
-- ❌ **Real-binary demo (Issue #206 root cause)**: integration tests passed because `fake_btc.sh` shaped output to match Dart's parser — but real `btc` binary's output diverged. *Lesson*: `flutter test` passing ≠ production-correct. Per L28 Gate C ("real-deps verify"): always run against real binary before declaring done. FFI Task 17 removes `fake_btc.sh` entirely — closes the gap structurally.
-
-### How to apply
-
-For every wallet-desktop task:
-
-1. Write code + tests
-2. Run `dart format lib test` (auto-fix OK if drift exists)
-3. Run `dart analyze --fatal-warnings --fatal-infos lib test` (must be clean)
-4. Run `flutter test` (100% pass)
-5. Run the 2 grep sweeps (zero matches in `lib/`)
-6. If all 5 pass → commit. If any fail → fix + retry from step 2.
-
-Per L13 step 11: "Run AFTER each fix commit AND at task-end (before final commit-push-pr)." The Flutter port adds the 2 grep sweeps as additional gates (L31 hardcode sweep + secret-leak sweep).
-
----
-
-## L38 — L21 ledger cascade via sub-agent (L13 step 19 — 2026-08-19)
-
-**Trigger**: Session 2026-08-19, after Task 27 merge (PR #204). I had edited `estimate-report.md` + `ai-cost-report.md` directly from the main thread per L21 cascade. User correction: "in lesson.md L13 at step 19 after merged run sub-agent to update estimate report and ai cost report" — L21 cascade should be dispatched to a sub-agent, not done inline on the main thread.
-
-**Rule**: At L13 step 19 (after PR merge), **dispatch a sub-agent** (via the Agent tool, subagent_type: `general-purpose`) to apply the L21 ledger cascade. Do NOT edit `estimate-report.md` + `ai-cost-report.md` from the main thread.
-
-**Why**: the L21 cascade is mechanical work — long file edits with embedded code spans, gate-prone (GateGuard fires on first edits per session), and high-context-cost (entire ledger file contents flow into main-thread context). A sub-agent isolates the work:
-
-- Main thread stays focused on user-facing flow (post-merge report-back, next-task pickup).
-- Sub-agent handles the mechanical edits with its own gate retries (no main-thread pollution if a gate denies).
-- L21 cascade surfaces as a discrete pipeline step in the audit trail (visible in the Agent dispatch log).
-- Parallelizes with any other post-merge work (PR review close-out, ledger cascade, estimate update).
-
-**How to apply**:
-
-At L13 step 19, after the PR merge commit lands on main:
-
-```text
-Agent(subagent_type: "general-purpose", prompt: "
-  Apply the L21 ledger cascade for the just-merged PR.
-
-  Inputs:
-  - PR number: #<N>
-  - Merge commit SHA: <sha>
-  - Merge date: YYYY-MM-DD
-  - Task title: <short>
-  - Tier: trivial | normal | critical
-  - Cost estimate (USD): ~$<amount>
-
-  Files to update:
-  1. .superpowers/sdd/<plan-slug>/estimate-report.md
-     - Append a new row to the Plan-progress table (columns: # | Title | Tier | Status | PR | Merge SHA | Date merged | Hours (ref) | Cost (USD))
-     - Update the Progress line (e.g. '26 of 26 tasks complete' → '27 of 27 tasks complete')
-     - Update Cost-to-date line
-     - Update Last merge footer with the new SHA + PR + date
-  2. .superpowers/sdd/<plan-slug>/ai-cost-report.md
-     - Append a row to the Tasks table (columns: # | Title | Input (Tok) | Output (Tok) | Model | Est. cost (USD) | Notes)
-     - Notes column: 1-3 sentence summary of what was done (L31 tier, key L12 findings if any, merge SHA)
-     - Match existing row style (Markdown table pipe style with trailing pipe per MD055)
-
-  Both files are gitignored per L18 — no commit needed, just save.
-
-  Report back: confirmation that both files updated + line counts + any gate denials encountered.
-")
-```
-
-**Anti-patterns**:
-
-- Editing the ledger files directly from the main thread after a PR merge — pollutes main-thread context, blocks user-facing flow on gate retries.
-- Combining the ledger cascade with other post-merge work in the same sub-agent dispatch — keeps the L21 step discrete + auditable.
-- Forgetting the trailing pipe on the new table row (MD055 warning) — match existing row style.
-- Re-formatting pre-existing rows that don't match the new style — out of scope for the L21 cascade; defer to separate cleanup PR.
-
-**Recovery pattern** (if sub-agent fails mid-cascade):
-
-1. Sub-agent reports partial completion + the specific file/lines that failed.
-2. Re-dispatch the same sub-agent with the partial state noted + retry only the failed edits.
-3. If retry fails 2x: pause + surface to user — manual intervention may be needed (gate denials, file format drift).
-
-**Example from this session**:
-
-Task 27 (post-release L29 operator smoke prep):
-
-- PR #204 merged at `63ea2b3` on 2026-08-19
-- Cost: ~$5.00 (trivial-tier per L31)
-- Sub-agent would have updated both files with: estimate-report row + progress 27/27 + cost ~$349.30 + footer `63ea2b3`; ai-cost-report row appended with summary of script + README + UI_TEST_CHECKLIST.md + 12-file format drift fix + Issue #203 + Issue #205 creation + PR #204 merge.
-- Retroactive note: I did this inline (not via sub-agent) — captured as L38 so future-self dispatches the sub-agent.
