@@ -7,7 +7,7 @@
 
 use crate::error::Error;
 use crate::wallet::{data_dir, list_wallets};
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::os::raw::c_char;
 
 /// Network byte → bitcoin::Network. Other values → -1.
@@ -19,11 +19,16 @@ const NETWORK_TESTNET: u8 = 1;
 ///
 /// `network`: 1 = Testnet (others TBD in Phase 1).
 ///
-/// Returns:
-/// - 0 on success (even with empty list — `*out_ptr` is then null)
-/// - 1 on error
+/// # Safety
+///
+/// `out_ptr` must be a valid, non-null pointer to a `*mut c_char` slot
+/// (the caller must allocate + own the slot). On success, this function
+/// writes a heap-allocated `CString` pointer into `*out_ptr`; the caller
+/// MUST free it with `wallet_list_free` (or `CString::from_raw` directly)
+/// to avoid a leak. Passing a null `out_ptr` returns 1 (error) without
+/// crashing.
 #[no_mangle]
-pub extern "C" fn wallet_list(network: u8, out_ptr: *mut *mut c_char) -> i32 {
+pub unsafe extern "C" fn wallet_list(network: u8, out_ptr: *mut *mut c_char) -> i32 {
     if out_ptr.is_null() {
         return 1;
     }
@@ -49,26 +54,35 @@ pub extern "C" fn wallet_list(network: u8, out_ptr: *mut *mut c_char) -> i32 {
         Err(_) => return 1,
     };
 
-    unsafe {
-        *out_ptr = c_string.into_raw();
-    }
+    *out_ptr = c_string.into_raw();
     0
 }
 
-/// Free a string returned by `wallet_list`.
+/// Free a string returned by `wallet_list` or `ffi_version`.
+///
+/// # Safety
+///
+/// `ptr` must either be null (no-op) or a pointer that was previously
+/// returned by `wallet_list` / `ffi_version` AND has not yet been freed.
+/// Double-free or freeing an arbitrary pointer causes undefined behavior
+/// (heap corruption).
 #[no_mangle]
-pub extern "C" fn wallet_list_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn wallet_list_free(ptr: *mut c_char) {
     if !ptr.is_null() {
-        unsafe {
-            let _ = CString::from_raw(ptr);
-        }
+        let _ = CString::from_raw(ptr);
     }
 }
 
 /// Return the rust crate version as a C string. Sanity check that
 /// symbol lookup works.
+///
+/// # Safety
+///
+/// Caller must free the returned pointer with `ffi_version_free` (or
+/// `CString::from_raw`). Returns null on internal failure (env var
+/// conversion failure — extremely unlikely).
 #[no_mangle]
-pub extern "C" fn ffi_version() -> *mut c_char {
+pub unsafe extern "C" fn ffi_version() -> *mut c_char {
     let s = match CString::new(env!("CARGO_PKG_VERSION")) {
         Ok(s) => s,
         Err(_) => return std::ptr::null_mut(),
@@ -77,12 +91,15 @@ pub extern "C" fn ffi_version() -> *mut c_char {
 }
 
 /// Free a string returned by `ffi_version`.
+///
+/// # Safety
+///
+/// Same contract as `wallet_list_free` — null is no-op; otherwise must be
+/// a pointer from a matching `ffi_version` call that hasn't been freed.
 #[no_mangle]
-pub extern "C" fn ffi_version_free(ptr: *mut c_char) {
+pub unsafe extern "C" fn ffi_version_free(ptr: *mut c_char) {
     if !ptr.is_null() {
-        unsafe {
-            let _ = CString::from_raw(ptr);
-        }
+        let _ = CString::from_raw(ptr);
     }
 }
 
@@ -102,14 +119,15 @@ pub fn wallet_list_for_test(network: u8) -> Result<Vec<String>, i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CStr;
 
     #[test]
     fn ffi_version_returns_non_null() {
-        let ptr = ffi_version();
+        let ptr = unsafe { ffi_version() };
         assert!(!ptr.is_null());
         let s = unsafe { CStr::from_ptr(ptr) };
         assert_eq!(s.to_str().unwrap(), "0.2.0");
-        ffi_version_free(ptr);
+        unsafe { ffi_version_free(ptr) };
     }
 
     #[test]
