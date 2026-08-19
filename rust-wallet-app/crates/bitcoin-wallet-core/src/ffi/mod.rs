@@ -14,6 +14,7 @@ pub mod error;
 pub mod panic;
 pub mod runtime;
 pub mod wallet;
+pub mod wallet_ops;
 
 pub use error::{ffi_last_error_message, set_last_error, FfiError};
 pub use panic::ffi_catch_unwind;
