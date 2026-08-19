@@ -52,6 +52,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Dart 3+ env mutation | L36.5 |
 | CI workflow hygiene | L37 |
 | Ledger cascade via sub-agent | L38 |
+| Flutter verify gate | L39 |
 | Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
 
 ---
@@ -1231,6 +1232,156 @@ Option 1 is the lower-friction path; option 2 is the more thorough path but requ
 - v0.2 follow-up: pin the 4 currently-tag-based actions (`subosito/flutter-action`, `actions/cache`, `actions/upload-artifact`, `codecov/codecov-action`) to verified SHAs after the first successful CI run captures the resolved SHAs from the Actions log.
 - For new workflows in general: when adding a new `uses:` line, check the official action repo for its current SHA; add the SHA to the team's "verified SHA" reference document so future workflows can pin without re-verifying.
 - v0.2 follow-up: a pre-commit hook that greps all `.github/workflows/*.yml` for SHA patterns and compares against the verified SHA document — would have caught the 4 fabricated SHAs at write time.
+
+---
+
+## L39 — Flutter verify gate (L13 step 11-flutter — 2026-08-19)
+
+**Trigger**: Session 2026-08-19 wallet-desktop FFI Task 2 work. L13 step 11 spec'd the Rust verify gate (`cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace`). L31 documented a brief Flutter adaptation (`dart format --set-exit-if-changed --output=none .` + `dart analyze --fatal-warnings --fatal-infos` + `flutter test`). Neither spelled out the **Flutter-specific failure modes, secret-leak sweep, hardcode sweep, coverage threshold, or the version-drift trap** that bit during Task 24 + Task 1 spike. This lesson is the explicit Flutter port of L13 step 11 — the version L31 defers to.
+
+**Rule**: For every `wallet-desktop/` task pickup, run the **Flutter verify gate** before declaring "done". A single failing gate = task is not done.
+
+### Gate commands (must all pass before commit)
+
+Run from `wallet-desktop/` after each fix commit AND at task-end (before final commit-push-pr). Order matters — format first (cheapest), then analyze (catches most lints), then test (slowest, depends on the above being clean).
+
+```bash
+# 1. Format check (BLOCKING — exit 1 means drift exists)
+export PATH="$PATH:/home/nhitran/flutter/bin"
+dart format --set-exit-if-changed --output=none lib test
+# Note: scope to lib test, NOT the whole repo — repo-wide check picks up
+# non-Dart files. Use lib test for wallet-desktop specifically.
+
+# 2. Static analysis (BLOCKING — --fatal-warnings --fatal-infos makes infos errors)
+dart analyze --fatal-warnings --fatal-infos lib test
+
+# 3. Unit + widget + integration tests (BLOCKING — 100% pass required)
+flutter test
+# Or per-target:
+flutter test test/unit/
+flutter test test/integration/   # hermetic; uses fake_btc.sh until Task 17 removes it
+flutter test test/widget_test.dart
+flutter test test/ffi/            # FFI spike tests (Task 1+)
+```
+
+### Format check details
+
+- **`--set-exit-if-changed` is a blocking gate**, not a convenience. Exit 1 = unformatted files exist; CI's `Format check` job fails the PR.
+- **`dart format <files>`** (without `--set-exit-if-changed`) auto-fixes drift. Safe to run pre-commit; safe to commit the resulting diff in the same task.
+- **`--output=none`** suppresses the diff print to stdout (CI-friendly); we want the exit code, not the diff.
+
+### Analysis details
+
+- **`--fatal-warnings`** elevates `warning` lints to errors. Off-by-default lints that would normally be warnings become blocking.
+- **`--fatal-infos`** elevates `info` lints to errors. Per L31 dev audit gate: `prefer_const_constructors`, `unawaited_futures`, etc. become blocking.
+- **Scope to lib test** — repo-wide `dart analyze` picks up `tool/` scripts, `example/`, etc. that aren't part of the shipping surface.
+- **Pre-existing lints in new files are caught at write time** — if a newly-written file has 3 lint warnings, the next commit fails until they're fixed. This is the desired behavior (catches drift early).
+
+### Test details
+
+- **`flutter test`** runs every file in `test/` matching `*_test.dart`. Includes unit, widget, integration, FFI spike.
+- **Coverage** (when `--coverage` flag added): L31 sets ≥80% threshold on `lib/core/` (the FFI/security boundary layer). Other modules (screens, widgets) are best-effort; widget-test coverage is harder to write.
+- **Per-target runs** (above) for faster iteration when iterating on a single layer.
+
+### Hardcode sweep (L31 mirror, Flutter-scoped)
+
+In addition to the 3 blocking commands, run these grep sweeps before committing. Match anything OUTSIDE `test/` or `// @TestOn('vm')` blocks.
+
+```bash
+# IP literals (should route through EsploraConfig / app config)
+rg -nE '127\.0\.0\.1|localhost|0\.0\.0\.0' wallet-desktop/lib
+
+# Hardcoded Esplora endpoints (defeats F20 SPKI pinning + per-network config)
+rg -nE 'blockstream\.info|mempool\.space|blockchair|btc\.com' wallet-desktop/lib
+
+# Hardcoded derivation paths outside named constants
+rg -nE "m/.*'/'[0-9]+'/'[0-9]+'" wallet-desktop/lib
+
+# XDG paths outside helpers (should route through path_provider)
+rg -nE '/tmp/|/usr/share/|/etc/|XDG_(DATA|CONFIG)' wallet-desktop/lib
+
+# Native lib search paths outside NativeLib.open()
+rg -nE '(librust_wallet_core|libbitcoin_wallet_core)' wallet-desktop/lib
+```
+
+**Rule**: any match is a defect — route through `EsploraConfig` (already in Task 12), `AppPaths` (Task 11), or extract a named constant. `lib/core/` is the security boundary; matches outside that are highest priority.
+
+### Secret-leak sweep (L31 mirror, Flutter-scoped — L12 CRITICAL #2)
+
+The L12 CRITICAL #2 invariant: **mnemonic + password never logged**. The Flutter side mirrors the Rust side's defense — the `BtcLogFilter` (Task 7) scrubs before any logger surface. These greps catch regressions:
+
+```bash
+# String literal assignment of secret-shaped values
+rg -nE '(password|mnemonic|secret)\s*[:=]\s*"[^"]+"' wallet-desktop/lib
+
+# Logging of secret-shaped values
+rg -nE 'print\s*\(.*(password|mnemonic)' wallet-desktop/lib
+rg -nE 'developer\.log\s*\(.*(password|mnemonic)' wallet-desktop/lib
+```
+
+**Rule**: zero matches outside `test/`. Mnemonic-shaped strings (12/15/18/21/24 lowercase words) in `lib/` source = defect. Routes through `BtcLogFilter` (Task 7) before any logger call.
+
+### CI integration (post-Task 25)
+
+The `wallet-desktop-ci.yml` workflow runs:
+
+```yaml
+- name: Test + analyze + coverage
+  steps:
+    - uses: actions/checkout@v4
+    - uses: subosito/flutter-action@v2  # pinned to 3.35.0+ (per L31)
+    - name: flutter pub get
+    - name: Build fake_btc (operator smoke shim)  # until Task 17 removes btc CLI
+    - name: Build bitcoin-wallet-core cdylib        # Task 1+ — FFI tests need it
+    - name: Copy cdylib to Flutter native dir       # Task 1+ — wallet-desktop/native/<arch>/
+    - name: dart analyze --fatal-warnings --fatal-infos
+    - name: flutter test --coverage
+    - name: Upload coverage
+      continue-on-error: true                      # codecov upload is best-effort until secret provisioned
+```
+
+**PR merges only when this workflow's `Test + analyze + coverage` job passes.** Format check is a separate parallel job (`dart format --set-exit-if-changed`) — both must pass.
+
+### Version-drift trap (Flutter SDK — analogous to rustfmt L13 note)
+
+- **Local Flutter 3.47.0 + Dart 3.13.0** may pass `dart format` + `dart analyze` cleanly while **CI's pinned Flutter 3.22.0 (Dart 3.4.0)** fails on the same code. Causes:
+  - API removals in newer Flutter (e.g., `DropdownButtonFormField.initialValue` was added in 3.33; older Flutter doesn't have it — see Task 25 PR #227 fix chain).
+  - Removed lints (e.g., `unsafe_html` removed in Dart 3.7.0).
+  - New lints (e.g., `avoid_renaming_method_parameters` stricter in newer Dart).
+- **Diagnostic when CI fails local-pass**: read CI's `Test + analyze + coverage` log for the Flutter SDK version line + the specific error; fix per upstream release notes.
+- **Permanent fix**: pin the workflow's Flutter to match the local dev version (or vice versa). The wallet-desktop workflow now uses `flutter-version: '3.35.0'` (per Task 25 fix) — match local or bump local to match CI.
+
+### Pre-commit hook (recommended, not yet shipped)
+
+A `.git/hooks/pre-commit` or `.husky/pre-commit` (Flutter-side equivalent) that runs the 3 commands + the 2 grep sweeps before allowing commit. Catches drift at write time, not at PR review time. Defer to v0.2.
+
+### Anti-patterns
+
+- **Run `dart format` only** and skip `dart analyze` — format doesn't catch lints (unused_field, deprecated_member_use, missing_safety_doc).
+- **Run `flutter test` only** and skip the other two — tests can pass while lint debt accumulates (the L13 anti-pattern for Rust clippy).
+- **Bump Dart SDK constraint in pubspec.yaml to make analysis pass** — masks the real problem (the code uses an outdated API); fix the code instead.
+- **Commit with `dart format` changes in a separate "format" commit** — drift should be in the same commit as the change that introduced it (cleaner audit trail).
+- **Treat `flutter test` warnings (deprecation notices) as acceptable** — they're already warnings; if you want them gone, fix them; don't add `// ignore:` comments as a habit.
+
+### Examples from this session
+
+- ✅ **Task 24** (`test/integration/fixtures/fake_btc.sh` + integration tests): passed all 3 gates; merged at PR #200 (`5839cf9`).
+- ✅ **Task 25** (`wallet-desktop-ci.yml`): CI workflow fix shipped; gates now enforced.
+- ✅ **Task 1 spike (PR #227)**: passed `dart analyze --fatal-warnings --fatal-infos` after fixing 2 lint warnings (`unused_field` on `_lib` anchor, `unused_import` on `dart:io`).
+- ❌ **Real-binary demo (Issue #206 root cause)**: integration tests passed because `fake_btc.sh` shaped output to match Dart's parser — but real `btc` binary's output diverged. *Lesson*: `flutter test` passing ≠ production-correct. Per L28 Gate C ("real-deps verify"): always run against real binary before declaring done. FFI Task 17 removes `fake_btc.sh` entirely — closes the gap structurally.
+
+### How to apply
+
+For every wallet-desktop task:
+
+1. Write code + tests
+2. Run `dart format lib test` (auto-fix OK if drift exists)
+3. Run `dart analyze --fatal-warnings --fatal-infos lib test` (must be clean)
+4. Run `flutter test` (100% pass)
+5. Run the 2 grep sweeps (zero matches in `lib/`)
+6. If all 5 pass → commit. If any fail → fix + retry from step 2.
+
+Per L13 step 11: "Run AFTER each fix commit AND at task-end (before final commit-push-pr)." The Flutter port adds the 2 grep sweeps as additional gates (L31 hardcode sweep + secret-leak sweep).
 
 ---
 

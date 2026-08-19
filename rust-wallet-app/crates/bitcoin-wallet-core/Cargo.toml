@@ -42,6 +42,11 @@ x509-parser = { workspace = true }
 tempfile = { workspace = true }
 uuid = { workspace = true }
 directories = { workspace = true }
+# Task 2 (FFI plan): regex + once_cell for L12 CRITICAL #2 panic-message
+# scrubbing in src/ffi/panic.rs (redacts password=/mnemonic=/secret= + BIP-39
+# 12-word sequences from panic payloads before they surface to Dart).
+once_cell = "1"
+regex = "1"
 
 [dev-dependencies]
 proptest = { workspace = true }
