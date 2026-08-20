@@ -79,6 +79,18 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
 
   Future<void> _unlock() async {
     if (_password.isEmpty) return;
+    // L12 flutter HIGH (Task 13): the FFI surface only supports
+    // testnet today (mirrors `WalletsListNotifier._networkFromString`
+    // assert guard at `wallet_providers.dart:78-84`). A router
+    // refactor that passes `'mainnet'` (or any new value) would
+    // silently route to the testnet blob dir + render a misleading
+    // "wrong password" error. Assert loudly so the operator can
+    // extend the FFI's `parse_network` alongside the UI.
+    assert(
+      widget.network == 'testnet',
+      'WalletDetailScreen._unlock only supports testnet today; '
+      'got: ${widget.network}. v0.2: extend when FFI parse_network grows.',
+    );
     // Capture the routing identity BEFORE the async suspension
     // (L12 type-design Task 20 MEDIUM). If the parent rebuilds the
     // screen with a different `walletId` mid-await, the FFI call
@@ -252,11 +264,15 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
             // Plan deviation #4: firstAddress is empty in v0.2.0
             // (peek_addresses requires bdk sync — deferred to v0.2.1).
             // Hide the chip when empty; v0.2.1 wires the sync path.
+            // L12 flutter MED: the previous "(sync required — open
+            // SendScreen)" was misleading — opening SendScreen does
+            // not trigger sync (Tasks 14+15 are still pending). The
+            // new copy accurately reflects the v0.2.0 state.
             if (d.firstAddress.isNotEmpty)
               AddressChip(address: d.firstAddress, network: d.network)
             else
               Text(
-                'First address: (sync required — open SendScreen)',
+                'First address: (sync pending — v0.2.1)',
                 style: textTheme.bodySmall,
               ),
           ],

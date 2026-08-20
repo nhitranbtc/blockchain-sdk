@@ -563,13 +563,18 @@ pub unsafe extern "C" fn wallet_show(
             Ok(p) => p,
             Err(_) => return FfiError::WalletStore,
         };
-        // Validate the decrypted phrase parses as a BIP-39 mnemonic
-        // BEFORE returning. A non-UTF-8 or non-mnemonic-shaped blob
-        // that survives the AES-GCM tag check is a corrupt-blob → the
-        // same collapsed `InvalidMnemonic` signal as a wrong
-        // checksum (the L12 collapse rule).
+        // L12 collapse (security-auditor Task 13 HIGH): even after a
+        // successful AES-GCM decrypt, the plaintext must parse as a
+        // BIP-39 mnemonic. A non-mnemonic plaintext that survived the
+        // tag check is a corrupt-blob → same `WalletStore` code as the
+        // pre-decrypt failures. Mapping to `InvalidMnemonic` (code -1)
+        // would let an offline attacker distinguish three outcomes
+        // per password guess (`WalletStore` tag-fail, `InvalidMnemonic`
+        // tag-pass + non-mnemonic, `Ok` tag-pass + valid mnemonic) —
+        // a partial N2 oracle leak. The check is retained as
+        // defense-in-depth; only the surfaced error code is collapsed.
         if Mnemonic::from_phrase(phrase_secret.expose()).is_err() {
-            return FfiError::InvalidMnemonic;
+            return FfiError::WalletStore;
         }
         // Zero the phrase copy on the heap ASAP — the Mnemonic check
         // above borrows the bytes; the phrase_secret's drop zeroizes
