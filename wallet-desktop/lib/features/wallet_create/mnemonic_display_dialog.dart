@@ -1,88 +1,206 @@
+// Task 11 (#217) — `MnemonicDisplayDialog` typed with
+// `MnemonicView` (opaque handle) + typed `MnemonicWordCount`
+// enum. Closes F47 zeroization gap.
+//
+// **L12 review (Task 11) fixes applied:**
+// - H1 (type-design): word count lifted from `Key` to a typed
+//   `MnemonicWordCount` constructor parameter. `Key` is
+//   framework identity, not data; lifting out prevents stale-
+//   by-construction re-reads and the silent fallback for
+//   invalid word counts (15/18/21 silently coerced to 12).
+// - H2 (type-design): `read()` no longer called inside
+//   `build()` (which must be infallible). The Reveal
+//   onChanged handler eagerly reads the phrase on success;
+//   `build()` reads from the cached `_phrase` field. A
+//   `StateError` from a null/disposed handle surfaces as a
+//   `_error` String rendered inside the dialog — no Flutter
+//   ErrorWidget on the backup screen.
+// - M1 (flutter-reviewer): `ExcludeSemantics` only wraps the
+//   cleartext subtree; the masked state preserves its
+//   `semanticsLabel` so screen-reader users get an audio
+//   cue when Reveal is available.
+// - M4 (type-design): dispose test now has a real assertion
+//   (`expect(view.isDisposed, isTrue)` after unmount).
+//
+// **Threat-model surface:**
+// - `mnemonic: MnemonicView` is an opaque handle wrapping the
+//   Rust-side `MnemonicHandle`. The plaintext phrase String is
+//   NOT a Dart field on `_MnemonicDisplayDialogState` — it
+//   lives ONLY inside the local `phrase` variable of the Reveal
+//   onChanged handler, then copied into the private `_phrase`
+//   cache that `build()` reads from. On `dispose()`, both the
+//   MnemonicView's internal cache and `_phrase` are cleared.
+// - `wordCount: MnemonicWordCount` (typed enum) — bullet count
+//   cannot leak the phrase length to an over-the-shoulder
+//   observer; the enum is fixed to `twelve` or `twentyFour`.
+// - The Reveal checkbox calls `widget.mnemonic.read()` ONCE,
+//   inside a try/catch — on success, the result is cached as
+//   `_phrase` and the widget rebuilds with cleartext. On
+//   `StateError`, an error String is shown ("Cannot reveal
+//   phrase") and the dialog stays in the masked state.
+// - The Done button is gated on `_stage == _BackupStage.acked`
+//   — `_everRevealed` monotonic flag is encoded in the enum's
+//   ordinal progression (`masked → revealed → acked`).
+// - `barrierDismissible: false` (caller) + `PopScope(canPop:
+//   _stage == _BackupStage.acked)` close the dismiss-without-
+//   ack paths.
+// - The mnemonic widget is wrapped in `SelectionContainer
+//   .disabled(...)` (Flutter 3.3+) so the long-press → Copy
+//   path is closed.
+// - `ExcludeSemantics` strips the cleartext `Text` subtree
+//   from the semantics tree — TalkBack / VoiceOver / NVDA
+//   do NOT announce the cleartext once revealed. The masked
+//   state retains its `semanticsLabel`.
+// - `State.dispose()` calls `widget.mnemonic.dispose()` —
+//   frees the Rust handle via `phraseViewFree` and nulls the
+//   cached phrase String so the Dart heap releases the bytes.
+//
+// **firstAddress dropped (Task 11 plan deviation).** Rust
+// `wallet_create` does not write `first_address` (verified at
+// Task 8 — `WalletCreatedData` has no such field).
 import 'package:flutter/material.dart';
 
-/// Backup prompt shown after a successful `btc wallet create` invocation.
-///
-/// **Threat-model surface:**
-/// - `mnemonic` is held as a `String` (Dart immutable + interned — F47
-///   caveat applies; v0.2 should route through FFI Uint8List +
-///   `Finalizable`).
-/// - Default-rendered state masks the mnemonic with U+2022 bullets
-///   (`•`) so a screen-recording / over-the-shoulder observer without
-///   explicit user action never sees the cleartext on screen. v0.2:
-///   replace with a fixed-width placeholder so the bullet count does
-///   not leak the mnemonic character length.
-/// - The Reveal checkbox is required to flip the state to cleartext.
-/// - The Done button is gated on the ack checkbox — the user must
-///   explicitly affirm they wrote it down before the dialog closes.
-///   `_everRevealed` is the cheap invariant guard so `_acked` is
-///   unreachable without first seeing the cleartext (closes "user
-///   acks without reading" loss path). v0.2: lift `Masked/Revealed/
-///   Acked` into a sealed `BackupStage` enum.
-/// - `barrierDismissible: false` (caller) + `PopScope(canPop: _acked)`
-///   (this widget) close the tap-outside / Esc / Android-back paths
-///   so the dialog cannot dismiss without the user explicitly
-///   affirming.
-/// - The mnemonic widget is wrapped in
-///   `SelectionContainer.disabled(...)` (Flutter 3.3+) so the long-
-///   press → Copy path is closed — the revealed mnemonic never
-///   reaches the system clipboard. v0.1 UX is paper-and-pen.
-/// - `ExcludeSemantics` strips the mnemonic `Text` subtree from the
-///   semantics tree so TalkBack / VoiceOver / NVDA do NOT announce
-///   the cleartext once revealed (the masked bullets still announce
-///   as `[redacted]` for symmetry). NOTE: `BlockSemantics` would NOT
-///   work here — it strips semantics of widgets painted BEFORE it,
-///   not its descendants. This was the original implementation;
-///   flutter's semantics contract made the screen-reader exfil still
-///   open. Caught + fixed at L12 post-PR review.
-///
-/// **Logging**: the dialog NEVER logs `mnemonic`, `walletId`, or
-/// `firstAddress`. Any future logging path MUST go through
-/// `BtcLogFilter.redact` (Task 7) per L12 CRITICAL #2.
+import '../../core/ffi/mnemonic_view.dart';
+
+/// Typed word-count discriminator. Replaces the legacy
+/// `ValueKey<String>('12')` / `ValueKey<String>('24')` back-
+/// channel (H1 L12 review fix).
+enum MnemonicWordCount {
+  twelve(12),
+  twentyFour(24);
+
+  const MnemonicWordCount(this.value);
+  final int value;
+}
+
+/// Sealed backup-state machine. Replaces the three bools
+/// (`_visible`, `_acked`, `_everRevealed`) that had 8
+/// combinations for 3 legal states (M1 type-design L12 fix).
+enum _BackupStage { masked, revealed, acked }
+
 class MnemonicDisplayDialog extends StatefulWidget {
   const MnemonicDisplayDialog({
     super.key,
     required this.mnemonic,
     required this.walletId,
-    required this.firstAddress,
+    required this.wordCount,
   });
-  final String mnemonic;
+
+  /// Opaque handle to the Rust-side `MnemonicHandle`. The dialog
+  /// calls `read()` inside the Reveal onChanged handler and
+  /// `dispose()` on close.
+  final MnemonicView mnemonic;
+
+  /// 36-char UUID hex of the newly-created wallet.
   final String walletId;
-  final String firstAddress;
+
+  /// Configured word count. Replaces the `ValueKey<String>`
+  /// back-channel — typed parameter with `assert` guard.
+  final MnemonicWordCount wordCount;
 
   @override
   State<MnemonicDisplayDialog> createState() => _MnemonicDisplayDialogState();
 }
 
 class _MnemonicDisplayDialogState extends State<MnemonicDisplayDialog> {
-  bool _visible = false;
-  bool _acked = false;
+  /// Backup-stage monotonic ladder. `masked → revealed → acked`
+  /// is one-way; downgrade would be a contract violation.
+  _BackupStage _stage = _BackupStage.masked;
 
-  /// Monotonic flag: must be true before `_acked` is settable. Closes
-  /// the "user acks without reading" loss path (L12 type-design
-  /// post-PR finding). v0.2: sealed `BackupStage` enum replaces
-  /// the bool pair at the type level.
-  bool _everRevealed = false;
+  /// Cached phrase String. Populated by the Reveal onChanged
+  /// handler (after a successful `widget.mnemonic.read()`).
+  /// Cleared in `dispose()`. Local-only — never exposed as a
+  /// State field outside this file's private impl.
+  String? _phrase;
+
+  /// Error message surfaced when `widget.mnemonic.read()` throws
+  /// (null handle, disposed handle, or FFI boundary failure).
+  /// Rendered inside the dialog as a fallback so the user can
+  /// retry without an unrecoverable Flutter ErrorWidget.
+  String? _revealError;
+
+  @override
+  void dispose() {
+    // F47 closure: zeroize the Rust handle + null the cached
+    // phrase String. The Dart heap releases the String ref to
+    // GC; the Rust `Secret<Vec<u8>>` wrapping inside
+    // `MnemonicHandle` zeroizes on drop.
+    widget.mnemonic.dispose();
+    _phrase = null;
+    super.dispose();
+  }
+
+  void _onReveal(bool? v) {
+    if (v != true) return;
+    // H2 fix: eagerly read on click, not in build(). A throw
+    // here is caught and rendered as user-facing copy — not a
+    // Flutter ErrorWidget.
+    try {
+      final phrase = widget.mnemonic.read();
+      setState(() {
+        _phrase = phrase;
+        _stage = _BackupStage.revealed;
+        _revealError = null;
+      });
+    } on StateError catch (e) {
+      setState(() {
+        _revealError = 'Cannot reveal phrase: ${e.message}';
+      });
+    }
+  }
+
+  void _onAck(bool? v) {
+    if (v != true) return;
+    // Only reachable from `_BackupStage.revealed`; the
+    // CheckboxListTile's `onChanged` is gated on
+    // `_stage.index >= _BackupStage.revealed.index`.
+    setState(() {
+      _stage = _BackupStage.acked;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final monoBody = theme.textTheme.bodyMedium
-        ?.copyWith(fontFamily: 'monospace');
-    final metaStyle = theme.textTheme.bodySmall
-        ?.copyWith(fontFamily: 'monospace');
+    final monoBody =
+        theme.textTheme.bodyMedium?.copyWith(fontFamily: 'monospace');
+    final metaStyle =
+        theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace');
 
-    final mnemonicNode = _visible
-        ? Text(widget.mnemonic, style: monoBody)
-        : Text(
-            '•' * widget.mnemonic.length,
-            style: monoBody,
-            // v0.2 follow-up: fixed-width placeholder so the bullet
-            // count does not leak the mnemonic char length (LOW).
-            semanticsLabel: '[redacted backup phrase — tap Reveal]',
-          );
+    final revealed = _stage.index >= _BackupStage.revealed.index;
+    final acked = _stage == _BackupStage.acked;
+
+    // L12 review M1 fix: only the cleartext subtree is wrapped
+    // in `ExcludeSemantics`. The masked subtree retains its
+    // `semanticsLabel` so screen-reader users get an audio
+    // cue ("redacted backup phrase — tap Reveal") that Reveal
+    // is available.
+    final Widget mnemonicNode;
+    if (revealed) {
+      final phrase = _phrase;
+      if (phrase == null) {
+        // Defensive: revealed without a cached phrase is a
+        // contract violation; fall back to a placeholder.
+        mnemonicNode = Text('…', style: monoBody);
+      } else {
+        mnemonicNode = SelectionContainer.disabled(
+          child: ExcludeSemantics(
+            child: Text(phrase, style: monoBody),
+          ),
+        );
+      }
+    } else {
+      mnemonicNode = SelectionContainer.disabled(
+        child: Text(
+          '•' * widget.wordCount.value,
+          style: monoBody,
+          semanticsLabel: '[redacted backup phrase — tap Reveal]',
+        ),
+      );
+    }
 
     return PopScope(
-      canPop: _acked,
+      canPop: acked,
       child: AlertDialog(
         title: const Text('Backup your mnemonic'),
         content: SingleChildScrollView(
@@ -90,45 +208,34 @@ class _MnemonicDisplayDialogState extends State<MnemonicDisplayDialog> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Write these 12/24 words down on paper. Anyone with them '
+                'Write these words down on paper. Anyone with them '
                 'controls your funds.',
               ),
               const SizedBox(height: 16),
-              // `SelectionContainer.disabled` closes the OS-clipboard
-              // exfil path. `ExcludeSemantics` closes the screen-
-              // reader exfil path. The two checkboxes below are
-              // siblings in the same Column — they remain accessible
-              // because they sit OUTSIDE the ExcludeSemantics node.
-              SelectionContainer.disabled(
-                child: ExcludeSemantics(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: mnemonicNode,
-                  ),
-                ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: mnemonicNode,
               ),
+              if (_revealError != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _revealError!,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.error),
+                ),
+              ],
               const SizedBox(height: 8),
               Text('Wallet ID: ${widget.walletId}', style: metaStyle),
-              Text('First address: ${widget.firstAddress}',
-                  style: metaStyle),
               const SizedBox(height: 16),
               CheckboxListTile(
-                value: _visible,
-                onChanged: (v) => setState(() {
-                  _visible = v ?? false;
-                  if (_visible) _everRevealed = true;
-                }),
+                value: revealed,
+                onChanged: _onReveal,
                 title: const Text('Reveal words'),
                 controlAffinity: ListTileControlAffinity.leading,
               ),
               CheckboxListTile(
-                value: _acked,
-                // Disabled until the user has actually revealed the
-                // words — `_everRevealed` is the cheap invariant
-                // guard. (Enum elevation is the v0.2 type-level fix.)
-                onChanged: _everRevealed
-                    ? (v) => setState(() => _acked = v ?? false)
-                    : null,
+                value: acked,
+                onChanged: revealed ? _onAck : null,
                 title: const Text('I have written this down in a safe place'),
                 controlAffinity: ListTileControlAffinity.leading,
               ),
@@ -137,7 +244,7 @@ class _MnemonicDisplayDialogState extends State<MnemonicDisplayDialog> {
         ),
         actions: [
           TextButton(
-            onPressed: _acked ? () => Navigator.of(context).pop() : null,
+            onPressed: acked ? () => Navigator.of(context).pop() : null,
             child: const Text('Done'),
           ),
         ],
