@@ -48,7 +48,7 @@ jobs:
       # actions/upload-artifact: tag-based (no pinned SHA available at
       # this commit; pin to a verified SHA after first successful CI run).
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: btc-${{ matrix.target }}
           path: rust-wallet-app/target/${{ matrix.target }}/release/btc*
