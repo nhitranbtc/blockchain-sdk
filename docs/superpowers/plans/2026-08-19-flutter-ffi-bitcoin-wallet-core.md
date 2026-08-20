@@ -481,10 +481,10 @@ For each screen: replace `ref.read(btcInvokerProvider.future).invoke<DTO>(BtcCom
 **Files:**
 - Modify: `wallet-desktop/lib/providers/wallet_providers.dart:17-50`
 
-- [ ] **Step 1: Replace `WalletsListNotifier.build` — call `walletCore.listWallets(network)` instead of `invoker.invoke<List<WalletInfo>>(BtcCommand.walletList(...), parse: ...)`
-- [ ] **Step 2: Apply L34.1 guard — if returned list is empty for fresh install, surface `[]` not error**
-- [ ] **Step 3: Verify gate**
-- [ ] **Step 4: Commit**
+- [x] **Step 1: Replace `WalletsListNotifier.build` — call `walletCore.listWallets(network)` instead of `invoker.invoke<List<WalletInfo>>(BtcCommand.walletList(...), parse: ...)`** *(returns `List<String>` — plan deviation: subtitle dropped; Rust `wallet_list` returns id only)*
+- [x] **Step 2: Apply L34.1 guard — if returned list is empty for fresh install, surface `[]` not error**
+- [x] **Step 3: Verify gate** *(L12 review: 2 HIGH + 3 MED + 3 LOW — 6 fixes applied: `Pointer<Utf8>` → `String` in interface, `userMessageForFfiException` extracted, `_networkFromString` assert guard, temp-dir dance removed, value equality on DTOs)*
+- [x] **Step 4: Commit**
 
 ### Task 11: Migrate `WalletCreateScreen` + `MnemonicDisplayDialog` (Stories 1, 20)
 

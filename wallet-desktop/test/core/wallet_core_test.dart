@@ -11,7 +11,6 @@
 
 import 'dart:io';
 
-import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
@@ -31,15 +30,13 @@ void main() {
     test('returns a list (possibly empty) for valid baseDir', () {
       final core = WalletCore.instance;
       final baseDir = Directory.systemTemp.createTempSync('wallet_core_list_');
-      final baseDirPtr = baseDir.path.toNativeUtf8();
       try {
         final wallets = core.listWallets(
           network: FfiNetwork.testnet,
-          baseDir: baseDirPtr,
+          baseDir: baseDir.path,
         );
         expect(wallets, isA<List<String>>());
       } finally {
-        calloc.free(baseDirPtr);
         baseDir.deleteSync(recursive: true);
       }
     }, skip: !Platform.isLinux);
@@ -53,14 +50,13 @@ void main() {
         final password = SecretBuffer.fromUtf8('test-password-1234');
         final baseDir =
             Directory.systemTemp.createTempSync('wallet_core_create_');
-        final baseDirPtr = baseDir.path.toNativeUtf8();
         try {
           final result = core.createWallet(
             words: 12,
             network: FfiNetwork.testnet,
             addressType: FfiAddressType.nativeSegwit,
             password: password,
-            baseDir: baseDirPtr,
+            baseDir: baseDir.path,
           );
           expect(result.id, hasLength(36));
           // MnemonicView is non-null and not disposed.
@@ -73,7 +69,6 @@ void main() {
           result.mnemonic.dispose();
           expect(result.mnemonic.isDisposed, isTrue);
         } finally {
-          calloc.free(baseDirPtr);
           baseDir.deleteSync(recursive: true);
           // Password is auto-disposed by the facade.
         }
@@ -87,7 +82,6 @@ void main() {
         final core = WalletCore.instance;
         final password = SecretBuffer.fromUtf8('test-password-1234');
         final baseDir = Directory.systemTemp.createTempSync('wallet_core_inv_');
-        final baseDirPtr = baseDir.path.toNativeUtf8();
         try {
           expect(
             () => core.createWallet(
@@ -95,7 +89,7 @@ void main() {
               network: FfiNetwork.testnet,
               addressType: FfiAddressType.nativeSegwit,
               password: password,
-              baseDir: baseDirPtr,
+              baseDir: baseDir.path,
             ),
             throwsA(
               isA<FfiException>().having(
@@ -106,7 +100,6 @@ void main() {
             ),
           );
         } finally {
-          calloc.free(baseDirPtr);
           baseDir.deleteSync(recursive: true);
         }
       },
@@ -122,18 +115,16 @@ void main() {
         final phraseBuf = SecretBuffer.fromUtf8(phrase);
         final passwordBuf = SecretBuffer.fromUtf8('test-password-1234');
         final baseDir = Directory.systemTemp.createTempSync('wallet_core_imp_');
-        final baseDirPtr = baseDir.path.toNativeUtf8();
         try {
           final result = core.importWallet(
             network: FfiNetwork.testnet,
             phrase: phraseBuf,
             password: passwordBuf,
-            baseDir: baseDirPtr,
+            baseDir: baseDir.path,
           );
           expect(result.id, hasLength(36));
           expect(result.network, FfiNetwork.testnet);
         } finally {
-          calloc.free(baseDirPtr);
           baseDir.deleteSync(recursive: true);
           // Both phrase + password auto-disposed.
         }

@@ -1,39 +1,63 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wallet_desktop/core/btc/btc_command.dart';
-import 'package:wallet_desktop/core/btc/btc_error.dart';
-import 'package:wallet_desktop/core/btc/btc_invoker.dart';
+import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
+import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
+import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
+import 'package:wallet_desktop/core/wallet_core_api.dart';
 import 'package:wallet_desktop/features/wallet_list/wallet_list_screen.dart';
-import 'package:wallet_desktop/providers/btc_providers.dart';
-import 'package:wallet_desktop/providers/wallet_providers.dart';
+import 'package:wallet_desktop/providers/wallet_core_provider.dart';
 import 'package:wallet_desktop/routing/wallet_routes.dart';
 
-/// Test double — returns canned JSON (or throws a [BtcError]) without
-/// spawning a subprocess. Mirrors the seam established in Task 13's
-/// `wallets_list_provider_test.dart`: override `btcInvokerProvider`
-/// (the only async dep `WalletsListNotifier` reaches for).
-class _FakeBtcInvoker extends BtcInvoker {
-  _FakeBtcInvoker({this.fixture = const [], this.throwError})
-      : super(binaryPath: '');
+/// Test double — implements [WalletCoreApi]. Returns canned id lists
+/// or throws typed [FfiException]s without loading the native library.
+class _FakeWalletCore implements WalletCoreApi {
+  _FakeWalletCore({this.fixture = const [], this.throwException});
 
-  /// Either a list of wallet JSON maps (snake_case: `address_type`) or
-  /// an empty `const []`. The real [WalletsListNotifier] parses this
-  /// through `WalletInfo.fromJson`.
-  final Object fixture;
-
-  /// When non-null, `invoke` throws this error instead of returning
-  /// parsed data — used by the error-branch test.
-  final BtcError? throwError;
+  final List<String> fixture;
+  final FfiException? throwException;
 
   @override
-  Future<T> invoke<T>(
-    BtcCommand cmd, {
-    required T Function(dynamic json) parse,
-  }) async {
-    final err = throwError;
-    if (err != null) throw err;
-    return parse(fixture);
+  String ffiVersion() => 'fake-0.0.0';
+
+  @override
+  List<String> listWallets({
+    required FfiNetwork network,
+    required String baseDir,
+  }) {
+    final exc = throwException;
+    if (exc != null) throw exc;
+    return List<String>.from(fixture);
+  }
+
+  @override
+  void deleteWallet({
+    required FfiNetwork network,
+    required String walletId,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  WalletCreatedData createWallet({
+    required int words,
+    required FfiNetwork network,
+    required FfiAddressType addressType,
+    required SecretBuffer password,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  WalletImportedData importWallet({
+    required FfiNetwork network,
+    required SecretBuffer phrase,
+    required SecretBuffer password,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
   }
 }
 
@@ -48,7 +72,7 @@ void main() {
     'when the wallet list is empty',
     (t) async {
       final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith((_) async => _FakeBtcInvoker()),
+        walletCoreProvider.overrideWithValue(_FakeWalletCore()),
       ]);
       addTearDown(container.dispose);
 
@@ -72,19 +96,8 @@ void main() {
     'WalletListScreen renders a row per wallet when the list is non-empty',
     (t) async {
       final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith(
-          (_) async => _FakeBtcInvoker(fixture: const [
-            {
-              'id': 'wlt-abc',
-              'network': 'testnet',
-              'address_type': 'native-segwit',
-            },
-            {
-              'id': 'wlt-def',
-              'network': 'testnet',
-              'address_type': 'taproot',
-            },
-          ]),
+        walletCoreProvider.overrideWithValue(
+          _FakeWalletCore(fixture: const ['wlt-abc', 'wlt-def']),
         ),
       ]);
       addTearDown(container.dispose);
@@ -99,24 +112,20 @@ void main() {
       );
       await t.pumpAndSettle();
 
-      // ids ≤12 chars render in full (security-auditor Task 17 review).
+      // ids <=12 chars render in full (security-auditor Task 17 review).
       expect(find.text('wlt-abc'), findsOneWidget);
       expect(find.text('wlt-def'), findsOneWidget);
     },
   );
 
   testWidgets(
-    'WalletListScreen truncates long wallet ids to first4…last4',
+    'WalletListScreen truncates long wallet ids to first4...last4',
     (t) async {
       final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith(
-          (_) async => _FakeBtcInvoker(fixture: const [
-            {
-              // 32-char hex (matches btc's fingerprint shape).
-              'id': 'abcdef0123456789abcdef0123456789',
-              'network': 'testnet',
-              'address_type': 'native-segwit',
-            },
+        walletCoreProvider.overrideWithValue(
+          _FakeWalletCore(fixture: const [
+            // 32-char hex (matches btc's fingerprint shape).
+            'abcdef0123456789abcdef0123456789',
           ]),
         ),
       ]);
@@ -140,15 +149,14 @@ void main() {
 
   testWidgets(
     'WalletListScreen shows a friendly error + Retry button '
-    'when the invoker throws',
+    'when walletCore throws FfiException(io)',
     (t) async {
       final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith(
-          (_) async => _FakeBtcInvoker(
-            throwError: const BtcError(
-              exitCode: 1,
-              stderr: 'panic: wallet db corrupted',
-              kind: BtcErrorKind.other,
+        walletCoreProvider.overrideWithValue(
+          _FakeWalletCore(
+            throwException: FfiException.fromCode(
+              code: -42, // Io
+              op: 'wallet_list',
             ),
           ),
         ),
@@ -165,12 +173,44 @@ void main() {
       );
       await t.pumpAndSettle();
 
-      // Kind-mapped message + retry button. The raw `panic: …` string
-      // MUST NOT surface (security-auditor Task 17 review).
-      expect(find.text('Something went wrong.'), findsOneWidget);
+      // L12 review MED #3 fix: kind-mapped copy from
+      // `userMessageForFfiException` (FfiErrorKind.io -> 'I/O error.').
+      expect(find.text('I/O error.'), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
-      expect(find.textContaining('panic'), findsNothing);
-      expect(find.textContaining('db corrupted'), findsNothing);
+      // The raw `code` MUST NOT surface (L12 CRITICAL #2 contract).
+      expect(find.textContaining('-42'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'WalletListScreen shows kind-mapped copy for FfiException(walletStore)',
+    (t) async {
+      final container = ProviderContainer(overrides: [
+        walletCoreProvider.overrideWithValue(
+          _FakeWalletCore(
+            throwException: FfiException.fromCode(
+              code: -34, // walletStore
+              op: 'wallet_list',
+            ),
+          ),
+        ),
+      ]);
+      addTearDown(container.dispose);
+
+      await t.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: Scaffold(body: WalletListScreen(network: _kTestnet)),
+          ),
+        ),
+      );
+      await t.pumpAndSettle();
+
+      // walletStore maps to the N2 oracle-mitigation message — same
+      // copy for "wrong password" / "wrong blob" / "wrong network".
+      expect(find.text('Cannot unlock wallet — check password.'),
+          findsOneWidget);
     },
   );
 
@@ -179,14 +219,8 @@ void main() {
     'callbacks when the user taps them',
     (t) async {
       final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith(
-          (_) async => _FakeBtcInvoker(fixture: const [
-            {
-              'id': 'wlt-abc',
-              'network': 'testnet',
-              'address_type': 'native-segwit',
-            },
-          ]),
+        walletCoreProvider.overrideWithValue(
+          _FakeWalletCore(fixture: const ['wlt-abc']),
         ),
       ]);
       addTearDown(container.dispose);
@@ -222,14 +256,10 @@ void main() {
     'allowlist (defence against path-injection)',
     (t) async {
       final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith(
-          (_) async => _FakeBtcInvoker(fixture: const [
+        walletCoreProvider.overrideWithValue(
+          _FakeWalletCore(fixture: const [
             // `../settings` would otherwise hijack navigation.
-            {
-              'id': '../settings',
-              'network': 'testnet',
-              'address_type': 'taproot'
-            },
+            '../settings',
           ]),
         ),
       ]);
@@ -253,7 +283,7 @@ void main() {
 
       // `../settings` contains `/` so the validator rejects it; the tap is
       // a no-op. Note: a CLI-returned id of `'new'` passes the allowlist
-      // (alnum only) but COLLIDES with the `new` route segment — that is a
+      // (alnum only) but COLLIDES with the `new` route segment -- that is a
       // UX-level footgun, deferred to v0.2 router-level `redirect:` (see
       // security-auditor LOW finding for Task 17).
       await t.tap(find.text('../settings'));

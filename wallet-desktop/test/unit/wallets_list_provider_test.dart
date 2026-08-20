@@ -1,100 +1,171 @@
+// Task 10 (#216) test — migrated `WalletsListNotifier` reads from
+// `walletCoreProvider` (Task 6+8+9 surface) instead of `btcInvokerProvider`.
+// Returns `List<String>` of wallet IDs (Rust `wallet_list` returns the
+// id list directly — no `WalletInfo` parsing).
+//
+// L12 CRITICAL #1 first real consumer: when `walletCore.listWallets`
+// throws `FfiException`, the notifier surfaces the typed exception in
+// `AsyncError` — UI catch blocks in `WalletListScreen` (Task 10) match
+// on `e.kind` to render user-facing copy.
+//
+// L34.1 guard: empty list for fresh install returns `AsyncData([])`,
+// NOT `AsyncError` (the Rust side may legitimately return a 0-length
+// array).
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wallet_desktop/core/btc/btc_command.dart';
-import 'package:wallet_desktop/core/btc/btc_invoker.dart';
-import 'package:wallet_desktop/providers/btc_providers.dart';
+import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
+import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
+import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
+import 'package:wallet_desktop/core/wallet_core_api.dart';
+import 'package:wallet_desktop/providers/wallet_core_provider.dart';
 import 'package:wallet_desktop/providers/wallet_providers.dart';
 
-/// Test double — returns canned JSON without spawning a subprocess.
-/// Each `invoke` call increments `invokeCount` and rewrites each entry's
-/// `id` to `w<invokeCount>`, so a refresh test can assert the parse
-/// path re-ran. The real subprocess path is covered by Task 24's
-/// integration test with fake_btc.sh.
-class _FakeBtcInvoker extends BtcInvoker {
-  _FakeBtcInvoker(this.fixture) : super(binaryPath: '/tmp/fake_btc');
+/// Test double — implements the `WalletCoreApi` interface that
+/// `walletCoreProvider` exposes (Task 10 mockability seam). Lets
+/// tests return canned id lists or throw typed `FfiException`s without
+/// requiring the native library to be loaded.
+class _FakeWalletCore implements WalletCoreApi {
+  _FakeWalletCore({this.fixture = const [], this.throwException});
 
-  final List<Map<String, dynamic>> fixture;
-  int invokeCount = 0;
+  /// Default: empty list (fresh-install).
+  final List<String> fixture;
+
+  /// When non-null, `listWallets` throws this exception.
+  final FfiException? throwException;
+
+  int callCount = 0;
 
   @override
-  Future<T> invoke<T>(
-    BtcCommand cmd, {
-    required T Function(dynamic json) parse,
-  }) async {
-    invokeCount += 1;
-    final mutated = [
-      for (final e in fixture) {...e, 'id': 'w$invokeCount'},
-    ];
-    return parse(mutated);
+  String ffiVersion() => 'fake-0.0.0';
+
+  @override
+  List<String> listWallets({
+    required FfiNetwork network,
+    required String baseDir,
+  }) {
+    callCount += 1;
+    final exc = throwException;
+    if (exc != null) throw exc;
+    return List<String>.from(fixture);
+  }
+
+  @override
+  void deleteWallet({
+    required FfiNetwork network,
+    required String walletId,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  WalletCreatedData createWallet({
+    required int words,
+    required FfiNetwork network,
+    required FfiAddressType addressType,
+    required SecretBuffer password,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  WalletImportedData importWallet({
+    required FfiNetwork network,
+    required SecretBuffer phrase,
+    required SecretBuffer password,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
   }
 }
 
 void main() {
-  test('walletsListProvider parses wallet list (autoDispose, family)',
-      () async {
-    final container = ProviderContainer(overrides: [
-      btcInvokerProvider.overrideWith(
-        (ref) async => _FakeBtcInvoker(const [
-          {
-            'id': 'abc123',
-            'network': 'testnet',
-            'address_type': 'native-segwit',
-          },
-          {
-            'id': 'def456',
-            'network': 'testnet',
-            'address_type': 'taproot',
-          },
-        ]),
-      ),
-    ]);
-    addTearDown(container.dispose);
+  group('WalletsListNotifier (FFI migration, Task 10)', () {
+    test('returns AsyncData with id list on success', () async {
+      final fake = _FakeWalletCore(
+        fixture: const ['wlt-abc', 'wlt-def'],
+      );
+      final container = ProviderContainer(overrides: [
+        walletCoreProvider.overrideWithValue(fake),
+      ]);
+      addTearDown(container.dispose);
 
-    final list = await container.read(walletsListProvider('testnet').future);
-    expect(list, hasLength(2));
-    expect(list.first.id, 'w1'); // fake mutates id to w<invokeCount>
-    expect(list.first.network, 'testnet');
-    expect(list.last.addressType, 'taproot');
-  });
+      final list = await container.read(walletsListProvider('testnet').future);
+      expect(list, equals(['wlt-abc', 'wlt-def']));
+      expect(fake.callCount, 1);
+    });
 
-  test('walletsListProvider refresh() re-invokes build via invalidateSelf',
-      () async {
-    // Track invoker invocations on the fake itself — `btcInvokerProvider`
-    // is non-autoDispose (Task 11), so its override body runs once; the
-    // wallet provider's `invalidateSelf` re-runs `build` which calls
-    // `invoker.invoke` again, incrementing this counter.
-    final fake = _FakeBtcInvoker(const [
-      {
-        'id': 'w0',
-        'network': 'testnet',
-        'address_type': 'native-segwit',
-      },
-    ]);
-    final container = ProviderContainer(overrides: [
-      btcInvokerProvider.overrideWith((ref) async => fake),
-    ]);
-    addTearDown(container.dispose);
+    test('returns AsyncData([]) on empty list (L34.1 guard, fresh install)',
+        () async {
+      final fake = _FakeWalletCore(); // default fixture = []
+      final container = ProviderContainer(overrides: [
+        walletCoreProvider.overrideWithValue(fake),
+      ]);
+      addTearDown(container.dispose);
 
-    final notifier = container.read(walletsListProvider('testnet').notifier);
-    final first = await container.read(walletsListProvider('testnet').future);
-    expect(first.single.id, 'w1'); // fake mutates id to w<invokeCount>
-    expect(fake.invokeCount, 1);
+      final list = await container.read(walletsListProvider('testnet').future);
+      expect(list, isEmpty);
+      expect(list, isA<List<String>>());
+    });
 
-    await notifier.refresh();
-    final refreshed =
-        await container.read(walletsListProvider('testnet').future);
-    expect(refreshed.single.id, 'w2'); // 2nd invoke → w2
-    expect(fake.invokeCount, 2);
-  });
+    test(
+        'surfaces FfiException(io) in AsyncError when Rust returns '
+        'storage failure', () async {
+      final fake = _FakeWalletCore(
+        throwException: FfiException.fromCode(code: -42, op: 'wallet_list'),
+      );
+      final container = ProviderContainer(overrides: [
+        walletCoreProvider.overrideWithValue(fake),
+      ]);
+      addTearDown(container.dispose);
 
-  test('walletsListProvider tolerates empty / null stdout (returns [])',
-      () async {
-    final container = ProviderContainer(overrides: [
-      btcInvokerProvider.overrideWith((ref) async => _FakeBtcInvoker(const [])),
-    ]);
-    addTearDown(container.dispose);
+      await expectLater(
+        container.read(walletsListProvider('testnet').future),
+        throwsA(isA<FfiException>()
+            .having((e) => e.kind, 'kind', equals(FfiErrorKind.io))),
+      );
+    });
 
-    final list = await container.read(walletsListProvider('testnet').future);
-    expect(list, isEmpty);
+    test(
+        'surfaces FfiException(walletStore) when wallet blob is corrupted '
+        '(N2 oracle: indistinguishable from wrong-password)', () async {
+      final fake = _FakeWalletCore(
+        throwException: FfiException.fromCode(
+          code: -34,
+          op: 'wallet_list',
+        ),
+      );
+      final container = ProviderContainer(overrides: [
+        walletCoreProvider.overrideWithValue(fake),
+      ]);
+      addTearDown(container.dispose);
+
+      await expectLater(
+        container.read(walletsListProvider('testnet').future),
+        throwsA(isA<FfiException>().having(
+          (e) => e.kind,
+          'kind',
+          equals(FfiErrorKind.walletStore),
+        )),
+      );
+    });
+
+    test('refresh() re-invokes build via invalidateSelf', () async {
+      final fake = _FakeWalletCore(fixture: const ['wlt-abc']);
+      final container = ProviderContainer(overrides: [
+        walletCoreProvider.overrideWithValue(fake),
+      ]);
+      addTearDown(container.dispose);
+
+      final notifier = container.read(walletsListProvider('testnet').notifier);
+      final first = await container.read(walletsListProvider('testnet').future);
+      expect(first, equals(['wlt-abc']));
+      expect(fake.callCount, 1);
+
+      await notifier.refresh();
+      expect(fake.callCount, 2);
+    });
   });
 }

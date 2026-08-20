@@ -3,51 +3,88 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:meta/meta.dart';
 
-import '../core/btc/btc_command.dart';
 import '../core/btc/models/wallet_detail.dart';
-import '../core/btc/models/wallet_info.dart';
-import 'btc_providers.dart';
+import '../core/ffi/ffi_enums.dart';
+import 'wallet_core_provider.dart';
 
 /// Loads the persisted-wallet list for the active network.
 ///
-/// Reads via `btc wallet list --network <NET> --json` and parses the
-/// JSON array into [WalletInfo] DTOs. `family<String>` keyed by network
-/// so switching networks invalidates only that network's cache.
-/// `autoDispose` so the cache drops when the list screen unmounts.
+/// Reads via `walletCore.listWallets(network)` (Task 6+8 FFI surface)
+/// and returns a `List<String>` of wallet IDs — no JSON parsing
+/// (Rust returns the id list directly).
+///
+/// **Task 10 migration.** Previously routed through `btcInvokerProvider`
+/// + `BtcCommand.walletList(network:)` + `WalletInfo.fromJson` parsing
+/// + a parse-callback that swallowed non-list responses. The new path
+/// has typed errors (`FfiException.kind`) instead of string-dump
+/// `BtcError(kind: other)`; UI catch blocks in `WalletListScreen`
+/// (Task 10 follow-up) match `on FfiException catch (e)` for kind-
+/// mapped copy.
+///
+/// **Plan deviation:** the legacy `List<WalletInfo>` DTO included
+/// `addressType` per wallet (the subtitle in `WalletListScreen`).
+/// Rust `wallet_list` returns id only; surfacing `addressType`
+/// requires an extra `wallet_peek_addresses` call per wallet (N extra
+/// FFI calls per list load) OR a Rust-side `wallet_list` enrichment
+/// (returns full `Vec<WalletInfo>`). Defer to v0.2 — for v0.2.0 the
+/// list view drops the subtitle's address type.
+///
+/// `family<String>` keyed by network so switching networks invalidates
+/// only that network's cache. `autoDispose` so the cache drops when
+/// the list screen unmounts.
 class WalletsListNotifier
-    extends AutoDisposeFamilyAsyncNotifier<List<WalletInfo>, String> {
+    extends AutoDisposeFamilyAsyncNotifier<List<String>, String> {
   @override
-  Future<List<WalletInfo>> build(String network) async {
-    final invoker = await ref.watch(btcInvokerProvider.future);
-    return invoker.invoke<List<WalletInfo>>(
-      BtcCommand.walletList(network: network),
-      // BtcInvoker passes `null` on empty stdout and a string fallback
-      // on non-JSON responses (defensive). Treat either as an empty
-      // list rather than a parse failure — a fresh install with no
-      // wallets should surface `data: []`, not `BtcError(kind: other)`.
-      parse: (j) => (j is List)
-          ? j
-              .map((e) => WalletInfo.fromJson(e as Map<String, dynamic>))
-              .toList(growable: false)
-          : const <WalletInfo>[],
+  Future<List<String>> build(String network) async {
+    final core = ref.watch(walletCoreProvider);
+    // L12 review MED #1 fix (Task 10): dropped the per-call
+    // `Directory.systemTemp.createTempSync` dance. The list path
+    // reads wallet-list metadata; the Rust side never writes to the
+    // dir on this code path (list returns ids, not blobs).
+    // Production `baseDir` will come from `appPathsProvider.baseDir`
+    // (Task 10 follow-up / app-shell integration).
+    return core.listWallets(
+      network: _networkFromString(network),
+      // v0.2.0 stand-in: empty baseDir is acceptable for the list
+      // path (no blob I/O). Tasks 11-16 wire `appPathsProvider`.
+      baseDir: '',
     );
   }
 
-  /// Force a re-fetch (e.g. after wallet create / import). Used by
-  /// Task 17 WalletListScreen's pull-to-refresh + Task 18 / 19
-  /// post-action invalidation. Delegates to `ref.invalidateSelf` so
-  /// Riverpod's lifecycle (dep tracking, listener coalescing) stays
-  /// intact — manually re-invoking `build(arg)` would race with
-  /// concurrent invalidations and double-subscribe `btcInvokerProvider`.
+  /// Force a re-fetch (e.g. after wallet create / import). Delegates to
+  /// `ref.invalidateSelf` so Riverpod's lifecycle (dep tracking,
+  /// listener coalescing) stays intact.
   Future<void> refresh() async {
     ref.invalidateSelf();
     await future;
   }
 }
 
+/// Maps the v0.1 string network identifier to the FFI network enum.
+///
+/// **Task 10 scope + L12 review HIGH #2.** The Rust-side `wallet_list`
+/// ABI (Task 5) currently only handles `FfiNetwork.testnet` — every
+/// other value returns `FfiError::Unknown` at the parse step
+/// (`wallet_ops.rs:70-75`). The UI's 5-option `NetworkPicker` is a
+/// v0.2 deferred scope; for v0.2.0 we map every non-testnet
+/// identifier to `testnet` (the only ABI-supported value).
+///
+/// **HIGH #2 guard.** The function asserts the input is `'testnet'` —
+/// silently discarding a non-testnet input would route every wallet
+/// list to the testnet blob dir without an error, masking the
+/// multi-network rollout when Rust `parse_network` grows. The
+/// assertion fails loudly so the operator can extend the mapping
+/// alongside the Rust enum.
+FfiNetwork _networkFromString(String network) {
+  assert(
+      network == 'testnet',
+      'WalletsListNotifier only supports testnet today; '
+      'got: $network. v0.2: extend when Rust parse_network grows.');
+  return FfiNetwork.testnet;
+}
+
 final walletsListProvider = AsyncNotifierProvider.autoDispose
-    .family<WalletsListNotifier, List<WalletInfo>, String>(
-        WalletsListNotifier.new);
+    .family<WalletsListNotifier, List<String>, String>(WalletsListNotifier.new);
 
 // ─── Task 14: walletSessionProvider ─────────────────────────────────────
 

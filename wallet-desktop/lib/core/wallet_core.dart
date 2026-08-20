@@ -46,62 +46,35 @@ import 'package:wallet_desktop/core/ffi/mnemonic_view.dart';
 import 'package:wallet_desktop/core/ffi/runtime_bindings.dart';
 import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
 import 'package:wallet_desktop/core/ffi/wallet_ops_bindings.dart';
+import 'package:wallet_desktop/core/wallet_core_api.dart';
 
 /// Result of a successful `wallet_create` call. The `mnemonic` field
 /// is a typed `MnemonicView` — the plaintext phrase String lives
 /// ONLY inside the view and is nulled on `dispose()`.
-class WalletCreated {
-  WalletCreated({
-    required this.id,
-    required this.mnemonic,
-    required this.network,
-    required this.addressType,
-  });
-
-  /// 36-char UUID hex (no NUL terminator).
-  final String id;
-
-  /// Typed wrapper around the Rust-side `MnemonicHandle`. Caller MUST
-  /// dispose after the user acknowledges the displayed phrase.
-  final MnemonicView mnemonic;
-
-  final FfiNetwork network;
-  final FfiAddressType addressType;
-
-  /// SECURITY: `mnemonic` is a `MnemonicView` (zeroize-on-dispose).
-  /// Override `toString` to mask the phrase so accidental
-  /// `print(walletCreated)` / Sentry breadcrumbs / Flutter error
-  /// handler can't leak it.
-  @override
-  String toString() => 'WalletCreated(id: $id, '
-      'network: $network, addressType: $addressType, '
-      'mnemonic: <view>)';
-}
+///
+/// **Task 10**: moved to `wallet_core_api.dart` as
+/// [WalletCreatedData]. This typedef preserves the Task 8 import path
+/// (`import 'package:wallet_desktop/core/wallet_core.dart'`) for
+/// downstream code; new code should import from `wallet_core_api.dart`
+/// directly.
+typedef WalletCreated = WalletCreatedData;
 
 /// Result of a successful `wallet_import` call. No mnemonic is
 /// returned — the caller already has the phrase.
-class WalletImported {
-  WalletImported({
-    required this.id,
-    required this.network,
-    required this.addressType,
-  });
-
-  final String id;
-  final FfiNetwork network;
-  final FfiAddressType addressType;
-
-  @override
-  String toString() => 'WalletImported(id: $id, '
-      'network: $network, addressType: $addressType)';
-}
+///
+/// **Task 10**: moved to `wallet_core_api.dart` as
+/// [WalletImportedData]. This typedef preserves the Task 8 import path.
+typedef WalletImported = WalletImportedData;
 
 /// Typed facade over the wallet FFI surface.
 ///
 /// Singleton via [instance] (process-lifetime). Holds the tokio
 /// runtime handle from `RuntimeBindings` once and reuses it for every
 /// async op.
-class WalletCore {
+///
+/// Implements [WalletCoreApi] (Task 10) so test fakes can swap in via
+/// Riverpod's `overrideWithValue`.
+class WalletCore implements WalletCoreApi {
   WalletCore._();
 
   static final WalletCore instance = WalletCore._();
@@ -118,6 +91,7 @@ class WalletCore {
   }
 
   /// Returns the rust crate version as a UTF-8 String.
+  @override
   String ffiVersion() {
     final ptr = WalletOpsBindings.ffiVersion();
     if (ptr == nullptr) {
@@ -131,16 +105,18 @@ class WalletCore {
   }
 
   /// Lists wallet IDs for the given network + baseDir.
+  @override
   List<String> listWallets({
     required FfiNetwork network,
-    required Pointer<Utf8> baseDir,
+    required String baseDir,
   }) {
+    final baseDirPtr = baseDir.toNativeUtf8();
     final outCount = calloc<UintPtr>();
     final outIds = calloc<Pointer<Utf8>>();
     try {
       final rc = WalletOpsBindings.walletList(
         network.code,
-        baseDir,
+        baseDirPtr,
         outCount,
         outIds,
       );
@@ -163,36 +139,47 @@ class WalletCore {
         WalletOpsBindings.walletListArrayFree(arrPtr, 0);
       }
     } finally {
+      calloc.free(baseDirPtr);
       calloc.free(outCount);
       calloc.free(outIds);
     }
   }
 
   /// Deletes the wallet blob for the given network + walletId.
+  @override
   void deleteWallet({
     required FfiNetwork network,
-    required Pointer<Utf8> walletId,
-    required Pointer<Utf8> baseDir,
+    required String walletId,
+    required String baseDir,
   }) {
-    final rc = WalletOpsBindings.walletDelete(
-      network.code,
-      baseDir,
-      walletId,
-    );
-    if (rc != 0) {
-      throw _ffiError('wallet_delete', rc);
+    final walletIdPtr = walletId.toNativeUtf8();
+    final baseDirPtr = baseDir.toNativeUtf8();
+    try {
+      final rc = WalletOpsBindings.walletDelete(
+        network.code,
+        baseDirPtr,
+        walletIdPtr,
+      );
+      if (rc != 0) {
+        throw _ffiError('wallet_delete', rc);
+      }
+    } finally {
+      calloc.free(walletIdPtr);
+      calloc.free(baseDirPtr);
     }
   }
 
   /// Creates a new wallet with a fresh random mnemonic. The
   /// `password` `SecretBuffer` is auto-disposed after the FFI call.
-  WalletCreated createWallet({
+  @override
+  WalletCreatedData createWallet({
     required int words,
     required FfiNetwork network,
     required FfiAddressType addressType,
     required SecretBuffer password,
-    required Pointer<Utf8> baseDir,
+    required String baseDir,
   }) {
+    final baseDirPtr = baseDir.toNativeUtf8();
     final outId = calloc<Uint8>(37);
     final outPhraseHandle = calloc<Pointer<Void>>();
     try {
@@ -202,7 +189,7 @@ class WalletCore {
         addressType.code,
         password.ptr,
         password.length,
-        baseDir,
+        baseDirPtr,
         outId,
         outPhraseHandle,
       );
@@ -214,13 +201,14 @@ class WalletCore {
       final idBytes = outId.asTypedList(36);
       final id = String.fromCharCodes(idBytes);
       final handle = outPhraseHandle.value;
-      return WalletCreated(
+      return WalletCreatedData(
         id: id,
         mnemonic: MnemonicView(handle),
         network: network,
         addressType: addressType,
       );
     } finally {
+      calloc.free(baseDirPtr);
       calloc.free(outId);
       calloc.free(outPhraseHandle);
       password.dispose();
@@ -230,17 +218,19 @@ class WalletCore {
   /// Imports an existing BIP-39 mnemonic phrase as a new wallet. Both
   /// `phrase` and `password` `SecretBuffer`s are auto-disposed after
   /// the FFI call.
-  WalletImported importWallet({
+  @override
+  WalletImportedData importWallet({
     required FfiNetwork network,
     required SecretBuffer phrase,
     required SecretBuffer password,
-    required Pointer<Utf8> baseDir,
+    required String baseDir,
   }) {
+    final baseDirPtr = baseDir.toNativeUtf8();
     final outId = calloc<Uint8>(37);
     try {
       final rc = WalletOpsBindings.walletImport(
         network.code,
-        baseDir,
+        baseDirPtr,
         phrase.ptr,
         phrase.length,
         password.ptr,
@@ -252,7 +242,7 @@ class WalletCore {
       }
       final idBytes = outId.asTypedList(36);
       final id = String.fromCharCodes(idBytes);
-      return WalletImported(
+      return WalletImportedData(
         id: id,
         network: network,
         // Address type not persisted in the import API — derive from
@@ -260,6 +250,7 @@ class WalletCore {
         addressType: FfiAddressType.unknown,
       );
     } finally {
+      calloc.free(baseDirPtr);
       calloc.free(outId);
       phrase.dispose();
       password.dispose();
