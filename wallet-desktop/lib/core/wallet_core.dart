@@ -19,12 +19,11 @@
 //    `ffi_enums.dart` — silent `int` truncation on the FFI boundary
 //    is impossible.
 //
-// **L12 deferred CRITICAL #1:** non-zero `FfiError` codes are thrown
-// as a generic `Exception` for now. Task 9 swaps this for
-// `FfiException` with typed kinds (Storage, Network, Crypto,
-// Unknown). The placeholder is acceptable because callers in Tasks
-// 10-16 will be wrapped in `try/catch` against the eventual typed
-// exception.
+// **L12 CRITICAL #1 closed (Task 9):** non-zero `FfiError` codes
+// are translated to typed `FfiException` (23 kinds, mirrors the Rust
+// `enum FfiError`). UI code in Tasks 10-16 switches on
+// `e.kind` to render user-facing messages. See
+// `lib/core/ffi/ffi_exception.dart`.
 //
 // **ABI notes:**
 // - `wallet_create` writes `out_id` (37 bytes, 36-char UUID hex + NUL)
@@ -42,6 +41,7 @@ import 'package:ffi/ffi.dart';
 
 import 'package:wallet_desktop/core/ffi/esplora_bindings.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
+import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
 import 'package:wallet_desktop/core/ffi/mnemonic_view.dart';
 import 'package:wallet_desktop/core/ffi/runtime_bindings.dart';
 import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
@@ -475,8 +475,10 @@ class WalletCore {
     return dst.cast<Utf8>();
   }
 
-  /// Placeholder for typed FFI exception. Task 9 swaps this for
-  /// `FfiException` with kinds (Storage, Network, Crypto, Unknown).
-  Exception _ffiError(String op, int code) =>
-      Exception('WalletCore FFI error: $op returned $code');
+  /// Translates a non-zero FFI return code to a typed [FfiException].
+  /// Task 9 closes L12 CRITICAL #1 — callers in Tasks 10-16 match
+  /// `on FfiException catch (e) when (e.kind == FfiErrorKind.x)`
+  /// instead of parsing message strings.
+  FfiException _ffiError(String op, int code) =>
+      FfiException.fromCode(code: code, op: op);
 }

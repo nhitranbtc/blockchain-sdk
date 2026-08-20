@@ -14,6 +14,7 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
+import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
 import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
 import 'package:wallet_desktop/core/wallet_core.dart';
 
@@ -50,7 +51,8 @@ void main() {
       () {
         final core = WalletCore.instance;
         final password = SecretBuffer.fromUtf8('test-password-1234');
-        final baseDir = Directory.systemTemp.createTempSync('wallet_core_create_');
+        final baseDir =
+            Directory.systemTemp.createTempSync('wallet_core_create_');
         final baseDirPtr = baseDir.path.toNativeUtf8();
         try {
           final result = core.createWallet(
@@ -80,7 +82,7 @@ void main() {
     );
 
     test(
-      'createWallet throws on invalid word count (FfiError surfaces)',
+      'createWallet throws FfiException(invalidMnemonic) on bad word count',
       () {
         final core = WalletCore.instance;
         final password = SecretBuffer.fromUtf8('test-password-1234');
@@ -95,7 +97,13 @@ void main() {
               password: password,
               baseDir: baseDirPtr,
             ),
-            throwsA(isA<Exception>()),
+            throwsA(
+              isA<FfiException>().having(
+                (e) => e.kind,
+                'kind',
+                equals(FfiErrorKind.invalidMnemonic),
+              ),
+            ),
           );
         } finally {
           calloc.free(baseDirPtr);
@@ -109,7 +117,8 @@ void main() {
       'importWallet returns DTO without mnemonic (caller already has phrase)',
       () {
         final core = WalletCore.instance;
-        const phrase = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
+        const phrase =
+            'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
         final phraseBuf = SecretBuffer.fromUtf8(phrase);
         final passwordBuf = SecretBuffer.fromUtf8('test-password-1234');
         final baseDir = Directory.systemTemp.createTempSync('wallet_core_imp_');
