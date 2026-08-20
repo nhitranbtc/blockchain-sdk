@@ -1,50 +1,60 @@
+// Task 12 (#218) — `WalletImportScreen` migrated from
+// `btcInvokerProvider` + `withPasswordFile` (Task 5/6) +
+// `BtcCommand.walletImport` to `walletCoreProvider` +
+// `walletCore.importWallet(network, phrase: SecretBuffer,
+// password: SecretBuffer, baseDir)`. Returns
+// `WalletImportedData { id, network, addressType }`.
+//
+// **Secret handling** (L12 CRITICAL #2 + Task 8/10/11 chain):
+// - The mnemonic is held in the `MnemonicPasteField`'s internal
+//   `TextEditingController` until the user submits; the field's
+//   `dispose()` clears it (Task 15 — `TextEditingController.clear()`
+//   is NOT real zeroization; documented F47 sub-gap).
+// - The password is held in the `PasswordField`'s controller;
+//   `dispose()` clears it (same gap).
+// - On submit: the screen copies `_mnemonic` + `_password` into
+//   `SecretBuffer.fromUtf8` allocations that the FFI facade
+//   auto-disposes in its `finally` block. The screen-side String
+//   copies are then force-cleared BEFORE the navigator pop so
+//   the route stack doesn't echo them.
+// - `FfiException.toString()` excludes `messageForDebug` (Task 9
+//   L12 CRITICAL #2 contract); the catch path's
+//   `BtcLogFilter.redact(e.toString())` is defense-in-depth.
+//
+// **BIP-39 checksum**: v0.1 defers client-side validation to the
+// Rust `wallet_import` (which rejects bad-checksum phrases with
+// `FfiErrorKind.invalidMnemonic` — surfaced as user copy
+// 'Invalid recovery phrase — please re-enter.').
+//
+// **Plan deviation: address type dropdown dropped.** Rust
+// `wallet_import` does NOT persist `address_type` (verified at
+// Task 8 — `WalletImportedData.addressType = FfiAddressType.unknown`).
+// Surfacing it requires an extra `wallet_peek_addresses` call per
+// imported wallet. For v0.2.0 the import screen drops the
+// dropdown; UI derives the address type on the detail screen
+// (Task 20). v0.2 follow-up: surface the picker once Rust
+// `wallet_import` is enriched.
+//
+// **Post-success**: refresh `walletsListProvider` via
+// `ref.invalidate` (Task 13 L31 lesson). Navigate to
+// `WalletDetailScreen`; Task 20 owns the session-unlock flow.
 import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/btc/btc_command.dart';
-import '../../core/btc/btc_error.dart';
-import '../../core/btc/btc_error_messages.dart';
-import '../../core/btc/models/wallet_info.dart';
+import '../../core/ffi/ffi_enums.dart';
+import '../../core/ffi/ffi_exception.dart';
+import '../../core/ffi/secret_buffer.dart';
 import '../../core/logging/btc_log_filter.dart';
-import '../../core/secrets/password_supply.dart';
-import '../../providers/btc_providers.dart';
+import '../../providers/wallet_core_provider.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
 import '../../widgets/mnemonic_paste_field.dart';
 import '../../widgets/password_field.dart';
-import '../../widgets/status_badge.dart';
+import '../wallet_create/mnemonic_display_dialog.dart' show MnemonicWordCount;
 
-/// Form for Story 2 — import an existing BIP-39 mnemonic into the
-/// `btc` wallet data directory.
-///
-/// **Secret handling** (L12 CRITICAL #2 + Task 5/6/7 chain + Task 17
-/// post-PR learnings):
-/// - The mnemonic is held in the `MnemonicPasteField`'s internal
-///   `TextEditingController` until the user submits; the field's
-///   `dispose()` clears it (Task 15).
-/// - The password is routed through `withPasswordFile` (Task 6) →
-///   mode-0600 temp file → never enters argv.
-/// - The mnemonic DOES enter argv for `BtcCommand.walletImport` in
-///   v0.1 (Task 8's `BtcCommand.walletImport` passes `--mnemonic
-///   <words>`). `BtcInvoker` does NOT log argv (Task 10); the
-///   defense-in-depth `BtcLogFilter` scrubs mnemonic-shape strings
-///   if any other code path incidentally echoes it. v0.2 will move
-///   to `withMnemonicFile` (Task 8 backlog) for true secret-passing.
-/// - `BtcLogFilter.redact` covers the catch path's `developer.log`
-///   (Task 17 lesson).
-///
-/// **BIP-39 checksum**: v0.1 defers client-side validation to `btc`
-/// (which rejects bad-checksum phrases with `BtcErrorKind.unknownWallet`
-/// arm — Task 8 sealed enum). v0.2 will validate the checksum on the
-/// client for fast user feedback.
-///
-/// **Post-success**: refresh `walletsListProvider` via `ref.invalidate`
-/// (NOT `unawaited(notifier.refresh())` — caught uncaught zone
-/// errors at Task 18 L12 type-design post-PR HIGH #2). Navigate to
-/// the wallet detail screen; Task 20 owns the session-unlock flow.
 class WalletImportScreen extends ConsumerStatefulWidget {
   const WalletImportScreen({super.key, required this.network});
   final String network;
@@ -54,14 +64,11 @@ class WalletImportScreen extends ConsumerStatefulWidget {
 }
 
 class _WalletImportScreenState extends ConsumerState<WalletImportScreen> {
-  /// BIP-39 word count. v0.1 defaults to 12; the dropdown lets the
-  /// user switch to 24 (matches the Task 18 walletCreate flow).
-  int _wordCount = 12;
-
+  MnemonicWordCount _wordCount = MnemonicWordCount.twelve;
   String _mnemonic = '';
   String _password = '';
   bool _running = false;
-  BtcError? _error;
+  String? _error;
 
   Future<void> _submit() async {
     if (_mnemonic.trim().isEmpty || _password.isEmpty) return;
@@ -70,47 +77,41 @@ class _WalletImportScreenState extends ConsumerState<WalletImportScreen> {
       _error = null;
     });
     try {
-      final invoker = await ref.read(btcInvokerProvider.future);
-      // `withPasswordFile` is `Future<void>` (Task 5/6 thin delegate);
-      // capture the parsed DTO via a closure variable. The Task 6.1
-      // follow-up (per type-design post-PR feedback) refactors both
-      // `withTempSecretFile<T>` + `withPasswordFile<T>` to return `T`.
-      WalletInfo? imported;
-      await withPasswordFile(_password, (path) async {
-        final r = await invoker.invoke<WalletInfo>(
-          BtcCommand.walletImport(
-            mnemonic: _mnemonic,
-            network: widget.network,
-            passwordFilePath: path,
-          ),
-          parse: (j) => WalletInfo.fromJson(j as Map<String, dynamic>),
-        );
-        imported = r;
-      });
-      final r = imported;
-      if (r == null || !mounted) return;
-      // Clear the screen-side password + mnemonic so the navigator
-      // pop doesn't echo the secrets.
-      setState(() {
-        _password = '';
-        _mnemonic = '';
-      });
-      // Refresh the wallet-list family (NOT `unawaited(ref.refresh)`
-      // — caught uncaught zone errors at Task 18 L12 type-design
-      // post-PR HIGH #2). The list screen's AsyncValue UI surfaces
-      // any re-fetch failure.
+      final core = ref.read(walletCoreProvider);
+      // FFI call: facade owns both SecretBuffer lifetimes
+      // (auto-dispose in `finally`). Returns WalletImportedData
+      // (no mnemonic returned — caller already has the phrase).
+      final imported = core.importWallet(
+        network: FfiNetwork.testnet,
+        phrase: SecretBuffer.fromUtf8(_mnemonic),
+        password: SecretBuffer.fromUtf8(_password),
+        baseDir: '', // v0.2.0 stand-in
+      );
+
+      if (!mounted) return;
+      // Force-clear screen-side password + mnemonic before
+      // navigating. The fields' `TextEditingController`s clear
+      // on their own dispose (later, on screen unmount).
+      // L12 review (Task 11 flutter M2 fix): drop `setState` —
+      // neither field is read by `build()` (the paste/password
+      // fields own their controllers); no rebuild is needed.
+      // Matches the Task 11 `WalletCreateScreen` pattern.
+      _mnemonic = '';
+      _password = '';
       ref.invalidate(walletsListProvider(widget.network));
-      // Note: deliberately NOT unlocking `walletSessionProvider`
-      // here. The import path lands on the WalletDetailScreen
-      // (Task 20) which will own the unlock flow + password
-      // re-prompt. Documented per Task 18 L12 type-design
-      // post-PR MEDIUM #5.
       if (mounted) {
-        context.go(WalletRoutes.detail(widget.network, r.id));
+        context.go(WalletRoutes.detail(widget.network, imported.id));
       }
-    } on BtcError catch (e) {
-      if (mounted) setState(() => _error = e);
+    } on FfiException catch (e) {
+      // Kind-mapped user copy (Task 10 MED #3 closure). For
+      // invalidMnemonic: 'Invalid recovery phrase — please
+      // re-enter.' (kind-mapped by `userMessageForFfiException`).
+      if (mounted) setState(() => _error = userMessageForFfiException(e));
     } catch (e, st) {
+      // Defense-in-depth: dart:developer.log bypasses
+      // package:logging. The `FfiException.toString()` contract
+      // excludes `messageForDebug`, so the redacted form is
+      // safe by construction for typed errors.
       const filter = BtcLogFilter();
       developer.log(
         'wallet_import failed',
@@ -120,7 +121,7 @@ class _WalletImportScreenState extends ConsumerState<WalletImportScreen> {
       );
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Something went wrong.')),
+          const SnackBar(content: Text('Could not import wallet.')),
         );
       }
     } finally {
@@ -138,35 +139,39 @@ class _WalletImportScreenState extends ConsumerState<WalletImportScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            DropdownButtonFormField<int>(
+            // Task 11/12 pattern: typed enum replaces bare int.
+            DropdownButtonFormField<MnemonicWordCount>(
               initialValue: _wordCount,
               decoration: const InputDecoration(labelText: 'Words'),
               items: const [
-                DropdownMenuItem(value: 12, child: Text('12')),
-                DropdownMenuItem(value: 24, child: Text('24')),
+                DropdownMenuItem(
+                  value: MnemonicWordCount.twelve,
+                  child: Text('12'),
+                ),
+                DropdownMenuItem(
+                  value: MnemonicWordCount.twentyFour,
+                  child: Text('24'),
+                ),
               ],
-              onChanged: (v) => setState(() => _wordCount = v ?? 12),
+              onChanged: (v) =>
+                  setState(() => _wordCount = v ?? MnemonicWordCount.twelve),
             ),
             const SizedBox(height: 16),
             MnemonicPasteField(
-              expectedWordCount: _wordCount,
+              expectedWordCount: _wordCount.value,
               onChanged: (v) => _mnemonic = v,
             ),
             const SizedBox(height: 16),
             PasswordField(onChanged: (v) => _password = v),
             const SizedBox(height: 16),
             if (error != null) ...[
-              StatusBadge(kind: error.kind),
-              const SizedBox(height: 8),
-              Text(userMessageForBtcError(error)),
+              Text(error),
               const SizedBox(height: 8),
             ],
             FilledButton(
               key: const Key('wallet_import_submit'),
               onPressed: _running ? null : _submit,
-              child: _running
-                  ? const Text('Importing…')
-                  : const Text('Import'),
+              child: _running ? const Text('Importing…') : const Text('Import'),
             ),
           ],
         ),

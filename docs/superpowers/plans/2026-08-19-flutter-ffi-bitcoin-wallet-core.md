@@ -502,9 +502,9 @@ For each screen: replace `ref.read(btcInvokerProvider.future).invoke<DTO>(BtcCom
 **Files:**
 - Modify: `wallet-desktop/lib/features/wallet_import/wallet_import_screen.dart` (main submit path)
 
-- [ ] **Step 1: Replace import invocation with `walletCore.importWallet({phrase, network, password})`**
-- [ ] **Step 2: Phrase stays as Dart String (user-pasted) but is wiped in `_password`/`_phrase` State fields on success**
-- [ ] **Step 3: Verify gate + commit**
+- [x] **Step 1: Replace import invocation with `walletCore.importWallet({phrase, network, password})`**
+- [x] **Step 2: Phrase stays as Dart String (user-pasted) but is wiped in `_password`/`_phrase` State fields on success** *(L12 review HIGH fix: drop `setState` around force-clear — Task 11 M2 pattern; matches `WalletCreateScreen`)*
+- [x] **Step 3: Verify gate + commit**
 
 ### Task 13: Migrate `WalletDetailScreen` (Story 3 + L32 L34.2 patterns)
 
