@@ -170,6 +170,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Task pickup (understand + plan)              | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                      |
 | Task pickup (drift scan, per L30)            | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts. |
+| Task pickup (new feature, no existing plan)  | `feature-dev:feature-dev` — 7-phase discovery → explore → clarify → architect → implement → review → summary. Use when feature unclear or scope undecided; phases 1-4 produce an ad-hoc plan that L13 then owns from step 9 onward. |
 | Plan authoring / plan review                 | `tasks/plan-lesson.md` (PL1, PL2, PL3, PL7–PL16) — drift scan, story trace, plugin stack, host-first SDK design, step-by-step workflow |
 | Code review / SDK quality                    | `tasks/review-lesson.md` (PL4, PL5, PL6, PL17) — flat re-exports, async mutex, stability policy, review plugins |
 | Deep search / content review / code-block    | `tasks/search-lesson.md` (PL18, PL19, PL20) — content review, code-block review, deep search + agent management |
@@ -232,6 +233,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ## Per pipeline step
 5. Step: pick skill pair (max 2) from L11 map
+5a. **No-plan branch:** if no plan/spec exists for the picked-up issue, defer to `feature-dev:feature-dev` instead of L13's TDD→review→verify chain. Output of feature-dev phases 1-4 = ad-hoc plan; resume L13 at step 9 (TDD) once the plan lands.
 6. Skill #1: invoke
 7. Skill #2: invoke (if applicable)
 8. Domain-tag wins on conflict: security > correctness > simplicity
@@ -354,6 +356,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review                                    |
 | `normal` (typical feature)                                                                   | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
 | `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`)             |
+| `feature-dev path` (no prior plan / scope undecided)                                          | `feature-dev:feature-dev` phases 1-4 (discover → explore → clarify → architect) produce ad-hoc plan; then L13 steps 9-15d own TDD → review → verify → PAUSE → commit-push-pr → PR review → tech doc → ledger |
 
 **10 decisions (the grilling record)**:
 
