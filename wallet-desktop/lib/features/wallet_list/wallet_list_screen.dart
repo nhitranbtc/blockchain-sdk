@@ -4,8 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/btc/btc_error.dart';
-import '../../core/btc/btc_error_messages.dart';
+import '../../core/ffi/ffi_exception.dart';
 import '../../core/format/wallet_id.dart';
 import '../../core/logging/btc_log_filter.dart';
 import '../../providers/wallet_providers.dart';
@@ -93,8 +92,8 @@ class WalletListScreen extends ConsumerWidget {
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 FilledButton.icon(
-                  onPressed:
-                      createCb ?? () => context.go(WalletRoutes.create(network)),
+                  onPressed: createCb ??
+                      () => context.go(WalletRoutes.create(network)),
                   icon: const Icon(Icons.add),
                   label: const Text('Create'),
                 ),
@@ -116,13 +115,15 @@ class WalletListScreen extends ConsumerWidget {
                 // DevTools / VM-service / OS syslog and bypasses the
                 // `package:logging` pipeline that `BtcLogFilter` sits
                 // behind. Pre-redact the exception's `toString()` so a
-                // non-BtcError reaching this branch can never echo a
-                // mnemonic or password string into an external log
-                // surface. (BtcError is safe by construction — see
-                // `BtcError.toString()` which deliberately omits stderr.)
-                // The `stackTrace` arg carries file/line info from Dart's
-                // catch site (BtcInvoker or `BtcLogFilter`) — not user
-                // input — so it is passed unredacted.
+                // non-FfiException reaching this branch can never echo
+                // a mnemonic or password string into an external log
+                // surface. (`FfiException.toString()` is safe by
+                // construction — see ffi_exception.dart which
+                // excludes the `messageForDebug` field. The redact
+                // pass is defense-in-depth against future exception
+                // types.) The `stackTrace` arg carries file/line info
+                // from Dart's catch site — not user input — so it is
+                // passed unredacted.
                 const filter = BtcLogFilter();
                 developer.log(
                   'wallet_list load failed',
@@ -130,25 +131,18 @@ class WalletListScreen extends ConsumerWidget {
                   error: filter.redact(e.toString()),
                   stackTrace: st,
                 );
-                final message = e is BtcError
-                    ? userMessageForBtcError(e)
+                // L12 review MED #3 (Task 10): use kind-mapped user
+                // copy from `ffi_exception.dart` — first real UI
+                // consumer of `FfiException`. Every Tasks 11-16
+                // screen will follow this pattern.
+                final message = e is FfiException
+                    ? userMessageForFfiException(e)
                     : 'Failed to load wallets';
-                final detail = e is BtcError
-                    ? null
-                    : const BtcLogFilter().redact(e.toString());
                 return Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(message),
-                      if (detail != null) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          detail,
-                          style: textTheme.bodySmall,
-                          textAlign: TextAlign.center,
-                        ),
-                      ],
                       const SizedBox(height: 16),
                       OutlinedButton.icon(
                         onPressed: () => ref
@@ -170,31 +164,32 @@ class WalletListScreen extends ConsumerWidget {
                   );
                 }
                 return RefreshIndicator(
-                  onRefresh: () => ref
-                      .read(walletsListProvider(network).notifier)
-                      .refresh(),
+                  onRefresh: () =>
+                      ref.read(walletsListProvider(network).notifier).refresh(),
                   child: ListView.builder(
                     itemCount: list.length,
                     itemBuilder: (_, i) {
-                      final w = list[i];
-                      final isValid =
-                          WalletRoutes.isValidWalletIdSegment(w.id);
+                      final id = list[i];
+                      final isValid = WalletRoutes.isValidWalletIdSegment(id);
                       return ListTile(
-                        key: ValueKey(w.id),
+                        key: ValueKey(id),
                         title: Text(
-                          formatWalletId(w.id),
+                          formatWalletId(id),
                           style: textTheme.bodyMedium
                               ?.copyWith(fontFamily: 'monospace'),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        subtitle: Text('${w.network} • ${w.addressType}'),
+                        // Plan deviation (Task 10): subtitle dropped —
+                        // Rust `wallet_list` returns id only; address
+                        // type surfaces in detail screen via
+                        // `wallet_peek_addresses` (Tasks 11-16).
                         onTap: !isValid
                             ? null
                             : (openCb != null
-                                ? () => openCb(w.id)
+                                ? () => openCb(id)
                                 : () => context.go(
-                                      WalletRoutes.detail(network, w.id),
+                                      WalletRoutes.detail(network, id),
                                     )),
                       );
                     },

@@ -280,3 +280,72 @@ final class FfiException implements Exception {
     }
   }
 }
+
+/// User-facing copy for an [FfiException]. L12 review MED #3 (Task 10):
+/// extracted from the per-variant dartdoc on [FfiErrorKind] so every UI
+/// consumer (Tasks 11-16 screens + this Task 10 list screen) can
+/// render kind-mapped messages without re-implementing the table.
+///
+/// **Recovery tier (UI hint, not a control flow contract):**
+/// - `userFixable` — operator can resolve (e.g. wrong password, bad
+///   SPKI pin, wrong word count). Surface a retry / re-enter dialog.
+/// - `retryable` — transient (network, sync not yet run). Surface a
+///   retry button.
+/// - `fatal` — operator can't resolve; surface a "contact support"
+///   banner with the kind code for triage.
+///
+/// **NEVER** include the exception's `messageForDebug` field in the
+/// returned copy — L12 CRITICAL #2.
+String userMessageForFfiException(FfiException e) {
+  switch (e.kind) {
+    case FfiErrorKind.invalidMnemonic:
+      return 'Invalid recovery phrase — please re-enter.';
+    case FfiErrorKind.invalidDerivationPath:
+      return 'Invalid derivation path — please re-enter.';
+    case FfiErrorKind.addressDerivation:
+      return 'Address derivation failed.';
+    case FfiErrorKind.scriptBuild:
+      return 'Transaction script invalid.';
+    case FfiErrorKind.network:
+      return 'Network error — please try again.';
+    case FfiErrorKind.esplora:
+      return 'Block explorer error — please try again.';
+    case FfiErrorKind.electrum:
+      return 'Electrum server error — please try again.';
+    case FfiErrorKind.insufficientFunds:
+      return 'Insufficient funds for this transaction.';
+    case FfiErrorKind.txBuild:
+      return 'Transaction build failed.';
+    case FfiErrorKind.sign:
+      return 'Signing failed.';
+    case FfiErrorKind.psbt:
+      return 'Transaction format invalid.';
+    case FfiErrorKind.storage:
+      return 'Disk error — cannot read wallet storage.';
+    case FfiErrorKind.notInitialized:
+      return 'Wallet not synced — please sync first.';
+    case FfiErrorKind.encryption:
+      return 'Encryption error — cannot decrypt wallet.';
+    case FfiErrorKind.mnemonicCipher:
+      return 'Wallet file is corrupted.';
+    case FfiErrorKind.walletStore:
+      // N2 oracle mitigation: the Rust side intentionally returns one
+      // indistinguishable message for "wrong password" / "wrong blob" /
+      // "wrong network". UI copy follows suit.
+      return 'Cannot unlock wallet — check password.';
+    case FfiErrorKind.bitcoin:
+      return 'Bitcoin protocol error.';
+    case FfiErrorKind.bdk:
+      return 'Wallet library error.';
+    case FfiErrorKind.io:
+      return 'I/O error.';
+    case FfiErrorKind.bip137:
+      return 'Message signing failed.';
+    case FfiErrorKind.spkiPin:
+      return 'TLS pin invalid — please re-enter.';
+    case FfiErrorKind.panic:
+      return 'Internal error — please try again.';
+    case FfiErrorKind.unknown:
+      return 'Wallet needs update — please contact support.';
+  }
+}
