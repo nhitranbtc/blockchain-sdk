@@ -13,7 +13,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 ## Index
 
 - [L1] Workspace path consistency across docs + Cargo manifests
-- [L6] approval gates before persistent changes — `git commit` + remote ops (memory)
+- [L6] approval gates before persistent changes — `git commit` + remote ops; same-scope commit+push bundled in one pause (memory)
 - [L8] flip issue checkboxes before squash-merge (memory)
 - [L9] issue bodies = status, PR bodies = fix analysis (with table)
 - [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
@@ -80,6 +80,8 @@ before commit.
 
 - Before `git commit` → STOP. Show diff summary + test output. Ask "approved?".
 - Before `gh pr merge --admin` / `--force-push` / `gh issue close` → name the bypass explicitly ("merge with --admin, approved"). The auto-mode classifier requires literal phrasing for bypass authorization.
+- **Same-scope commit + push — one pause.** When proposing a commit to a feature branch with no pending push, surface BOTH actions in one prompt: *"Commit `<subject>` and push to `origin/<branch>` — approve?"* A literal "approved" / "commit" authorizes the commit AND the subsequent push to the same branch. Required: name the push target + force-flag (or "no force") in the same prompt so the approval scope is explicit.
+- **Two-pause cases (override the bundling):** force-push (`--force` / `--force-with-lease`); push to `main` / release branch; push bundling multiple commits with different scopes; any `--admin` bypass or `gh pr merge --admin`; PR open after push (still requires separate approval per L6 + workflow-approval-required memory). Each of these needs its own dedicated pause.
 - For post-merge bookkeeping commits (CHANGELOG/lessons) → still pause. User's "approved" message earlier in the session is for the prior action, not subsequent commits (per the never-auto-commit memory).
 
 ---
