@@ -26,6 +26,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
+- [L42] Verify staged set before commit (`git diff --cached --stat` after every `git add`)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -36,7 +37,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Domain | Lessons |
 |---|---|
 | Build / Cargo hygiene | L1 |
-| Git workflow | L6 (approval gates), L8, L14 |
+| Git workflow | L6 (approval gates), L8, L14, L42 |
 | Issue/PR protocol | L9, L24 |
 | Skill + review pair | L11, L12, L13 |
 | Post-merge bookkeeping | L21, L24 |
@@ -839,6 +840,25 @@ Operator confirms via PR comment + flips the `L29` acceptance box.
 - v0.2 follow-up: pin the 4 currently-tag-based actions (`subosito/flutter-action`, `actions/cache`, `actions/upload-artifact`, `codecov/codecov-action`) to verified SHAs after the first successful CI run captures the resolved SHAs from the Actions log.
 - For new workflows in general: when adding a new `uses:` line, check the official action repo for its current SHA; add the SHA to the team's "verified SHA" reference document so future workflows can pin without re-verifying.
 - v0.2 follow-up: a pre-commit hook that greps all `.github/workflows/*.yml` for SHA patterns and compares against the verified SHA document — would have caught the 4 fabricated SHAs at write time.
+
+---
+
+
+## L42 — Verify staged set before commit
+
+**Trigger:** Session 2026-08-20 lessons.md L13 feature-dev hookup. Pre-existing staged-but-uncommitted files in the index from prior session (`CHANGELOG.md` + 2 `native_lib` Dart files). `git add tasks/lessons.md` appended to the existing index; the next `git commit` captured all 3 files in commit `0585adb` (1 intended + 2 unrelated + 1 unrelated CHANGELOG). User caught the bundle during the commit-pause review. Recovery via `git reset --mixed HEAD~` + clean recommit = 3 extra steps (commit, amend, reset, recommit, pop stash) that the L42 check would have eliminated.
+
+**Rule:** After every `git add <files>`, run `git diff --cached --stat` before any commit to verify the staged set matches intent. If the staged set contains unexpected files, unstage them (`git restore --staged <files>`) and re-verify before committing.
+
+**Why:** `git add <specific-file>` does NOT clear pre-existing staged content — it APPENDS to the index. Silent bundling of unrelated changes into a commit breaks the L6 separation principle (one commit = one scope) and forces a recovery via `git reset --mixed HEAD~` + recommit, which is itself state-modifying and gate-prone. The recovery cost (3-5 commands + re-pause) vastly exceeds the one-command pre-check. Session-start state is the worst case: prior sessions may have left files in the index; `git status` alone doesn't surface staged-vs-working-tree distinctions as clearly as `git diff --cached --stat`.
+
+**How to apply:**
+- After every `git add <files>`: run `git diff --cached --stat` — confirm the file list matches your intent (one file, one hunk range, no surprises).
+- If unexpected files appear in the staged set: `git restore --staged <unexpected-files>` then `git diff --cached --stat` again to confirm the staged set is now correct.
+- Session-start defensive check: `git status --short | grep '^[^?]' | grep -v '^.. '` flags staged-but-not-modified files (untracked-looking but in index) — those are the bundles most likely to surprise.
+- Combine with L6 (approval gates before `git commit`) and L13 step 12 (PAUSE for commit approval): three-stage guard = `add → verify staged → commit`. The verify-staged step is the cheapest, fastest catch — runs in <1s and prevents the costliest recovery.
+- Anti-pattern: relying on `git status` alone. The two-column output (`M file` = staged; ` M file` = unstaged) is hard to scan for unexpected content under load. `--cached --stat` gives a single clean list of what's about to ship.
+- Companion check before commit: `git log --oneline @{u}..HEAD` — confirm the commits ahead of upstream match what you intend to push (catches accidental mixed commits in the same way).
 
 ---
 
