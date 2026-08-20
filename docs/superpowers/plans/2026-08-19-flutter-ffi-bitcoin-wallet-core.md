@@ -492,10 +492,10 @@ For each screen: replace `ref.read(btcInvokerProvider.future).invoke<DTO>(BtcCom
 - Modify: `wallet-desktop/lib/features/wallet_create/wallet_create_screen.dart:65-150`
 - Modify: `wallet-desktop/lib/features/wallet_create/mnemonic_display_dialog.dart` (no change to L12/L33.4 logic; only receives `MnemonicHandle` instead of `String`)
 
-- [ ] **Step 1: Replace `withPasswordFile(_password, (path) async { invoker.invoke<WalletCreated>(...) })` with `walletCore.createWallet({words, network, addressType, password})` — returns `MnemonicHandle` (opaque, zeroize-on-drop in Rust)**
-- [ ] **Step 2: MnemonicDisplayDialog takes `MnemonicHandle` (not `String`) — `widget.mnemonic.toString()` only happens when user toggles Reveal; the underlying Rust memory is wiped after the dialog disposes**
-- [ ] **Step 3: Verify L12 CRITICAL #2 — mnemonic NEVER in Dart `String` field on the State class**
-- [ ] **Step 4: Verify gate + widget test + commit**
+- [x] **Step 1: Replace `withPasswordFile(_password, (path) async { invoker.invoke<WalletCreated>(...) })` with `walletCore.createWallet({words, network, addressType, password})` — returns `MnemonicHandle` (opaque, zeroize-on-drop in Rust)**
+- [x] **Step 2: MnemonicDisplayDialog takes `MnemonicHandle` (not `String`) — `widget.mnemonic.toString()` only happens when user toggles Reveal; the underlying Rust memory is wiped after the dialog disposes** *(L12 review fixes: typed `MnemonicWordCount` param replaces `ValueKey<String>` back-channel; sealed `_BackupStage` enum replaces 3 bools; `read()` hoisted from `build()` into Reveal onChanged with try/catch)*
+- [x] **Step 3: Verify L12 CRITICAL #2 — mnemonic NEVER in Dart `String` field on the State class** *(3-agent cascade closed; no CRITICAL/HIGH; 6 MEDIUM fixes applied)*
+- [x] **Step 4: Verify gate + widget test + commit**
 
 ### Task 12: Migrate `WalletImportScreen` (Story 2)
 
