@@ -55,13 +55,14 @@ jobs:
         working-directory: wallet-desktop
         run: flutter pub get
 
-      - name: Build fake_btc (operator smoke shim)
-        working-directory: wallet-desktop
-        run: bash scripts/build_fake_btc.sh
-
       # Task 1 spike + Phase 2 of 2026-08-19 FFI integration plan:
       # bitcoin-wallet-core cdylib loaded by dart:ffi in wallet-desktop.
       # Build the cdylib + copy to native/ before flutter test runs.
+      # (Task 13 fold-in: btc CLI subprocess plumbing removed — the
+      # legacy `Build fake_btc (operator smoke shim)` step is gone
+      # since `test/integration/fixtures/fake_btc.sh` no longer
+      # exists. v0.2 Task 18 wires the native-lib build helper
+      # `wallet-desktop/tool/build_native.sh` here instead.)
       - name: Build bitcoin-wallet-core cdylib
         working-directory: rust-wallet-app
         run: cargo build --release -p bitcoin-wallet-core
