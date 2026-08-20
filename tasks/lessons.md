@@ -352,22 +352,6 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 19. Apply L21 — dispatch the L21 sub-agent cascade (see L21 sub-section "Sub-agent dispatch at L13 step 19" for the agent prompt template). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow.
 ```
 
-### Behavioral discipline (karpathy-guidelines)
-
-Apply at every L13 step (pickup, plan, code, review, verify, commit). Distilled from `andrej-karpathy-skills:karpathy-guidelines` per L11 skill→step mapping.
-
-1. **Think Before Coding.** State assumptions explicitly. If uncertain, ask. If multiple interpretations exist, present them — don't pick silently. If a simpler approach exists, say so. Push back when warranted. If something is unclear, stop and name what's confusing. Ask.
-
-2. **Simplicity First.** Minimum code that solves the problem. Nothing speculative. No features beyond what was asked. No abstractions for single-use code. No "flexibility" / "configurability" that wasn't requested. No error handling for impossible scenarios. If you write 200 lines and it could be 50, rewrite it. Test: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
-
-3. **Surgical Changes.** Touch only what you must. Don't "improve" adjacent code, comments, or formatting. Don't refactor things that aren't broken. Match existing style, even if you'd do it differently. If you notice unrelated dead code, mention it — don't delete it. When your changes create orphans, remove imports/variables/functions that YOUR changes made unused. Don't remove pre-existing dead code unless asked. Test: every changed line should trace directly to the user's request.
-
-4. **Goal-Driven Execution.** Transform tasks into verifiable goals. "Add validation" → "Write tests for invalid inputs, then make them pass." "Fix the bug" → "Write a test that reproduces it, then make it pass." "Refactor X" → "Ensure tests pass before and after." For multi-step tasks, state a brief plan with verify-checks per step.
-
-**Anti-patterns:** overengineering "for safety"; bulk refactors bundled with feature work; picking the first interpretation silently; declaring done without verifying against success criteria.
-
-**Cross-references:** Principle 1 → L11 (skill selection), L13 step 2 (complexity tier self-detect). Principle 2 → L12 (review), L42 (verify-staged). Principle 3 → L1 (workspace path changes), L6 (commit hygiene), L42 (verify-staged). Principle 4 → L13 step 1 (skill tag), L28 (verify-before-claim).
-
 **Complexity tier → pipeline variation** (self-detect + user confirm):
 
 | Tier                                                                                         | Pipeline                                                                    |
