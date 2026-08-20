@@ -13,19 +13,20 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 ## Index
 
 - [L1] Workspace path consistency across docs + Cargo manifests
-- [L6] approval gates before persistent changes — `git commit` + remote ops (memory)
+- [L6] approval gates before persistent changes — `git commit` + remote ops; same-scope commit+push bundled in one pause (memory)
 - [L8] flip issue checkboxes before squash-merge (memory)
 - [L9] issue bodies = status, PR bodies = fix analysis (with table)
 - [L11] scan skills list at session start, tag 3-5 relevant, invoke before doing
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
-- [L18] ledger path collision — `.superpowers/sdd/` gitignored; canonical L21 record in PR body
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
+- [L25] Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
+- [L42] Verify staged set before commit (`git diff --cached --stat` after every `git add`)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -36,7 +37,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Domain | Lessons |
 |---|---|
 | Build / Cargo hygiene | L1 |
-| Git workflow | L6 (approval gates), L8, L14 |
+| Git workflow | L6 (approval gates), L8, L14, L42 |
 | Issue/PR protocol | L9, L24 |
 | Skill + review pair | L11, L12, L13 |
 | Post-merge bookkeeping | L21, L24 |
@@ -79,6 +80,8 @@ before commit.
 
 - Before `git commit` → STOP. Show diff summary + test output. Ask "approved?".
 - Before `gh pr merge --admin` / `--force-push` / `gh issue close` → name the bypass explicitly ("merge with --admin, approved"). The auto-mode classifier requires literal phrasing for bypass authorization.
+- **Same-scope commit + push — one pause.** When proposing a commit to a feature branch with no pending push, surface BOTH actions in one prompt: *"Commit `<subject>` and push to `origin/<branch>` — approve?"* A literal "approved" / "commit" authorizes the commit AND the subsequent push to the same branch. Required: name the push target + force-flag (or "no force") in the same prompt so the approval scope is explicit.
+- **Two-pause cases (override the bundling):** force-push (`--force` / `--force-with-lease`); push to `main` / release branch; push bundling multiple commits with different scopes; any `--admin` bypass or `gh pr merge --admin`; PR open after push (still requires separate approval per L6 + workflow-approval-required memory). Each of these needs its own dedicated pause.
 - For post-merge bookkeeping commits (CHANGELOG/lessons) → still pause. User's "approved" message earlier in the session is for the prior action, not subsequent commits (per the never-auto-commit memory).
 
 ---
@@ -170,6 +173,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Task pickup (understand + plan)              | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                      |
 | Task pickup (drift scan, per L30)            | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts. |
+| Task pickup (new feature, no existing plan)  | `feature-dev:feature-dev` — 7-phase discovery → explore → clarify → architect → implement → review → summary. Use when feature unclear or scope undecided; phases 1-4 produce an ad-hoc plan that L13 then owns from step 9 onward. |
 | Plan authoring / plan review                 | `tasks/plan-lesson.md` (PL1, PL2, PL3, PL7–PL16) — drift scan, story trace, plugin stack, host-first SDK design, step-by-step workflow |
 | Code review / SDK quality                    | `tasks/review-lesson.md` (PL4, PL5, PL6, PL17) — flat re-exports, async mutex, stability policy, review plugins |
 | Deep search / content review / code-block    | `tasks/search-lesson.md` (PL18, PL19, PL20) — content review, code-block review, deep search + agent management |
@@ -232,6 +236,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ## Per pipeline step
 5. Step: pick skill pair (max 2) from L11 map
+5a. **No-plan branch:** if no plan/spec exists for the picked-up issue, defer to `feature-dev:feature-dev` instead of L13's TDD→review→verify chain. Output of feature-dev phases 1-4 = ad-hoc plan; resume L13 at step 9 (TDD) once the plan lands.
 6. Skill #1: invoke
 7. Skill #2: invoke (if applicable)
 8. Domain-tag wins on conflict: security > correctness > simplicity
@@ -344,7 +349,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
 18. Add new lessons if user corrections or novel patterns (L9 schema) — **PAUSE first**: surface candidate + rationale, await explicit user approval before writing to lessons.md
-19. Apply L21 — **dispatch a sub-agent** to update `estimate-report.md` (Plan-progress row + progress % + footer with merge SHA + date) + `ai-cost-report.md` (move row estimate→actual with measured tokens + recompute totals). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow — long file edits with embedded code spans are gate-prone; sub-agent allows gate retries without polluting main-thread context. Separate commits per file.
+19. Apply L21 — dispatch the L21 sub-agent cascade (see L21 sub-section "Sub-agent dispatch at L13 step 19" for the agent prompt template). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow.
 ```
 
 **Complexity tier → pipeline variation** (self-detect + user confirm):
@@ -354,6 +359,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review                                    |
 | `normal` (typical feature)                                                                   | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
 | `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`)             |
+| `feature-dev path` (no prior plan / scope undecided)                                          | `feature-dev:feature-dev` phases 1-4 (discover → explore → clarify → architect) produce ad-hoc plan; then L13 steps 9-15d own TDD → review → verify → PAUSE → commit-push-pr → PR review → tech doc → ledger |
 
 **10 decisions (the grilling record)**:
 
@@ -458,13 +464,11 @@ Originally scoped as direct-commit-on-main deviation (2026-08-15 early session, 
 
 **Apply**: For every CLAUDE.md dedup, do a 2-step: (1) add rule to lessons.md in the same commit, (2) remove from CLAUDE.md. Verify with `grep <keyword> lessons.md` after the commit.
 
----
-## L18 — Ledger path collision: `.superpowers/sdd/` gitignored; canonical L21 record lives in PR body
+### Path collision caveat (formerly L18)
 
 **Trigger**: Session 2026-08-11 #64 retry. Working `ai-cost-report.md` at `.superpowers/sdd/2026-08-05-rust-bitcoin-wallet/` was modified locally; `git add` rejected by `.superpowers/sdd/.gitignore = "*"`. Prior sessions had committed this path (commits `4be98ac`, `f5ddbb2`) BEFORE the `*` rule was applied.
 
 **Rule**:
-
 - `.superpowers/sdd/<plan>/{progress,ai-cost,estimate}-report.md` = operator-local-only per L14. Do NOT force-add.
 - Canonical L21 record travels in the PR body (merge SHA + cost row + applied-findings table). Squash-merge = published ledger.
 - When a non-PR record is required (cumulative cost across PRs, retrospective cleanup), target `docs/{ai-cost,estimate}-report.md` — survives L14 gitignore.
@@ -472,11 +476,11 @@ Originally scoped as direct-commit-on-main deviation (2026-08-15 early session, 
 **Why**: L14 says ledger is gitignored for a reason (working-state churn out of public history). L21 says update on every merge — also valid. Without clarification, every session-end re-triages "force-add or skip?" — convention drift caused silent rule contradiction in this session.
 
 **Apply**:
-
 - `git add .superpowers/sdd/...` rejected by gitignore → `git restore --staged --worktree`. Working copy stays for next session; canonical record in PR body.
 - Path-aware L21 update → write to `docs/`, not `.superpowers/sdd/`.
 - L13 step 18 harvest: include this drift class in retrospectives.
 
+---
 ---
 ## L21 — Update estimate-report AND ai-cost-report on every PR merge
 
@@ -608,7 +612,7 @@ Agent(subagent_type: "general-purpose", prompt: "
 - Marking a story "done" when the implementation is partial (e.g., "Create wallet from mnemonic" works but doesn't yet sync) — split into smaller stories instead.
 - Fabricating "Try it" commands without verifying the path exists.
 
-## Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
+## L25 — Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
 
 **Trigger**: Session 2026-08-10. Task 9 (`Wallet::from_mnemonic` + sync + balance) was too large for one PR. User directed: "complete all sub-tasks in task 9, then call merge" + "I have a tree for sub-task handling: task/19 is main task branch, check from main task branch for sub-task" + "we only merge by order number, complete task 19a merge into main task branch 19, then create new branch from 19 for task 19b".
 
@@ -836,6 +840,25 @@ Operator confirms via PR comment + flips the `L29` acceptance box.
 - v0.2 follow-up: pin the 4 currently-tag-based actions (`subosito/flutter-action`, `actions/cache`, `actions/upload-artifact`, `codecov/codecov-action`) to verified SHAs after the first successful CI run captures the resolved SHAs from the Actions log.
 - For new workflows in general: when adding a new `uses:` line, check the official action repo for its current SHA; add the SHA to the team's "verified SHA" reference document so future workflows can pin without re-verifying.
 - v0.2 follow-up: a pre-commit hook that greps all `.github/workflows/*.yml` for SHA patterns and compares against the verified SHA document — would have caught the 4 fabricated SHAs at write time.
+
+---
+
+
+## L42 — Verify staged set before commit
+
+**Trigger:** Session 2026-08-20 lessons.md L13 feature-dev hookup. Pre-existing staged-but-uncommitted files in the index from prior session (`CHANGELOG.md` + 2 `native_lib` Dart files). `git add tasks/lessons.md` appended to the existing index; the next `git commit` captured all 3 files in commit `0585adb` (1 intended + 2 unrelated + 1 unrelated CHANGELOG). User caught the bundle during the commit-pause review. Recovery via `git reset --mixed HEAD~` + clean recommit = 3 extra steps (commit, amend, reset, recommit, pop stash) that the L42 check would have eliminated.
+
+**Rule:** After every `git add <files>`, run `git diff --cached --stat` before any commit to verify the staged set matches intent. If the staged set contains unexpected files, unstage them (`git restore --staged <files>`) and re-verify before committing.
+
+**Why:** `git add <specific-file>` does NOT clear pre-existing staged content — it APPENDS to the index. Silent bundling of unrelated changes into a commit breaks the L6 separation principle (one commit = one scope) and forces a recovery via `git reset --mixed HEAD~` + recommit, which is itself state-modifying and gate-prone. The recovery cost (3-5 commands + re-pause) vastly exceeds the one-command pre-check. Session-start state is the worst case: prior sessions may have left files in the index; `git status` alone doesn't surface staged-vs-working-tree distinctions as clearly as `git diff --cached --stat`.
+
+**How to apply:**
+- After every `git add <files>`: run `git diff --cached --stat` — confirm the file list matches your intent (one file, one hunk range, no surprises).
+- If unexpected files appear in the staged set: `git restore --staged <unexpected-files>` then `git diff --cached --stat` again to confirm the staged set is now correct.
+- Session-start defensive check: `git status --short | grep '^[^?]' | grep -v '^.. '` flags staged-but-not-modified files (untracked-looking but in index) — those are the bundles most likely to surprise.
+- Combine with L6 (approval gates before `git commit`) and L13 step 12 (PAUSE for commit approval): three-stage guard = `add → verify staged → commit`. The verify-staged step is the cheapest, fastest catch — runs in <1s and prevents the costliest recovery.
+- Anti-pattern: relying on `git status` alone. The two-column output (`M file` = staged; ` M file` = unstaged) is hard to scan for unexpected content under load. `--cached --stat` gives a single clean list of what's about to ship.
+- Companion check before commit: `git log --oneline @{u}..HEAD` — confirm the commits ahead of upstream match what you intend to push (catches accidental mixed commits in the same way).
 
 ---
 
