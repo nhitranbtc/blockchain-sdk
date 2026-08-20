@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
 import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
@@ -54,6 +55,18 @@ class _FakeWalletCore implements WalletCoreApi {
   WalletImportedData importWallet({
     required FfiNetwork network,
     required SecretBuffer phrase,
+    required SecretBuffer password,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
+  }
+
+  // Task 13 — required by `WalletCoreApi.showWallet` addition; this
+  // fake is only used for list-screen tests so the body throws.
+  @override
+  WalletDetail showWallet({
+    required FfiNetwork network,
+    required String walletId,
     required SecretBuffer password,
     required String baseDir,
   }) {
@@ -209,8 +222,8 @@ void main() {
 
       // walletStore maps to the N2 oracle-mitigation message — same
       // copy for "wrong password" / "wrong blob" / "wrong network".
-      expect(find.text('Cannot unlock wallet — check password.'),
-          findsOneWidget);
+      expect(
+          find.text('Cannot unlock wallet — check password.'), findsOneWidget);
     },
   );
 

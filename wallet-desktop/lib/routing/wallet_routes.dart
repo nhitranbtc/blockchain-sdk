@@ -48,6 +48,5 @@ class WalletRoutes {
 
   /// True iff [s] is a safe wallet-id segment to interpolate into a
   /// route path. Empty string is rejected.
-  static bool isValidWalletIdSegment(String s) =>
-      walletIdSegment.hasMatch(s);
+  static bool isValidWalletIdSegment(String s) => walletIdSegment.hasMatch(s);
 }

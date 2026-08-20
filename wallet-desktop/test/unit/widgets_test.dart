@@ -25,9 +25,6 @@ void main() {
   testWidgets('BalanceCard shows confirmed balance', (tester) async {
     const bal = Balance(
       confirmedSat: 100000,
-      trustedPendingSat: 0,
-      untrustedPendingSat: 0,
-      immatureSat: 0,
     );
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(body: BalanceCard(balance: bal)),

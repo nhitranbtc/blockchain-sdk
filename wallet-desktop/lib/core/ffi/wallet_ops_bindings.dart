@@ -131,6 +131,38 @@ typedef _WalletImportDart = int Function(
 );
 
 // ---------------------------------------------------------------------------
+// wallet_show (Task 13 / Issue #219)
+// ---------------------------------------------------------------------------
+
+typedef _WalletShowC = Int32 Function(
+  Uint8,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  IntPtr,
+  Pointer<Uint8>,
+  Pointer<Uint8>,
+  Pointer<Uint8>,
+  Pointer<Pointer<Utf8>>,
+  Pointer<Uint64>,
+);
+typedef _WalletShowDart = int Function(
+  int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  int,
+  Pointer<Uint8>,
+  Pointer<Uint8>,
+  Pointer<Uint8>,
+  Pointer<Pointer<Utf8>>,
+  Pointer<Uint64>,
+);
+
+typedef _WalletShowFirstAddressFreeC = Void Function(Pointer<Utf8>);
+typedef _WalletShowFirstAddressFreeDart = void Function(Pointer<Utf8>);
+
+// ---------------------------------------------------------------------------
 // Bindings
 // ---------------------------------------------------------------------------
 
@@ -270,4 +302,63 @@ class WalletOpsBindings {
     Pointer<Uint8> outId,
   ) walletImport =
       _lib.lookupFunction<_WalletImportC, _WalletImportDart>('wallet_import');
+
+  // ---------------------------------------------------------------------------
+  // wallet_show (Task 13 / Issue #219)
+  // ---------------------------------------------------------------------------
+
+  /// Read a wallet's metadata + first external address from the
+  /// persisted blob (Task 13). Returns the wallet id, network,
+  /// address type, first address (heap-allocated CString; free via
+  /// [walletShowFirstAddressFree]), and balance (always 0 for v0.2.0).
+  ///
+  /// **OutParams:**
+  /// - `outId`: caller allocates a 37-byte buffer (calloc zero-initialises
+  ///   byte 36). Reads the 36-char UUID hex from `outId.value` after
+  ///   the call returns.
+  /// - `outNetwork`: caller allocates `calloc<Uint8>()`; reads the
+  ///   echoed network byte (1 = Testnet).
+  /// - `outAddressType`: caller allocates `calloc<Uint8>()`; reads
+  ///   the address-type byte (0 = NativeSegwit, 1 = NestedSegwit,
+  ///   2 = Taproot).
+  /// - `outFirstAddress`: caller allocates
+  ///   `calloc<Pointer<Utf8>>()`. After the call, the slot holds a
+  ///   pointer to a NUL-terminated CString (empty string in v0.2.0
+  ///   per plan deviation #4 — peek_addresses requires sync).
+  ///   Free via [walletShowFirstAddressFree].
+  /// - `outBalanceSat`: caller allocates `calloc<Uint64>()`; reads
+  ///   the confirmed balance (always 0 in v0.2.0; v0.2.1 wires sync).
+  ///
+  /// **L12 collapse (L12 HIGH #1 mirror):** file-not-found, wrong
+  /// password, wrong network AAD, and corrupt blob all surface as
+  /// `FfiError::WalletStore`. The detail screen renders this via
+  /// `userMessageForFfiException` as a single "could not unlock"
+  /// copy — no enumeration signal for a network observer.
+  ///
+  /// **Zeroize contract (L12 CRITICAL #2):** `password` MUST be
+  /// zeroed via `SecretBuffer.fromUtf8` (auto-disposed in `finally`)
+  /// after the call returns.
+  ///
+  /// **Network scalar:** pass `FfiNetwork.testnet.code`.
+  static final int Function(
+    int network,
+    Pointer<Utf8> baseDir,
+    Pointer<Utf8> walletId,
+    Pointer<Uint8> password,
+    int passwordLen,
+    Pointer<Uint8> outId,
+    Pointer<Uint8> outNetwork,
+    Pointer<Uint8> outAddressType,
+    Pointer<Pointer<Utf8>> outFirstAddress,
+    Pointer<Uint64> outBalanceSat,
+  ) walletShow =
+      _lib.lookupFunction<_WalletShowC, _WalletShowDart>('wallet_show');
+
+  /// Frees a first-address CString returned by [walletShow]. Null is
+  /// a no-op.
+  static final void Function(Pointer<Utf8> ptr) walletShowFirstAddressFree =
+      _lib.lookupFunction<_WalletShowFirstAddressFreeC,
+          _WalletShowFirstAddressFreeDart>(
+    'wallet_show_first_address_free',
+  );
 }

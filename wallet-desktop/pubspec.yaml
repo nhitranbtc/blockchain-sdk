@@ -34,11 +34,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/btc/linux-x64/btc
-    - assets/btc/linux-arm64/btc
-    - assets/btc/macos-x64/btc
-    - assets/btc/macos-arm64/btc
-    - assets/btc/windows-x64/btc.exe
+  # No `assets:` block — the legacy btc CLI binaries (Task 17 partial,
+  # folded into Task 13 per user direction) are gone. The wallet
+  # desktop is FFI-only; the native library lives in `wallet-desktop/native/`
+  # and is loaded via `NativeLib.open()` (Task 6).
 
 dependency_overrides: {}

@@ -39,6 +39,7 @@ import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
 
+import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/esplora_bindings.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
@@ -253,6 +254,113 @@ class WalletCore implements WalletCoreApi {
       calloc.free(baseDirPtr);
       calloc.free(outId);
       phrase.dispose();
+      password.dispose();
+    }
+  }
+
+  /// Read a wallet's metadata + first external address from the
+  /// persisted blob (Task 13 / Issue #219). The `password`
+  /// `SecretBuffer` is auto-disposed after the FFI call. Returns a
+  /// `WalletDetail` (collapsed `Balance` — single `confirmedSat`
+  /// field, no `utxos` list).
+  ///
+  /// **v0.2.0 read-only show**: `firstAddress` is always `''` (Rust
+  /// `peek_addresses` requires bdk sync — deferred to v0.2.1);
+  /// `balance.confirmedSat` is always `0` (no Esplora sync). The
+  /// detail screen handles empty `firstAddress` by hiding
+  /// `AddressChip`.
+  ///
+  /// **L12 collapse (HIGH #1 mirror):** wrong-password /
+  /// not-found / wrong-AAD / corrupt-blob all surface as
+  /// `FfiException(kind: FfiErrorKind.walletStore)`.
+  @override
+  WalletDetail showWallet({
+    required FfiNetwork network,
+    required String walletId,
+    required SecretBuffer password,
+    required String baseDir,
+  }) {
+    final baseDirPtr = baseDir.toNativeUtf8();
+    final walletIdPtr = walletId.toNativeUtf8();
+    final outId = calloc<Uint8>(37);
+    final outNetwork = calloc<Uint8>();
+    final outAddressType = calloc<Uint8>();
+    final outFirstAddress = calloc<Pointer<Utf8>>();
+    final outBalanceSat = calloc<Uint64>();
+    try {
+      final rc = WalletOpsBindings.walletShow(
+        network.code,
+        baseDirPtr,
+        walletIdPtr,
+        password.ptr,
+        password.length,
+        outId,
+        outNetwork,
+        outAddressType,
+        outFirstAddress,
+        outBalanceSat,
+      );
+      if (rc != 0) {
+        throw _ffiError('wallet_show', rc);
+      }
+      // Read the 36-char UUID hex from out_id (Rust leaves byte 36
+      // untouched; the calloc zero-init means it's `0` — NUL
+      // terminator, but we only read 36 bytes).
+      final idBytes = outId.asTypedList(36);
+      final id = String.fromCharCodes(idBytes);
+      // out_network is the echo byte (always equals the input `network`).
+      // out_address_type maps the byte to the typed enum.
+      final addrTypeByte = outAddressType.value;
+      final addressType = switch (addrTypeByte) {
+        0 => FfiAddressType.nativeSegwit,
+        1 => FfiAddressType.nestedSegwit,
+        2 => FfiAddressType.taproot,
+        _ => FfiAddressType.unknown,
+      };
+      // out_first_address: v0.2.0 always empty. Free the CString
+      // regardless (Rust allocates one even for the empty case).
+      final firstAddrPtr = outFirstAddress.value;
+      final firstAddress =
+          firstAddrPtr == nullptr ? '' : firstAddrPtr.toDartString();
+      // out_balance_sat: v0.2.0 always 0 (no sync).
+      final balanceSat = outBalanceSat.value;
+      // Dart string for addressType (matches legacy btc wallet show
+      // --json encoding for the detail screen).
+      final addressTypeStr = switch (addressType) {
+        FfiAddressType.nativeSegwit => 'native-segwit',
+        FfiAddressType.nestedSegwit => 'nested-segwit',
+        FfiAddressType.taproot => 'taproot',
+        FfiAddressType.unknown => '',
+      };
+      // Network: the FFI `network` parameter is the typed enum; map
+      // to a string for `WalletDetail.network`. Only testnet is
+      // wired today (matches Task 10/11/12 `_networkFromString`
+      // assert guard); the FFI surface ignores other values.
+      final networkStr = switch (network) {
+        FfiNetwork.testnet => 'testnet',
+        FfiNetwork.unknown => '',
+      };
+      return WalletDetail(
+        id: id,
+        network: networkStr,
+        addressType: addressTypeStr,
+        firstAddress: firstAddress,
+        balance: Balance(confirmedSat: balanceSat),
+      );
+    } finally {
+      // Free the CString-typed `out_first_address` if Rust allocated
+      // one (always true for the v0.2.0 path). Null-safe.
+      final firstAddrPtr = outFirstAddress.value;
+      if (firstAddrPtr != nullptr) {
+        WalletOpsBindings.walletShowFirstAddressFree(firstAddrPtr);
+      }
+      calloc.free(baseDirPtr);
+      calloc.free(walletIdPtr);
+      calloc.free(outId);
+      calloc.free(outNetwork);
+      calloc.free(outAddressType);
+      calloc.free(outFirstAddress);
+      calloc.free(outBalanceSat);
       password.dispose();
     }
   }

@@ -88,11 +88,7 @@ void main() {
               firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 12345,
-                trustedPendingSat: 0,
-                untrustedPendingSat: 0,
-                immatureSat: 0,
               ),
-              utxos: <Utxo>[],
             ),
           );
       // Document the v0.1 sentinel contract in code: a regression that
@@ -163,11 +159,7 @@ void main() {
               firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 12345,
-                trustedPendingSat: 0,
-                untrustedPendingSat: 0,
-                immatureSat: 0,
               ),
-              utxos: <Utxo>[],
             ),
           );
       // Document the v0.1 sentinel contract in code: a regression that

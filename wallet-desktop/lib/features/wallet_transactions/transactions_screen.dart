@@ -61,8 +61,7 @@ class TransactionsScreen extends ConsumerStatefulWidget {
   final String walletId;
 
   @override
-  ConsumerState<TransactionsScreen> createState() =>
-      _TransactionsScreenState();
+  ConsumerState<TransactionsScreen> createState() => _TransactionsScreenState();
 }
 
 class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {

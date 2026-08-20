@@ -1,39 +1,39 @@
+// Task 13 (#219) — `WalletDetail` collapsed to match the Rust
+// `wallet_show` FFI return shape.
+//
+// **Plan deviation #3 + #5** (vs. legacy `btc wallet show --json`):
+// - `Balance` collapsed from 4-tuple to single `confirmedSat` field.
+//   Rust `wallet_show` returns `balance_sat: u64`; the legacy
+//   4-tuple (confirmed/trustedPending/untrustedPending/immature) is
+//   not exposed by the FFI. v0.2.1 will re-introduce the pending/
+//   immature breakdown once the Esplora sync is wired into the
+//   `wallet_show` FFI (the sync surface lives in
+//   `bdk_extras::wallet_balance`, deferred to v0.2.1).
+// - `utxos` field dropped. Rust `wallet_show` (v0.2.0 read-only
+//   show, no sync) returns no UTXO list. v0.2.1: wire
+//   `wallet_utxos` FFI export that returns a typed `Utxo[]`.
+//
+// **Path note:** this file lives under `lib/core/btc/models/` per
+// the v0.1.0 layout. Task 17 moves the btc/ folder out; for Task 13
+// the path stays as-is to minimise cross-file churn. The class name
+// (`WalletDetail`) is also reused by the FFI DTO (Task 10 pattern of
+// the same name living in both the legacy and FFI worlds during
+// Phase 3 migration).
+
 import 'package:meta/meta.dart';
 
 import 'dto_parse_exception.dart';
 
 @immutable
 class Balance {
-  const Balance({
-    required this.confirmedSat,
-    required this.trustedPendingSat,
-    required this.untrustedPendingSat,
-    required this.immatureSat,
-  });
+  /// Confirmed balance in satoshis. `0` for a fresh wallet with no
+  /// confirmed UTXOs. v0.2.0 read-only show always surfaces `0` —
+  /// the FFI defers Esplora sync to v0.2.1.
+  const Balance({required this.confirmedSat});
   final int confirmedSat;
-  final int trustedPendingSat;
-  final int untrustedPendingSat;
-  final int immatureSat;
 
   factory Balance.fromJson(Map<String, dynamic> j) => Balance(
         confirmedSat: dtoInt(j, 'confirmed_sat'),
-        trustedPendingSat: dtoIntOpt(j, 'trusted_pending_sat') ?? 0,
-        untrustedPendingSat: dtoIntOpt(j, 'untrusted_pending_sat') ?? 0,
-        immatureSat: dtoIntOpt(j, 'immature_sat') ?? 0,
-      );
-}
-
-@immutable
-class Utxo {
-  const Utxo({required this.txid, required this.vout, required this.valueSat});
-  final String txid;
-  final int vout;
-  final int valueSat;
-
-  factory Utxo.fromJson(Map<String, dynamic> j) => Utxo(
-        txid: dtoString(j, 'txid'),
-        vout: dtoInt(j, 'vout'),
-        valueSat: dtoInt(j, 'value_sat'),
       );
 }
 
@@ -45,23 +45,28 @@ class WalletDetail {
     required this.addressType,
     required this.firstAddress,
     required this.balance,
-    required this.utxos,
   });
   final String id;
   final String network;
+
+  /// Address-type string, matches the legacy `btc wallet show --json`
+  /// encoding (`native-segwit` / `nested-segwit` / `taproot`).
+  /// Empty in v0.2.0 if Rust returns `FfiAddressType.unknown` (the
+  /// `unknown` byte from `read_address_type_or_default`'s default
+  /// path is mapped to an empty Dart string; v0.2.1 surfaces the
+  /// exact byte mapping).
   final String addressType;
+
+  /// First external address. **Empty in v0.2.0** — the FFI defers
+  /// `peek_addresses` (requires bdk sync) to v0.2.1. The detail
+  /// screen hides `AddressChip` when this is empty.
   final String firstAddress;
   final Balance balance;
-  final List<Utxo> utxos;
 
   factory WalletDetail.fromJson(Map<String, dynamic> j) {
     final balanceRaw = j['balance'];
     if (balanceRaw is! Map<String, dynamic>) {
       throw DtoParseException('balance', balanceRaw);
-    }
-    final utxosRaw = j['utxos'];
-    if (utxosRaw != null && utxosRaw is! List) {
-      throw DtoParseException('utxos', utxosRaw);
     }
     return WalletDetail(
       id: dtoString(j, 'id'),
@@ -69,14 +74,6 @@ class WalletDetail {
       addressType: dtoString(j, 'address_type'),
       firstAddress: dtoString(j, 'first_address'),
       balance: Balance.fromJson(balanceRaw),
-      utxos: List<Utxo>.unmodifiable(
-        ((utxosRaw ?? const <Object?>[]) as List<Object?>).map((Object? e) {
-          if (e is! Map<String, dynamic>) {
-            throw DtoParseException('utxos[]', e);
-          }
-          return Utxo.fromJson(e);
-        }),
-      ),
     );
   }
 }

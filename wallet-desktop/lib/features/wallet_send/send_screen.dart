@@ -236,9 +236,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     final amount = int.tryParse(_amountSat);
     if (amount == null || amount <= 0 || _address.isEmpty) {
       setState(() => _error = const BtcError(
-          exitCode: 2,
-          stderr: 'invalid input',
-          kind: BtcErrorKind.other));
+          exitCode: 2, stderr: 'invalid input', kind: BtcErrorKind.other));
       return;
     }
     // Lesson 32.2: capture identity at top of async-await chain.
@@ -302,9 +300,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
           // testnet would otherwise be a no-op flag in argv).
         );
         final r = await invoker.invoke<SendResult>(
-          network == 'bitcoin'
-              ? _withConfirm(cmd, confirmYes)
-              : cmd,
+          network == 'bitcoin' ? _withConfirm(cmd, confirmYes) : cmd,
           parse: (j) => SendResult.fromJson(j as Map<String, dynamic>),
         );
         result = r;
@@ -425,8 +421,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                       // count + ack internally, then fires
                       // `_onReentrySubmit`). Avoids holding the
                       // cleartext in screen state.
-                      final state =
-                          _mnemonicFieldKey.currentState as dynamic;
+                      final state = _mnemonicFieldKey.currentState as dynamic;
                       state?.submit();
                     },
               child: const Text('Unlock for signing'),
@@ -503,9 +498,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 FilledButton(
                   key: const Key('send_screen_send'),
                   onPressed: _running ? null : _submit,
-                  child: _running
-                      ? const Text('Sending…')
-                      : const Text('Send'),
+                  child: _running ? const Text('Sending…') : const Text('Send'),
                 ),
               ],
             ),
