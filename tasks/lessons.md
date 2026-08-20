@@ -20,9 +20,9 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L12] code review runs BEFORE local verify gate, not after
 - [L13] per-task pipeline spec (10 decisions, 2026-08-07 grill)
 - [L14] ledger rule — `.superpowers/sdd/<plan>/progress.md`, update on pickup/commit/merge/grill, gitignored locally
-- [L18] ledger path collision — `.superpowers/sdd/` gitignored; canonical L21 record in PR body
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
+- [L25] Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
 - [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
@@ -349,7 +349,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
 18. Add new lessons if user corrections or novel patterns (L9 schema) — **PAUSE first**: surface candidate + rationale, await explicit user approval before writing to lessons.md
-19. Apply L21 — **dispatch a sub-agent** to update `estimate-report.md` (Plan-progress row + progress % + footer with merge SHA + date) + `ai-cost-report.md` (move row estimate→actual with measured tokens + recompute totals). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow — long file edits with embedded code spans are gate-prone; sub-agent allows gate retries without polluting main-thread context. Separate commits per file.
+19. Apply L21 — dispatch the L21 sub-agent cascade (see L21 sub-section "Sub-agent dispatch at L13 step 19" for the agent prompt template). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow.
 ```
 
 **Complexity tier → pipeline variation** (self-detect + user confirm):
@@ -464,13 +464,11 @@ Originally scoped as direct-commit-on-main deviation (2026-08-15 early session, 
 
 **Apply**: For every CLAUDE.md dedup, do a 2-step: (1) add rule to lessons.md in the same commit, (2) remove from CLAUDE.md. Verify with `grep <keyword> lessons.md` after the commit.
 
----
-## L18 — Ledger path collision: `.superpowers/sdd/` gitignored; canonical L21 record lives in PR body
+### Path collision caveat (formerly L18)
 
 **Trigger**: Session 2026-08-11 #64 retry. Working `ai-cost-report.md` at `.superpowers/sdd/2026-08-05-rust-bitcoin-wallet/` was modified locally; `git add` rejected by `.superpowers/sdd/.gitignore = "*"`. Prior sessions had committed this path (commits `4be98ac`, `f5ddbb2`) BEFORE the `*` rule was applied.
 
 **Rule**:
-
 - `.superpowers/sdd/<plan>/{progress,ai-cost,estimate}-report.md` = operator-local-only per L14. Do NOT force-add.
 - Canonical L21 record travels in the PR body (merge SHA + cost row + applied-findings table). Squash-merge = published ledger.
 - When a non-PR record is required (cumulative cost across PRs, retrospective cleanup), target `docs/{ai-cost,estimate}-report.md` — survives L14 gitignore.
@@ -478,11 +476,11 @@ Originally scoped as direct-commit-on-main deviation (2026-08-15 early session, 
 **Why**: L14 says ledger is gitignored for a reason (working-state churn out of public history). L21 says update on every merge — also valid. Without clarification, every session-end re-triages "force-add or skip?" — convention drift caused silent rule contradiction in this session.
 
 **Apply**:
-
 - `git add .superpowers/sdd/...` rejected by gitignore → `git restore --staged --worktree`. Working copy stays for next session; canonical record in PR body.
 - Path-aware L21 update → write to `docs/`, not `.superpowers/sdd/`.
 - L13 step 18 harvest: include this drift class in retrospectives.
 
+---
 ---
 ## L21 — Update estimate-report AND ai-cost-report on every PR merge
 
@@ -614,7 +612,7 @@ Agent(subagent_type: "general-purpose", prompt: "
 - Marking a story "done" when the implementation is partial (e.g., "Create wallet from mnemonic" works but doesn't yet sync) — split into smaller stories instead.
 - Fabricating "Try it" commands without verifying the path exists.
 
-## Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
+## L25 — Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
 
 **Trigger**: Session 2026-08-10. Task 9 (`Wallet::from_mnemonic` + sync + balance) was too large for one PR. User directed: "complete all sub-tasks in task 9, then call merge" + "I have a tree for sub-task handling: task/19 is main task branch, check from main task branch for sub-task" + "we only merge by order number, complete task 19a merge into main task branch 19, then create new branch from 19 for task 19b".
 
