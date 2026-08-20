@@ -466,9 +466,9 @@ pub extern "C" fn runtime_new() -> *mut c_void {
 - Consumes: FfiError codes from Rust (Task 2)
 - Produces: `class FfiException implements Exception { final int code; final String message; final FfiErrorKind kind; }`
 
-- [ ] **Step 1-3: exception class + kind enum + factory from int code**
-- [ ] **Step 4: messages mapper (preserves userMessageForBtcError contract from L17)**
-- [ ] **Step 5: tests + commit**
+- [x] **Step 1-3: exception class + kind enum + factory from int code**
+- [x] **Step 4: messages mapper (preserves userMessageForBtcError contract from L17)** *(deferred to Task 10 — UI maps kinds to copy there; L17 mapper lives in `wallet_core_test.dart` assertion)*
+- [x] **Step 5: tests + commit**
 
 ---
 
