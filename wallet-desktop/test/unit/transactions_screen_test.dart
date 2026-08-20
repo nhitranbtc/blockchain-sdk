@@ -59,11 +59,7 @@ WalletDetail _seedDetail() => const WalletDetail(
       firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
       balance: Balance(
         confirmedSat: 0,
-        trustedPendingSat: 0,
-        untrustedPendingSat: 0,
-        immatureSat: 0,
       ),
-      utxos: [],
     );
 
 void main() {

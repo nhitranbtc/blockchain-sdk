@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart'
-    show Utxo, WalletDetail, Balance;
+    show WalletDetail, Balance;
 import 'package:wallet_desktop/features/wallet_send/send_screen.dart';
 import 'package:wallet_desktop/providers/wallet_providers.dart';
 
@@ -27,11 +27,7 @@ void main() {
               firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 0,
-                trustedPendingSat: 0,
-                untrustedPendingSat: 0,
-                immatureSat: 0,
               ),
-              utxos: <Utxo>[],
             ),
           );
 
@@ -72,11 +68,7 @@ void main() {
               firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 0,
-                trustedPendingSat: 0,
-                untrustedPendingSat: 0,
-                immatureSat: 0,
               ),
-              utxos: <Utxo>[],
             ),
           );
 
@@ -123,11 +115,7 @@ void main() {
               firstAddress: 'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
               balance: Balance(
                 confirmedSat: 0,
-                trustedPendingSat: 0,
-                untrustedPendingSat: 0,
-                immatureSat: 0,
               ),
-              utxos: <Utxo>[],
             ),
           );
 

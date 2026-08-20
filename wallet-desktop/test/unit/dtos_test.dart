@@ -20,7 +20,7 @@ void main() {
     expect(w.addressType, 'native-segwit');
   });
 
-  test('WalletDetail from btc wallet show --json shape', () {
+  test('WalletDetail from FFI wallet_show shape (Task 13 collapsed)', () {
     final d = WalletDetail.fromJson(const {
       'id': 'abc',
       'network': 'testnet',
@@ -28,12 +28,11 @@ void main() {
       'first_address': 'tb1q...',
       'balance': {
         'confirmed_sat': 1000,
-        'trusted_pending_sat': 0,
-        'untrusted_pending_sat': 0,
-        'immature_sat': 0,
       },
-      'utxos': <Map<String, dynamic>>[],
     });
+    // Task 13: utxos field dropped; Balance collapsed from 4-tuple
+    // to single `confirmedSat`. Legacy 4-tuple keys are ignored by
+    // the parser (defense-in-depth for the json-from-disk path).
     expect(d.balance.confirmedSat, 1000);
     expect(d.firstAddress, 'tb1q...');
   });
@@ -119,20 +118,8 @@ void main() {
     );
   });
 
-  test('Utxo list is unmodifiable (immutability contract)', () {
-    final d = WalletDetail.fromJson(const {
-      'id': 'abc',
-      'network': 'testnet',
-      'address_type': 'native-segwit',
-      'first_address': 'tb1q...',
-      'balance': {
-        'confirmed_sat': 1000,
-        'trusted_pending_sat': 0,
-        'untrusted_pending_sat': 0,
-        'immature_sat': 0,
-      },
-      'utxos': <Map<String, dynamic>>[],
-    });
-    expect(() => d.utxos.clear(), throwsUnsupportedError);
-  });
+  // Task 13: Utxo class removed (Rust FFI doesn't return UTXO list
+  // — v0.2.0 read-only show). The unmodifiable-list test is gone;
+  // `Balance` is now a single-field immutable class with no nested
+  // collection to test.
 }

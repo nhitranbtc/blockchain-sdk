@@ -31,8 +31,7 @@ class WalletCreated {
   /// Flutter error handler can't leak it. Callers needing the value MUST
   /// access `walletCreated.mnemonic` directly.
   @override
-  String toString() =>
-      'WalletCreated(id: $id, firstAddress: $firstAddress, '
+  String toString() => 'WalletCreated(id: $id, firstAddress: $firstAddress, '
       'network: $network, addressType: $addressType, '
       'mnemonic: <masked>)';
 }

@@ -22,11 +22,15 @@
 
 #![allow(unsafe_code)] // FFI surface
 
+use crate::crypto::aad::Aad;
+use crate::crypto::mnemonic_cipher::{decrypt_mnemonic, MnemonicCipherBlob};
 use crate::ffi::panic::ffi_catch_unwind;
 use crate::ffi::FfiError;
-use crate::keys::AddressType;
-use crate::keys::Secret;
-use crate::wallet::ops::{create_wallet, delete_wallet, import_wallet, list_wallets};
+use crate::keys::{AddressType, Mnemonic, Secret};
+use crate::wallet::ops::{
+    create_wallet, delete_wallet, import_wallet, list_wallets, read_address_type_or_default,
+};
+use crate::wallet::store::read_wallet_at;
 use crate::wallet::WalletId;
 use bitcoin::Network;
 use std::ffi::{CStr, CString};
@@ -463,6 +467,194 @@ pub unsafe extern "C" fn wallet_import(
 // arg-marshalling pattern as `wallet_create`. Show_wallet is Task 5
 // (async + EsploraClient dependency).
 
+/// Read a wallet's metadata + first external address from the
+/// persisted blob (Task 13 / Issue #219). Returns the wallet id,
+/// network, address type, first address (heap-allocated CString;
+/// caller frees via `wallet_show_first_address_free`), and a
+/// balance (always 0 for v0.2.0).
+///
+/// **v0.2.0 read-only show** (plan deviation): no Esplora sync, no
+/// UTXO list. The balance is always 0 — the detail screen surfaces
+/// "balance: 0" until the user opens SendScreen (which triggers a
+/// sync via the existing `wallet_sync` FFI). v0.2.1: wire Esplora
+/// sync via the runtime handle + return real balance.
+///
+/// **L12 CRITICAL #2**: the password crosses the FFI boundary as
+/// raw `*const u8`; the Rust side wraps it in `Secret<Vec<u8>>`
+/// (zeroize-on-drop). The cleartext mnemonic is also wrapped in
+/// `Secret<String>` via `decrypt_mnemonic`; the explicit
+/// `drop(phrase_secret)` after `Mnemonic::from_phrase` zeros the
+/// heap copy ASAP.
+///
+/// **Error collapse** (L12 HIGH #1 precedent from `show_wallet`):
+/// file-not-found, wrong-password, wrong-AAD, and corrupt-blob all
+/// surface as the indistinguishable `FfiError::WalletStore`. The
+/// detail screen renders this via `userMessageForFfiException` as
+/// a single "could not unlock" copy — no enumeration signal for a
+/// network observer.
+///
+/// # Safety
+/// - `base_dir` and `wallet_id` must be NUL-terminated UTF-8.
+/// - `password` must point to `password_len` readable bytes (caller
+///   zeros the buffer after the call returns).
+/// - `out_id` must be a writable 37-byte buffer (zero-init by the
+///   caller; the 36-byte UUID hex is written at indices [0..36),
+///   byte 36 stays zero).
+/// - `out_network`, `out_address_type`, `out_first_address`, and
+///   `out_balance_sat` must be non-null and writable.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_show(
+    network: u8,
+    base_dir: *const c_char,
+    wallet_id: *const c_char,
+    password: *const u8,
+    password_len: usize,
+    out_id: *mut c_char,
+    out_network: *mut u8,
+    out_address_type: *mut u8,
+    out_first_address: *mut *mut c_char,
+    out_balance_sat: *mut u64,
+) -> FfiError {
+    ffi_catch_unwind(|| -> FfiError {
+        if out_id.is_null()
+            || out_network.is_null()
+            || out_address_type.is_null()
+            || out_first_address.is_null()
+            || out_balance_sat.is_null()
+        {
+            return FfiError::Storage;
+        }
+        let net = match parse_network(network) {
+            Ok(n) => n,
+            Err(e) => return e,
+        };
+        let base = match read_base_dir(base_dir) {
+            Ok(b) => b,
+            Err(e) => return e,
+        };
+        let id_str = match unsafe { CStr::from_ptr(wallet_id) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return FfiError::WalletStore,
+        };
+        let id = match id_str.parse::<WalletId>() {
+            Ok(u) => u,
+            Err(_) => return FfiError::WalletStore,
+        };
+        if password.is_null() || password_len == 0 {
+            return FfiError::Encryption;
+        }
+        let pw_bytes = unsafe { std::slice::from_raw_parts(password, password_len) };
+        let pw_secret = Secret::new(pw_bytes.to_vec());
+
+        // L12 collapse: any failure to reach a decrypted mnemonic
+        // (file-not-found, wrong-password, wrong-AAD, corrupt-blob,
+        // bad phrase) → `WalletStore`. The detail screen cannot
+        // distinguish these from a single user copy.
+        let blob_bytes = match read_wallet_at(&base, net, id) {
+            Ok(b) => b,
+            Err(_) => return FfiError::WalletStore,
+        };
+        let blob = match MnemonicCipherBlob::try_from(blob_bytes.as_slice()) {
+            Ok(b) => b,
+            Err(_) => return FfiError::WalletStore,
+        };
+        let aad = Aad::network(net);
+        let phrase_secret = match decrypt_mnemonic(&blob, pw_secret.expose().as_slice(), aad) {
+            Ok(p) => p,
+            Err(_) => return FfiError::WalletStore,
+        };
+        // Validate the decrypted phrase parses as a BIP-39 mnemonic
+        // BEFORE returning. A non-UTF-8 or non-mnemonic-shaped blob
+        // that survives the AES-GCM tag check is a corrupt-blob → the
+        // same collapsed `InvalidMnemonic` signal as a wrong
+        // checksum (the L12 collapse rule).
+        if Mnemonic::from_phrase(phrase_secret.expose()).is_err() {
+            return FfiError::InvalidMnemonic;
+        }
+        // Zero the phrase copy on the heap ASAP — the Mnemonic check
+        // above borrows the bytes; the phrase_secret's drop zeroizes
+        // the heap copy.
+        drop(phrase_secret);
+
+        let address_type = read_address_type_or_default(&base, net, id);
+        // v0.2.0 plan deviation: skip first-address derivation. The
+        // bdk `Wallet::peek_addresses` requires the bdk state to be
+        // initialised via `sync()` or `balance()` (which needs an
+        // EsploraClient + runtime handle — the async path the v0.2.0
+        // FFI defers). v0.2.0 returns an empty first-address; the
+        // detail screen renders this as "sync required — open
+        // SendScreen" copy. v0.2.1 wires the async sync path so the
+        // first address populates on unlock.
+        let first_address = String::new();
+
+        // Write outputs. ID first, then metadata, then CString, then
+        // balance — fail-fast on any CString alloc so the caller sees
+        // a clean `Io` error rather than a partial out_id.
+        let id_string = id.to_string();
+        let id_bytes = id_string.as_bytes();
+        if id_bytes.len() != 36 {
+            return FfiError::WalletStore;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(id_bytes.as_ptr(), out_id as *mut u8, 36);
+        }
+        unsafe {
+            *out_network = network;
+        }
+        let addr_type_byte = match address_type {
+            AddressType::NativeSegwit => 0u8,
+            AddressType::NestedSegwit => 1u8,
+            AddressType::Taproot => 2u8,
+            // `read_address_type_or_default` only ever returns one of
+            // the three FFI-supported variants (the sidecar value is
+            // parsed via `parse_address_type` which rejects any byte
+            // not in {0, 1, 2}; the default is `NativeSegwit`).
+            // `Legacy` is unreachable from the FFI surface — kept as
+            // an explicit error arm so a future sidecar-format change
+            // that surfaces a `Legacy` value fails loudly instead of
+            // silently writing a 3rd-party byte the Dart side cannot
+            // interpret.
+            AddressType::Legacy => return FfiError::Unknown,
+        };
+        unsafe {
+            *out_address_type = addr_type_byte;
+        }
+        let addr_cstr = match CString::new(first_address.to_string()) {
+            Ok(c) => c,
+            Err(_) => return FfiError::Io,
+        };
+        unsafe {
+            *out_first_address = addr_cstr.into_raw();
+        }
+        // v0.2.0: balance is always 0 (no sync). v0.2.1: wire sync
+        // via the runtime handle + return the real balance.
+        unsafe {
+            *out_balance_sat = 0;
+        }
+        FfiError::Ok
+    })
+}
+
+/// Free a first-address CString returned by `wallet_show`. Null is
+/// a no-op. The `CString::from_raw` round-trip reclaims the heap
+/// allocation; the buffer's contents are NOT zeroized (the address
+/// is not a secret — it's the same string the legacy
+/// `btc wallet show --json` returned in plaintext).
+///
+/// # Safety
+/// `ptr` must be null (no-op) or a pointer returned by
+/// `wallet_show` and not yet freed. Double-free is undefined
+/// behavior.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_show_first_address_free(ptr: *mut c_char) {
+    ffi_catch_unwind(|| {
+        if !ptr.is_null() {
+            let _ = unsafe { CString::from_raw(ptr) };
+        }
+        FfiError::Ok
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,5 +945,141 @@ mod tests {
             )
         };
         assert_eq!(rc, FfiError::InvalidMnemonic);
+    }
+
+    // -- Task 13 (#219): wallet_show FFI --
+
+    /// Round-trip: create + show returns matching id + network +
+    /// address type + a non-empty bech32 first address. Balance is
+    /// always 0 for v0.2.0 (no sync).
+    #[test]
+    fn wallet_show_after_create_returns_matching_metadata() {
+        let (_dir, base) = temp_base();
+        let (pw, pw_len) = pw_bytes("hunter2");
+        let mut id_buf = [0i8; 37];
+        let mut phrase_handle: *mut c_void = std::ptr::null_mut();
+        let rc = unsafe {
+            wallet_create(
+                12,
+                NETWORK_TESTNET,
+                0,
+                pw.as_ptr(),
+                pw_len,
+                base.as_ptr(),
+                id_buf.as_mut_ptr(),
+                &mut phrase_handle,
+            )
+        };
+        assert_eq!(rc, FfiError::Ok);
+        let id_str = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
+            .to_str()
+            .unwrap()
+            .to_string();
+        unsafe { phrase_view_free(phrase_handle) };
+
+        let mut show_id = [0i8; 37];
+        let mut show_network: u8 = 0;
+        let mut show_addr_type: u8 = 255;
+        let mut show_first_address: *mut c_char = std::ptr::null_mut();
+        let mut show_balance: u64 = 999;
+        let rc = unsafe {
+            wallet_show(
+                NETWORK_TESTNET,
+                base.as_ptr(),
+                id_str.as_ptr() as *const c_char,
+                pw.as_ptr(),
+                pw_len,
+                show_id.as_mut_ptr(),
+                &mut show_network,
+                &mut show_addr_type,
+                &mut show_first_address,
+                &mut show_balance,
+            )
+        };
+        assert_eq!(rc, FfiError::Ok);
+
+        // out_id matches the created id.
+        let show_id_str = unsafe { CStr::from_ptr(show_id.as_ptr()) }
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(show_id_str, id_str);
+        // out_network is echoed.
+        assert_eq!(show_network, NETWORK_TESTNET);
+        // out_address_type is native-segwit (0).
+        assert_eq!(show_addr_type, 0);
+        // out_first_address is empty (v0.2.0 plan deviation: skip
+        // peek_addresses — needs sync). v0.2.1 wires the async path.
+        assert!(!show_first_address.is_null());
+        let first_addr = unsafe { CStr::from_ptr(show_first_address) }
+            .to_str()
+            .unwrap();
+        assert!(
+            first_addr.is_empty(),
+            "v0.2.0 returns empty first_address; got: {first_addr}"
+        );
+        // out_balance_sat is 0 (v0.2.0: no sync).
+        assert_eq!(show_balance, 0);
+
+        unsafe { wallet_show_first_address_free(show_first_address) };
+    }
+
+    /// Wrong password → WalletStore (L12 collapse: indistinguishable
+    /// from "wallet does not exist" or "corrupt blob" or "wrong
+    /// network AAD").
+    #[test]
+    fn wallet_show_wrong_password_returns_wallet_store() {
+        let (_dir, base) = temp_base();
+        let (pw, pw_len) = pw_bytes("correct");
+        let mut id_buf = [0i8; 37];
+        let mut phrase_handle: *mut c_void = std::ptr::null_mut();
+        let rc = unsafe {
+            wallet_create(
+                12,
+                NETWORK_TESTNET,
+                0,
+                pw.as_ptr(),
+                pw_len,
+                base.as_ptr(),
+                id_buf.as_mut_ptr(),
+                &mut phrase_handle,
+            )
+        };
+        assert_eq!(rc, FfiError::Ok);
+        let id_str = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
+            .to_str()
+            .unwrap()
+            .to_string();
+        unsafe { phrase_view_free(phrase_handle) };
+
+        let (wrong_pw, wrong_pw_len) = pw_bytes("wrong");
+        let mut show_id = [0i8; 37];
+        let mut show_network: u8 = 0;
+        let mut show_addr_type: u8 = 0;
+        let mut show_first_address: *mut c_char = std::ptr::null_mut();
+        let mut show_balance: u64 = 0;
+        let rc = unsafe {
+            wallet_show(
+                NETWORK_TESTNET,
+                base.as_ptr(),
+                id_str.as_ptr() as *const c_char,
+                wrong_pw.as_ptr(),
+                wrong_pw_len,
+                show_id.as_mut_ptr(),
+                &mut show_network,
+                &mut show_addr_type,
+                &mut show_first_address,
+                &mut show_balance,
+            )
+        };
+        assert_eq!(rc, FfiError::WalletStore);
+        // No CString allocated on the error path — must be null.
+        assert!(show_first_address.is_null());
+    }
+
+    /// Free on null pointer is a no-op.
+    #[test]
+    fn wallet_show_first_address_free_null_is_noop() {
+        unsafe { wallet_show_first_address_free(std::ptr::null_mut()) };
     }
 }

@@ -20,6 +20,7 @@
 // `walletCoreProvider` returns `WalletCoreApi` so tests can swap a
 // fake that `implements WalletCoreApi`.
 
+import 'btc/models/wallet_detail.dart';
 import 'ffi/ffi_enums.dart';
 import 'ffi/mnemonic_view.dart';
 import 'ffi/secret_buffer.dart';
@@ -57,6 +58,31 @@ abstract interface class WalletCoreApi {
   WalletImportedData importWallet({
     required FfiNetwork network,
     required SecretBuffer phrase,
+    required SecretBuffer password,
+    required String baseDir,
+  });
+
+  /// Read a wallet's metadata + first external address from the
+  /// persisted blob (Task 13 / Issue #219). The `password`
+  /// `SecretBuffer` is auto-disposed after the FFI call. Returns a
+  /// `WalletDetail` (collapsed `Balance` — single `confirmedSat`
+  /// field, no `utxos` list; see `lib/core/btc/models/wallet_detail.dart`
+  /// for the plan-deviation rationale).
+  ///
+  /// **v0.2.0 read-only show**: `firstAddress` is always `''` (Rust
+  /// `peek_addresses` requires bdk sync — deferred to v0.2.1);
+  /// `balance.confirmedSat` is always `0` (no Esplora sync).
+  /// The detail screen handles empty `firstAddress` by hiding
+  /// `AddressChip`.
+  ///
+  /// **L12 collapse (HIGH #1 mirror):** wrong-password /
+  /// not-found / wrong-AAD / corrupt-blob all surface as
+  /// `FfiException(kind: FfiErrorKind.walletStore)`. The detail
+  /// screen renders this as a single "could not unlock" copy — no
+  /// enumeration signal for a network observer.
+  WalletDetail showWallet({
+    required FfiNetwork network,
+    required String walletId,
     required SecretBuffer password,
     required String baseDir,
   });

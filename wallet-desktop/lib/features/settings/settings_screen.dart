@@ -66,11 +66,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       // would then crash with a Flutter assertion if the value is
       // not in its `items` list.
       const knownNetworks = {
-        'bitcoin', 'testnet', 'testnet4', 'signet', 'regtest',
+        'bitcoin',
+        'testnet',
+        'testnet4',
+        'signet',
+        'regtest',
       };
-      final network = knownNetworks.contains(cfg.network)
-          ? cfg.network
-          : 'testnet';
+      final network =
+          knownNetworks.contains(cfg.network) ? cfg.network : 'testnet';
       setState(() {
         _network = network;
         _urlController.text = cfg.url;

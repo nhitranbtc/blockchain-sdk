@@ -1,8 +1,21 @@
+// Stub: the btc CLI integration plumbing (binary extractor +
+// subprocess invoker) is removed in this commit. `btcInvokerProvider`
+// stays as a stub so legacy `SendScreen` + `TransactionsScreen`
+// widgets (Tasks 14+15 migration targets) still compile; the
+// provider throws on access with a clear "FFI migration in
+// progress" message. The FFI surface is now the only wallet-ops
+// path; new code uses `walletCoreProvider` (Task 8/10).
+//
+// **Plan deviation** (Task 13 fold-in): Task 17 (delete btc/ CLI
+// plumbing) is partially landed here per user direction. The
+// `lib/core/btc/{btc_invoker,btc_command,btc_error,btc_error_messages}.dart`
+// files remain on disk for the unmigrated `SendScreen` +
+// `TransactionsScreen` to import. Tasks 14 + 15 finish the deletion.
+
 import 'dart:io' show Directory;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../core/binary/btc_extractor.dart';
 import '../core/btc/btc_invoker.dart';
 import '../core/paths.dart';
 
@@ -23,8 +36,9 @@ class AppPaths {
 }
 
 /// Resolves the OS `appDataDir` and creates the three subdirectories
-/// `btc/`, `tmp/`, `wallet_data/`. `ref.watch` consumers get a single
-/// `AppPaths` instance per `ProviderContainer`.
+/// `btc/`, `tmp/`, `wallet_data/`. The `btc/` subdir is preserved for
+/// backward-compat with any path the legacy btc CLI would have
+/// written to, but no binary is extracted into it.
 final appPathsProvider = FutureProvider<AppPaths>((Ref ref) async {
   return AppPaths(
     dataDir: await appDataDir(),
@@ -34,17 +48,15 @@ final appPathsProvider = FutureProvider<AppPaths>((Ref ref) async {
   );
 });
 
-/// Resolves the bundled `btc` binary via [BtcExtractor] and constructs
-/// a [BtcInvoker] pre-configured with the wallet data directory
-/// override. `dataDirOverride` is what `btc` reads via `BTC_DATA_DIR`.
-///
-/// Depends on [appPathsProvider] — extracted binary path comes from
-/// `appDataDir/btc/btc` (or `.exe` on Windows).
+/// Stub: throws on access. `SendScreen` / `TransactionsScreen`
+/// (Tasks 14+15) still import this provider; their `_submit` will
+/// surface the error as a SnackBar. The verify gate (analyze + test)
+/// passes because the type signature is preserved.
 final btcInvokerProvider = FutureProvider<BtcInvoker>((Ref ref) async {
-  final paths = await ref.watch(appPathsProvider.future);
-  final binaryPath = await extractBtc();
-  return BtcInvoker(
-    binaryPath: binaryPath,
-    dataDirOverride: paths.walletDataDir.path,
+  throw StateError(
+    'btcInvokerProvider stub: btc CLI integration is removed '
+    '(commit per user direction). FFI surface is the only wallet-ops '
+    'path — use walletCoreProvider. SendScreen + TransactionsScreen '
+    'are pending Tasks 14+15 migration.',
   );
 });

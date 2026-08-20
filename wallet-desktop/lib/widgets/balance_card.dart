@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import '../core/btc/models/wallet_detail.dart';
 
-/// Card showing wallet balance breakdown. Shows confirmed + (when
-/// non-zero) trusted-pending, untrusted-pending, immature.
+/// Card showing the wallet's confirmed balance.
+///
+/// **Task 13 collapse** (plan deviation #3): the legacy 4-tuple
+/// breakdown (confirmed / trustedPending / untrustedPending /
+/// immature) is gone — Rust `wallet_show` returns a single
+/// `balance_sat: u64`. v0.2.1 re-introduces the pending/immature
+/// breakdown once the Esplora sync is wired into `wallet_show`.
 class BalanceCard extends StatelessWidget {
   const BalanceCard({super.key, required this.balance});
   final Balance balance;
-
-  String _sats(int v) => '$v sats';
 
   @override
   Widget build(BuildContext context) {
@@ -18,19 +21,8 @@ class BalanceCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text('Confirmed', style: Theme.of(context).textTheme.labelMedium),
-            Text(_sats(balance.confirmedSat),
+            Text('${balance.confirmedSat} sats',
                 style: Theme.of(context).textTheme.headlineSmall),
-            if (balance.trustedPendingSat > 0)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                    'Pending (trusted): ${_sats(balance.trustedPendingSat)}'),
-              ),
-            if (balance.untrustedPendingSat > 0)
-              Text(
-                  'Pending (untrusted): ${_sats(balance.untrustedPendingSat)}'),
-            if (balance.immatureSat > 0)
-              Text('Immature: ${_sats(balance.immatureSat)}'),
           ],
         ),
       ),

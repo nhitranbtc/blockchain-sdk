@@ -56,6 +56,7 @@ abstract interface class LogFilter {
 
 class BtcLogFilter implements LogFilter {
   const BtcLogFilter();
+
   /// Width for right-padded level name in [format] output. Matches the
   /// length of `WARNING`, the longest Level name.
   static const _levelNameWidth = 7;
@@ -86,8 +87,8 @@ class BtcLogFilter implements LogFilter {
   /// no patterns match).
   @override
   String redact(String message) => message
-      .replaceAll(_mnemonicPattern, '<redacted-mnemonic>')
-      .replaceAllMapped(_passwordFlagPattern, (m) {
+          .replaceAll(_mnemonicPattern, '<redacted-mnemonic>')
+          .replaceAllMapped(_passwordFlagPattern, (m) {
         final match = m.group(0);
         if (match == null) return '';
         final flag = match.split(RegExp(r'[\s=]')).first;
@@ -103,9 +104,8 @@ class BtcLogFilter implements LogFilter {
   String format(LogRecord record) {
     final ts = record.time.toIso8601String();
     final redacted = redact(record.message);
-    final err = record.error != null
-        ? ' err=${redact(record.error.toString())}'
-        : '';
+    final err =
+        record.error != null ? ' err=${redact(record.error.toString())}' : '';
     final st = record.stackTrace != null
         ? '\n${redact(record.stackTrace.toString())}'
         : '';

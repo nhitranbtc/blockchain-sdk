@@ -14,6 +14,7 @@
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
 import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
@@ -74,6 +75,18 @@ class _FakeWalletCore implements WalletCoreApi {
   WalletImportedData importWallet({
     required FfiNetwork network,
     required SecretBuffer phrase,
+    required SecretBuffer password,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
+  }
+
+  // Task 13 — required by `WalletCoreApi.showWallet` addition; this
+  // fake is only used for list/notifier tests so the body throws.
+  @override
+  WalletDetail showWallet({
+    required FfiNetwork network,
+    required String walletId,
     required SecretBuffer password,
     required String baseDir,
   }) {

@@ -103,5 +103,6 @@ class EsploraConfigNotifier extends AsyncNotifier<EsploraConfig> {
   }
 }
 
-final esploraConfigProvider = AsyncNotifierProvider<EsploraConfigNotifier,
-    EsploraConfig>(EsploraConfigNotifier.new);
+final esploraConfigProvider =
+    AsyncNotifierProvider<EsploraConfigNotifier, EsploraConfig>(
+        EsploraConfigNotifier.new);
