@@ -30,7 +30,7 @@ use std::ffi::CStr;
 use std::ptr;
 
 use bitcoin_wallet_core::ffi::wallet::{ffi_version, ffi_version_free};
-use bitcoin_wallet_core::ffi::{runtime_drop, runtime_new};
+use bitcoin_wallet_core::ffi::{runtime_drop, runtime_new, wallet_load, wallet_load_free};
 
 // ---------------------------------------------------------------------------
 // ffi_version + ffi_version_free
@@ -109,4 +109,63 @@ fn runtime_new_drop_round_trip() {
     unsafe { runtime_drop(handle) };
     // Second drop would be UB — but we only call drop once.
     // This test verifies the documented single-owner semantics.
+}
+
+// ---------------------------------------------------------------------------
+// wallet_load + wallet_load_free (Task 14 / Issue #220 Sub-split A)
+// ---------------------------------------------------------------------------
+
+/// Regression guard (Task 14 #220): `wallet_load_free` must accept
+/// null without panicking — same null-tolerance contract as the
+/// other `_free` FFI exports.
+#[test]
+fn wallet_load_free_accepts_null() {
+    // SAFETY: documented contract — null is a no-op.
+    unsafe { wallet_load_free(std::ptr::null_mut()) };
+}
+
+/// Regression guard (Task 14 #220): `wallet_load` returns null
+/// (NOT a panic) when given a non-existent base directory. The
+/// caller (Dart side) interprets null + `FfiError::Storage` from
+/// `ffi_last_error_message` as "wallet file not found at this
+/// base_dir" — surfaced to the user as "Cannot unlock wallet".
+///
+/// **TDD red (2026-08-21):** this test fails to compile until
+/// `wallet_load` is exported from the Rust FFI surface (see
+/// `bdk_extras.rs`). The export takes `(base_dir: *const c_char,
+/// wallet_id: *const c_char, mnemonic: *const c_char,
+/// network: u8) -> *mut c_void` and frees via `wallet_load_free`.
+#[test]
+fn wallet_load_nonexistent_dir_returns_null() {
+    use std::ffi::CString;
+    let base_dir = CString::new("/nonexistent/wallet/store").unwrap();
+    let wallet_id = CString::new("00000000-0000-0000-0000-000000000000").unwrap();
+    // Empty mnemonic — caller is expected to validate first. This
+    // test exercises the "wallet file missing" branch, not the
+    // "bad mnemonic" branch (which is `FfiError::InvalidMnemonic`).
+    let mnemonic = CString::new("").unwrap();
+
+    // SAFETY: all CString pointers are valid for the duration of
+    // the call. Returns null on failure (no panic).
+    let handle = unsafe {
+        wallet_load(
+            base_dir.as_ptr(),
+            wallet_id.as_ptr(),
+            mnemonic.as_ptr(),
+            0, /* network placeholder */
+        )
+    };
+
+    // Must not panic; must not leak. Either null (failure path,
+    // expected) or non-null (somehow succeeded, must be freed).
+    if !handle.is_null() {
+        // SAFETY: handle ownership transferred to caller via the
+        // successful `wallet_load` return.
+        unsafe { wallet_load_free(handle) };
+    }
+    // Asserting null is the expected outcome — see doc above.
+    assert!(
+        handle.is_null(),
+        "wallet_load with non-existent base_dir must return null"
+    );
 }

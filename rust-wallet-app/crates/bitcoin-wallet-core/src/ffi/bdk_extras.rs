@@ -458,6 +458,100 @@ pub unsafe extern "C" fn wallet_free(handle: *mut c_void) {
     }
 }
 
+/// Load an existing wallet from disk into a `WalletHandle`.
+///
+/// **Task 14 / Issue #220 Sub-split A.** SendScreen needs to call
+/// `wallet_send(rt, wallet_handle, esplora_handle, ...)` against a
+/// wallet that already exists on disk. `wallet_from_mnemonic` is
+/// not appropriate here — it constructs a NEW wallet from a
+/// mnemonic. `wallet_load` reads the persisted changeset + builds
+/// a `Wallet` ready for sync.
+///
+/// **`db_path`** convention: `{base_dir}/{wallet_id}.wallet` (bdk
+/// file_store appends `.db` internally; `.wallet` is the
+/// schema-version marker for v0.2 — chosen so future schema bumps
+/// don't collide with v0.1 on-disk format).
+///
+/// Returns null on any failure (see `ffi_last_error_message` for
+/// the `FfiError` code). Caller frees via `wallet_load_free` (which
+/// is identical to `wallet_free` — same handle type).
+///
+/// # Safety
+///
+/// `base_dir`, `wallet_id`, `phrase` must be valid NUL-terminated C
+/// strings. `phrase` is wrapped in `Secret<String>` so the heap
+/// copy is zeroized on drop (L12 CRITICAL #2).
+#[no_mangle]
+pub unsafe extern "C" fn wallet_load(
+    base_dir: *const c_char,
+    wallet_id: *const c_char,
+    phrase: *const c_char,
+    network: u8,
+) -> *mut c_void {
+    ffi_catch_unwind_ptr(|| -> *mut c_void {
+        if base_dir.is_null() || wallet_id.is_null() || phrase.is_null() {
+            return surface_null_error_msg("wallet_load: null base_dir, wallet_id, or phrase");
+        }
+        let base_dir_str = match unsafe { CStr::from_ptr(base_dir) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return surface_null_error_msg("wallet_load: base_dir not UTF-8"),
+        };
+        let wallet_id_str = match unsafe { CStr::from_ptr(wallet_id) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return surface_null_error_msg("wallet_load: wallet_id not UTF-8"),
+        };
+        // Length cap (L12 MED — hostile caller).
+        if base_dir_str.len() > 4096 || wallet_id_str.len() > 64 {
+            return surface_null_error_msg("wallet_load: base_dir or wallet_id too long");
+        }
+        let phrase_str = match unsafe { CStr::from_ptr(phrase) }.to_str() {
+            Ok(s) => s.to_owned(),
+            Err(_) => return surface_null_error_msg("wallet_load: phrase not UTF-8"),
+        };
+        let net = match ffi_parse_network(network) {
+            Ok(n) => n,
+            Err(_) => return surface_null_error_msg("wallet_load: unknown network byte"),
+        };
+
+        // L12 CRITICAL #2: wrap cleartext phrase in `Secret<String>`
+        // so the heap copy is zeroized on drop.
+        let secret = Secret::new(phrase_str);
+        let mnemonic = match Mnemonic::from_phrase(secret.expose()) {
+            Ok(m) => m,
+            Err(e) => return surface_null_error::<c_void>(e),
+        };
+
+        // Compose db_path: `{base_dir}/{wallet_id}.wallet` (bdk
+        // file_store appends `.db` internally, so the on-disk file
+        // is `{wallet_id}.wallet.db`).
+        let db_path =
+            std::path::PathBuf::from(base_dir_str).join(format!("{wallet_id_str}.wallet"));
+
+        let wallet = match Wallet::load_persisted(db_path, &mnemonic, net) {
+            Ok(w) => w,
+            Err(e) => return surface_null_error::<c_void>(e),
+        };
+        Box::into_raw(Box::new(WalletHandle(wallet))) as *mut c_void
+    })
+}
+
+/// Drop a `WalletHandle` returned by `wallet_load`. Identical to
+/// `wallet_free` — provided for API symmetry on the Dart side
+/// (`walletLoadFree` pairs with `walletLoad`, same way
+/// `walletFree` pairs with `walletFromMnemonic`).
+///
+/// # Safety
+///
+/// `handle` must be null (no-op) or a pointer returned by
+/// `wallet_load` and not previously freed.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_load_free(handle: *mut c_void) {
+    // SAFETY: identical contract to wallet_free — same handle type
+    // (Box<WalletHandle>). The `if !handle.is_null()` guard inside
+    // is sufficient.
+    unsafe { wallet_free(handle) };
+}
+
 // ---------------------------------------------------------------------------
 // Wallet async ops
 // ---------------------------------------------------------------------------

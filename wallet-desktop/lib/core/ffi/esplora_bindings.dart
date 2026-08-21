@@ -94,6 +94,34 @@ typedef _WalletFromMnemonicDart = Pointer<Void> Function(
   int,
 );
 
+// wallet_load + wallet_load_free (Task 14 / Issue #220 Sub-split A)
+//
+// Load an existing wallet from disk into a `WalletHandle`. Mirror of
+// `walletFromMnemonic` for the SendScreen path: SendScreen needs
+// to call `walletSend(rt, walletHandle, esploraHandle, ...)` against
+// a wallet that already exists; `walletFromMnemonic` would build a
+// NEW wallet from a mnemonic, which is the wrong path.
+//
+// `wallet_load_free` is identical to `wallet_free` (same handle
+// type) — provided for API symmetry so Dart callers pair
+// `walletLoad` with `walletLoadFree` and the relationship is
+// visible at call sites without consulting the Rust source.
+typedef _WalletLoadC = Pointer<Void> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Uint8,
+);
+typedef _WalletLoadDart = Pointer<Void> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  int,
+);
+
+typedef _WalletLoadFreeC = Void Function(Pointer<Void>);
+typedef _WalletLoadFreeDart = void Function(Pointer<Void>);
+
 typedef _WalletFreeC = Void Function(Pointer<Void>);
 typedef _WalletFreeDart = void Function(Pointer<Void>);
 
@@ -265,6 +293,25 @@ class EsploraBindings {
   /// Drops a `Wallet` handle. Null is a no-op.
   static final void Function(Pointer<Void> handle) walletFree =
       _lib.lookupFunction<_WalletFreeC, _WalletFreeDart>('wallet_free');
+
+  /// Loads an existing wallet from disk and returns a `WalletHandle`.
+  /// (Task 14 / Issue #220 Sub-split A.) Returns null on failure;
+  /// caller checks `ffi_last_error_message` for the `FfiError` code.
+  /// Pairs with [walletLoadFree].
+  static final Pointer<Void> Function(
+    Pointer<Utf8> baseDir,
+    Pointer<Utf8> walletId,
+    Pointer<Utf8> phrase,
+    int network,
+  ) walletLoad =
+      _lib.lookupFunction<_WalletLoadC, _WalletLoadDart>('wallet_load');
+
+  /// Drops a `WalletHandle` returned by [walletLoad]. Null is a
+  /// no-op. Body identical to [walletFree] — separate symbol for
+  /// API symmetry on the Dart side.
+  static final void Function(Pointer<Void> handle) walletLoadFree =
+      _lib.lookupFunction<_WalletLoadFreeC, _WalletLoadFreeDart>(
+          'wallet_load_free');
 
   /// Syncs the wallet against Esplora (pulls UTXOs + chain tip).
   static final int Function(
