@@ -61,17 +61,16 @@ jobs:
       # (Task 13 fold-in: btc CLI subprocess plumbing removed — the
       # legacy `Build fake_btc (operator smoke shim)` step is gone
       # since `test/integration/fixtures/fake_btc.sh` no longer
-      # exists. v0.2 Task 18 wires the native-lib build helper
-      # `wallet-desktop/tool/build_native.sh` here instead.)
-      - name: Build bitcoin-wallet-core cdylib
-        working-directory: rust-wallet-app
-        run: cargo build --release -p bitcoin-wallet-core
-
-      - name: Copy cdylib to Flutter native dir
-        run: |
-          mkdir -p wallet-desktop/native/linux-x64
-          cp rust-wallet-app/target/release/libbitcoin_wallet_core.so \
-             wallet-desktop/native/linux-x64/librust_wallet_core.so
+      # exists.)
+      #
+      # Task 18 / Issue #224 (2026-08-21): the inline build + copy
+      # steps are replaced with a single invocation of
+      # `wallet-desktop/tool/build_native.sh` — the same script
+      # developers run locally. Detects host arch, builds the
+      # cdylib, and copies the shared library into the correct
+      # `wallet-desktop/native/<arch>/` directory.
+      - name: Build + copy cdylib via build_native.sh
+        run: ./wallet-desktop/tool/build_native.sh
 
       - name: dart analyze
         working-directory: wallet-desktop
