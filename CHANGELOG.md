@@ -130,7 +130,7 @@ cargo test -p bitcoin-wallet-core ffi::wallet_ops::tests::wallet_show_wrong_pass
 
 ### Removed
 
-- None.
+- `wallet-desktop/scripts/smoke/UI_TEST_CHECKLIST.md`: stale pre-FFI subprocess references removed (`ProcessProgressOverlay — spinner during CLI invocation`, `Verify L7 env-strip`, `Real btc binary`, `Sandbox-L29 substitute (chrome-devtools-mcp + fake_btc.sh)` section) per Issue #259 drift. Title bumped v0.1.0 → v0.2.x; Run block now references PR #257 auto-screenshot capture. (PR #260)
 
 ### Fixed
 
