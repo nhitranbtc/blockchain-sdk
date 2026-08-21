@@ -11,7 +11,7 @@ import '../core/ffi/ffi_exception.dart';
 import '../core/ffi/secret_buffer.dart';
 import '../core/wallet_core.dart';
 import '../core/wallet_core_api.dart';
-import 'btc_providers.dart';
+import 'app_paths_provider.dart';
 import 'esplora_config_provider.dart';
 import 'wallet_core_provider.dart';
 

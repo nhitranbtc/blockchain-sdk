@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wallet_desktop/core/btc/btc_error.dart';
+import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/widgets/address_chip.dart';
 import 'package:wallet_desktop/widgets/balance_card.dart';
@@ -62,7 +62,7 @@ void main() {
       (tester) async {
     await tester.pumpWidget(const MaterialApp(
       home: Scaffold(
-        body: StatusBadge(kind: BtcErrorKind.insufficientFunds),
+        body: StatusBadge(kind: FfiErrorKind.insufficientFunds),
       ),
     ));
     expect(
