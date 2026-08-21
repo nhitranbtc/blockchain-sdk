@@ -1,6 +1,9 @@
+import 'dart:ffi';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:wallet_desktop/core/btc/models/fee_estimate.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
@@ -70,6 +73,13 @@ class _FakeWalletCore implements WalletCoreApi {
     required SecretBuffer password,
     required String baseDir,
   }) {
+    throw UnimplementedError();
+  }
+
+  // Task 16 — required by `WalletCoreApi.feeEstimate` addition; this
+  // fake is only used for list-screen tests so the body throws.
+  @override
+  FeeEstimate feeEstimate({required Pointer<Void> esploraHandle}) {
     throw UnimplementedError();
   }
 }

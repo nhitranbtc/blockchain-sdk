@@ -35,10 +35,12 @@
 //   CStr). SecretBuffer is bytes (`*const u8` + length) — for this
 //   call the facade allocates a NUL-terminated copy.
 
+import 'dart:convert';
 import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
 
+import 'package:wallet_desktop/core/btc/models/fee_estimate.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/esplora_bindings.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
@@ -389,6 +391,32 @@ class WalletCore implements WalletCoreApi {
   void esploraClientFree(Pointer<Void> handle) {
     if (handle == nullptr) return;
     EsploraBindings.esploraClientFree(handle);
+  }
+
+  /// Fetch Esplora fee estimates via the FFI surface. (Task 16 /
+  /// Issue #222.) Returns a parsed [FeeEstimate]; the raw JSON
+  /// payload crosses the FFI boundary as a NUL-terminated `CString`
+  /// (`esplora_fee_estimate` returns a `*mut c_char` allocated via
+  /// `into_raw()`; we read it via `toDartString()` then `free` it
+  /// via `esplora_fee_estimate_free`).
+  ///
+  /// Caller owns the `esploraHandle` (must come from `esploraClientNew`).
+  /// Throws `FfiException` on null handle + Esplora/network failures
+  /// (see `esplora_fee_estimate` for the `FfiError` mapping).
+  @override
+  FeeEstimate feeEstimate({required Pointer<Void> esploraHandle}) {
+    final rt = _runtimeHandle();
+    final jsonPtr = EsploraBindings.esploraFeeEstimate(rt, esploraHandle);
+    if (jsonPtr == nullptr) {
+      throw _ffiError('esplora_fee_estimate', -1);
+    }
+    try {
+      final jsonStr = jsonPtr.toDartString();
+      final decoded = jsonDecode(jsonStr) as Map<String, dynamic>;
+      return FeeEstimate.fromJson(decoded);
+    } finally {
+      EsploraBindings.esploraFeeEstimateFree(jsonPtr);
+    }
   }
 
   /// Constructs a `Wallet` from a BIP-39 mnemonic phrase. The

@@ -20,6 +20,9 @@
 // `walletCoreProvider` returns `WalletCoreApi` so tests can swap a
 // fake that `implements WalletCoreApi`.
 
+import 'dart:ffi';
+
+import 'btc/models/fee_estimate.dart';
 import 'btc/models/wallet_detail.dart';
 import 'ffi/ffi_enums.dart';
 import 'ffi/mnemonic_view.dart';
@@ -86,6 +89,22 @@ abstract interface class WalletCoreApi {
     required SecretBuffer password,
     required String baseDir,
   });
+
+  /// Fetch Esplora fee estimates via the FFI surface. (Task 16 /
+  /// Issue #222.) The caller owns the `esploraHandle` (must come
+  /// from `esploraClientNew`) and is responsible for freeing it via
+  /// `esploraClientFree` after the call.
+  ///
+  /// **Inefficient call pattern (current):** the typical caller
+  /// creates + frees an Esplora handle per call (no caching). The
+  /// "right" architecture caches the handle in `WalletSessionNotifier`
+  /// (Task 14 Sub-split B). For Task 16 the per-call pattern is
+  /// acceptable; flag in the PR body as a Sub-split B follow-up.
+  ///
+  /// Throws `FfiException` on failure (Esplora HTTP failure →
+  /// `FfiErrorKind.esplora` or `network`; null handle →
+  /// `FfiErrorKind.notInitialized`).
+  FeeEstimate feeEstimate({required Pointer<Void> esploraHandle});
 }
 
 /// Result of a successful `createWallet` call. The `mnemonic` field is a
