@@ -267,10 +267,7 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
             Center(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text(
-                  'Could not load transactions: '
-                  '${error.kind.name}',
-                ),
+                child: Text(userMessageForFfiException(error)),
               ),
             )
           else if (txids == null)
