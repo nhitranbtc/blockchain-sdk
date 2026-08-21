@@ -44,7 +44,7 @@ jobs:
 
       # actions/cache: tag-based (same reasoning).
       - name: Cache pub
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: wallet-desktop/.dart_tool
           key: ${{ runner.os }}-pub-${{ hashFiles('wallet-desktop/pubspec.lock') }}
