@@ -22,6 +22,8 @@
 
 import 'dart:ffi';
 
+import 'package:ffi/ffi.dart';
+
 import 'btc/models/fee_estimate.dart';
 import 'btc/models/wallet_detail.dart';
 import 'ffi/ffi_enums.dart';
@@ -105,6 +107,46 @@ abstract interface class WalletCoreApi {
   /// `FfiErrorKind.esplora` or `network`; null handle →
   /// `FfiErrorKind.notInitialized`).
   FeeEstimate feeEstimate({required Pointer<Void> esploraHandle});
+
+  // --- FFI handle lifecycle (Task 14 / Issue #220 Sub-split B) ---
+  // SendScreen needs to own + cache FFI handles (wallet + esplora)
+  // across the unlocked session, not create+free per call. These
+  // 4 methods are the building blocks for `WalletSessionNotifier
+  // .ensureHandles()`. See `wallet_providers.dart` for the
+  // caller-side lifecycle + drop semantics.
+
+  /// Create an `EsploraHandle` from a URL + optional SPKI pin
+  /// (Task 5). Returns null on failure.
+  ///
+  /// **Note:** the raw `Pointer<Utf8>` signature mirrors the
+  /// underlying FFI call (`EsploraBindings.esploraClientNew`).
+  /// Higher-level callers (`WalletSessionNotifier.ensureHandles`)
+  /// convert `String` → `Pointer<Utf8>` via `toNativeUtf8()` before
+  /// invoking. The interface does NOT hide the FFI shape here
+  /// because `walletLoad` + `walletSend` follow the same pattern
+  /// (raw pointers in the interface, conversion at the Notifier
+  /// boundary).
+  Pointer<Void> esploraClientNew({
+    required Pointer<Utf8> url,
+    Pointer<Utf8>? spkiPinB64,
+  });
+
+  /// Drop an `EsploraHandle` returned by [esploraClientNew].
+  /// Idempotent on null.
+  void esploraClientFree(Pointer<Void> handle);
+
+  /// Load an existing wallet from disk into a `WalletHandle`
+  /// (Task 14 Sub-split A). Returns null on failure.
+  Pointer<Void> walletLoad({
+    required FfiNetwork network,
+    required String walletId,
+    required SecretBuffer phrase,
+    required String baseDir,
+  });
+
+  /// Drop a `WalletHandle` returned by [walletLoad] (alias of
+  /// `wallet_free`; same handle type). Idempotent on null.
+  void walletLoadFree(Pointer<Void> handle);
 }
 
 /// Result of a successful `createWallet` call. The `mnemonic` field is a

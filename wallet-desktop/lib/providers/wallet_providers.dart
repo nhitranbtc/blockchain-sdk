@@ -1,10 +1,18 @@
 import 'dart:async';
+import 'dart:ffi';
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:meta/meta.dart';
 
 import '../core/btc/models/wallet_detail.dart';
 import '../core/ffi/ffi_enums.dart';
+import '../core/ffi/ffi_exception.dart';
+import '../core/ffi/secret_buffer.dart';
+import '../core/wallet_core.dart';
+import '../core/wallet_core_api.dart';
+import 'btc_providers.dart';
+import 'esplora_config_provider.dart';
 import 'wallet_core_provider.dart';
 
 /// Loads the persisted-wallet list for the active network.
@@ -107,14 +115,31 @@ class WalletSession {
     required this.walletId,
     required this.mnemonic,
     this.detail,
+    this.walletHandle,
+    this.esploraHandle,
   });
   final String walletId;
   final OpaqueMnemonic mnemonic;
   final WalletDetail? detail;
 
+  /// FFI `WalletHandle` (Task 14 / Issue #220 Sub-split B). Null
+  /// until [WalletSessionNotifier.ensureHandles] is called (lazy
+  /// create on first SendScreen entry — avoids paying the Esplora
+  /// connection cost when the user only wants to view the wallet).
+  final Pointer<Void>? walletHandle;
+
+  /// FFI `EsploraHandle`. Same lifecycle as [walletHandle] (null
+  /// until ensureHandles, dropped on lock/dispose).
+  final Pointer<Void>? esploraHandle;
+
   /// `copyWith` cannot clear `detail` back to null (the `?? this.detail`
   /// pattern conflates absent with null). v0.2 backlog: switch to a
   /// sentinel object or add an explicit `clearDetail: bool` flag.
+  ///
+  /// Handles are managed by [WalletSessionNotifier] (not via
+  /// copyWith) — copyWith replaces the whole session; the Notifier
+  /// drops old handles + creates new ones through its own
+  /// [ensureHandles] path.
   WalletSession copyWith({WalletDetail? detail}) => WalletSession(
         walletId: walletId,
         mnemonic: mnemonic,
@@ -147,15 +172,136 @@ class OpaqueMnemonic {
 }
 
 class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
+  /// Cached `WalletCoreApi` reference for handle drop in `onDispose`.
+  /// `ref.read(walletCoreProvider)` is NOT safe inside `onDispose`
+  /// because the container is already disposed at that point. We
+  /// capture the core in [build] (when the container is alive) and
+  /// use the cached reference for handle drop.
+  WalletCoreApi? _coreForDispose;
+
   @override
   WalletSession? build(String walletId) {
+    // Cache the WalletCore reference for use in onDispose. Safe to
+    // read here because the container is still alive at build time.
+    _coreForDispose = ref.read(walletCoreProvider);
+
     // Cleanup hook fires when the ProviderContainer tears down (app
     // exit). Ensures the mnemonic handle gets `dispose()`'d on exit
+    // AND FFI handles get dropped (to avoid Rust-side memory leaks)
     // even if `lock()` was never explicitly called.
     ref.onDispose(() {
-      state?.mnemonic.dispose();
+      final current = state;
+      current?.mnemonic.dispose();
+      _dropHandles(current);
     });
     return null;
+  }
+
+  /// Drops the FFI handles owned by [session] (idempotent on null).
+  /// Uses the cached [_coreForDispose] reference — cannot use
+  /// `ref.read` because this is called from `onDispose` after the
+  /// container is disposed.
+  void _dropHandles(WalletSession? session) {
+    final core = _coreForDispose;
+    if (core == null) return; // build() never ran (defensive)
+    if (session?.walletHandle != null) {
+      core.walletLoadFree(session!.walletHandle!);
+    }
+    if (session?.esploraHandle != null) {
+      core.esploraClientFree(session!.esploraHandle!);
+    }
+  }
+
+  /// Lazily creates the FFI `WalletHandle` + `EsploraHandle` for
+  /// the current session, if not already present. (Task 14 / Issue
+  /// #220 Sub-split B.) SendScreen calls this on entry to get the
+  /// handles it needs for `walletSend` + `feeEstimate` calls.
+  ///
+  /// Idempotent: if both handles are already non-null, this is a
+  /// no-op and returns the existing state.
+  ///
+  /// **Throws** [FfiException] if wallet_load or esplora_client_new
+  /// fails (e.g., wrong password → `FfiError::WalletStore`; bad Esplora
+  /// URL → `FfiError::Esplora`). Caller surfaces to the user.
+  ///
+  /// **L12 CRITICAL #2**: the mnemonic phrase is wrapped in a
+  /// [SecretBuffer] (zeroize-on-dispose) and consumed in the same
+  /// async tick; the underlying heap copy is zeroized after
+  /// `walletLoad` returns.
+  Future<void> ensureHandles() async {
+    final current = state;
+    if (current == null) {
+      throw StateError(
+        'WalletSessionNotifier.ensureHandles called before unlock',
+      );
+    }
+    if (current.walletHandle != null && current.esploraHandle != null) {
+      return; // already created
+    }
+    final core = ref.read(walletCoreProvider);
+    final esploraCfg = await ref.read(esploraConfigProvider.future);
+    final appPaths = await ref.read(appPathsProvider.future);
+
+    // Drop any partial handles from a previous failed ensureHandles
+    // before re-creating. Idempotent on null.
+    _dropHandles(current);
+
+    final urlPtr = esploraCfg.url.toNativeUtf8();
+    final pinPtr = esploraCfg.spkiPin.isEmpty
+        ? nullptr
+        : esploraCfg.spkiPin.toNativeUtf8();
+    Pointer<Void> esploraHandle;
+    try {
+      esploraHandle = core.esploraClientNew(
+        url: urlPtr,
+        spkiPinB64: pinPtr,
+      );
+    } finally {
+      calloc.free(urlPtr);
+      if (pinPtr != nullptr) calloc.free(pinPtr);
+    }
+    if (esploraHandle == nullptr) {
+      throw FfiException.fromCode(
+        code: -1,
+        op: 'esplora_client_new',
+      );
+    }
+
+    // v0.2.0 FFI surface is testnet-only (FfiNetwork enum has
+    // `testnet` + `unknown`; mainnet is not yet mapped). The
+    // `detail.network` String from WalletDetail is informational
+    // for the UI; the FFI call uses `testnet` for now.
+    const network = FfiNetwork.testnet;
+    final phrase = SecretBuffer.fromUtf8(current.mnemonic.value);
+    Pointer<Void>? walletHandle;
+    try {
+      walletHandle = core.walletLoad(
+        network: network,
+        walletId: current.walletId,
+        phrase: phrase,
+        baseDir: appPaths.walletDataDir.path,
+      );
+      if (walletHandle == nullptr) {
+        // Drop the esplora handle we already created before throwing.
+        core.esploraClientFree(esploraHandle);
+        throw FfiException.fromCode(
+          code: -1,
+          op: 'wallet_load',
+        );
+      }
+    } finally {
+      // Zeroize the SecretBuffer regardless of success/failure
+      // (L12 CRITICAL #2).
+      phrase.dispose();
+    }
+
+    state = WalletSession(
+      walletId: current.walletId,
+      mnemonic: current.mnemonic,
+      detail: current.detail,
+      walletHandle: walletHandle,
+      esploraHandle: esploraHandle,
+    );
   }
 
   /// Unlock the session for the family key. The `walletId` is derived
@@ -166,6 +312,7 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
   void unlock({required String mnemonic, WalletDetail? detail}) {
     final prev = state;
     prev?.mnemonic.dispose(); // never leak a prior mnemonic
+    _dropHandles(prev); // never leak a prior FFI handles
     state = WalletSession(
       walletId: arg, // family key, not user input
       mnemonic: OpaqueMnemonic(mnemonic),
@@ -192,6 +339,7 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
   void unlockWithDetail(WalletDetail detail) {
     final prev = state;
     prev?.mnemonic.dispose(); // never leak a prior mnemonic
+    _dropHandles(prev); // never leak prior FFI handles
     state = WalletSession(
       walletId: arg, // family key, not user input
       mnemonic: OpaqueMnemonic(''), // sentinel — see doc above
@@ -208,6 +356,7 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
   void lock() {
     final current = state;
     current?.mnemonic.dispose();
+    _dropHandles(current); // drop FFI handles before clearing state
     state = null;
   }
 }
