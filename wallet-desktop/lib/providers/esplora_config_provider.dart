@@ -19,49 +19,67 @@ class EsploraConfig {
 
   factory EsploraConfig.defaults(String network) {
     switch (network) {
-      case 'bitcoin':
-        return const EsploraConfig(
-          network: 'bitcoin',
-          url: 'https://blockstream.info/api',
-          spkiPin: '',
-        );
-      case 'testnet':
-        return const EsploraConfig(
-          network: 'testnet',
-          url: 'https://blockstream.info/testnet/api',
-          spkiPin: '',
-        );
-      case 'testnet4':
-        return const EsploraConfig(
-          network: 'testnet4',
-          url: 'https://blockstream.info/testnet4/api',
-          spkiPin: '',
-        );
-      case 'signet':
-        return const EsploraConfig(
-          network: 'signet',
-          url: 'https://blockstream.info/signet/api',
-          spkiPin: '',
-        );
-      // L12 type-design Task 23 MEDIUM: add regtest canonical default.
-      // The dropdown in SettingsScreen includes 'regtest'; without
-      // this case, selecting it falls through to `default:` which
-      // returns an empty URL — an invalid business state (wallet
-      // can never reach the chain). Local regtest Esplora standard
-      // is electrs on 127.0.0.1:50002.
+      // L12 type-design Task 23 MEDIUM: regtest canonical default.
+      // Local regtest Esplora standard is electrs on 127.0.0.1:50002.
+      // This is the ONLY hardcoded default — it's a localhost dev
+      // escape that bypasses F20 SPKI-pin enforcement (the Rust
+      // `EsploraClient::new` accepts null pins for localhost per
+      // F36 dev-mode exception). All public-network hosts require
+      // an operator-provided config file with a valid SPKI pin —
+      // throwing here forces that setup.
       case 'regtest':
         return const EsploraConfig(
           network: 'regtest',
           url: 'http://127.0.0.1:50002/api',
           spkiPin: '',
         );
+      // Issue #148 sweep (2026-08-21): removed hardcoded public
+      // Esplora URLs (blockstream.info) for bitcoin/testnet/
+      // testnet4/signet. The previous defaults would fail F20
+      // enforcement at runtime (empty SPKI pin + public host → null
+      // pin rejected by `esplora_client_new`). Throwing surfaces
+      // the misconfiguration at boot instead of at first Esplora
+      // call — better operator UX.
+      case 'bitcoin':
+      case 'testnet':
+      case 'testnet4':
+      case 'signet':
+      case 'mainnet':
+        throw StateError(
+          'EsploraConfig.defaults("$network"): public-network hosts '
+          'require an operator-provided config file with a valid SPKI '
+          'pin (F20 enforcement). No default URL ships with the binary '
+          '— write the config to '
+          '\$XDG_CONFIG_HOME/flutter_btc_wallet/esplora.json with '
+          '{"network":"$network","url":"<your-host>",'
+          '"spkiPin":"<base64-pin>"} and retry. See '
+          'lib/providers/esplora_config_provider.dart docstring for the '
+          'SPKI pin retrieval workflow.',
+        );
       default:
-        return EsploraConfig(network: network, url: '', spkiPin: '');
+        throw ArgumentError(
+          'EsploraConfig.defaults: unknown network "$network" — '
+          'expected one of: bitcoin, testnet, testnet4, signet, '
+          'regtest, mainnet.',
+        );
     }
   }
 
   Map<String, dynamic> toJson() =>
       {'network': network, 'url': url, 'spkiPin': spkiPin};
+
+  /// **Test-only** factory — bypasses the production F20 enforcement
+  /// (no operator-provided config required). Exists so tests can
+  /// construct arbitrary configs without throwing. **NOT for
+  /// production use** — production must go through operator-provided
+  /// config file (see [EsploraConfig.defaults] throw path).
+  @visibleForTesting
+  factory EsploraConfig.forTesting({
+    required String network,
+    required String url,
+    String spkiPin = '',
+  }) =>
+      EsploraConfig(network: network, url: url, spkiPin: spkiPin);
 
   factory EsploraConfig.fromJson(Map<String, dynamic> j) => EsploraConfig(
         network: j['network'] as String,
