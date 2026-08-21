@@ -44,6 +44,7 @@ import '../../core/ffi/ffi_enums.dart';
 import '../../core/ffi/ffi_exception.dart';
 import '../../core/ffi/secret_buffer.dart';
 import '../../core/logging/btc_log_filter.dart';
+import '../../providers/app_paths_provider.dart';
 import '../../providers/wallet_core_provider.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
@@ -76,6 +77,7 @@ class _WalletCreateScreenState extends ConsumerState<WalletCreateScreen> {
     });
     try {
       final core = ref.read(walletCoreProvider);
+      final appPaths = await ref.read(appPathsProvider.future);
       // FFI call: facade owns the SecretBuffer lifetime
       // (auto-disposes in `finally`). Returns WalletCreatedData
       // with a typed MnemonicView handle (Task 8 RAII).
@@ -84,8 +86,7 @@ class _WalletCreateScreenState extends ConsumerState<WalletCreateScreen> {
         network: FfiNetwork.testnet,
         addressType: _addressType,
         password: SecretBuffer.fromUtf8(_password),
-        baseDir:
-            '', // v0.2.0 stand-in; Task 10 follow-up wires appPathsProvider
+        baseDir: appPaths.walletDataDir.path,
       );
 
       if (!mounted) {

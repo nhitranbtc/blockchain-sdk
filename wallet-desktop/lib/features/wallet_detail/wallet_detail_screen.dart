@@ -33,7 +33,10 @@
 
 import 'dart:developer' as developer;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -43,10 +46,10 @@ import '../../core/ffi/ffi_exception.dart';
 import '../../core/ffi/secret_buffer.dart';
 import '../../core/format/wallet_id.dart';
 import '../../core/logging/btc_log_filter.dart';
+import '../../providers/app_paths_provider.dart';
 import '../../providers/wallet_core_provider.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
-import '../../widgets/address_chip.dart';
 import '../../widgets/balance_card.dart';
 import '../../widgets/password_field.dart';
 
@@ -104,6 +107,7 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
     });
     try {
       final core = ref.read(walletCoreProvider);
+      final appPaths = await ref.read(appPathsProvider.future);
       // FFI call: facade owns the SecretBuffer lifetime (auto-dispose
       // in `finally`). Returns `WalletDetail` (no mnemonic returned —
       // the FFI never exposes cleartext; matches the legacy
@@ -112,7 +116,7 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
         network: FfiNetwork.testnet,
         walletId: walletId,
         password: SecretBuffer.fromUtf8(_password),
-        baseDir: '', // v0.2.0 stand-in
+        baseDir: appPaths.walletDataDir.path,
       );
       if (!mounted) return;
       // Re-assert identity: if widget was rebuilt with a different
@@ -219,8 +223,29 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
     final textTheme = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text('Wallet ${formatWalletId(d.id)}'),
+        // Full UUID in title (no truncation) — operator needs the
+        // exact id for support / cross-referencing. `formatWalletId`
+        // is the list-row helper (shoulder-surf hygiene on the
+        // overview screen); the detail screen is the focused
+        // context where the user explicitly unlocked.
+        title: SelectableText(
+          d.id,
+          maxLines: 1,
+          style: textTheme.titleMedium?.copyWith(fontFamily: 'monospace'),
+        ),
         actions: [
+          IconButton(
+            key: const Key('wallet_detail_copy_id'),
+            icon: const Icon(Icons.copy),
+            tooltip: 'Copy wallet ID',
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: d.id));
+              if (!context.mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Wallet ID copied')),
+              );
+            },
+          ),
           IconButton(
             key: const Key('wallet_detail_send'),
             icon: const Icon(Icons.send),
@@ -269,12 +294,72 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
             // not trigger sync (Tasks 14+15 are still pending). The
             // new copy accurately reflects the v0.2.0 state.
             if (d.firstAddress.isNotEmpty)
-              AddressChip(address: d.firstAddress, network: d.network)
+              Row(
+                children: [
+                  Expanded(
+                    child: SelectableText(
+                      d.firstAddress,
+                      style: textTheme.bodyMedium
+                          ?.copyWith(fontFamily: 'monospace'),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy),
+                    tooltip: 'Copy address',
+                    onPressed: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: d.firstAddress),
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Address copied')),
+                      );
+                    },
+                  ),
+                ],
+              )
             else
               Text(
                 'First address: (sync pending — v0.2.1)',
                 style: textTheme.bodySmall,
               ),
+            const SizedBox(height: 8),
+            // Explorer + Faucet buttons live OUTSIDE the address
+            // branch — always reachable so the user can browse /
+            // fund a wallet even while sync is pending (v0.2.1).
+            // URLs degrade gracefully: address-specific when known,
+            // generic testnet home when not.
+            Row(
+              children: [
+                TextButton.icon(
+                  icon: const Icon(Icons.open_in_new),
+                  label: const Text('Explorer'),
+                  onPressed: () async {
+                    final addr = d.firstAddress;
+                    final url = addr.isEmpty
+                        ? 'https://blockstream.info/testnet'
+                        : 'https://blockstream.info/testnet/address/$addr';
+                    await Process.start('xdg-open', [url]);
+                  },
+                ),
+                const SizedBox(width: 8),
+                TextButton.icon(
+                  icon: const Icon(Icons.water_drop),
+                  label: const Text('Faucet'),
+                  onPressed: () async {
+                    // mempool's testnet-faucet subdomain redirects
+                    // to mempool.space root (dead since ~2024). Use
+                    // coinfaucet.eu — accepts ?address= for prefilled
+                    // tb1 receive, no account.
+                    final addr = d.firstAddress;
+                    final url = addr.isEmpty
+                        ? 'https://coinfaucet.eu/en/btc-testnet/'
+                        : 'https://coinfaucet.eu/en/btc-testnet/?address=$addr';
+                    await Process.start('xdg-open', [url]);
+                  },
+                ),
+              ],
+            ),
           ],
         ),
       ),

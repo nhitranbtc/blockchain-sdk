@@ -1,6 +1,7 @@
 import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -184,6 +185,12 @@ class WalletListScreen extends ConsumerWidget {
                         // Rust `wallet_list` returns id only; address
                         // type surfaces in detail screen via
                         // `wallet_peek_addresses` (Tasks 11-16).
+                        // Long-press opens a sheet with the full UUID
+                        // + Copy affordance (shoulder-surf hygiene:
+                        // list shows the short form only).
+                        onLongPress: !isValid
+                            ? null
+                            : () => _showWalletIdSheet(context, id),
                         onTap: !isValid
                             ? null
                             : (openCb != null
@@ -200,6 +207,52 @@ class WalletListScreen extends ConsumerWidget {
           ),
         ],
       ),
+    );
+  }
+
+  /// Bottom sheet showing the full wallet UUID + Copy affordance.
+  /// Triggered by long-press on a list row. List row title stays in
+  /// the shoulder-surf-safe `first4…last4` short form (see
+  /// `core/format/wallet_id.dart`).
+  Future<void> _showWalletIdSheet(BuildContext context, String id) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetCtx) {
+        final theme = Theme.of(sheetCtx);
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'Wallet ID',
+                style: theme.textTheme.labelLarge,
+              ),
+              const SizedBox(height: 8),
+              SelectableText(
+                id,
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontFamily: 'monospace'),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                icon: const Icon(Icons.copy),
+                label: const Text('Copy'),
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: id));
+                  if (!sheetCtx.mounted) return;
+                  ScaffoldMessenger.of(sheetCtx).showSnackBar(
+                    const SnackBar(content: Text('Wallet ID copied')),
+                  );
+                  Navigator.of(sheetCtx).pop();
+                },
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -170,11 +170,11 @@ class _MnemonicDisplayDialogState extends State<MnemonicDisplayDialog> {
     final revealed = _stage.index >= _BackupStage.revealed.index;
     final acked = _stage == _BackupStage.acked;
 
-    // L12 review M1 fix: only the cleartext subtree is wrapped
-    // in `ExcludeSemantics`. The masked subtree retains its
-    // `semanticsLabel` so screen-reader users get an audio
-    // cue ("redacted backup phrase — tap Reveal") that Reveal
-    // is available.
+    // Masked state: keep selection disabled + semanticsLabel so the
+    // bullet placeholder can't be shoulder-surfed. Revealed state:
+    // SelectableText enables long-press copy + screen-reader
+    // selection so the operator can move the phrase to a password
+    // manager / hardware backup.
     final Widget mnemonicNode;
     if (revealed) {
       final phrase = _phrase;
@@ -183,19 +183,17 @@ class _MnemonicDisplayDialogState extends State<MnemonicDisplayDialog> {
         // contract violation; fall back to a placeholder.
         mnemonicNode = Text('…', style: monoBody);
       } else {
-        mnemonicNode = SelectionContainer.disabled(
-          child: ExcludeSemantics(
-            child: Text(phrase, style: monoBody),
-          ),
+        mnemonicNode = SelectableText(
+          phrase,
+          style: monoBody,
+          enableInteractiveSelection: true,
         );
       }
     } else {
-      mnemonicNode = SelectionContainer.disabled(
-        child: Text(
-          '•' * widget.wordCount.value,
-          style: monoBody,
-          semanticsLabel: '[redacted backup phrase — tap Reveal]',
-        ),
+      mnemonicNode = Text(
+        '•' * widget.wordCount.value,
+        style: monoBody,
+        semanticsLabel: '[redacted backup phrase — tap Reveal]',
       );
     }
 

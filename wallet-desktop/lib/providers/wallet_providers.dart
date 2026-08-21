@@ -45,17 +45,14 @@ class WalletsListNotifier
   @override
   Future<List<String>> build(String network) async {
     final core = ref.watch(walletCoreProvider);
+    final appPaths = await ref.watch(appPathsProvider.future);
     // L12 review MED #1 fix (Task 10): dropped the per-call
     // `Directory.systemTemp.createTempSync` dance. The list path
-    // reads wallet-list metadata; the Rust side never writes to the
-    // dir on this code path (list returns ids, not blobs).
-    // Production `baseDir` will come from `appPathsProvider.baseDir`
-    // (Task 10 follow-up / app-shell integration).
+    // reads wallet-list metadata; the Rust side scans
+    // `$baseDir/wallet_data/` for existing wallet blob files.
     return core.listWallets(
       network: _networkFromString(network),
-      // v0.2.0 stand-in: empty baseDir is acceptable for the list
-      // path (no blob I/O). Tasks 11-16 wire `appPathsProvider`.
-      baseDir: '',
+      baseDir: appPaths.walletDataDir.path,
     );
   }
 
