@@ -133,6 +133,19 @@ class _FakeWalletCore implements WalletCoreApi {
   void walletLoadFree(Pointer<Void> handle) {
     throw UnimplementedError();
   }
+
+  // Task 14 Sub-split B-step-2 — walletSend method; this fake is
+  // only used for list/notifier tests so the body throws.
+  @override
+  String walletSend({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+    required Pointer<Utf8> recipient,
+    required int amountSat,
+    required int feeRateSatPerVb,
+  }) {
+    throw UnimplementedError();
+  }
 }
 
 void main() {
