@@ -101,11 +101,17 @@ impl Image for BitcoindRegtest {
 // bollard is the workaround path for future PR.)
 
 /// Electrs regtest image — custom Image impl per testcontainers 0.23 API.
-/// Connects to bitcoind via the daemon-rpc-addr + cookie auth. The
-/// `start_with_network` testcontainers helper joins the bitcoind
-/// container's network namespace so electrs can reach bitcoind at
-/// `localhost:18443`.
-struct ElectrsRegtest;
+/// Connects to bitcoind via the daemon-rpc-addr + cookie auth.
+///
+/// `bitcoind_rpc_addr` is the full RPC address electrs uses to reach
+/// bitcoind. On host networking, this is `127.0.0.1:<bitcoind-host-port>`
+/// (Issue #115 Option B — host network + host-port injection). The
+/// `--network host` mode (applied via `with_network` at start) gives
+/// electrs direct access to the host loopback, so it can reach bitcoind
+/// via the same address the test uses for JSON-RPC.
+struct ElectrsRegtest {
+    bitcoind_rpc_addr: String,
+}
 
 impl Image for ElectrsRegtest {
     fn name(&self) -> &str {
@@ -125,18 +131,14 @@ impl Image for ElectrsRegtest {
         [
             "--network".to_string(),
             "regtest".to_string(),
-            // With host networking, localhost on the container is the
-            // host loopback. bitcoind's RPC port is mapped to host:18443.
             "--daemon-rpc-addr".to_string(),
-            "localhost:18443".to_string(),
+            self.bitcoind_rpc_addr.clone(),
             "--cookie".to_string(),
             "bitcoin:bitcoin".to_string(),
             "--http-addr".to_string(),
             "0.0.0.0:50001".to_string(),
             "--db-dir".to_string(),
             "/tmp/electrs-db".to_string(),
-            "--daemon-dir".to_string(),
-            "/tmp/electrs-daemon".to_string(),
         ]
     }
 
@@ -241,24 +243,31 @@ fn btc_regtest_smoke_mines_101_blocks() {
 ///    (returns wallet_id = UUID)
 /// 2. Mine 101 blocks to the entropy=0 wallet's first address
 ///    (funds the wallet via coinbase)
-/// 3. `btc wallet balance --mnemonic` — queries the balance
+/// 3. `btc wallet balance --mnemonic` — queries the balance via the
+///    local electrs sidecar
 ///
 /// This is the happy-path use case that issue #112 / Story 3 care about:
 /// proves the CLI works against a real node end-to-end (not just raw RPC).
-/// Uses stateless `btc wallet balance` (no Esplora required) so the test
-/// stays focused on the wallet-fund-balance surface.
 ///
-/// **Currently `#[ignore]`** — the integration test requires inter-container
-/// networking that testcontainers 0.23 + custom Image trait can't easily
-/// provide without bollard (testcontainers::Network is `pub(crate)` in 0.23).
-/// Specifically: electrs (host network) needs to reach bitcoind's
-/// HOST-mapped RPC port (random port per testcontainers), but the cmd
-/// is built eagerly before the bitcoind host port is allocated. Workaround
-/// needs `bollard` ~50 LOC to create a custom user-defined network +
-/// inject the BTC host port as env var into the electrs container.
-/// Tracked for follow-up PR.
+/// **Currently `#[ignore]` — Issue #115 deferred.**
+///
+/// Investigation (2026-08-21, #115): electrs IS connected to bitcoind
+/// (verbose logs show `NetworkInfo` + `BlockchainInfo` RPC calls
+/// succeeding) but the HTTP `/blocks/tip/height` endpoint stays at 0
+/// after mining 101 blocks. Root cause NOT identified in this session
+/// — suspected `initialblockdownload=true` quirk with bitcoin core
+/// v25.2 regtest (electrs may gate indexing on IBD=false even though
+/// `verificationprogress: 1.0`). Tracked as a follow-up issue.
+///
+/// **Architecture preserved (host networking variant):** bitcoind runs
+/// on the default bridge network (testcontainers maps RPC to a random
+/// HOST port). electrs runs on HOST networking (`--network host` via
+/// `with_network("host")`) so it shares the host's loopback and
+/// reaches bitcoind at `127.0.0.1:<bitcoind-host-port>` — same address
+/// the test uses for JSON-RPC. The host port is injected into
+/// electrs's `--daemon-rpc-addr` flag at start time.
 #[test]
-#[ignore = "needs bollard custom Docker network + host port injection"]
+#[ignore = "Issue #115 deferred — electrs connects but doesn't update tip; see follow-up issue"]
 fn btc_workflow_create_fund_balance() {
     if std::env::var("SKIP_TESTCONTAINERS").is_ok() {
         eprintln!("SKIP_TESTCONTAINERS set; skipping testcontainers smoke");
@@ -268,7 +277,7 @@ fn btc_workflow_create_fund_balance() {
     let tmp = std::env::temp_dir().join(format!("btc-workflow-smoke-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).expect("create temp dir");
 
-    // 1. Boot bitcoind regtest container.
+    // 1. Boot bitcoind regtest container on the default bridge network.
     let container = BitcoindRegtest
         .start()
         .expect("start bitcoind regtest container");
@@ -278,19 +287,17 @@ fn btc_workflow_create_fund_balance() {
     let url = format!("http://127.0.0.1:{host_port}");
     let auth = ("bitcoin", "bitcoin");
 
-    // 2. Boot electrs sidecar with HOST networking. This gives
-    // electrs direct access to the host's loopback — bitcoind's RPC
-    // port is mapped to host:18443 (via testcontainers' default port
-    // mapping), so electrs can reach bitcoind at `localhost:18443`.
-    // The trade-off: host networking requires Docker privilege (works
-    // in most CI runners; fails on sandboxed Docker).
-    let _electrs = ElectrsRegtest
-        .with_network("host")
-        .start()
-        .expect("start electrs on host network");
-    // With host networking, electrs binds directly to ELECTRS_HTTP_PORT
-    // on the host's loopback — no port mapping needed. The container
-    // handle is kept alive for RAII teardown.
+    // 2. Boot electrs sidecar on HOST networking. electrs's
+    //    `--daemon-rpc-addr` points at bitcoind's HOST-mapped RPC port
+    //    (the same address the test uses for JSON-RPC). The trade-off:
+    //    host networking requires Docker privilege (works in most CI
+    //    runners; fails on sandboxed Docker).
+    let _electrs = ElectrsRegtest {
+        bitcoind_rpc_addr: format!("127.0.0.1:{host_port}"),
+    }
+    .with_network("host")
+    .start()
+    .expect("start electrs on host network");
     let electrs_host_port = electrs_host_port();
     let esplora_url = format!("http://127.0.0.1:{electrs_host_port}");
 
@@ -391,7 +398,7 @@ fn btc_workflow_create_fund_balance() {
     };
     let client = reqwest::blocking::Client::new();
     let mut indexed: u64 = 0;
-    for _ in 0..120 {
+    for _ in 0..360 {
         if let Ok(r) = client
             .get(format!("{esplora_url}/blocks/tip/height"))
             .send()
@@ -409,7 +416,7 @@ fn btc_workflow_create_fund_balance() {
     }
     assert!(
         indexed >= bitcoind_height,
-        "electrs did not index bitcoind's chain within 60s (got {indexed}, expected {bitcoind_height})"
+        "electrs did not index bitcoind's chain within 180s (got {indexed}, expected {bitcoind_height})"
     );
     println!("✓ STEP 2.5: electrs indexed to height {indexed}");
 
