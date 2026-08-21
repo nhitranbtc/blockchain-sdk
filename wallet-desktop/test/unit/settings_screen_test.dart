@@ -104,12 +104,17 @@ void main() {
 }
 
 /// Stub `EsploraConfigNotifier` for tests — overrides `build()` to
-/// return `defaults('testnet')` synchronously (avoids disk read).
-/// Mirrors Task 22's `_StubEsploraConfigNotifier` pattern. Note: we
+/// return `forTesting(...)` synchronously (avoids disk read; bypasses
+/// the F20-enforcement throw path added in Issue #148 — see
+/// `EsploraConfig.defaults`). Mirrors Task 22's pattern. Note: we
 /// override `build()` but NOT `save()` — `save()` still writes to the
 /// file at `esploraConfigFilePathProvider`'s path, which the test
 /// overrides to a temp file.
 class _FakeEsploraConfigNotifier extends EsploraConfigNotifier {
   @override
-  Future<EsploraConfig> build() async => EsploraConfig.defaults('testnet');
+  Future<EsploraConfig> build() async => EsploraConfig.forTesting(
+        network: 'testnet',
+        url: 'https://blockstream.info/testnet/api',
+        spkiPin: '',
+      );
 }
