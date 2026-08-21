@@ -1,5 +1,6 @@
 import 'dart:ffi';
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -80,6 +81,36 @@ class _FakeWalletCore implements WalletCoreApi {
   // fake is only used for list-screen tests so the body throws.
   @override
   FeeEstimate feeEstimate({required Pointer<Void> esploraHandle}) {
+    throw UnimplementedError();
+  }
+
+  // Task 14 Sub-split B — handle lifecycle methods; this fake is
+  // only used for list-screen tests so the bodies throw.
+  @override
+  Pointer<Void> esploraClientNew({
+    required Pointer<Utf8> url,
+    Pointer<Utf8>? spkiPinB64,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  void esploraClientFree(Pointer<Void> handle) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Pointer<Void> walletLoad({
+    required FfiNetwork network,
+    required String walletId,
+    required SecretBuffer phrase,
+    required String baseDir,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  void walletLoadFree(Pointer<Void> handle) {
     throw UnimplementedError();
   }
 }
