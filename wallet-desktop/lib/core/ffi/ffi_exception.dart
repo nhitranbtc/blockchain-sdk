@@ -8,13 +8,19 @@
 // (Tasks 10-16) match against `FfiException.kind` to render
 // user-facing messages instead of dumping raw codes.
 //
-// **L12 CRITICAL #2 closure (defense-in-depth).** The Rust side
-// sanitizes error messages before they cross the FFI boundary
-// (`sanitize_for_ffi` redacts 12/15/18/21/24-word sequences and
-// 64-char hex). On the Dart side, [toString] never includes the
-// raw `message` field — the message is preserved on the object for
-// debugging but excluded from any string the user might log,
-// print, or send to a crash reporter.
+// **L12 CRITICAL #2 closure (Dart-side only — see Issue #242).**
+// The Rust side `sanitize_for_ffi` does NOT redact BIP-39 word
+// sequences or 64-char hex hashes (only replaces NUL bytes). The
+// Rust-side redaction claim in earlier versions of this comment was
+// false (L12 review R-H1).
+//
+// The single layer of defense on the Dart side is:
+// (a) [FfiException.toString] never includes the `messageForDebug`
+//     field — the field is preserved on the object for debugging
+//     but excluded from any string the user might log, print, or
+//     send to a crash reporter;
+// (b) callers MUST scrub via `BtcLogFilter.redact()` (or equivalent)
+//     before any logger / Sentry / Slack path.
 //
 // **Sealed hierarchy.** `FfiException` is a single concrete class
 // with a `kind` discriminator rather than a sealed class tree —
@@ -195,12 +201,14 @@ final class FfiException implements Exception {
   /// to the user.
   final String op;
 
-  /// Optional sanitized message from the Rust side. **NEVER include
-  /// in [toString] (L12 CRITICAL #2) — and NEVER route through a
-  /// logger/crash-reporter without scrubbing first.** The renamed
-  /// field name (`messageForDebug`) is the type-system signal: this
-  /// is debug-only text that may contain mnemonic or password bytes
-  /// if the Rust-side `sanitize_for_ffi` ever regresses.
+  /// Optional message from the Rust side. **Not sanitized on the Rust
+  /// side** — `sanitize_for_ffi` only replaces NUL bytes (see Issue #242,
+  /// 2026-08-21). May contain mnemonic or password bytes verbatim.
+  ///
+  /// **NEVER include in [toString] (L12 CRITICAL #2) — and NEVER route
+  /// through a logger/crash-reporter without scrubbing first.** The
+  /// renamed field name (`messageForDebug`) is the type-system signal:
+  /// this is debug-only text, NOT user-safe.
   ///
   /// Callers MUST route this through `BtcLogFilter.redact()` (or an
   /// equivalent scrubber) before any log/Sentry/Slack message.
@@ -217,10 +225,10 @@ final class FfiException implements Exception {
 
   /// Renders the exception for logs and crash reporters.
   ///
-  /// **Redaction contract:** never includes [messageForDebug] (which
-  /// may contain Rust-side error text that, while sanitized, should
-  /// not be assumed mnemonic-free). Includes `op`, `kind.name`, and
-  /// `code` only.
+  /// **Redaction contract:** never includes [messageForDebug]. The Rust
+  /// side does NOT sanitize the message (Issue #242, 2026-08-21) — it
+  /// may contain mnemonic or password bytes verbatim. Includes `op`,
+  /// `kind.name`, and `code` only.
   @override
   String toString() => 'FfiException(op: $op, kind: ${kind.name}, code: $code)';
 

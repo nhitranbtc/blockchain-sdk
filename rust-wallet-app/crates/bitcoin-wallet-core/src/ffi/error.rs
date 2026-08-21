@@ -135,11 +135,15 @@ impl From<Error> for FfiError {
 /// Sanitize a string for safe C ABI transport:
 /// - Replace interior NUL bytes with U+FFFD (replacement char) so the
 ///   string round-trips as a single NUL-terminated C string.
-/// - Apply minimal secret scrubbing: redact any substring matching a
-///   BIP-39 word sequence (12/15/18/21/24 lowercase words separated by
-///   single spaces) and any string that looks like a hex-encoded 32-byte
-///   hash (64 hex chars). Future hardening: pattern for password=... in
-///   panic messages.
+///
+/// **Scope (2026-08-21):** this function does NOT scrub BIP-39 word
+/// sequences or 64-char hex hashes. The mnemonic/password redaction
+/// claim that previously lived here is false (L12 review R-H1, Issue
+/// #242). Defense against secret leakage across the FFI boundary rests
+/// on the **Dart side** (`FfiException.toString` excludes the
+/// `messageForDebug` field; callers MUST scrub before any logger /
+/// Sentry / Slack path). Future hardening (regex for BIP-39 + hex, or
+/// `password=...` in panic messages) tracked separately.
 fn sanitize_for_ffi(msg: &str) -> String {
     msg.replace('\0', "\u{FFFD}")
 }
@@ -357,6 +361,36 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    /// Regression guard for L12 review R-H1 (Issue #242, 2026-08-21):
+    /// `sanitize_for_ffi` does NOT redact BIP-39 word sequences.
+    /// Defense against secret leakage rests on the Dart side
+    /// (`FfiException.toString` excludes `messageForDebug`). If a future
+    /// contributor adds real scrubbing here, this test will fail and
+    /// force them to update the Dart-side contract too.
+    #[test]
+    fn bip39_word_sequence_passes_through_unchanged() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon \
+                        abandon abandon abandon abandon abandon about";
+        let sanitized = sanitize_for_ffi(mnemonic);
+        assert_eq!(
+            sanitized, mnemonic,
+            "sanitize_for_ffi must not redact BIP-39 sequences; \
+             see Issue #242 + ffi_exception.dart FfiException.toString"
+        );
+    }
+
+    /// Regression guard for L12 review R-H1 (Issue #242, 2026-08-21):
+    /// `sanitize_for_ffi` does NOT redact 64-char hex strings.
+    #[test]
+    fn hex_64char_passes_through_unchanged() {
+        let hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let sanitized = sanitize_for_ffi(hex);
+        assert_eq!(
+            sanitized, hex,
+            "sanitize_for_ffi must not redact hex hashes; see Issue #242"
+        );
     }
 
     /// Next set_last_error invalidates the previously-returned pointer.
