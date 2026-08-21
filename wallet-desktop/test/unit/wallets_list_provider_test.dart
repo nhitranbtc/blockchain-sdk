@@ -88,11 +88,13 @@ class _FakeWalletCore implements WalletCoreApi {
   // Task 13 — required by `WalletCoreApi.showWallet` addition; this
   // fake is only used for list/notifier tests so the body throws.
   @override
-  WalletDetail showWallet({
+  WalletShowResult showWallet({
     required FfiNetwork network,
     required String walletId,
     required SecretBuffer password,
     required String baseDir,
+    required String esploraUrl,
+    required String esploraSpkiPin,
   }) {
     throw UnimplementedError();
   }
@@ -143,6 +145,37 @@ class _FakeWalletCore implements WalletCoreApi {
     required Pointer<Utf8> recipient,
     required int amountSat,
     required int feeRateSatPerVb,
+  }) {
+    throw UnimplementedError();
+  }
+
+  // Issue #261 follow-up — walletSync + walletBalance for the
+  // detail-screen balance refresh; list/notifier tests never call
+  // these so the body throws (UnimplementedError). Matches the
+  // Task 14 Sub-split B-step-2 pattern.
+  @override
+  void walletSync({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  int walletBalance({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+  }) {
+    throw UnimplementedError();
+  }
+
+  // Issue #261 fallback — walletFromMnemonic for wallets created
+  // without `db_path`; list/notifier tests never call this.
+  @override
+  Pointer<Void> walletFromMnemonic({
+    required FfiNetwork network,
+    required SecretBuffer phrase,
+    required FfiAddressType addressType,
   }) {
     throw UnimplementedError();
   }

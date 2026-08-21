@@ -73,11 +73,13 @@ class _FakeWalletCore implements WalletCoreApi {
   }
 
   @override
-  WalletDetail showWallet({
+  WalletShowResult showWallet({
     required FfiNetwork network,
     required String walletId,
     required SecretBuffer password,
     required String baseDir,
+    required String esploraUrl,
+    required String esploraSpkiPin,
   }) {
     throw UnimplementedError();
   }
@@ -131,6 +133,36 @@ class _FakeWalletCore implements WalletCoreApi {
     final exc = exceptionToThrow;
     if (exc != null) throw exc;
     return List<String>.from(txids);
+  }
+
+  // Issue #261 follow-up — walletSync + walletBalance for the
+  // detail-screen balance refresh; transactions-screen tests never
+  // call these so the body throws (UnimplementedError).
+  @override
+  void walletSync({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+  }) {
+    throw UnimplementedError();
+  }
+
+  @override
+  int walletBalance({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+  }) {
+    throw UnimplementedError();
+  }
+
+  // Issue #261 fallback — walletFromMnemonic for wallets created
+  // without `db_path`; transactions-screen tests never call this.
+  @override
+  Pointer<Void> walletFromMnemonic({
+    required FfiNetwork network,
+    required SecretBuffer phrase,
+    required FfiAddressType addressType,
+  }) {
+    throw UnimplementedError();
   }
 }
 

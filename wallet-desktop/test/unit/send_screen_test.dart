@@ -93,6 +93,59 @@ void main() {
       // Re-prompt surface renders.
       expect(find.textContaining('mnemonic'), findsAtLeastNWidgets(1));
     },
+    // v0.2.x deviance closure (#261 follow-up): the mnemonic
+    // re-paste flow was removed in favor of password-only auth
+    // (Rust decrypts internally + returns a fresh signing handle).
+    // This test asserts the old contract — see the new test below
+    // for the v0.2.x contract.
+    skip: true,
+    // v0.2.x deviance closure (#261 follow-up): the mnemonic
+    // re-paste flow was removed in favor of password-only auth
+    // (Rust decrypts internally + returns a fresh signing handle).
+    // This test asserts the old contract — see the next test below
+    // for the v0.2.x contract.
+  );
+
+  testWidgets(
+    'SendScreen renders the send form (Address / Amount / Fee rate / '
+    'password / Send) when the session has the empty-string mnemonic '
+    'sentinel (v0.2.x deviance closure — password-only auth)',
+    (t) async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      container
+          .read(walletSessionProvider(_kWalletId).notifier)
+          .unlockWithDetail(
+            const WalletDetail(
+              id: _kWalletId,
+              network: _kTestnet,
+              addressType: 'native-segwit',
+              firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
+              balance: Balance(confirmedSat: 0),
+            ),
+          );
+      await t.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: Scaffold(
+              body: SendScreen(network: _kTestnet, walletId: _kWalletId),
+            ),
+          ),
+        ),
+      );
+      await t.pump();
+
+      // Send form renders unconditionally post-#261. The mnemonic
+      // paste field is gone — the password field is the new gate.
+      expect(find.text('Address'), findsOneWidget);
+      expect(find.text('Send'), findsOneWidget);
+      expect(find.textContaining('mnemonic'), findsNothing);
+      expect(
+        find.text('Wallet password (re-auth to sign)'),
+        findsOneWidget,
+      );
+    },
   );
 
   testWidgets(

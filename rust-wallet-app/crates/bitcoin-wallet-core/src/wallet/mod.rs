@@ -787,6 +787,43 @@ impl Wallet {
             .map(|i| bdk.peek_address(kind, i).address)
             .collect())
     }
+
+    /// Derive the first external (receive) address WITHOUT syncing
+    /// the bdk wallet state. Pure local crypto: bip39 seed → xprv →
+    /// descriptor → `BdkWallet::create` → `peek_address(External, 0)`.
+    /// The transient bdk Wallet is dropped immediately — this method
+    /// does NOT mutate `self.bdk` (so subsequent `sync()` /
+    /// `balance()` can still populate that field without losing a
+    /// staged `ChangeSet`).
+    ///
+    /// **Why a separate method (not `peek_addresses`):** `peek_addresses`
+    /// requires `self.bdk: Some`, populated only by `sync()` or
+    /// `balance()`. The wallet detail screen wants the address before
+    /// any Esplora round-trip — derivation is a function of the
+    /// descriptor alone (L12 review HIGH #3 follow-up).
+    ///
+    /// **Cost:** one `build_bdk_wallet` call (~1 ms; bip39 seed →
+    /// xprv → descriptor parse). Acceptable for `wallet_show` which
+    /// runs once per detail-screen open.
+    ///
+    /// **Errors:** same surface as `build_bdk_wallet` —
+    /// `Error::InvalidMnemonic`, `Error::InvalidDerivationPath`,
+    /// `Error::Bdk`. Callers in the FFI layer collapse all three to
+    /// `FfiError::WalletStore` to preserve the no-oracle surface
+    /// (L12 security-auditor HIGH #1).
+    ///
+    /// **v0.2.x deviance resolution:** the original v0.2.0
+    /// `wallet_show` FFI deferred first-address to v0.2.1 because
+    /// `peek_addresses` requires sync. Issue #261 closed the gap by
+    /// exposing this offline path. See `tests::first_external_address_offline_*`
+    /// for the regression guards.
+    pub fn first_external_address_offline(&self) -> Result<bdk_wallet::bitcoin::Address, Error> {
+        let bdk = self.build_bdk_wallet()?;
+        let info = bdk.peek_address(KeychainKind::External, 0);
+        // bdk drops here (the `bdk` binding is a local BdkWallet,
+        // not `self.bdk`).
+        Ok(info.address)
+    }
 }
 
 /// For first `SCAN_GAP_LIMIT` external + internal addresses, query
@@ -909,6 +946,54 @@ mod tests {
     fn from_mnemonic_explicit_network_required() {
         let mnemonic = fresh_mnemonic(12usize);
         let _w = Wallet::from_mnemonic(&mnemonic, Network::Testnet, None);
+    }
+
+    // -- first_external_address_offline (Issue #261) ----------------------
+    //
+    // The wallet detail screen needs the first external receive address
+    // for copy/explorer/faucet wiring. `peek_addresses` requires `sync()`
+    // or `balance()` first (populates `self.bdk`); for a fresh detail-
+    // screen open we don't want an Esplora round-trip just to derive
+    // an address. `first_external_address_offline` builds a transient
+    // bdk Wallet from the descriptor alone (no UTXO scan) and peeks
+    // index 0 of the External keychain. See `Wallet::first_external_address_offline`
+    // for the full contract.
+
+    #[test]
+    fn first_external_address_offline_returns_tb1_for_testnet_native_segwit() {
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet, None).expect("valid input");
+        let addr = wallet
+            .first_external_address_offline()
+            .expect("offline peek should succeed for a freshly constructed wallet");
+        let s = addr.to_string();
+        assert!(
+            s.starts_with("tb1"),
+            "testnet NativeSegwit (BIP-84) must start with `tb1`, got {s}"
+        );
+        assert_eq!(
+            s.len(),
+            42,
+            "testnet NativeSegwit P2WPKH bech32m address must be 42 chars, got {} ({s})",
+            s.len()
+        );
+    }
+
+    #[test]
+    fn first_external_address_offline_does_not_populate_bdk_state() {
+        // Regression guard: if the offline peek path accidentally
+        // populated `self.bdk`, downstream `peek_addresses` would no
+        // longer require `sync()` — and the next `sync()` would
+        // rebuild + discard any staged `ChangeSet` from a prior
+        // sync. Lock in the invariant: offline peek is read-only.
+        let mnemonic = fresh_mnemonic(12usize);
+        let wallet = Wallet::from_mnemonic(&mnemonic, Network::Testnet, None).expect("valid input");
+        let _addr = wallet.first_external_address_offline().expect("peek ok");
+        let peek_after = wallet.peek_addresses(KeychainKind::External, 1);
+        assert!(
+            peek_after.is_err(),
+            "offline peek must NOT populate self.bdk; peek_addresses must still error"
+        );
     }
 
     #[test]

@@ -140,11 +140,14 @@ typedef _WalletShowC = Int32 Function(
   Pointer<Utf8>,
   Pointer<Uint8>,
   IntPtr,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Pointer<Utf8>>,
   Pointer<Uint64>,
+  Pointer<Pointer<Void>>,
 );
 typedef _WalletShowDart = int Function(
   int,
@@ -152,11 +155,14 @@ typedef _WalletShowDart = int Function(
   Pointer<Utf8>,
   Pointer<Uint8>,
   int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Pointer<Utf8>>,
   Pointer<Uint64>,
+  Pointer<Pointer<Void>>,
 );
 
 typedef _WalletShowFirstAddressFreeC = Void Function(Pointer<Utf8>);
@@ -346,11 +352,14 @@ class WalletOpsBindings {
     Pointer<Utf8> walletId,
     Pointer<Uint8> password,
     int passwordLen,
+    Pointer<Utf8> esploraUrl,
+    Pointer<Utf8> esploraSpkiPin,
     Pointer<Uint8> outId,
     Pointer<Uint8> outNetwork,
     Pointer<Uint8> outAddressType,
     Pointer<Pointer<Utf8>> outFirstAddress,
     Pointer<Uint64> outBalanceSat,
+    Pointer<Pointer<Void>> outWalletHandle,
   ) walletShow =
       _lib.lookupFunction<_WalletShowC, _WalletShowDart>('wallet_show');
 

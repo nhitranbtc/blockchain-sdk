@@ -86,6 +86,16 @@ pub struct EsploraHandle(EsploraClient);
 /// cast in every async FFI export.
 pub struct WalletHandle(Wallet);
 
+impl WalletHandle {
+    /// Wrap a constructed `Wallet` (e.g. from `wallet_show` after
+    /// decrypting the mnemonic) so the caller can use it for
+    /// subsequent async FFI calls. The inner `Wallet` is dropped
+    /// when the handle is freed via `wallet_load_free`.
+    pub fn new(wallet: Wallet) -> Self {
+        Self(wallet)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // FFI parameter mapping
 // ---------------------------------------------------------------------------

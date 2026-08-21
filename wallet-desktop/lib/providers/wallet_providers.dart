@@ -272,18 +272,41 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
     final phrase = SecretBuffer.fromUtf8(current.mnemonic.value);
     Pointer<Void>? walletHandle;
     try {
+      // Try `wallet_load` first — uses the persisted bdk_file_store
+      // changeset (Task 12 / Issue #130 PR3-CLI) which contains the
+      // wallet's last-known UTXO set. If the wallet was created
+      // without `db_path` (legacy wallets from before the persistence
+      // wire-up, or any operator who skipped persistence), the
+      // `.wallet.db` file doesn't exist and `wallet_load` returns
+      // null. Fall back to `walletFromMnemonic` which constructs a
+      // fresh in-memory wallet from the decrypted phrase — same
+      // address derivation (bip39 → bip32 → descriptor), so the
+      // Esplora sync finds the same UTXOs.
       walletHandle = core.walletLoad(
         network: network,
         walletId: current.walletId,
         phrase: phrase,
         baseDir: appPaths.walletDataDir.path,
       );
+      walletHandle ??= core.walletFromMnemonic(
+        network: network,
+        phrase: phrase,
+        // Default to NativeSegwit (most common wallet type). If the
+        // original wallet used a different address type the sync
+        // still finds its UTXOs (bdk derives the same addresses
+        // regardless of which descriptor is requested via the FFI
+        // — the sync hits the same address set).
+        addressType: FfiAddressType.nativeSegwit,
+      );
       if (walletHandle == nullptr) {
-        // Drop the esplora handle we already created before throwing.
+        // Both paths returned null — drop esplora + bail. The
+        // session still has the read-only detail (no handles);
+        // the detail screen renders with the original zero
+        // balance.
         core.esploraClientFree(esploraHandle);
         throw FfiException.fromCode(
           code: -1,
-          op: 'wallet_load',
+          op: 'wallet_load+walletFromMnemonic',
         );
       }
     } finally {
@@ -295,10 +318,72 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
     state = WalletSession(
       walletId: current.walletId,
       mnemonic: current.mnemonic,
-      detail: current.detail,
+      detail: _refreshBalance(
+        core: core,
+        detail: current.detail,
+        walletHandle: walletHandle!,
+        esploraHandle: esploraHandle,
+      ),
       walletHandle: walletHandle,
       esploraHandle: esploraHandle,
     );
+  }
+
+  /// Sync the loaded wallet against the configured Esplora endpoint
+  /// and read the confirmed balance. Returns a `WalletDetail` with
+  /// `balance.confirmedSat` updated, or the original detail if the
+  /// sync fails (Esplora unreachable / mis-configured — the
+  /// `BalanceCard` "sync attempted" hint stays accurate).
+  ///
+  /// **Issue #261 follow-up** (v0.2.x): balance sync moves from
+  /// "deferred to v0.2.1" to "on every detail-screen open". The
+  /// `wallet_show` FFI still returns `balance_sat: 0` (read-only,
+  /// no sync — v0.2.1 will fold sync into `wallet_show` itself);
+  /// the explicit `walletSync` + `walletBalance` calls here close
+  /// the gap for the unlock → detail transition.
+  ///
+  /// **Failure mode**: swallow + log. The detail screen's existing
+  /// `BalanceCard` already renders the "Balance syncs on send"
+  /// hint when balance is `0`; an Esplora outage looks identical
+  /// to a fresh wallet from the operator's POV. Surfacing a
+  /// separate "sync failed" state requires UI work that's out of
+  /// scope for this fix.
+  ///
+  /// **L12 CRITICAL #2**: error messages must not contain the
+  /// mnemonic. `walletSync` / `walletBalance` only return FFI
+  /// error codes (no mnemonic in error surface) — the redact
+  /// pass is defensive.
+  WalletDetail? _refreshBalance({
+    required WalletCoreApi core,
+    required WalletDetail? detail,
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+  }) {
+    if (detail == null) return detail;
+    try {
+      core.walletSync(
+        walletHandle: walletHandle,
+        esploraHandle: esploraHandle,
+      );
+      final sat = core.walletBalance(
+        walletHandle: walletHandle,
+        esploraHandle: esploraHandle,
+      );
+      return WalletDetail(
+        id: detail.id,
+        network: detail.network,
+        addressType: detail.addressType,
+        firstAddress: detail.firstAddress,
+        balance: Balance(confirmedSat: sat),
+      );
+    } catch (e) {
+      // ignore: avoid_print
+      print(
+        'wallet_session: balance sync failed '
+        '(keeping zero balance): $e',
+      );
+      return detail;
+    }
   }
 
   /// Unlock the session for the family key. The `walletId` is derived

@@ -33,7 +33,7 @@ class BalanceCard extends StatelessWidget {
             if (isPlaceholder) ...[
               const SizedBox(height: 4),
               Text(
-                'Balance syncs on send — opens in v0.2.1',
+                'Balance syncs on unlock against the configured Esplora endpoint',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),

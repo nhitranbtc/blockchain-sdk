@@ -77,6 +77,8 @@ typedef WalletImported = WalletImportedData;
 ///
 /// Implements [WalletCoreApi] (Task 10) so test fakes can swap in via
 /// Riverpod's `overrideWithValue`.
+/// (`WalletShowResult` lives in `wallet_core_api.dart` so the
+/// abstract surface can reference it without a circular dep.)
 class WalletCore implements WalletCoreApi {
   WalletCore._();
 
@@ -266,29 +268,37 @@ class WalletCore implements WalletCoreApi {
   /// `WalletDetail` (collapsed `Balance` — single `confirmedSat`
   /// field, no `utxos` list).
   ///
-  /// **v0.2.0 read-only show**: `firstAddress` is always `''` (Rust
-  /// `peek_addresses` requires bdk sync — deferred to v0.2.1);
-  /// `balance.confirmedSat` is always `0` (no Esplora sync). The
-  /// detail screen handles empty `firstAddress` by hiding
-  /// `AddressChip`.
+  /// **v0.2.x firstAddress (Issue #261):** `firstAddress` is
+  /// populated offline (no Esplora round-trip). Rust derives the
+  /// first External receive address via
+  /// `Wallet::first_external_address_offline` — pure local crypto.
+  /// `balance.confirmedSat` is still `0` (sync gate stays — address
+  /// vs balance are independent derivation paths). The detail
+  /// screen renders the address chip + copy/explorer/faucet wiring
+  /// unconditionally now that the field is reliable.
   ///
   /// **L12 collapse (HIGH #1 mirror):** wrong-password /
   /// not-found / wrong-AAD / corrupt-blob all surface as
   /// `FfiException(kind: FfiErrorKind.walletStore)`.
   @override
-  WalletDetail showWallet({
+  WalletShowResult showWallet({
     required FfiNetwork network,
     required String walletId,
     required SecretBuffer password,
     required String baseDir,
+    required String esploraUrl,
+    required String esploraSpkiPin,
   }) {
     final baseDirPtr = baseDir.toNativeUtf8();
     final walletIdPtr = walletId.toNativeUtf8();
+    final esploraUrlPtr = esploraUrl.toNativeUtf8();
+    final esploraPinPtr = esploraSpkiPin.toNativeUtf8();
     final outId = calloc<Uint8>(37);
     final outNetwork = calloc<Uint8>();
     final outAddressType = calloc<Uint8>();
     final outFirstAddress = calloc<Pointer<Utf8>>();
     final outBalanceSat = calloc<Uint64>();
+    final outWalletHandle = calloc<Pointer<Void>>();
     try {
       final rc = WalletOpsBindings.walletShow(
         network.code,
@@ -296,11 +306,14 @@ class WalletCore implements WalletCoreApi {
         walletIdPtr,
         password.ptr,
         password.length,
+        esploraUrlPtr,
+        esploraPinPtr,
         outId,
         outNetwork,
         outAddressType,
         outFirstAddress,
         outBalanceSat,
+        outWalletHandle,
       );
       if (rc != 0) {
         throw _ffiError('wallet_show', rc);
@@ -319,12 +332,18 @@ class WalletCore implements WalletCoreApi {
         2 => FfiAddressType.taproot,
         _ => FfiAddressType.unknown,
       };
-      // out_first_address: v0.2.0 always empty. Free the CString
-      // regardless (Rust allocates one even for the empty case).
+      // out_first_address: Issue #261 — Rust `wallet_show` derives
+      // the first External receive address offline via
+      // `Wallet::first_external_address_offline` (no Esplora
+      // round-trip). Always non-empty for a freshly constructed
+      // wallet. Empty string only if Rust allocates a null (defensive
+      // — shouldn't happen post-#261).
       final firstAddrPtr = outFirstAddress.value;
       final firstAddress =
           firstAddrPtr == nullptr ? '' : firstAddrPtr.toDartString();
-      // out_balance_sat: v0.2.0 always 0 (no sync).
+      // out_balance_sat: synced via Esplora when `esplora_url` was
+      // provided (see sync block above); otherwise `0` (legacy
+      // v0.2.0 behavior — useful for offline test fixtures).
       final balanceSat = outBalanceSat.value;
       // Dart string for addressType (matches legacy btc wallet show
       // --json encoding for the detail screen).
@@ -342,12 +361,19 @@ class WalletCore implements WalletCoreApi {
         FfiNetwork.testnet => 'testnet',
         FfiNetwork.unknown => '',
       };
-      return WalletDetail(
-        id: id,
-        network: networkStr,
-        addressType: addressTypeStr,
-        firstAddress: firstAddress,
-        balance: Balance(confirmedSat: balanceSat),
+      return WalletShowResult(
+        detail: WalletDetail(
+          id: id,
+          network: networkStr,
+          addressType: addressTypeStr,
+          firstAddress: firstAddress,
+          balance: Balance(confirmedSat: balanceSat),
+        ),
+        // The signing handle — caller passes to walletSend /
+        // walletBalance / walletSync. Free via walletLoadFree. Null
+        // if Rust skipped (out_wallet_handle was nullptr on the FFI
+        // side, which we never do post-#261 — defensive only).
+        walletHandle: outWalletHandle.value,
       );
     } finally {
       // Free the CString-typed `out_first_address` if Rust allocated
@@ -358,11 +384,14 @@ class WalletCore implements WalletCoreApi {
       }
       calloc.free(baseDirPtr);
       calloc.free(walletIdPtr);
+      calloc.free(esploraUrlPtr);
+      calloc.free(esploraPinPtr);
       calloc.free(outId);
       calloc.free(outNetwork);
       calloc.free(outAddressType);
       calloc.free(outFirstAddress);
       calloc.free(outBalanceSat);
+      calloc.free(outWalletHandle);
       password.dispose();
     }
   }

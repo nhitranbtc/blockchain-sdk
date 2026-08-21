@@ -17,10 +17,14 @@
 //   sentinel is constructed inside `unlockWithDetail` (Task 20 L12
 //   type-design HIGH) so the convention doesn't leak to callers.
 //
-// **v0.2.0 firstAddress plan deviation #4:** Rust `wallet_show`
-// returns an empty `first_address` because `peek_addresses` requires
-// bdk sync (deferred to v0.2.1). The detail screen hides
-// `AddressChip` when `firstAddress.isEmpty` (graceful UX).
+// **v0.2.x firstAddress (Issue #261 — deviance closed):** Rust
+// `wallet_show` now derives the first External receive address
+// offline via `Wallet::first_external_address_offline` (pure local
+// crypto, no Esplora round-trip). `WalletDetail.firstAddress`
+// carries a real `tb1…` 42-char string on every unlock. The chip +
+// copy + Explorer + Faucet wiring renders unconditionally; the only
+// remaining fallback is a defensive `'(unavailable — unlock failed)'`
+// for an unexpected FFI failure.
 //
 // **L12 collapse (HIGH #1 mirror):** wrong-password / not-found /
 // wrong-AAD / corrupt-blob all surface as
@@ -39,6 +43,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:ffi/ffi.dart';
+
+import 'dart:ffi';
 
 import '../../core/btc/models/wallet_detail.dart';
 import '../../core/ffi/ffi_enums.dart';
@@ -47,6 +54,7 @@ import '../../core/ffi/secret_buffer.dart';
 import '../../core/format/wallet_id.dart';
 import '../../core/logging/btc_log_filter.dart';
 import '../../providers/app_paths_provider.dart';
+import '../../providers/esplora_config_provider.dart';
 import '../../providers/wallet_core_provider.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
@@ -108,16 +116,33 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
     try {
       final core = ref.read(walletCoreProvider);
       final appPaths = await ref.read(appPathsProvider.future);
+      // Esplora config for the in-FFI sync (Issue #261 follow-up).
+      // Rust syncs against this URL + SPKI pin and returns the
+      // confirmed balance. Empty URL → Rust skips (legacy v0.2.0
+      // behavior, `balance_sat: 0`).
+      final esploraCfg = await ref.read(esploraConfigProvider.future);
       // FFI call: facade owns the SecretBuffer lifetime (auto-dispose
       // in `finally`). Returns `WalletDetail` (no mnemonic returned —
       // the FFI never exposes cleartext; matches the legacy
       // `btc wallet show --json` which also didn't return the phrase).
-      final detail = core.showWallet(
+      final showResult = core.showWallet(
         network: FfiNetwork.testnet,
         walletId: walletId,
         password: SecretBuffer.fromUtf8(_password),
         baseDir: appPaths.walletDataDir.path,
+        esploraUrl: esploraCfg.url,
+        esploraSpkiPin: esploraCfg.spkiPin,
       );
+      final detail = showResult.detail;
+      // The wallet handle from `wallet_show` is freed on lock via the
+      // session notifier — detail screen reads only `showResult.detail`
+      // (no signing material lives in the Dart session; SendScreen
+      // re-calls `walletShow` with the password when needed).
+      // Explicit free here is a defensive null-check (the FFI always
+      // populates the out param post-#261).
+      if (showResult.walletHandle != nullptr) {
+        core.walletLoadFree(showResult.walletHandle);
+      }
       if (!mounted) return;
       // Re-assert identity: if widget was rebuilt with a different
       // walletId mid-await, do NOT populate the wrong family.
@@ -286,14 +311,19 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
               style: textTheme.bodyMedium,
             ),
             const SizedBox(height: 16),
-            // Plan deviation #4: firstAddress is empty in v0.2.0
-            // (peek_addresses requires bdk sync — deferred to v0.2.1).
-            // Hide the chip when empty; v0.2.1 wires the sync path.
-            // L12 flutter MED: the previous "(sync required — open
-            // SendScreen)" was misleading — opening SendScreen does
-            // not trigger sync (Tasks 14+15 are still pending). The
-            // new copy accurately reflects the v0.2.0 state.
-            if (d.firstAddress.isNotEmpty)
+            // Issue #261: firstAddress is populated offline by Rust
+            // `wallet_show` (via `Wallet::first_external_address_offline`
+            // — pure local crypto, no Esplora round-trip). Render
+            // the address chip + copy/explorer/faucet wiring
+            // unconditionally. Empty fallback kept as a safety net
+            // for an unexpected FFI failure (should not happen in
+            // v0.2.x).
+            if (d.firstAddress.isEmpty)
+              Text(
+                'First address: (unavailable — unlock failed)',
+                style: textTheme.bodySmall,
+              )
+            else
               Row(
                 children: [
                   Expanded(
@@ -317,18 +347,13 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
                     },
                   ),
                 ],
-              )
-            else
-              Text(
-                'First address: (sync pending — v0.2.1)',
-                style: textTheme.bodySmall,
               ),
             const SizedBox(height: 8),
-            // Explorer + Faucet buttons live OUTSIDE the address
-            // branch — always reachable so the user can browse /
-            // fund a wallet even while sync is pending (v0.2.1).
-            // URLs degrade gracefully: address-specific when known,
-            // generic testnet home when not.
+            // Explorer + Faucet buttons: address-specific URLs
+            // (prefilled via `?address=<addr>` for coinfaucet). Both
+            // rely on `d.firstAddress` being non-empty post-#261.
+            // Empty fallback degrades to the generic testnet home
+            // (safety net for the unexpected-failure path above).
             Row(
               children: [
                 TextButton.icon(
