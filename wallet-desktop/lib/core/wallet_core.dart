@@ -561,6 +561,7 @@ class WalletCore implements WalletCoreApi {
   }
 
   /// Returns all txids in the wallet.
+  @override
   List<String> walletTxids({required Pointer<Void> walletHandle}) {
     final outCount = calloc<UintPtr>();
     final outArr = calloc<Pointer<Utf8>>();
