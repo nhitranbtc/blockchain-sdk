@@ -423,6 +423,53 @@ class WalletCore implements WalletCoreApi {
     EsploraBindings.walletFree(handle);
   }
 
+  /// Loads an existing wallet from disk into a `WalletHandle`.
+  /// (Task 14 / Issue #220 Sub-split A.) Returns null on failure
+  /// (wallet file missing at `{baseDir}/{walletId}.wallet`, bad
+  /// mnemonic, unknown network byte, etc.); caller checks
+  /// `ffi_last_error_message` for the `FfiError` code via
+  /// [_ffiError].
+  ///
+  /// **L12 CRITICAL #2**: `phrase` is wrapped in a `SecretBuffer` on
+  /// the Dart side and zeroized + freed after the FFI call returns.
+  /// The Rust side wraps the incoming C string in `Secret<String>`
+  /// (zeroize-on-drop). Mirrors the lifetime pattern from
+  /// `walletFromMnemonic`.
+  Pointer<Void> walletLoad({
+    required String baseDir,
+    required String walletId,
+    required SecretBuffer phrase,
+    required FfiNetwork network,
+  }) {
+    final baseDirPtr = baseDir.toNativeUtf8();
+    final walletIdPtr = walletId.toNativeUtf8();
+    final phrasePtr = _toCString(phrase.ptr, phrase.length);
+    try {
+      final handle = EsploraBindings.walletLoad(
+        baseDirPtr,
+        walletIdPtr,
+        phrasePtr,
+        network.code,
+      );
+      if (handle == nullptr) {
+        throw _ffiError('wallet_load', -1);
+      }
+      return handle;
+    } finally {
+      calloc.free(baseDirPtr);
+      calloc.free(walletIdPtr);
+      calloc.free(phrasePtr);
+    }
+  }
+
+  /// Drops a `WalletHandle` returned by [walletLoad]. Idempotent on
+  /// null. Body identical to [walletFree] — separate method for
+  /// call-site clarity (which load created the handle).
+  void walletLoadFree(Pointer<Void> handle) {
+    if (handle == nullptr) return;
+    EsploraBindings.walletLoadFree(handle);
+  }
+
   /// Syncs the wallet against Esplora (pulls UTXOs + chain tip).
   void walletSync({
     required Pointer<Void> walletHandle,

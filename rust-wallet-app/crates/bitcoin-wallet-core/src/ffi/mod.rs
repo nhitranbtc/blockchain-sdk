@@ -17,6 +17,7 @@ pub mod runtime;
 pub mod wallet;
 pub mod wallet_ops;
 
+pub use bdk_extras::{wallet_load, wallet_load_free};
 pub use error::{ffi_last_error_message, set_last_error, FfiError};
 pub use panic::{ffi_catch_unwind, scrub_panic_message};
 pub use runtime::{runtime_block_on, runtime_drop, runtime_new, runtime_or_unknown, RuntimeHandle};
