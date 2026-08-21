@@ -1,46 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wallet_desktop/core/btc/btc_command.dart';
-import 'package:wallet_desktop/core/btc/btc_error.dart';
-import 'package:wallet_desktop/core/btc/btc_invoker.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/features/wallet_detail/wallet_detail_screen.dart';
-import 'package:wallet_desktop/providers/btc_providers.dart';
 import 'package:wallet_desktop/providers/wallet_providers.dart';
 
 const _kTestnet = 'testnet';
 const _kWalletId = 'wlt-abc';
-
-/// Test double — always throws (the screen-level tests seed the
-/// session directly via `walletSessionProvider.notifier.unlock(...)`
-/// rather than going through `walletShow`). Mirrors the seam
-/// established in Task 13/17 — only the success path is exercised
-/// here; error paths are covered by `wallets_list_provider_test.dart`.
-class _FakeBtcInvoker extends BtcInvoker {
-  _FakeBtcInvoker() : super(binaryPath: '');
-
-  @override
-  Future<T> invoke<T>(
-    BtcCommand cmd, {
-    required T Function(dynamic json) parse,
-  }) async {
-    throw const BtcError(
-      exitCode: 1,
-      stderr: 'no fixture — tests seed session directly',
-      kind: BtcErrorKind.other,
-    );
-  }
-}
 
 void main() {
   testWidgets(
     'WalletDetailScreen shows the Unlock form (Password + Unlock button) '
     'when the wallet session is null',
     (t) async {
-      final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith((_) async => _FakeBtcInvoker()),
-      ]);
+      final container = ProviderContainer();
       addTearDown(container.dispose);
 
       await t.pumpWidget(
@@ -68,9 +41,7 @@ void main() {
     'WalletDetailScreen shows balance + first address + nav buttons '
     'when the wallet session has a parsed detail',
     (t) async {
-      final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith((_) async => _FakeBtcInvoker()),
-      ]);
+      final container = ProviderContainer();
       addTearDown(container.dispose);
 
       // Seed the session so the screen boots into the unlocked view.
@@ -143,9 +114,7 @@ void main() {
     'WalletDetailScreen lock button clears the wallet session '
     '(returns to the Unlock form)',
     (t) async {
-      final container = ProviderContainer(overrides: [
-        btcInvokerProvider.overrideWith((_) async => _FakeBtcInvoker()),
-      ]);
+      final container = ProviderContainer();
       addTearDown(container.dispose);
 
       // Seed the session as unlocked.

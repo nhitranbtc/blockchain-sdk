@@ -4,8 +4,6 @@ import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/btc/btc_error.dart';
-import '../../core/btc/btc_error_messages.dart';
 import '../../core/btc/models/send_result.dart';
 import '../../core/ffi/ffi_exception.dart';
 import '../../core/logging/btc_log_filter.dart';
@@ -87,7 +85,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   int _feeRate = 1;
   bool _feeRateEdited = false;
   bool _running = false;
-  BtcError? _error;
+  FfiException? _error;
   SendResult? _result;
 
   /// Persistent controller for the Fee-rate field (L12 flutter-reviewer
@@ -259,8 +257,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   Future<void> _submit() async {
     final amount = int.tryParse(_amountSat);
     if (amount == null || amount <= 0 || _address.isEmpty) {
-      setState(() => _error = const BtcError(
-          exitCode: 2, stderr: 'invalid input', kind: BtcErrorKind.other));
+      setState(() => _error = FfiException.fromCode(
+          code: -1,
+          op: 'send_screen_validation',
+          messageForDebug: 'invalid input'));
       return;
     }
     // Lesson 32.2: capture identity at top of async-await chain.
@@ -270,10 +270,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     final mnemonic = session?.mnemonic.value ?? '';
     if (mnemonic.isEmpty) {
       // Sentinel-clear path — user must re-paste first.
-      setState(() => _error = const BtcError(
-          exitCode: 2,
-          stderr: 'mnemonic required',
-          kind: BtcErrorKind.confirmRequired));
+      setState(() => _error = FfiException.fromCode(
+          code: -1,
+          op: 'send_screen_validation',
+          messageForDebug: 'mnemonic required'));
       return;
     }
     String? confirmYes;
@@ -283,10 +283,10 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       if (confirmYes == null || !mounted) return;
       if (widget.walletId != walletId || widget.network != network) return;
       if (confirmYes.trim() != 'yes') {
-        setState(() => _error = const BtcError(
-            exitCode: 2,
-            stderr: 'mainnet confirm rejected',
-            kind: BtcErrorKind.confirmRequired));
+        setState(() => _error = FfiException.fromCode(
+            code: -1,
+            op: 'send_screen_validation',
+            messageForDebug: 'mainnet confirm rejected'));
         return;
       }
     }
@@ -342,10 +342,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
             vbytes: 0, // unknown without separate fee-calc; UI doesn't show
           ));
     } on FfiException catch (e) {
-      if (mounted) setState(() => _error = BtcError(
-          exitCode: e.code,
-          stderr: userMessageForFfiException(e),
-          kind: BtcErrorKind.other));
+      if (mounted) setState(() => _error = e);
     } catch (e, st) {
       const filter = BtcLogFilter();
       developer.log(
@@ -505,7 +502,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 if (error != null) ...[
                   StatusBadge(kind: error.kind),
                   const SizedBox(height: 8),
-                  Text(userMessageForBtcError(error)),
+                  Text(userMessageForFfiException(error)),
                   const SizedBox(height: 8),
                 ],
                 if (result != null)
