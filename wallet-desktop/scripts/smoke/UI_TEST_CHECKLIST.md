@@ -1,8 +1,15 @@
-# wallet-desktop v0.1.0 UI test checklist
+# wallet-desktop v0.2.x UI test checklist
 
 All wired user stories + supporting widgets. Run via `xdotool` against
 the live Flutter Linux desktop app (the `flutter run` background
 process spawned by `scripts/smoke/v0.1.0.sh`).
+
+**v0.2.x FFI-only:** wallet-desktop no longer spawns a `btc` subprocess
+(PRs #255 + #256 deleted `BtcInvoker`, `BtcExtractor`, `assets/btc/`,
+`fake_btc.sh`). Every wallet op routes through Rust FFI via
+`bitcoin-wallet-core`. The checklist reflects the FFI surface; the
+threat-model checks (L12 CRITICAL #2, L33.4) replaced the subprocess
+ones (L7 env-strip). See Issue #259 for the full threat-model mapping.
 
 **Prerequisites:** the `btc` CLI binary is NO LONGER required — wallet-desktop
 is FFI-only after PRs #255 + #256. Instead, the operator must build
@@ -38,7 +45,7 @@ Issue # 224). See `scripts/smoke/README.md` for the full prereq list.
 | `PasswordField` | unlock | obscureText defaults true + reveal toggle |
 | `MnemonicPasteField` | import / send re-entry | word count validation (12/15/18/21/24) + paste handler |
 | `MnemonicDisplayDialog` | create | reveal/hide toggle + Copy disabled + ExcludeSemantics |
-| `ProcessProgressOverlay` | send / sync | spinner during CLI invocation |
+| `ProcessProgressOverlay` | send / sync | spinner during FFI call (no subprocess) |
 
 ## Per-feature test steps
 
@@ -47,7 +54,7 @@ For each feature:
 2. Verify expected widgets present (`debugDumpApp` query for widget name)
 3. Verify state transitions correct (loading → data / error)
 4. Verify L12 CRITICAL #2 — no mnemonic/password appears in `developer.log` after the action
-5. Verify L7 env-strip — no `BTC_WALLET_MNEMONIC` in spawned subprocess env
+5. Verify L33.4 mnemonic-never-in-argv — `ps -ef` during Send must not show the mnemonic (FFI passes via `phrase: SecretBuffer` only)
 6. Mark `[x]` in this checklist after manual confirmation
 
 ## Operator-driven gates (deferred to real desktop)
@@ -55,21 +62,11 @@ For each feature:
 - [ ] Live testnet faucet fund via browser
 - [ ] Visual confirmation of address rendering
 - [ ] Confirmation count updates in UI after 1 conf
-- [ ] Real `btc` binary (not fake_btc.sh) — uses Issue #203's v0.1.0.sh smoke
-
-## Sandbox-L29 substitute (chrome-devtools-mcp + fake_btc.sh)
-
-The Linux app currently running uses the **fake_btc.sh** fixture (the
-`btc` binary in PATH points to the test fixture, not real `btc`). This
-is sufficient for **UI exercise** but NOT for live testnet verification
-(L29 + L28 Gate C). All `flutter test test/integration/` tests already
-pass against the same fixture (7/7 per the pre-flight verify).
+- [ ] Real Rust cdylib via `wallet-desktop/tool/build_native.sh` — uses Issue #259's checklist + `scripts/smoke/v0.1.0.sh` (PR #257)
 
 ## Run
 
-```bash
-# 1. Confirm Linux app is running + VM service alive
-curl -s http://127.0.0.1:37671/ElHrJYsLQTU=/getVM | jq '.result.name'
-# 2. Open chrome-devtools-mcp against the VM service URL
-# 3. Walk each row above; mark [x] after manual UI verification
-```
+The operator-driven walk runs via `scripts/smoke/v0.1.0.sh` (PR #257
+auto-captures `import -window root` screenshots per story into
+`$XDG_DATA_HOME/flutter_btc_wallet/smoke-screenshots/v$TAG/`). Walk
+each row above; mark `[x]` after manual UI verification per Issue #259.
