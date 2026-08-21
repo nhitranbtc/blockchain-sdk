@@ -148,6 +148,22 @@ abstract interface class WalletCoreApi {
   /// `wallet_free`; same handle type). Idempotent on null.
   void walletLoadFree(Pointer<Void> handle);
 
+  /// Return all txids in the wallet as hex strings.
+  /// (Task 17 / Issue #223 — TransactionsScreen migration off
+  /// `BtcInvoker.invoke<TxRecord>(BtcCommand.txList(...))` to FFI.)
+  ///
+  /// **v0.2.1 limitation**: returns txid hex only — no per-tx fields
+  /// (timestamps, amounts, addresses). The richer `wallet_tx_history`
+  /// FFI export requires Rust-side work to query bdk's tx metadata and
+  /// is deferred to v0.3 (see #221 closure).
+  ///
+  /// Caller owns the `walletHandle` (must come from [walletLoad]
+  /// via `WalletSessionNotifier.ensureHandles()`).
+  /// Returns an empty list if the wallet has no transactions.
+  ///
+  /// Throws [FfiException] on failure.
+  List<String> walletTxids({required Pointer<Void> walletHandle});
+
   /// Send satoshis to a recipient via the Esplora client. Returns
   /// the broadcast txid as a hex string. (Task 14 / Issue #220
   /// Sub-split B — SendScreen UI migration.)

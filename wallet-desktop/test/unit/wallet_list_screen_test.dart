@@ -126,6 +126,13 @@ class _FakeWalletCore implements WalletCoreApi {
   }) {
     throw UnimplementedError();
   }
+
+  // Task 17 / Issue #223 — walletTxids facade; this fake is only
+  // used for list-screen tests so the body throws.
+  @override
+  List<String> walletTxids({required Pointer<Void> walletHandle}) {
+    throw UnimplementedError();
+  }
 }
 
 /// Single source of truth for the testnet identifier used by every Task 17
