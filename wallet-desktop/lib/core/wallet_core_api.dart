@@ -147,6 +147,26 @@ abstract interface class WalletCoreApi {
   /// Drop a `WalletHandle` returned by [walletLoad] (alias of
   /// `wallet_free`; same handle type). Idempotent on null.
   void walletLoadFree(Pointer<Void> handle);
+
+  /// Send satoshis to a recipient via the Esplora client. Returns
+  /// the broadcast txid as a hex string. (Task 14 / Issue #220
+  /// Sub-split B — SendScreen UI migration.)
+  ///
+  /// Caller owns both handles (must come from [walletLoad] +
+  /// [esploraClientNew] via `WalletSessionNotifier.ensureHandles`).
+  /// The phrase is no longer a parameter — the wallet was loaded
+  /// with the phrase via [walletLoad] and persists in the
+  /// `WalletHandle` (Task 8 RAII).
+  ///
+  /// Throws `FfiException` on insufficient funds, network failure,
+  /// broadcast failure, etc.
+  String walletSend({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+    required Pointer<Utf8> recipient,
+    required int amountSat,
+    required int feeRateSatPerVb,
+  });
 }
 
 /// Result of a successful `createWallet` call. The `mnemonic` field is a

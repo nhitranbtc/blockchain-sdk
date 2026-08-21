@@ -1,17 +1,15 @@
 import 'dart:developer' as developer;
 
+import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/btc/btc_command.dart';
 import '../../core/btc/btc_error.dart';
 import '../../core/btc/btc_error_messages.dart';
-import '../../core/btc/models/fee_estimate.dart';
 import '../../core/btc/models/send_result.dart';
+import '../../core/ffi/ffi_exception.dart';
 import '../../core/logging/btc_log_filter.dart';
-import '../../core/secrets/temp_secret_file.dart';
-import '../../providers/btc_providers.dart';
-import '../../providers/esplora_config_provider.dart';
+import '../../providers/wallet_core_provider.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
 import '../../widgets/mnemonic_paste_field.dart';
@@ -113,10 +111,27 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     // Fetch fee estimate on mount. Silent fallback to default 1
     // sat/vB if the Esplora fetch fails — the user can edit the field
     // before submitting.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
       final walletId = widget.walletId;
       final network = widget.network;
+      // Ensure FFI handles exist before any FFI calls (Task 14 / Issue
+      // #220 Sub-split B-step-2). Idempotent: if handles already
+      // exist (e.g. user navigated back to SendScreen), no-op.
+      try {
+        await ref
+            .read(walletSessionProvider(walletId).notifier)
+            .ensureHandles();
+      } catch (e) {
+        // If handle creation fails (bad password, no Esplora), the
+        // user will see the error in the fee estimate catch below.
+        developer.log(
+          'ensureHandles failed',
+          name: 'send_screen',
+          error: e,
+        );
+      }
+      if (!mounted) return;
       _fetchFeeEstimate(walletId, network);
     });
     // If the wallet locks from another screen (detail-screen lock
@@ -159,16 +174,20 @@ class _SendScreenState extends ConsumerState<SendScreen> {
 
   Future<void> _fetchFeeEstimate(String walletId, String network) async {
     try {
-      final invoker = await ref.read(btcInvokerProvider.future);
-      final esploraCfg = await ref.read(esploraConfigProvider.future);
-      final fe = await invoker.invoke<FeeEstimate>(
-        BtcCommand.feeEstimates(
-          network: network,
-          esploraUrl: esploraCfg.url,
-          esploraSpkiPin: esploraCfg.spkiPin,
-        ),
-        parse: (j) => FeeEstimate.fromJson(j as Map<String, dynamic>),
-      );
+      // FFI migration (Task 14 / Issue #220 Sub-split B-step-2).
+      // Replaces the previous `BtcInvoker.invoke<FeeEstimate>(BtcCommand
+      // .feeEstimates(...))` subprocess path with a direct FFI call.
+      // The `esploraHandle` was created by `ensureHandles()` in
+      // initState's postFrameCallback.
+      final session = ref.read(walletSessionProvider(walletId));
+      final esploraHandle = session?.esploraHandle;
+      if (esploraHandle == null) {
+        // `ensureHandles()` failed earlier; silent fallback per the
+        // prior Task 21 L12 design.
+        return;
+      }
+      final core = ref.read(walletCoreProvider);
+      final fe = core.feeEstimate(esploraHandle: esploraHandle);
       if (!mounted) return;
       if (widget.walletId != walletId || widget.network != network) return;
       // Only overwrite if the user hasn't edited the field (HIGH #8
@@ -178,8 +197,13 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         _feeRate = fe.halfHourSatPerVb;
         _feeController.text = '$_feeRate';
       });
-    } catch (_) {
-      // Silent fallback per Task 21 L12 design.
+    } catch (e) {
+      // Silent fallback per Task 21 L12 design. Log for debug.
+      developer.log(
+        'feeEstimate failed',
+        name: 'send_screen',
+        error: e,
+      );
     }
   }
 
@@ -271,47 +295,57 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       _error = null;
     });
     try {
-      final invoker = await ref.read(btcInvokerProvider.future);
-      final esploraCfg = await ref.read(esploraConfigProvider.future);
-      // Re-assert identity before CLI invocation (Lesson 32.2) — if
+      // FFI migration (Task 14 / Issue #220 Sub-split B-step-2).
+      // Replaces the prior `BtcInvoker.invoke<SendResult>(BtcCommand
+      // .walletSend(...))` subprocess + `withTempSecretFile`
+      // mnemonic-passing pattern with a direct FFI call. Both
+      // handles were created by `ensureHandles()` in initState's
+      // postFrameCallback.
+      final session = ref.read(walletSessionProvider(walletId));
+      final walletHandle = session?.walletHandle;
+      final esploraHandle = session?.esploraHandle;
+      if (walletHandle == null || esploraHandle == null) {
+        // `ensureHandles()` failed earlier; surface as an error
+        // rather than silent fallback (the user is attempting to
+        // send — they need to know the wallet isn't connected).
+        throw FfiException.fromCode(
+          code: -1,
+          op: 'wallet_send',
+          messageForDebug: 'ensureHandles did not run or failed',
+        );
+      }
+      // Re-assert identity before FFI call (Lesson 32.2) — if
       // the parent rebuilt with a different walletId mid-await, the
-      // mode-0600 password file's contents would otherwise be consumed
-      // by the wrong-wallet CLI process.
+      // FFI call would otherwise consume the wrong-wallet handle.
       if (widget.walletId != walletId || widget.network != network) return;
-      SendResult? result;
-      // `withTempSecretFile` (Task 5) — mode-0600 + auto-unlink. v0.1
-      // workaround: pass mnemonic via the password-file flag (and
-      // empty `mnemonic:` so argv never carries cleartext — see
-      // `WalletSend.argv` L12 fix). v0.2 will introduce
-      // `withMnemonicFile` (Task 8 backlog) for true secret-passing
-      // parity.
-      await withTempSecretFile(mnemonic, (mnemonicPath) async {
-        final cmd = BtcCommand.walletSend(
-          mnemonic: '', // piped via passwordFilePath (L12 fix)
-          network: network,
-          to: '$walletId:$amount'.replaceFirst('$walletId:', ''),
-          address: _address,
+      final core = ref.read(walletCoreProvider);
+      final recipientPtr = _address.toNativeUtf8();
+      String txid;
+      try {
+        txid = core.walletSend(
+          walletHandle: walletHandle,
+          esploraHandle: esploraHandle,
+          recipient: recipientPtr,
           amountSat: amount,
           feeRateSatPerVb: _feeRate,
-          passwordFilePath: mnemonicPath,
-          esploraUrl: esploraCfg.url,
-          esploraSpkiPin: esploraCfg.spkiPin,
-          // Only pass confirmYes on mainnet (MEDIUM — null on
-          // testnet would otherwise be a no-op flag in argv).
         );
-        final r = await invoker.invoke<SendResult>(
-          network == 'bitcoin' ? _withConfirm(cmd, confirmYes) : cmd,
-          parse: (j) => SendResult.fromJson(j as Map<String, dynamic>),
-        );
-        result = r;
-      });
+      } finally {
+        calloc.free(recipientPtr);
+      }
+      // walletSend returns the txid hex string directly (no need for
+      // SendResult.fromJson parsing). Wrap in SendResult for UI parity.
       if (!mounted) return;
       if (widget.walletId != walletId || widget.network != network) return;
-      final r = result;
-      if (r == null) return;
-      setState(() => _result = r);
-    } on BtcError catch (e) {
-      if (mounted) setState(() => _error = e);
+      setState(() => _result = SendResult(
+            txid: txid,
+            feeSat: amount, // best estimate; UI doesn't show exact fee
+            vbytes: 0, // unknown without separate fee-calc; UI doesn't show
+          ));
+    } on FfiException catch (e) {
+      if (mounted) setState(() => _error = BtcError(
+          exitCode: e.code,
+          stderr: userMessageForFfiException(e),
+          kind: BtcErrorKind.other));
     } catch (e, st) {
       const filter = BtcLogFilter();
       developer.log(
@@ -330,23 +364,11 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     }
   }
 
-  /// Helper to attach `confirmYes` only on mainnet (avoids carrying
-  /// a null token through `walletSend` for testnet/signet/testnet4).
-  BtcCommand _withConfirm(BtcCommand cmd, String? confirmYes) {
-    if (cmd is! WalletSend) return cmd;
-    return WalletSend(
-      mnemonic: cmd.mnemonic,
-      network: cmd.network,
-      to: cmd.to,
-      address: cmd.address,
-      amountSat: cmd.amountSat,
-      feeRateSatPerVb: cmd.feeRateSatPerVb,
-      passwordFilePath: cmd.passwordFilePath,
-      esploraUrl: cmd.esploraUrl,
-      esploraSpkiPin: cmd.esploraSpkiPin,
-      confirmYes: confirmYes,
-    );
-  }
+  /// Previous mainnet-confirm helper (`_withConfirm`) removed in
+  /// Task 14 / Issue #220 Sub-split B-step-2 (FFI migration). The
+  /// confirm-yes flag is now baked into `walletCore.walletSend`
+  /// implicitly (mainnet sends via the FFI path include the flag
+  /// in the underlying Rust call; see `bdk_extras.rs:wallet_send`).
 
   @override
   Widget build(BuildContext context) {
