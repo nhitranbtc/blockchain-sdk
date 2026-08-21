@@ -180,6 +180,31 @@ class _FakeSessionSentinelNotifier extends WalletSessionNotifier {
   }
 }
 
+/// Stub [WalletSessionNotifier] that returns a session with
+/// `walletHandle = null` — exercises the screen's `ensureHandles()`
+/// failure recovery branch (the synthetic `FfiException.fromCode`
+/// thrown at `transactions_screen.dart:132-143`).
+class _FakeSessionNotifierNoHandle extends WalletSessionNotifier {
+  @override
+  WalletSession? build(String walletId) {
+    ref.onDispose(() {});
+    return WalletSession(
+      walletId: walletId,
+      mnemonic: OpaqueMnemonic(_kMnemonic),
+      detail: _seedDetail(),
+      walletHandle: null,
+      esploraHandle: null,
+    );
+  }
+
+  @override
+  Future<void> ensureHandles() async {
+    // Simulates the real failure mode: ensureHandles swallows the
+    // exception (postFrameCallback's catch) so the session stays
+    // null-handed.
+  }
+}
+
 WalletDetail _seedDetail() => const WalletDetail(
       id: _kWalletId,
       network: _kTestnet,
@@ -322,11 +347,11 @@ void main() {
         await t.pump(const Duration(milliseconds: 50));
       }
 
-      // Kind-mapped user message surfaces (FfiErrorKind.walletStore).
-      // The screen renders `error.kind.name` for now (v0.2.1 — see
-      // docstring). Future v0.3: kind-mapped copy via
-      // `userMessageForFfiException`.
-      expect(find.textContaining('walletStore'), findsOneWidget);
+      // Kind-mapped user message surfaces (L12 CRITICAL fix — screen
+      // uses `userMessageForFfiException` so the raw `kind.name`
+      // never reaches the user).
+      expect(
+          find.text('Cannot unlock wallet — check password.'), findsOneWidget);
     },
   );
 
@@ -369,7 +394,47 @@ void main() {
 
   // v0.2 deferred: end-to-end submit via Task 24 `fake_btc.sh`
   // integration test (operator-driven per L29).
-  test('placeholder — tx-list submit coverage deferred to Task 24', () {
-    // empty body — defer per Task 17/18 lesson.
-  }, skip: 'Task 24 fake_btc.sh integration');
+  // (Removed per PR #255 round-1 review: empty-body placeholder
+  // test that passed trivially. Coverage deferred to the L29
+  // live-testnet smoke — tracked in backlog.)
+
+  testWidgets(
+    'TransactionsScreen surfaces FfiException(notInitialized) when '
+    'session has a mnemonic but ensureHandles failed (walletHandle null)',
+    (t) async {
+      final container = ProviderContainer(overrides: [
+        walletCoreProvider.overrideWithValue(_FakeWalletCore()),
+        walletSessionProvider
+            .overrideWith(_FakeSessionNotifierNoHandle.new),
+      ]);
+      addTearDown(container.dispose);
+
+      await t.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: Scaffold(
+              body: TransactionsScreen(
+                network: _kTestnet,
+                walletId: _kWalletId,
+              ),
+            ),
+          ),
+        ),
+      );
+      for (var i = 0; i < 10; i++) {
+        await t.pump(const Duration(milliseconds: 50));
+      }
+
+      // The screen throws a synthetic `FfiException.fromCode(code: -1)`
+      // when walletHandle is null (recovered from ensureHandles
+      // failure). code=-1 maps to FfiErrorKind.invalidMnemonic,
+      // and userMessageForFfiException surfaces "Invalid recovery
+      // phrase — please re-enter." (a stand-in for "wallet didn't
+      // load" — v0.3 can introduce a dedicated FfiErrorKind for
+      // "handles not initialized" with a clearer message).
+      expect(
+          find.textContaining('Invalid recovery phrase'), findsOneWidget);
+    },
+  );
 }
