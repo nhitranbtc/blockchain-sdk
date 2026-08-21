@@ -92,6 +92,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   bool _running = false;
   FfiException? _error;
   SendResult? _result;
+  String _password = '';
 
   /// Persistent controller for the Fee-rate field (L12 flutter-reviewer
   /// Task 21 CRITICAL #2 — inline construction leaks controllers and
