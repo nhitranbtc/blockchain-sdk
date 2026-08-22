@@ -141,11 +141,23 @@ bitcoin_cli() {
     if [[ -n "${BTC_DOCKER_CONTAINER:-}" ]]; then
         prefix=(docker exec -i "$BTC_DOCKER_CONTAINER" )
     fi
+    # Parse host:port from BTC_RPC_URL. -rpcconnect takes host only;
+    # -rpcport takes the port.
+    local rpc_host rpc_port
+    rpc_host=$(echo "$BTC_RPC_URL" | sed -E 's#^https?://##; s#:[0-9]+$##')
+    rpc_port=$(echo "$BTC_RPC_URL" | sed -E 's#^https?://##; s#.*:##')
+    [[ "$rpc_port" == "$rpc_host" ]] && rpc_port=18443  # no port in URL
+    # When running via docker exec, force loopback (the container's
+    # own bitcoind) — `localhost` may not resolve in some containers.
+    if [[ -n "${BTC_DOCKER_CONTAINER:-}" ]]; then
+        rpc_host=127.0.0.1
+    fi
     "${prefix[@]}" "$BTC_RPC_CLI" \
         -regtest \
         -rpcuser="$BTC_RPC_USER" \
         -rpcpassword="$BTC_RPC_PASS" \
-        -rpcconnect="$(echo "$BTC_RPC_URL" | sed -E 's#^https?://##')" \
+        -rpcconnect="$rpc_host" \
+        -rpcport="$rpc_port" \
         "$@"
 }
 
@@ -170,6 +182,21 @@ wait_for_bitcoind() {
     done
     echo -e "${RED}bitcoind unreachable at $BTC_RPC_URL after 30s${RESET}" >&2
     exit 3
+}
+
+# Ensure a default wallet is loaded. bitcoind 24+ no longer creates one
+# automatically; without a wallet, getnewaddress / generatetoaddress fail.
+ensure_wallet() {
+    local wallets
+    wallets=$(bitcoin_cli listwallets 2>/dev/null | grep -oE '"[^"]+"' | tr -d '"' | head -1)
+    if [[ -n "$wallets" ]]; then
+        return 0
+    fi
+    bitcoin_cli createwallet "default" >/dev/null 2>&1 || {
+        echo -e "${RED}createwallet default failed${RESET}" >&2
+        return 1
+    }
+    echo "  created wallet: default"
 }
 
 # Mine `n` blocks to a fresh address (for confirmations).
@@ -216,6 +243,7 @@ echo "Mnemonic:   $([[ -n "${BTC_E2E_MNEMONIC:-}" ]] && echo '<env>' || echo "fi
 echo
 
 wait_for_bitcoind
+ensure_wallet
 
 # --- Steps ---
 
