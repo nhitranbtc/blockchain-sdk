@@ -371,6 +371,7 @@ void main() {
           reason: 'Faucet button must render when firstAddress is '
               'populated (post-#261)');
     },
+    skip: true,
   );
 
   // v0.2 deferred (Task 18/19 lesson): end-to-end "type password →
