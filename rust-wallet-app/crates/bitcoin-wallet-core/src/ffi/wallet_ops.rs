@@ -764,6 +764,24 @@ pub unsafe extern "C" fn wallet_show(
                                     let rt = tokio::runtime::Builder::new_current_thread()
                                         .enable_all()
                                         .build();
+                                    // L13 review C1 (thread-local
+                                    // safety): the `set_last_error`
+                                    // calls below run on the calling
+                                    // Dart thread (single-threaded
+                                    // `new_current_thread` runtime —
+                                    // `rt.block_on` blocks the
+                                    // calling thread, no thread
+                                    // spawn). The thread-local
+                                    // `LAST_ERROR` Cell is therefore
+                                    // readable by the Dart side via
+                                    // `ffi_last_error_message()` on
+                                    // the same thread. Do NOT move
+                                    // `set_last_error` calls into a
+                                    // `tokio::spawn` block — they
+                                    // would land on the runtime's
+                                    // worker thread, not the calling
+                                    // thread, and the Dart reader
+                                    // would see the previous value.
                                     match rt {
                                         Ok(rt) => {
                                             // Fast path: query Esplora
