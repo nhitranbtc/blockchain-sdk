@@ -81,7 +81,7 @@ subtle = "2"
 # TLS pinning (Task 7 — F20 SPKI pinning per threat model B2/U2).
 # Raw reqwest + custom ServerCertVerifier (CONTEXT.md hard rule #2:
 # no bdk_esplora; pulls rustls-webpki 0.101.7 RUSTSEC-2026-0106).
-rustls             = { version = "0.23", default-features = false, features = ["std", "tls12", "logging"] }
+rustls             = { version = "0.23", default-features = false, features = ["std", "tls12", "logging", "ring"] }
 rustls-native-certs = "0.7"  # Native system CA roots (Task 7 — F20 TLS pinning)
 sha2               = "0.10"
 webpki             = { version = "0.22", default-features = false, features = ["std"] }
