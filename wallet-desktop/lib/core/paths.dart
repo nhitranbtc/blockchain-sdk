@@ -31,6 +31,29 @@ Future<Directory> subdirFor(String name) async {
   return Directory(p.join(base.path, name)).create(recursive: true);
 }
 
+/// Returns the on-disk app-data path WITHOUT creating any directory.
+/// Awaits `getApplicationSupportDirectory()` (path_provider exposes only
+/// the async variant) then joins [appDirName] under it. Use this when
+/// you only need the path string — for logging, config-file generation,
+/// dry-run tooling — NOT for opening files. Not cached; each call
+/// re-queries `path_provider`. For the IO-creating variant, use
+/// [appDataDir].
+Future<String> appDataPath() async {
+  final base = await getApplicationSupportDirectory();
+  return p.join(base.path, appDirName);
+}
+
+/// Returns the on-disk subdirectory path WITHOUT creating any directory.
+/// Validates [name] against the same single-segment contract as
+/// [subdirFor] (see [_validateSubdirName]). Use this for config-file
+/// generation + dry-run tooling. For the IO-creating variant, use
+/// [subdirFor].
+Future<String> subdirPathFor(String name) async {
+  _validateSubdirName(name);
+  final base = await appDataPath();
+  return p.join(base, name);
+}
+
 /// Rejects subdir names that could escape `appDataDir` (CWE-22).
 /// Throws [ArgumentError] before any filesystem side effect.
 ///
