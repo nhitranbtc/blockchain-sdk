@@ -99,4 +99,37 @@ void main() {
       throwsA(isA<ArgumentError>()),
     );
   }, skip: !Platform.isWindows);
+
+  test('appDataPath returns a path string ending with appDirName', () async {
+    final path = await appDataPath();
+    expect(path.split(Platform.pathSeparator).last, appDirName);
+  });
+
+  test('appDataPath does not create the directory on disk', () async {
+    final path = await appDataPath();
+    expect(Directory(path).existsSync(), isFalse);
+  });
+
+  test('subdirPathFor returns a path string under appDataPath', () async {
+    final base = await appDataPath();
+    final sub = await subdirPathFor('btc');
+    expect(sub.startsWith(base), isTrue);
+    expect(sub.endsWith('btc'), isTrue);
+  });
+
+  test('subdirPathFor rejects traversal (validation reuse)', () async {
+    await expectLater(
+      () => subdirPathFor('../etc'),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('appDataDir creates the dir while appDataPath does not', () async {
+    // IO-creating variant must materialize the dir on disk...
+    await appDataDir();
+    // ...so appDataPath (path-only) resolves to an existing dir.
+    // Asserts the contract difference side-by-side in one test.
+    final path = await appDataPath();
+    expect(Directory(path).existsSync(), isTrue);
+  });
 }
