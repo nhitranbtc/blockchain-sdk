@@ -33,6 +33,18 @@ import 'ffi/secret_buffer.dart';
 /// Public contract every consumer of the FFI wallet surface depends on.
 /// Implemented by the concrete `WalletCore` (Task 8) and by test fakes
 /// (Task 10 `WalletsListNotifier` test suite).
+/// Result of [`WalletCore.showWallet`]: read-only metadata + a
+/// signing handle (Box<WalletHandle> from the Rust FFI). Caller
+/// owns the handle — free via `walletLoadFree` after use.
+class WalletShowResult {
+  const WalletShowResult({
+    required this.detail,
+    required this.walletHandle,
+  });
+  final WalletDetail detail;
+  final Pointer<Void> walletHandle;
+}
+
 abstract interface class WalletCoreApi {
   /// Returns the rust crate version as a UTF-8 String.
   String ffiVersion();
@@ -85,11 +97,13 @@ abstract interface class WalletCoreApi {
   /// `FfiException(kind: FfiErrorKind.walletStore)`. The detail
   /// screen renders this as a single "could not unlock" copy — no
   /// enumeration signal for a network observer.
-  WalletDetail showWallet({
+  WalletShowResult showWallet({
     required FfiNetwork network,
     required String walletId,
     required SecretBuffer password,
     required String baseDir,
+    required String esploraUrl,
+    required String esploraSpkiPin,
   });
 
   /// Fetch Esplora fee estimates via the FFI surface. (Task 16 /
@@ -182,6 +196,46 @@ abstract interface class WalletCoreApi {
     required Pointer<Utf8> recipient,
     required int amountSat,
     required int feeRateSatPerVb,
+  });
+
+  /// Sync the loaded wallet against the Esplora client (pulls UTXOs
+  /// + chain tip). (Issue #261 follow-up — `wallet_show` FFI stays
+  /// read-only; the explicit sync here lets the detail screen
+  /// surface a real balance on every unlock.)
+  ///
+  /// Caller owns both handles. Throws `FfiException` on Esplora
+  /// network failure / SPKI mismatch / etc.
+  void walletSync({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+  });
+
+  /// Returns the confirmed balance in satoshis for the loaded
+  /// wallet. Must be preceded by a successful [walletSync] call
+  /// (otherwise the bdk wallet state is empty and the call
+  /// returns `0`).
+  ///
+  /// Caller owns both handles. Throws `FfiException` on failure.
+  int walletBalance({
+    required Pointer<Void> walletHandle,
+    required Pointer<Void> esploraHandle,
+  });
+
+  /// Constructs a fresh `WalletHandle` in memory from a mnemonic +
+  /// network + address type — no disk persistence. (Issue #261
+  /// fallback — used when `walletLoad` returns null because the
+  /// wallet was created without `db_path`; the in-memory wallet
+  /// has the same address derivation as the persisted one so
+  /// Esplora sync finds the same UTXOs.)
+  ///
+  /// Caller must dispose via [walletLoadFree] (same `*mut WalletHandle`
+  /// box round-trip; both free functions call `wallet_free` internally).
+  ///
+  /// The `phrase` `SecretBuffer` is auto-disposed after the FFI call.
+  Pointer<Void> walletFromMnemonic({
+    required FfiNetwork network,
+    required SecretBuffer phrase,
+    required FfiAddressType addressType,
   });
 }
 

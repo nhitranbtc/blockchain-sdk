@@ -46,6 +46,13 @@ typedef _FfiVersionFreeC = Void Function(Pointer<Utf8>);
 typedef _FfiVersionFreeDart = void Function(Pointer<Utf8>);
 
 // ---------------------------------------------------------------------------
+// ffi_last_error_message (Issue #263 — surface sync-fail diagnostic to UI)
+// ---------------------------------------------------------------------------
+
+typedef _FfiLastErrorMessageC = Pointer<Utf8> Function();
+typedef _FfiLastErrorMessageDart = Pointer<Utf8> Function();
+
+// ---------------------------------------------------------------------------
 // wallet_create
 // ---------------------------------------------------------------------------
 
@@ -140,11 +147,15 @@ typedef _WalletShowC = Int32 Function(
   Pointer<Utf8>,
   Pointer<Uint8>,
   IntPtr,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Pointer<Utf8>>,
   Pointer<Uint64>,
+  Pointer<Uint8>,
+  Pointer<Pointer<Void>>,
 );
 typedef _WalletShowDart = int Function(
   int,
@@ -152,11 +163,15 @@ typedef _WalletShowDart = int Function(
   Pointer<Utf8>,
   Pointer<Uint8>,
   int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Uint8>,
   Pointer<Pointer<Utf8>>,
   Pointer<Uint64>,
+  Pointer<Uint8>,
+  Pointer<Pointer<Void>>,
 );
 
 typedef _WalletShowFirstAddressFreeC = Void Function(Pointer<Utf8>);
@@ -185,6 +200,24 @@ class WalletOpsBindings {
   static final void Function(Pointer<Utf8> ptr) ffiVersionFree =
       _lib.lookupFunction<_FfiVersionFreeC, _FfiVersionFreeDart>(
     'ffi_version_free',
+  );
+
+  /// **Issue #263** — surface the last FFI error message (set via
+  /// `set_last_error` in Rust) to the UI. Returns a borrowed
+  /// `*const c_char` into a thread-local `CString`; the pointer is
+  /// invalidated by the NEXT FFI call on the same thread that
+  /// triggers `set_last_error`. Caller MUST read it via
+  /// `toDartString` (or copy bytes) IMMEDIATELY after the FFI call
+  /// returns — DO NOT retain across subsequent FFI calls. Returns
+  /// null if no error has been recorded.
+  ///
+  /// Used by [WalletCore.showWallet] to surface Esplora sync failure
+  /// diagnostics (`wallet_show esplora client: <err>`, etc.) in the
+  /// red SyncFailed banner. The C1 fix from L12 review (replaces the
+  /// dead `lastError` parameter that was never populated).
+  static final Pointer<Utf8> Function() ffiLastErrorMessage =
+      _lib.lookupFunction<_FfiLastErrorMessageC, _FfiLastErrorMessageDart>(
+    'ffi_last_error_message',
   );
 
   /// Generates a new random mnemonic + persists the encrypted wallet
@@ -310,7 +343,8 @@ class WalletOpsBindings {
   /// Read a wallet's metadata + first external address from the
   /// persisted blob (Task 13). Returns the wallet id, network,
   /// address type, first address (heap-allocated CString; free via
-  /// [walletShowFirstAddressFree]), and balance (always 0 for v0.2.0).
+  /// [walletShowFirstAddressFree]), balance, sync status (Issue #263),
+  /// and an optional signing handle.
   ///
   /// **OutParams:**
   /// - `outId`: caller allocates a 37-byte buffer (calloc zero-initialises
@@ -328,6 +362,14 @@ class WalletOpsBindings {
   ///   Free via [walletShowFirstAddressFree].
   /// - `outBalanceSat`: caller allocates `calloc<Uint64>()`; reads
   ///   the confirmed balance (always 0 in v0.2.0; v0.2.1 wires sync).
+  /// - `outSyncStatus` (Issue #263): caller allocates `calloc<Uint8>()`;
+  ///   reads the `WalletSyncStatus` byte (0 = Synced, 1 = EmptyWallet,
+  ///   2 = SyncFailed). Lets the UI render a red banner + Retry button
+  ///   when sync fails (previously silent — operator couldn't
+  ///   distinguish empty wallet from broken Esplora sync).
+  /// - `outWalletHandle`: caller allocates `calloc<Pointer<Void>>()`;
+  ///   receives the opaque `Box<WalletHandle>` for `walletSend` /
+  ///   `walletBalance` / `walletSync`. Free via `walletLoadFree`.
   ///
   /// **L12 collapse (L12 HIGH #1 mirror):** file-not-found, wrong
   /// password, wrong network AAD, and corrupt blob all surface as
@@ -346,11 +388,15 @@ class WalletOpsBindings {
     Pointer<Utf8> walletId,
     Pointer<Uint8> password,
     int passwordLen,
+    Pointer<Utf8> esploraUrl,
+    Pointer<Utf8> esploraSpkiPin,
     Pointer<Uint8> outId,
     Pointer<Uint8> outNetwork,
     Pointer<Uint8> outAddressType,
     Pointer<Pointer<Utf8>> outFirstAddress,
     Pointer<Uint64> outBalanceSat,
+    Pointer<Uint8> outSyncStatus,
+    Pointer<Pointer<Void>> outWalletHandle,
   ) walletShow =
       _lib.lookupFunction<_WalletShowC, _WalletShowDart>('wallet_show');
 

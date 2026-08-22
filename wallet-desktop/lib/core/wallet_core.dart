@@ -77,6 +77,8 @@ typedef WalletImported = WalletImportedData;
 ///
 /// Implements [WalletCoreApi] (Task 10) so test fakes can swap in via
 /// Riverpod's `overrideWithValue`.
+/// (`WalletShowResult` lives in `wallet_core_api.dart` so the
+/// abstract surface can reference it without a circular dep.)
 class WalletCore implements WalletCoreApi {
   WalletCore._();
 
@@ -266,29 +268,38 @@ class WalletCore implements WalletCoreApi {
   /// `WalletDetail` (collapsed `Balance` — single `confirmedSat`
   /// field, no `utxos` list).
   ///
-  /// **v0.2.0 read-only show**: `firstAddress` is always `''` (Rust
-  /// `peek_addresses` requires bdk sync — deferred to v0.2.1);
-  /// `balance.confirmedSat` is always `0` (no Esplora sync). The
-  /// detail screen handles empty `firstAddress` by hiding
-  /// `AddressChip`.
+  /// **v0.2.x firstAddress (Issue #261):** `firstAddress` is
+  /// populated offline (no Esplora round-trip). Rust derives the
+  /// first External receive address via
+  /// `Wallet::first_external_address_offline` — pure local crypto.
+  /// `balance.confirmedSat` is still `0` (sync gate stays — address
+  /// vs balance are independent derivation paths). The detail
+  /// screen renders the address chip + copy/explorer/faucet wiring
+  /// unconditionally now that the field is reliable.
   ///
   /// **L12 collapse (HIGH #1 mirror):** wrong-password /
   /// not-found / wrong-AAD / corrupt-blob all surface as
   /// `FfiException(kind: FfiErrorKind.walletStore)`.
   @override
-  WalletDetail showWallet({
+  WalletShowResult showWallet({
     required FfiNetwork network,
     required String walletId,
     required SecretBuffer password,
     required String baseDir,
+    required String esploraUrl,
+    required String esploraSpkiPin,
   }) {
     final baseDirPtr = baseDir.toNativeUtf8();
     final walletIdPtr = walletId.toNativeUtf8();
+    final esploraUrlPtr = esploraUrl.toNativeUtf8();
+    final esploraPinPtr = esploraSpkiPin.toNativeUtf8();
     final outId = calloc<Uint8>(37);
     final outNetwork = calloc<Uint8>();
     final outAddressType = calloc<Uint8>();
     final outFirstAddress = calloc<Pointer<Utf8>>();
     final outBalanceSat = calloc<Uint64>();
+    final outSyncStatus = calloc<Uint8>();
+    final outWalletHandle = calloc<Pointer<Void>>();
     try {
       final rc = WalletOpsBindings.walletShow(
         network.code,
@@ -296,11 +307,15 @@ class WalletCore implements WalletCoreApi {
         walletIdPtr,
         password.ptr,
         password.length,
+        esploraUrlPtr,
+        esploraPinPtr,
         outId,
         outNetwork,
         outAddressType,
         outFirstAddress,
         outBalanceSat,
+        outSyncStatus,
+        outWalletHandle,
       );
       if (rc != 0) {
         throw _ffiError('wallet_show', rc);
@@ -319,13 +334,38 @@ class WalletCore implements WalletCoreApi {
         2 => FfiAddressType.taproot,
         _ => FfiAddressType.unknown,
       };
-      // out_first_address: v0.2.0 always empty. Free the CString
-      // regardless (Rust allocates one even for the empty case).
+      // out_first_address: Issue #261 — Rust `wallet_show` derives
+      // the first External receive address offline via
+      // `Wallet::first_external_address_offline` (no Esplora
+      // round-trip). Always non-empty for a freshly constructed
+      // wallet. Empty string only if Rust allocates a null (defensive
+      // — shouldn't happen post-#261).
       final firstAddrPtr = outFirstAddress.value;
       final firstAddress =
           firstAddrPtr == nullptr ? '' : firstAddrPtr.toDartString();
-      // out_balance_sat: v0.2.0 always 0 (no sync).
+      // out_balance_sat: synced via Esplora when `esplora_url` was
+      // provided (see sync block above); otherwise `0` (legacy
+      // v0.2.0 behavior — useful for offline test fixtures).
       final balanceSat = outBalanceSat.value;
+      // out_sync_status (Issue #263): `WalletSyncStatus` byte
+      // (0 Synced / 1 EmptyWallet / 2 SyncFailed). Lets the detail
+      // screen render a red banner + Retry button when sync fails
+      // (previously silent — the operator couldn't distinguish
+      // empty wallet from broken Esplora sync).
+      final syncStatus = FfiSyncStatus.fromCode(outSyncStatus.value);
+      // Issue #263 — C1 fix: surface the Rust `set_last_error`
+      // diagnostic to the UI. Read the borrowed thread-local
+      // `CString` IMMEDIATELY after `walletShow` returns (any
+      // subsequent FFI call on this thread could overwrite it).
+      // Only populate for `SyncFailed` (other statuses don't
+      // emit diagnostic context).
+      String? lastError;
+      if (syncStatus == FfiSyncStatus.syncFailed) {
+        final errPtr = WalletOpsBindings.ffiLastErrorMessage();
+        if (errPtr != nullptr) {
+          lastError = errPtr.toDartString();
+        }
+      }
       // Dart string for addressType (matches legacy btc wallet show
       // --json encoding for the detail screen).
       final addressTypeStr = switch (addressType) {
@@ -342,12 +382,21 @@ class WalletCore implements WalletCoreApi {
         FfiNetwork.testnet => 'testnet',
         FfiNetwork.unknown => '',
       };
-      return WalletDetail(
-        id: id,
-        network: networkStr,
-        addressType: addressTypeStr,
-        firstAddress: firstAddress,
-        balance: Balance(confirmedSat: balanceSat),
+      return WalletShowResult(
+        detail: WalletDetail(
+          id: id,
+          network: networkStr,
+          addressType: addressTypeStr,
+          firstAddress: firstAddress,
+          balance: Balance(confirmedSat: balanceSat),
+          syncStatus: syncStatus,
+          lastError: lastError,
+        ),
+        // The signing handle — caller passes to walletSend /
+        // walletBalance / walletSync. Free via walletLoadFree. Null
+        // if Rust skipped (out_wallet_handle was nullptr on the FFI
+        // side, which we never do post-#261 — defensive only).
+        walletHandle: outWalletHandle.value,
       );
     } finally {
       // Free the CString-typed `out_first_address` if Rust allocated
@@ -358,11 +407,15 @@ class WalletCore implements WalletCoreApi {
       }
       calloc.free(baseDirPtr);
       calloc.free(walletIdPtr);
+      calloc.free(esploraUrlPtr);
+      calloc.free(esploraPinPtr);
       calloc.free(outId);
       calloc.free(outNetwork);
       calloc.free(outAddressType);
       calloc.free(outFirstAddress);
       calloc.free(outBalanceSat);
+      calloc.free(outSyncStatus);
+      calloc.free(outWalletHandle);
       password.dispose();
     }
   }
@@ -654,6 +707,51 @@ class WalletCore implements WalletCoreApi {
   /// Task 9 closes L12 CRITICAL #1 — callers in Tasks 10-16 match
   /// `on FfiException catch (e) when (e.kind == FfiErrorKind.x)`
   /// instead of parsing message strings.
-  FfiException _ffiError(String op, int code) =>
-      FfiException.fromCode(code: code, op: op);
+  ///
+  /// **Issue #265 — C1 async FFI surface**: reads the Rust
+  /// thread-local `ffi_last_error_message` (set via `set_last_error`
+  /// on the Rust side before returning the non-zero `FfiError` code)
+  /// and attaches it to the exception as [FfiException.lastError].
+  /// UI code calls [userMessageForFfiExceptionWithOp] to surface the
+  /// per-op diagnostic alongside the per-op user copy.
+  ///
+  /// **Thread-locality**: the borrowed CString is invalidated by
+  /// the NEXT FFI call on this thread that triggers `set_last_error`.
+  /// We read it via `toDartString` IMMEDIATELY (zero-copy into Dart
+  /// heap) — same pattern as `showWallet` for `WalletSyncStatus =
+  /// SyncFailed`.
+  ///
+  /// **Older Rust crate** (L12 review MEDIUM): if
+  /// `ffi_last_error_message` is unresolved (older build), the
+  /// `static final` binding throws `ArgumentError` on first
+  /// `lookupFunction` access. Without a guard, that throw
+  /// propagates out of `_ffiError` and bypasses the
+  /// `on FfiException catch (e)` matchers in Tasks 10-16 screens —
+  /// the caller expects an `FfiException`, gets an `ArgumentError`.
+  /// Wrap the binding access in try/catch so the diagnostic path
+  /// degrades to `lastError: null` instead of breaking the error
+  /// contract. Same fallback for `toDartString` if the Rust side
+  /// emits non-UTF-8 bytes (rare; defense-in-depth).
+  FfiException _ffiError(String op, int code) {
+    String? lastError;
+    try {
+      final errPtr = WalletOpsBindings.ffiLastErrorMessage();
+      if (errPtr != nullptr) {
+        lastError = errPtr.toDartString();
+      }
+    } catch (_) {
+      // Older Rust crate (no `ffi_last_error_message` export) OR
+      // non-UTF-8 thread-local payload. The exception path itself
+      // must still produce a typed FfiException so the
+      // `on FfiException catch (e)` handlers match — silently
+      // dropping the diagnostic is acceptable (the operator sees
+      // the per-op copy + op/code, just not the Rust diagnostic).
+      lastError = null;
+    }
+    return FfiException.fromCode(
+      code: code,
+      op: op,
+      lastError: lastError,
+    );
+  }
 }

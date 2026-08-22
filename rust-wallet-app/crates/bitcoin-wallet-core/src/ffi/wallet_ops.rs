@@ -22,6 +22,9 @@
 
 #![allow(unsafe_code)] // FFI surface
 
+use crate::chain::esplora::{EsploraClient, TlsPolicy};
+use crate::chain::esplora_url::EsploraUrl;
+use crate::chain::spki::{SpkiPin, SpkiPinSet};
 use crate::crypto::aad::Aad;
 use crate::crypto::mnemonic_cipher::{decrypt_mnemonic, MnemonicCipherBlob};
 use crate::ffi::panic::ffi_catch_unwind;
@@ -31,12 +34,43 @@ use crate::wallet::ops::{
     create_wallet, delete_wallet, import_wallet, list_wallets, read_address_type_or_default,
 };
 use crate::wallet::store::read_wallet_at;
+use crate::wallet::Wallet;
 use crate::wallet::WalletId;
 use bitcoin::Network;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
 use zeroize::Zeroize;
+
+/// Sync status byte written by `wallet_show` to `out_sync_status`.
+///
+/// **Issue #263 — distinct "sync failed" UX state.** Previously every
+/// sync failure surfaced as `balance_sat: 0` with no signal to the UI;
+/// operator couldn't distinguish an empty wallet from a broken Esplora
+/// sync. The detail screen now renders a red banner + Retry button for
+/// `SyncFailed` and shows the existing "no funds yet" hint for
+/// `EmptyWallet`.
+///
+/// Values MUST match `FfiSyncStatus` in
+/// `wallet-desktop/lib/core/ffi/ffi_enums.dart`. Drift = silent
+/// classification bug (Dart would map `Synced → SyncFailed` and the
+/// banner would render on every wallet unlock).
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletSyncStatus {
+    /// Esplora sync ran to completion. Balance reflects the live
+    /// UTXO set (may be `0` for a legitimately empty wallet).
+    Synced = 0,
+    /// No `esplora_url` provided (legacy v0.2.0 path) — sync
+    /// intentionally skipped. Operator should see the "no funds yet"
+    /// hint, not the sync-failed banner.
+    EmptyWallet = 1,
+    /// Esplora sync attempted but failed (network down, bad URL,
+    /// SPKI mismatch, runtime build failure, MAX_MONEY overflow).
+    /// UI surfaces a red banner + Retry button that re-invokes
+    /// `wallet_show`.
+    SyncFailed = 2,
+}
 
 /// Opaque FFI handle to the cleartext mnemonic returned by
 /// `wallet_create`. The bytes are heap-allocated with a trailing NUL
@@ -500,8 +534,29 @@ pub unsafe extern "C" fn wallet_import(
 /// - `out_id` must be a writable 37-byte buffer (zero-init by the
 ///   caller; the 36-byte UUID hex is written at indices [0..36),
 ///   byte 36 stays zero).
+/// - `esplora_url` must be NUL-terminated UTF-8. The sync runs
+///   against this endpoint. Pass an empty string to skip sync
+///   (returns `balance_sat: 0`, legacy v0.2.0 behavior — useful for
+///   offline test fixtures).
+/// - `spki_pin_b64` must be NUL-terminated UTF-8 (base64 of the
+///   SPKI pin). Pass an empty string to skip the pin check
+///   (localhost dev escape only — F20 enforcement on public hosts).
 /// - `out_network`, `out_address_type`, `out_first_address`, and
 ///   `out_balance_sat` must be non-null and writable.
+/// - `out_sync_status` must be non-null and writable. Receives a
+///   [`WalletSyncStatus`] byte (`0` Synced / `1` EmptyWallet / `2`
+///   SyncFailed — Issue #263). Lets the UI distinguish an empty wallet
+///   from a broken Esplora sync (previously both surfaced as
+///   `balance_sat: 0` with no signal).
+/// - `out_wallet_handle` if non-null receives a `Box<WalletHandle>`
+///   that the caller can pass to `wallet_send` / `wallet_balance` /
+///   `wallet_sync` / `wallet_peek_addresses`. Free via
+///   `wallet_load_free` (same `Box<WalletHandle>` round-trip per
+///   `bdk_extras.rs:wallet_load_free`). **Mnemonic never crosses
+///   FFI as raw bytes** — the handle holds the decrypted phrase
+///   internally in `Secret<String>` and zeroizes on drop. SendScreen
+///   re-calls `wallet_show` with the user's password for sign
+///   authorization instead of requiring a mnemonic paste.
 #[no_mangle]
 pub unsafe extern "C" fn wallet_show(
     network: u8,
@@ -509,11 +564,15 @@ pub unsafe extern "C" fn wallet_show(
     wallet_id: *const c_char,
     password: *const u8,
     password_len: usize,
+    esplora_url: *const c_char,
+    spki_pin_b64: *const c_char,
     out_id: *mut c_char,
     out_network: *mut u8,
     out_address_type: *mut u8,
     out_first_address: *mut *mut c_char,
     out_balance_sat: *mut u64,
+    out_sync_status: *mut u8,
+    out_wallet_handle: *mut *mut c_void,
 ) -> FfiError {
     ffi_catch_unwind(|| -> FfiError {
         if out_id.is_null()
@@ -521,6 +580,7 @@ pub unsafe extern "C" fn wallet_show(
             || out_address_type.is_null()
             || out_first_address.is_null()
             || out_balance_sat.is_null()
+            || out_sync_status.is_null()
         {
             return FfiError::Storage;
         }
@@ -573,24 +633,299 @@ pub unsafe extern "C" fn wallet_show(
         // tag-pass + non-mnemonic, `Ok` tag-pass + valid mnemonic) —
         // a partial N2 oracle leak. The check is retained as
         // defense-in-depth; only the surfaced error code is collapsed.
-        if Mnemonic::from_phrase(phrase_secret.expose()).is_err() {
-            return FfiError::WalletStore;
-        }
-        // Zero the phrase copy on the heap ASAP — the Mnemonic check
-        // above borrows the bytes; the phrase_secret's drop zeroizes
-        // the heap copy.
-        drop(phrase_secret);
+        //
+        // Compute the `Mnemonic` once — both the defense-in-depth
+        // check and the `Wallet::from_mnemonic_with_type` constructor
+        // below parse the SAME bytes. bip39 parsing is deterministic;
+        // a second parse on a validated phrase cannot fail (L12
+        // review F1 MEDIUM — drop the redundant `Err` arms).
+        let mnemonic = match Mnemonic::from_phrase(phrase_secret.expose()) {
+            Ok(m) => m,
+            Err(_) => return FfiError::WalletStore,
+        };
 
         let address_type = read_address_type_or_default(&base, net, id);
-        // v0.2.0 plan deviation: skip first-address derivation. The
-        // bdk `Wallet::peek_addresses` requires the bdk state to be
-        // initialised via `sync()` or `balance()` (which needs an
-        // EsploraClient + runtime handle — the async path the v0.2.0
-        // FFI defers). v0.2.0 returns an empty first-address; the
-        // detail screen renders this as "sync required — open
-        // SendScreen" copy. v0.2.1 wires the async sync path so the
-        // first address populates on unlock.
-        let first_address = String::new();
+        // Offline first-address derivation (Issue #261). Builds a
+        // transient `Wallet` from the decrypted mnemonic + the
+        // persisted address type, then calls
+        // `first_external_address_offline` — pure local crypto (no
+        // Esplora round-trip, no runtime handle). Replaces the v0.2.0
+        // empty-string sentinel. Closes the v0.2.x deviance tracked
+        // in `wallet_show_first_address_free` callers.
+        //
+        // `phrase_secret` must outlive the offline peek — its drop
+        // zeroizes the heap copy. The `Wallet::drop` zeroizes the
+        // inner `phrase: Secret<String>` copy. Both gone before the
+        // FFI writes any out-params.
+        let first_address =
+            match Wallet::from_mnemonic_with_type(&mnemonic, net, address_type, None)
+                .expect("mnemonic validated above; bip39 word count deterministic")
+                .first_external_address_offline()
+            {
+                Ok(a) => a.to_string(),
+                // L12 collapse (security-auditor Task 13 HIGH #1):
+                // descriptor-parse / bip32 / bdk failures all surface as
+                // `WalletStore` — same code as the decrypt-failure
+                // collapse. No oracle for offline attackers.
+                Err(_) => return FfiError::WalletStore,
+            };
+        // Construct a transient `Wallet` for the sync path below
+        // (separate instance from the offline-peek helper; this one
+        // carries the runtime handle inside `sync`/`balance` (tokio
+        // async)).
+        let sync_wallet = Wallet::from_mnemonic_with_type(&mnemonic, net, address_type, None)
+            .expect("mnemonic validated above; deterministic re-parse");
+        drop(phrase_secret);
+
+        // Optional Esplora sync (Issue #261 follow-up). Skip when
+        // `esplora_url` is empty — legacy v0.2.0 behavior
+        // (`balance_sat: 0`, `WalletSyncStatus::EmptyWallet`).
+        // On failure (network down, bad URL, SPKI mismatch) keep
+        // `balance_sat: 0` + flip `sync_status` to `SyncFailed` so
+        // the UI can render a distinct red banner + Retry button
+        // (Issue #263 — operator can now distinguish empty wallet
+        // from broken Esplora sync).
+        let mut synced_balance_sat: u64 = 0;
+        let mut sync_status: WalletSyncStatus = if esplora_url.is_null() {
+            // No URL provided → caller's intent was "skip sync".
+            // Legacy v0.2.0 path; render the existing "no funds
+            // yet" hint, not the sync-failed banner.
+            WalletSyncStatus::EmptyWallet
+        } else {
+            // URL was provided → any failure below flips back to
+            // `SyncFailed`. The single-shot `match` updates the
+            // `sync_status` local via side-effect.
+            WalletSyncStatus::SyncFailed
+        };
+        if !esplora_url.is_null() {
+            match unsafe { CStr::from_ptr(esplora_url) }.to_str() {
+                Ok("") => {
+                    // Empty URL explicitly → caller wants legacy
+                    // offline path.
+                    sync_status = WalletSyncStatus::EmptyWallet;
+                }
+                Ok(url_str) => {
+                    let pin_str = if spki_pin_b64.is_null() {
+                        ""
+                    } else {
+                        // Malformed CStr / non-UTF-8 pin → empty
+                        // string (falls through to SystemRoots).
+                        // A storage error here would lock the
+                        // operator out of the wallet over a Dart
+                        // binding bug — better to sync (less secure)
+                        // than to refuse the unlock.
+                        unsafe { CStr::from_ptr(spki_pin_b64) }
+                            .to_str()
+                            .unwrap_or_default()
+                    };
+                    match EsploraUrl::new(url_str) {
+                        Ok(esplora_url_parsed) => {
+                            // F20 SPKI enforcement: build
+                            // `TlsPolicy::Pinned` from the base64
+                            // pin. Fall back to `TlsPolicy::SystemRoots`
+                            // (localhost-only dev escape) when the
+                            // pin is missing OR malformed (decoded
+                            // length ≠ 32 bytes). A misconfigured
+                            // pin shouldn't block unlock — the
+                            // operator can re-fetch the pin via
+                            // Settings. Per F20 the production
+                            // stance is still "operator-provided
+                            // config file with a valid SPKI pin" —
+                            // a malformed pin defaults to system
+                            // roots as a UX escape hatch, same as
+                            // empty pin.
+                            let tls_policy = if pin_str.is_empty() {
+                                TlsPolicy::SystemRoots
+                            } else {
+                                match SpkiPin::from_base64(pin_str) {
+                                    Ok(pin) => TlsPolicy::Pinned(SpkiPinSet::from_one(pin)),
+                                    // Malformed pin → fall through
+                                    // to SystemRoots. A storage
+                                    // error here would lock the
+                                    // operator out of the wallet
+                                    // over a config typo; better to
+                                    // sync (less secure) than to
+                                    // refuse the unlock.
+                                    Err(e) => {
+                                        crate::ffi::error::set_last_error(format!(
+                                            "wallet_show spki pin decode: {e}"
+                                        ));
+                                        TlsPolicy::SystemRoots
+                                    }
+                                }
+                            };
+                            match EsploraClient::new(esplora_url_parsed, tls_policy) {
+                                Ok(esplora_client) => {
+                                    // Single-shot tokio runtime — created
+                                    // and torn down per `wallet_show` call.
+                                    // Overhead ~1ms; acceptable for a
+                                    // detail-screen unlock (one call per
+                                    // unlock, not per render).
+                                    let rt = tokio::runtime::Builder::new_current_thread()
+                                        .enable_all()
+                                        .build();
+                                    // L13 review C1 (thread-local
+                                    // safety): the `set_last_error`
+                                    // calls below run on the calling
+                                    // Dart thread (single-threaded
+                                    // `new_current_thread` runtime —
+                                    // `rt.block_on` blocks the
+                                    // calling thread, no thread
+                                    // spawn). The thread-local
+                                    // `LAST_ERROR` Cell is therefore
+                                    // readable by the Dart side via
+                                    // `ffi_last_error_message()` on
+                                    // the same thread. Do NOT move
+                                    // `set_last_error` calls into a
+                                    // `tokio::spawn` block — they
+                                    // would land on the runtime's
+                                    // worker thread, not the calling
+                                    // thread, and the Dart reader
+                                    // would see the previous value.
+                                    match rt {
+                                        Ok(rt) => {
+                                            // Fast path: query Esplora
+                                            // directly for the first
+                                            // address's UTXOs. bdk's
+                                            // `sync` does a gap scan
+                                            // (40 HTTP requests ≈ 20s
+                                            // over network) which is
+                                            // overkill for the unlock
+                                            // path — the detail screen
+                                            // needs only the
+                                            // first-address balance.
+                                            // SendScreen uses the
+                                            // full bdk sync (via
+                                            // `walletSync` FFI) when
+                                            // it needs a complete UTXO
+                                            // set.
+                                            let first_address = sync_wallet
+                                                .first_external_address_offline()
+                                                .expect(
+                                                    "peek succeeded above; deterministic re-derive",
+                                                );
+                                            match rt.block_on(async {
+                                                esplora_client.address_utxos(&first_address).await
+                                            }) {
+                                                Ok(utxos) => {
+                                                    // F13 + L12 review MED #3
+                                                    // (commit security
+                                                    // review): cap each
+                                                    // UTXO value at
+                                                    // `Amount::MAX_MONEY`
+                                                    // to bound a malicious
+                                                    // Esplora response
+                                                    // from inflating
+                                                    // the balance via
+                                                    // integer overflow.
+                                                    // Mirror the existing
+                                                    // guard in `scan_into`
+                                                    // (the wallet-side
+                                                    // path); without
+                                                    // this, a hostile
+                                                    // Esplora could
+                                                    // return `u.value =
+                                                    // u64::MAX` → balance
+                                                    // display wildly
+                                                    // wrong. Per-UTXO
+                                                    // reject + zero
+                                                    // result preserves
+                                                    // the `balance_sat: 0`
+                                                    // UX (operator sees
+                                                    // the safe fallback
+                                                    // and re-checks
+                                                    // their Esplora URL
+                                                    // in Settings).
+                                                    let mut sum: u64 = 0;
+                                                    let mut poisoned = false;
+                                                    for u in &utxos {
+                                                        if !u.status.confirmed {
+                                                            continue;
+                                                        }
+                                                        let amt =
+                                                            bitcoin::Amount::from_sat(u.value);
+                                                        if amt > bitcoin::Amount::MAX_MONEY {
+                                                            crate::ffi::error::set_last_error(format!(
+                                                                "wallet_show: utxo value {} sat exceeds MAX_MONEY for {} — possible Esplora misconfig",
+                                                                u.value, first_address
+                                                            ));
+                                                            poisoned = true;
+                                                            break;
+                                                        }
+                                                        sum = match sum.checked_add(u.value) {
+                                                            Some(s) => s,
+                                                            None => {
+                                                                crate::ffi::error::set_last_error(format!(
+                                                                    "wallet_show: balance overflow for {} — possible Esplora misconfig",
+                                                                    first_address
+                                                                ));
+                                                                poisoned = true;
+                                                                break;
+                                                            }
+                                                        };
+                                                    }
+                                                    if !poisoned {
+                                                        // Sync reached the wire + parsed
+                                                        // the response cleanly. Balance may
+                                                        // be `0` for a legitimately empty
+                                                        // wallet — that's still `Synced`,
+                                                        // not `SyncFailed` (Issue #263).
+                                                        synced_balance_sat = sum;
+                                                        sync_status = WalletSyncStatus::Synced;
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    crate::ffi::error::set_last_error(format!(
+                                                        "wallet_show esplora utxos: {e}"
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            crate::ffi::error::set_last_error(format!(
+                                                "wallet_show tokio runtime: {e}"
+                                            ));
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    crate::ffi::error::set_last_error(format!(
+                                        "wallet_show esplora client: {e}"
+                                    ));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            crate::ffi::error::set_last_error(format!(
+                                "wallet_show esplora url: {e}"
+                            ));
+                        }
+                    }
+                }
+                // Malformed esplora_url CStr / non-UTF-8 → leave
+                // status as `SyncFailed` (the initial value when
+                // `esplora_url` was non-null). Same UX rationale as
+                // the pin fallback: don't lock the operator out of
+                // the wallet over a binding typo — but DO surface
+                // the failure so they can spot the bad config.
+                Err(_) => {}
+            }
+        }
+        // Wrap the sync wallet in a `Box<WalletHandle>` for the caller
+        // (used by `wallet_send` / `wallet_balance` etc.). The handle
+        // holds the decrypted mnemonic internally in
+        // `Secret<String>` and zeroizes on `wallet_load_free`.
+        if !out_wallet_handle.is_null() {
+            unsafe {
+                *out_wallet_handle = Box::into_raw(Box::new(
+                    crate::ffi::bdk_extras::WalletHandle::new(sync_wallet),
+                )) as *mut c_void;
+            }
+        } else {
+            // `sync_wallet::drop` zeroizes its inner
+            // `phrase: Secret<String>`.
+            drop(sync_wallet);
+        }
 
         // Write outputs. ID first, then metadata, then CString, then
         // balance — fail-fast on any CString alloc so the caller sees
@@ -624,17 +959,26 @@ pub unsafe extern "C" fn wallet_show(
         unsafe {
             *out_address_type = addr_type_byte;
         }
-        let addr_cstr = match CString::new(first_address.to_string()) {
+        let addr_cstr = match CString::new(first_address) {
             Ok(c) => c,
             Err(_) => return FfiError::Io,
         };
         unsafe {
             *out_first_address = addr_cstr.into_raw();
         }
-        // v0.2.0: balance is always 0 (no sync). v0.2.1: wire sync
-        // via the runtime handle + return the real balance.
+        // Balance: synced via Esplora when `esplora_url` was provided
+        // (see sync block above); otherwise `0` (legacy v0.2.0
+        // behavior — useful for offline test fixtures).
         unsafe {
-            *out_balance_sat = 0;
+            *out_balance_sat = synced_balance_sat;
+        }
+        // Sync status (Issue #263). See `WalletSyncStatus` enum above
+        // for the 3-way classification. Lets the UI render a red
+        // banner + Retry button when sync fails (previously silent —
+        // the operator couldn't distinguish empty wallet from broken
+        // Esplora).
+        unsafe {
+            *out_sync_status = sync_status as u8;
         }
         FfiError::Ok
     })
@@ -987,6 +1331,7 @@ mod tests {
         let mut show_addr_type: u8 = 255;
         let mut show_first_address: *mut c_char = std::ptr::null_mut();
         let mut show_balance: u64 = 999;
+        let mut show_sync_status: u8 = 255;
         let rc = unsafe {
             wallet_show(
                 NETWORK_TESTNET,
@@ -994,11 +1339,22 @@ mod tests {
                 id_str.as_ptr() as *const c_char,
                 pw.as_ptr(),
                 pw_len,
+                // Skip sync in the unit test (no Esplora endpoint
+                // reachable from CI). Empty url → balance_sat: 0,
+                // sync_status = EmptyWallet (legacy v0.2.0 path).
+                c"".as_ptr(),
+                c"".as_ptr(),
                 show_id.as_mut_ptr(),
                 &mut show_network,
                 &mut show_addr_type,
                 &mut show_first_address,
                 &mut show_balance,
+                &mut show_sync_status,
+                // SendScreen handle out param — skipped in this
+                // unit test (no Esplora endpoint, no need for a
+                // signing handle; tests that exercise the handle
+                // out param live in `bdk_extras::tests`).
+                std::ptr::null_mut(),
             )
         };
         assert_eq!(rc, FfiError::Ok);
@@ -1013,18 +1369,115 @@ mod tests {
         assert_eq!(show_network, NETWORK_TESTNET);
         // out_address_type is native-segwit (0).
         assert_eq!(show_addr_type, 0);
-        // out_first_address is empty (v0.2.0 plan deviation: skip
-        // peek_addresses — needs sync). v0.2.1 wires the async path.
+        // out_first_address is populated (Issue #261, v0.2.x deviance
+        // closure). `wallet_show` derives the first External address
+        // offline via `Wallet::first_external_address_offline` — no
+        // Esplora round-trip. Asserts shape only (prefix + length);
+        // the exact address depends on the per-run fresh mnemonic.
         assert!(!show_first_address.is_null());
         let first_addr = unsafe { CStr::from_ptr(show_first_address) }
             .to_str()
             .unwrap();
         assert!(
-            first_addr.is_empty(),
-            "v0.2.0 returns empty first_address; got: {first_addr}"
+            first_addr.starts_with("tb1"),
+            "testnet NativeSegwit first address must start with `tb1`, got: {first_addr}"
+        );
+        assert_eq!(
+            first_addr.len(),
+            42,
+            "testnet NativeSegwit P2WPKH address must be 42 chars, got {} ({first_addr})",
+            first_addr.len()
         );
         // out_balance_sat is 0 (v0.2.0: no sync).
         assert_eq!(show_balance, 0);
+        // out_sync_status is EmptyWallet (Issue #263) — empty URL
+        // means caller wants the legacy offline path, not the
+        // sync-failed banner.
+        assert_eq!(show_sync_status, WalletSyncStatus::EmptyWallet as u8);
+
+        unsafe { wallet_show_first_address_free(show_first_address) };
+    }
+
+    /// Issue #263 — sync-failed classification. When `esplora_url`
+    /// is a syntactically valid URL but the host refuses the
+    /// connection (port 1 → TCP RST), `wallet_show` must surface
+    /// `WalletSyncStatus::SyncFailed` (NOT `EmptyWallet`) so the
+    /// UI can render a distinct red banner + Retry button.
+    ///
+    /// The function still returns `FfiError::Ok` — the unlock
+    /// succeeded (decrypted mnemonic + first address both
+    /// populated); only the Esplora sync path failed. Balance
+    /// stays `0` (matches the safe-fallback the operator saw
+    /// pre-#263).
+    #[test]
+    fn wallet_show_unreachable_esplora_returns_sync_failed() {
+        let (_dir, base) = temp_base();
+        let (pw, pw_len) = pw_bytes("hunter2");
+        let mut id_buf = [0i8; 37];
+        let mut phrase_handle: *mut c_void = std::ptr::null_mut();
+        let rc = unsafe {
+            wallet_create(
+                12,
+                NETWORK_TESTNET,
+                0,
+                pw.as_ptr(),
+                pw_len,
+                base.as_ptr(),
+                id_buf.as_mut_ptr(),
+                &mut phrase_handle,
+            )
+        };
+        assert_eq!(rc, FfiError::Ok);
+        let id_str = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
+            .to_str()
+            .unwrap()
+            .to_string();
+        unsafe { phrase_view_free(phrase_handle) };
+
+        let mut show_id = [0i8; 37];
+        let mut show_network: u8 = 0;
+        let mut show_addr_type: u8 = 0;
+        let mut show_first_address: *mut c_char = std::ptr::null_mut();
+        let mut show_balance: u64 = 999;
+        let mut show_sync_status: u8 = 255;
+        // TCP port 1 → connection refused (unreachable host).
+        let bad_url = c"https://127.0.0.1:1/";
+        let rc = unsafe {
+            wallet_show(
+                NETWORK_TESTNET,
+                base.as_ptr(),
+                id_str.as_ptr() as *const c_char,
+                pw.as_ptr(),
+                pw_len,
+                bad_url.as_ptr(),
+                c"".as_ptr(),
+                show_id.as_mut_ptr(),
+                &mut show_network,
+                &mut show_addr_type,
+                &mut show_first_address,
+                &mut show_balance,
+                &mut show_sync_status,
+                std::ptr::null_mut(),
+            )
+        };
+        // Unlock itself succeeds (decrypt + first-address derive are
+        // both offline). Only the Esplora sync arm failed.
+        assert_eq!(rc, FfiError::Ok);
+        // out_sync_status = SyncFailed (the whole point of #263 —
+        // distinguishes a reachable-but-empty wallet from a broken
+        // Esplora sync, both of which pre-#263 surfaced as
+        // `balance_sat: 0` with no signal).
+        assert_eq!(
+            show_sync_status,
+            WalletSyncStatus::SyncFailed as u8,
+            "expected SyncFailed (2), got {}",
+            show_sync_status
+        );
+        // out_balance_sat = 0 (no UTXOs reachable → safe fallback).
+        assert_eq!(show_balance, 0);
+        // out_first_address still populated — first-address derivation
+        // is offline; sync failure doesn't affect it.
+        assert!(!show_first_address.is_null());
 
         unsafe { wallet_show_first_address_free(show_first_address) };
     }
@@ -1063,6 +1516,7 @@ mod tests {
         let mut show_addr_type: u8 = 0;
         let mut show_first_address: *mut c_char = std::ptr::null_mut();
         let mut show_balance: u64 = 0;
+        let mut show_sync_status: u8 = 0;
         let rc = unsafe {
             wallet_show(
                 NETWORK_TESTNET,
@@ -1070,11 +1524,19 @@ mod tests {
                 id_str.as_ptr() as *const c_char,
                 wrong_pw.as_ptr(),
                 wrong_pw_len,
+                c"".as_ptr(),
+                c"".as_ptr(),
                 show_id.as_mut_ptr(),
                 &mut show_network,
                 &mut show_addr_type,
                 &mut show_first_address,
                 &mut show_balance,
+                &mut show_sync_status,
+                // SendScreen handle out param — skipped in this
+                // unit test (no Esplora endpoint, no need for a
+                // signing handle; tests that exercise the handle
+                // out param live in `bdk_extras::tests`).
+                std::ptr::null_mut(),
             )
         };
         assert_eq!(rc, FfiError::WalletStore);

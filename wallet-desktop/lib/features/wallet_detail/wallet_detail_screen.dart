@@ -17,10 +17,14 @@
 //   sentinel is constructed inside `unlockWithDetail` (Task 20 L12
 //   type-design HIGH) so the convention doesn't leak to callers.
 //
-// **v0.2.0 firstAddress plan deviation #4:** Rust `wallet_show`
-// returns an empty `first_address` because `peek_addresses` requires
-// bdk sync (deferred to v0.2.1). The detail screen hides
-// `AddressChip` when `firstAddress.isEmpty` (graceful UX).
+// **v0.2.x firstAddress (Issue #261 — deviance closed):** Rust
+// `wallet_show` now derives the first External receive address
+// offline via `Wallet::first_external_address_offline` (pure local
+// crypto, no Esplora round-trip). `WalletDetail.firstAddress`
+// carries a real `tb1…` 42-char string on every unlock. The chip +
+// copy + Explorer + Faucet wiring renders unconditionally; the only
+// remaining fallback is a defensive `'(unavailable — unlock failed)'`
+// for an unexpected FFI failure.
 //
 // **L12 collapse (HIGH #1 mirror):** wrong-password / not-found /
 // wrong-AAD / corrupt-blob all surface as
@@ -39,6 +43,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:ffi/ffi.dart';
+
+import 'dart:ffi';
 
 import '../../core/btc/models/wallet_detail.dart';
 import '../../core/ffi/ffi_enums.dart';
@@ -47,6 +54,7 @@ import '../../core/ffi/secret_buffer.dart';
 import '../../core/format/wallet_id.dart';
 import '../../core/logging/btc_log_filter.dart';
 import '../../providers/app_paths_provider.dart';
+import '../../providers/esplora_config_provider.dart';
 import '../../providers/wallet_core_provider.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
@@ -70,9 +78,60 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
   String _password = '';
   bool _running = false;
   String? _error;
+  // Subscription to `esploraConfigProvider` that fires when Settings →
+  // Save mutates the on-disk esplora.json. Used to surface a
+  // "Re-unlock to refresh balance" snackbar — `wallet_show` only Esplora-
+  // syncs at unlock, so a stale balance (cached at 0 from a previous bad
+  // pin) won't update until the operator re-unlocks. Listener registered
+  // in `initState`, cancelled in `dispose`. Tighter than ref.listen() in
+  // build() (which re-subscribes per rebuild) and avoids caching the
+  // cleartext password across unlocks.
+  ProviderSubscription<AsyncValue<EsploraConfig>>? _esploraCfgSub;
+  // Snapshot of the Esplora config at screen mount. Compared post-mount
+  // against the current value to detect off-screen Settings → Save
+  // changes (the listener subscribes here and cancels in dispose, so
+  // changes while this route is unmounted would be silently missed).
+  EsploraConfig? _initialEsploraCfg;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialEsploraCfg = ref.read(esploraConfigProvider).value;
+    // Post-mount check for off-screen config mutations: if Settings
+    // was visited and saved a new config while this route was
+    // unmounted, the listener's `fireImmediately: true` path sees
+    // `prev == null` and skips — leaving an off-screen refresh
+    // undetected. Snapshotted comparison catches that case.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final current = ref.read(esploraConfigProvider).value;
+      if (current == null) return;
+      final initial = _initialEsploraCfg;
+      if (initial == null) return;
+      if (_sameEsploraConfig(initial, current)) return;
+      _onEsploraConfigChanged();
+    });
+    _esploraCfgSub = ref.listenManual<AsyncValue<EsploraConfig>>(
+      esploraConfigProvider,
+      (prev, next) {
+        // `fireImmediately: true` triggers one initial callback
+        // (`prev == null`) which we skip — no prior to compare against.
+        if (prev == null) return;
+        final prevCfg = prev.value;
+        final nextCfg = next.value;
+        if (nextCfg == null) return; // save() should always emit AsyncData
+        if (prevCfg == null) return; // first non-initial state with no prior
+        if (_sameEsploraConfig(prevCfg, nextCfg)) return;
+        _onEsploraConfigChanged();
+      },
+      fireImmediately: true,
+    );
+  }
 
   @override
   void dispose() {
+    _esploraCfgSub?.close();
+    _esploraCfgSub = null;
     // Defense-in-depth (Task 20 LOW): zero screen-side password on
     // unmount. Real zeroization is FFI Uint8List + Finalizable
     // (v0.2 backlog).
@@ -108,16 +167,33 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
     try {
       final core = ref.read(walletCoreProvider);
       final appPaths = await ref.read(appPathsProvider.future);
+      // Esplora config for the in-FFI sync (Issue #261 follow-up).
+      // Rust syncs against this URL + SPKI pin and returns the
+      // confirmed balance. Empty URL → Rust skips (legacy v0.2.0
+      // behavior, `balance_sat: 0`).
+      final esploraCfg = await ref.read(esploraConfigProvider.future);
       // FFI call: facade owns the SecretBuffer lifetime (auto-dispose
       // in `finally`). Returns `WalletDetail` (no mnemonic returned —
       // the FFI never exposes cleartext; matches the legacy
       // `btc wallet show --json` which also didn't return the phrase).
-      final detail = core.showWallet(
+      final showResult = core.showWallet(
         network: FfiNetwork.testnet,
         walletId: walletId,
         password: SecretBuffer.fromUtf8(_password),
         baseDir: appPaths.walletDataDir.path,
+        esploraUrl: esploraCfg.url,
+        esploraSpkiPin: esploraCfg.spkiPin,
       );
+      final detail = showResult.detail;
+      // The wallet handle from `wallet_show` is freed on lock via the
+      // session notifier — detail screen reads only `showResult.detail`
+      // (no signing material lives in the Dart session; SendScreen
+      // re-calls `walletShow` with the password when needed).
+      // Explicit free here is a defensive null-check (the FFI always
+      // populates the out param post-#261).
+      if (showResult.walletHandle != nullptr) {
+        core.walletLoadFree(showResult.walletHandle);
+      }
       if (!mounted) return;
       // Re-assert identity: if widget was rebuilt with a different
       // walletId mid-await, do NOT populate the wrong family.
@@ -275,7 +351,43 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            BalanceCard(balance: d.balance),
+            BalanceCard(
+              balance: d.balance,
+              // Issue #263 — thread the 3-way sync classification
+              // from `wallet_show` FFI into the balance card. The
+              // card renders a red banner + Retry for
+              // `FfiSyncStatus.syncFailed` (previously silent —
+              // operator couldn't distinguish empty wallet from
+              // broken Esplora). Retry re-runs the unlock flow,
+              // which re-invokes `wallet_show` (idempotent) and
+              // refreshes the balance via fresh Esplora sync.
+              // L12 review M2: gate Retry on `_running` to prevent
+              // stacking dialogs from a double-tap.
+              // L12 review C1: surface the Rust `set_last_error`
+              // diagnostic in the banner so the operator can see
+              // WHY sync failed (not just THAT it failed).
+              syncStatus: d.syncStatus,
+              lastError: d.lastError,
+              onRetry: (d.syncStatus == FfiSyncStatus.syncFailed &&
+                      !_running)
+                  ? _showReUnlockDialog
+                  : null,
+            ),
+            // Manual resync: triggers the same re-unlock dialog as the
+            // off-screen Esplora config-change snackbar. Useful when
+            // balance drifted from new blocks (since `wallet_show` only
+            // syncs at unlock) or as a no-config-change sanity check.
+            // Gated on `_running` to avoid stacking dialogs while a
+            // concurrent unlock is in flight.
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: const Key('wallet_detail_resync'),
+                icon: const Icon(Icons.refresh),
+                label: const Text('Resync balance'),
+                onPressed: _running ? null : _showReUnlockDialog,
+              ),
+            ),
             const SizedBox(height: 16),
             Text(
               'Network: ${d.network}',
@@ -286,14 +398,19 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
               style: textTheme.bodyMedium,
             ),
             const SizedBox(height: 16),
-            // Plan deviation #4: firstAddress is empty in v0.2.0
-            // (peek_addresses requires bdk sync — deferred to v0.2.1).
-            // Hide the chip when empty; v0.2.1 wires the sync path.
-            // L12 flutter MED: the previous "(sync required — open
-            // SendScreen)" was misleading — opening SendScreen does
-            // not trigger sync (Tasks 14+15 are still pending). The
-            // new copy accurately reflects the v0.2.0 state.
-            if (d.firstAddress.isNotEmpty)
+            // Issue #261: firstAddress is populated offline by Rust
+            // `wallet_show` (via `Wallet::first_external_address_offline`
+            // — pure local crypto, no Esplora round-trip). Render
+            // the address chip + copy/explorer/faucet wiring
+            // unconditionally. Empty fallback kept as a safety net
+            // for an unexpected FFI failure (should not happen in
+            // v0.2.x).
+            if (d.firstAddress.isEmpty)
+              Text(
+                'First address: (unavailable — unlock failed)',
+                style: textTheme.bodySmall,
+              )
+            else
               Row(
                 children: [
                   Expanded(
@@ -317,18 +434,13 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
                     },
                   ),
                 ],
-              )
-            else
-              Text(
-                'First address: (sync pending — v0.2.1)',
-                style: textTheme.bodySmall,
               ),
             const SizedBox(height: 8),
-            // Explorer + Faucet buttons live OUTSIDE the address
-            // branch — always reachable so the user can browse /
-            // fund a wallet even while sync is pending (v0.2.1).
-            // URLs degrade gracefully: address-specific when known,
-            // generic testnet home when not.
+            // Explorer + Faucet buttons: address-specific URLs
+            // (prefilled via `?address=<addr>` for coinfaucet). Both
+            // rely on `d.firstAddress` being non-empty post-#261.
+            // Empty fallback degrades to the generic testnet home
+            // (safety net for the unexpected-failure path above).
             Row(
               children: [
                 TextButton.icon(
@@ -364,5 +476,89 @@ class _WalletDetailScreenState extends ConsumerState<WalletDetailScreen> {
         ),
       ),
     );
+  }
+
+  /// Field-by-field equality on the Esplora config — `AsyncValue`
+  /// wrapper identity changes across reads even when the inner
+  /// value is unchanged, so `prev == next` would fire the snackbar
+  /// on every state touch instead of only on real config saves.
+  bool _sameEsploraConfig(EsploraConfig a, EsploraConfig b) =>
+      a.network == b.network &&
+      a.url == b.url &&
+      a.spkiPin == b.spkiPin;
+
+  /// Fires when Settings → Save mutates esplora.json. Surfaces a
+  /// snackbar asking the operator to re-unlock. Re-unlock re-runs
+  /// `core.showWallet(...)` including Esplora sync, which is the
+  /// only path that refreshes the cached balance. Suppressed when
+  /// the wallet is locked (no balance to refresh).
+  void _onEsploraConfigChanged() {
+    if (!mounted) return;
+    final session = ref.read(walletSessionProvider(widget.walletId));
+    if (session == null) return;
+    // Listener fires outside the build phase, so defer context
+    // reads to the next frame to avoid a "deactivated element"
+    // crash when the route is unmounting.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Esplora config changed — re-unlock to refresh balance',
+          ),
+          duration: const Duration(seconds: 6),
+          action: SnackBarAction(
+            label: 'Re-unlock',
+            onPressed: _showReUnlockDialog,
+          ),
+        ),
+      );
+    });
+  }
+
+  /// Modal dialog asking for the wallet password. On submit sets
+  /// `_password` and calls the existing `_unlock()` flow — same
+  /// path as first-time unlock, so Esplora sync re-runs against
+  /// the fresh config and balance updates. Avoids caching the
+  /// cleartext password (v0.2.x design: zeroize on each unlock).
+  Future<void> _showReUnlockDialog() async {
+    if (!mounted) return;
+    final controller = TextEditingController();
+    try {
+      final entered = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Re-unlock to refresh balance'),
+          content: TextField(
+            controller: controller,
+            obscureText: true,
+            enableSuggestions: false,
+            autocorrect: false,
+            decoration: const InputDecoration(
+              labelText: 'Wallet password',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(controller.text),
+              child: const Text('Re-unlock'),
+            ),
+          ],
+        ),
+      );
+      if (entered == null || entered.isEmpty || !mounted) return;
+      setState(() {
+        _password = entered;
+        _error = null;
+      });
+      await _unlock();
+    } finally {
+      controller.dispose();
+    }
   }
 }

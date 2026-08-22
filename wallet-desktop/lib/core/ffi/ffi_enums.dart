@@ -64,3 +64,47 @@ enum FfiKeychainKind {
 
   final int code;
 }
+
+/// Sync status byte returned by `wallet_show`.
+///
+/// **Issue #263** — distinct "sync failed" UX state. Previously every
+/// Esplora failure surfaced as `balance_sat: 0` with no signal to the
+/// UI; the operator couldn't distinguish an empty wallet from a broken
+/// Esplora sync. The detail screen now renders a red banner + Retry
+/// button for [syncFailed] and shows the existing "no funds yet" hint
+/// for [emptyWallet].
+///
+/// Values MUST mirror `WalletSyncStatus` in
+/// `rust-wallet-app/crates/bitcoin-wallet-core/src/ffi/wallet_ops.rs`.
+/// Drift = silent classification bug (e.g. `Synced` mapped to
+/// `SyncFailed` would render the red banner on every wallet unlock).
+enum FfiSyncStatus {
+  /// Esplora sync ran to completion. Balance reflects the live UTXO
+  /// set (may be `0` for a legitimately empty wallet).
+  synced(0),
+
+  /// No `esploraUrl` was provided (legacy v0.2.0 offline path) — sync
+  /// intentionally skipped. UI shows the "no funds yet" hint.
+  emptyWallet(1),
+
+  /// Esplora sync attempted but failed (network down, bad URL, SPKI
+  /// mismatch, runtime build failure, MAX_MONEY overflow). UI shows
+  /// a red banner with the `last_error` text + a Retry button that
+  /// re-invokes `walletShow`.
+  syncFailed(2),
+
+  /// Byte Rust returned doesn't match any known variant. Defensive
+  /// only — Rust-side `WalletSyncStatus` is `#[repr(u8)]` and
+  /// exhaustive, so this only fires if the ABI drifts.
+  unknown(255);
+
+  const FfiSyncStatus(this.code);
+  final int code;
+
+  static FfiSyncStatus fromCode(int code) => switch (code) {
+        0 => FfiSyncStatus.synced,
+        1 => FfiSyncStatus.emptyWallet,
+        2 => FfiSyncStatus.syncFailed,
+        _ => FfiSyncStatus.unknown,
+      };
+}

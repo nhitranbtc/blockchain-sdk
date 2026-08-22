@@ -1,16 +1,20 @@
 import 'dart:developer' as developer;
+import 'dart:ffi';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/btc/models/send_result.dart';
+import '../../core/ffi/ffi_enums.dart';
 import '../../core/ffi/ffi_exception.dart';
+import '../../core/ffi/secret_buffer.dart';
 import '../../core/logging/btc_log_filter.dart';
+import '../../providers/app_paths_provider.dart';
+import '../../providers/esplora_config_provider.dart';
 import '../../providers/wallet_core_provider.dart';
 import '../../providers/wallet_providers.dart';
 import '../../routing/wallet_routes.dart';
-import '../../widgets/mnemonic_paste_field.dart';
 import '../../widgets/process_progress_overlay.dart';
 import '../../widgets/status_badge.dart';
 
@@ -87,6 +91,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   bool _running = false;
   FfiException? _error;
   SendResult? _result;
+  String _password = '';
 
   /// Persistent controller for the Fee-rate field (L12 flutter-reviewer
   /// Task 21 CRITICAL #2 — inline construction leaks controllers and
@@ -95,17 +100,16 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   /// (only if the user has not edited the field — see `_feeRateEdited`).
   late final TextEditingController _feeController;
 
-  /// GlobalKey into the `MnemonicPasteField` so the re-entry view's
-  /// "Unlock for signing" button can call `fieldKey.currentState?.submit()`
-  /// without the screen holding a screen-side cache of the typed
-  /// mnemonic (L12 security-auditor Task 21 CRITICAL #3 — no screen-
-  /// side cleartext cache).
-  final GlobalKey<State> _mnemonicFieldKey = GlobalKey<State>();
+  /// Controller for the password field (v0.2.x deviance closure —
+  /// password re-auth replaces mnemonic re-paste; Rust decrypts
+  /// internally + returns a signing handle).
+  late final TextEditingController _passwordController;
 
   @override
   void initState() {
     super.initState();
     _feeController = TextEditingController(text: '$_feeRate');
+    _passwordController = TextEditingController();
     // Fetch fee estimate on mount. Silent fallback to default 1
     // sat/vB if the Esplora fetch fails — the user can edit the field
     // before submitting.
@@ -123,10 +127,14 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       } catch (e) {
         // If handle creation fails (bad password, no Esplora), the
         // user will see the error in the fee estimate catch below.
+        // L12 review LOW #3: scrub via BtcLogFilter.redact at the
+        // call site so a future Sentry-style sink that reflects on
+        // the typed FfiException fields can't leak `lastError`.
+        const filter = BtcLogFilter();
         developer.log(
           'ensureHandles failed',
           name: 'send_screen',
-          error: e,
+          error: filter.redact(e.toString()),
         );
       }
       if (!mounted) return;
@@ -155,6 +163,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   @override
   void dispose() {
     _feeController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
@@ -197,25 +206,23 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       });
     } catch (e) {
       // Silent fallback per Task 21 L12 design. Log for debug.
+      // L12 review LOW #3: scrub via BtcLogFilter.redact at the
+      // call site (matches the pattern at `_submit`'s catch).
+      const filter = BtcLogFilter();
       developer.log(
         'feeEstimate failed',
         name: 'send_screen',
-        error: e,
+        error: filter.redact(e.toString()),
       );
     }
   }
 
-  /// Sentinel-clear: re-paste the mnemonic on the unlocked session.
-  /// Preserves the parsed `WalletDetail` (type-design Task 21 HIGH
-  /// — `unlock(mnemonic:)` would otherwise drop detail to null).
-  void _onReentrySubmit(String mnemonic) {
-    final session = ref.read(walletSessionProvider(widget.walletId));
-    if (session == null) return;
-    final priorDetail = session.detail;
-    ref
-        .read(walletSessionProvider(widget.walletId).notifier)
-        .unlock(mnemonic: mnemonic, detail: priorDetail);
-  }
+  /// (v0.2.x deviance closure) — no-op; the mnemonic-paste re-entry
+  /// flow was removed in favor of password-only auth (see `_submit`
+  /// below). Kept as a private stub so the dispatch table in
+  /// `build` doesn't need a conditional import.
+  // ignore: unused_element
+  void _legacyMnemonicStub() {}
 
   Future<String?> _confirmMainnet() async {
     final controller = TextEditingController();
@@ -257,24 +264,27 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   Future<void> _submit() async {
     final amount = int.tryParse(_amountSat);
     if (amount == null || amount <= 0 || _address.isEmpty) {
-      setState(() => _error = FfiException.fromCode(
-          code: -1,
-          op: 'send_screen_validation',
-          messageForDebug: 'invalid input'));
-      return;
+      // Use a plain Dart exception for client-side validation
+      // errors (NOT FfiException with code -1) — `code: -1`
+      // maps to `FfiErrorKind.invalidMnemonic` which renders as
+      // "Invalid recovery phrase — please re-enter." in the UI
+      // (irrelevant to send-screen validation). The
+      // generic catch below displays a SnackBar with the actual
+      // message.
+      throw Exception('Invalid input — check address, amount, fee rate');
     }
     // Lesson 32.2: capture identity at top of async-await chain.
     final walletId = widget.walletId;
     final network = widget.network;
-    final session = ref.read(walletSessionProvider(walletId));
-    final mnemonic = session?.mnemonic.value ?? '';
-    if (mnemonic.isEmpty) {
-      // Sentinel-clear path — user must re-paste first.
-      setState(() => _error = FfiException.fromCode(
-          code: -1,
-          op: 'send_screen_validation',
-          messageForDebug: 'mnemonic required'));
-      return;
+    // v0.2.x deviance closure: mnemonic paste removed. The user
+    // re-auths via password. We construct BOTH handles
+    // (esplora + wallet) inline in this scope — frees after
+    // the send call. No reliance on session state (which may
+    // have null esplora handle if `ensureHandles` failed earlier
+    // for a wallet-without-`db_path`).
+    final password = _passwordController.text;
+    if (password.isEmpty) {
+      throw Exception('Wallet password required to sign the send');
     }
     String? confirmYes;
     if (network == 'bitcoin') {
@@ -283,42 +293,74 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       if (confirmYes == null || !mounted) return;
       if (widget.walletId != walletId || widget.network != network) return;
       if (confirmYes.trim() != 'yes') {
-        setState(() => _error = FfiException.fromCode(
-            code: -1,
-            op: 'send_screen_validation',
-            messageForDebug: 'mainnet confirm rejected'));
-        return;
+        throw Exception('Mainnet confirmation rejected');
       }
     }
     setState(() {
       _running = true;
       _error = null;
     });
+    final core = ref.read(walletCoreProvider);
     try {
       // FFI migration (Task 14 / Issue #220 Sub-split B-step-2).
       // Replaces the prior `BtcInvoker.invoke<SendResult>(BtcCommand
       // .walletSend(...))` subprocess + `withTempSecretFile`
       // mnemonic-passing pattern with a direct FFI call. Both
-      // handles were created by `ensureHandles()` in initState's
-      // postFrameCallback.
-      final session = ref.read(walletSessionProvider(walletId));
-      final walletHandle = session?.walletHandle;
-      final esploraHandle = session?.esploraHandle;
-      if (walletHandle == null || esploraHandle == null) {
-        // `ensureHandles()` failed earlier; surface as an error
-        // rather than silent fallback (the user is attempting to
-        // send — they need to know the wallet isn't connected).
-        throw FfiException.fromCode(
-          code: -1,
-          op: 'wallet_send',
-          messageForDebug: 'ensureHandles did not run or failed',
+      // Construct the esplora handle inline (v0.2.x — no reliance on
+      // session state, since `ensureHandles` may have failed for
+      // a wallet-without-`db_path`). Same pattern as the wallet
+      // handle below (re-built fresh per send).
+      final esploraCfg = await ref.read(esploraConfigProvider.future);
+      final appPaths = await ref.read(appPathsProvider.future);
+      Pointer<Void> esploraHandle;
+      final urlPtr = esploraCfg.url.toNativeUtf8();
+      final pinPtr = esploraCfg.spkiPin.isEmpty
+          ? nullptr
+          : esploraCfg.spkiPin.toNativeUtf8();
+      try {
+        esploraHandle = core.esploraClientNew(
+          url: urlPtr,
+          spkiPinB64: pinPtr,
+        );
+      } finally {
+        calloc.free(urlPtr);
+        if (pinPtr != nullptr) calloc.free(pinPtr);
+      }
+      if (esploraHandle == nullptr) {
+        throw Exception(
+          'Failed to construct Esplora client — check Settings '
+          '(URL + SPKI pin)',
+        );
+      }
+      // Re-call `walletShow` with the password — Rust decrypts the
+      // mnemonic internally and returns a fresh `WalletHandle`
+      // for this send only. **Mnemonic never crosses FFI as raw
+      // bytes.** The handle is freed at the end of this block (RAII).
+      final showResult = core.showWallet(
+        network: FfiNetwork.testnet,
+        walletId: walletId,
+        password: SecretBuffer.fromUtf8(password),
+        baseDir: appPaths.walletDataDir.path,
+        esploraUrl: esploraCfg.url,
+        esploraSpkiPin: esploraCfg.spkiPin,
+      );
+      final walletHandle = showResult.walletHandle;
+      if (walletHandle == nullptr) {
+        core.esploraClientFree(esploraHandle);
+        throw Exception(
+          'wallet_show returned a null handle — password may be wrong',
         );
       }
       // Re-assert identity before FFI call (Lesson 32.2) — if
       // the parent rebuilt with a different walletId mid-await, the
       // FFI call would otherwise consume the wrong-wallet handle.
-      if (widget.walletId != walletId || widget.network != network) return;
-      final core = ref.read(walletCoreProvider);
+      if (widget.walletId != walletId || widget.network != network) {
+        // Free the esplora + wallet handles we built (won't be
+        // freed by the inner finally since we're returning early).
+        core.esploraClientFree(esploraHandle);
+        core.walletLoadFree(walletHandle);
+        return;
+      }
       final recipientPtr = _address.toNativeUtf8();
       String txid;
       try {
@@ -331,6 +373,11 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         );
       } finally {
         calloc.free(recipientPtr);
+        // Free the per-send esplora + wallet handles (decrypted
+        // mnemonic drops here via `Wallet::drop` on the Rust side;
+        // zeroize via `Secret<String>`).
+        core.esploraClientFree(esploraHandle);
+        core.walletLoadFree(walletHandle);
       }
       // walletSend returns the txid hex string directly (no need for
       // SendResult.fromJson parsing). Wrap in SendResult for UI parity.
@@ -352,8 +399,15 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         stackTrace: st,
       );
       if (mounted) {
+        // Surface the actual error to the operator — the generic
+        // "Could not broadcast transaction." was uninformative
+        // (a wrong password + an esplora handle missing + an
+        // insufficient-funds error all surfaced as the same
+        // opaque message). Show the redacted exception toString
+        // (L12 CRITICAL #2 — BtcLogFilter strips mnemonic /
+        // password patterns from the developer.log emission).
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not broadcast transaction.')),
+          SnackBar(content: Text(filter.redact(e.toString()))),
         );
       }
     } finally {
@@ -377,13 +431,12 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     );
     final session = ref.watch(walletSessionProvider(widget.walletId));
     if (session == null) return _buildLockedView();
-    final mnemonic = session.mnemonic.value;
-    if (mnemonic.isEmpty) {
-      return _buildMnemonicReentryView(context);
-    }
-    // Pure build: derive word count from session — no field mutation.
-    final wordCount = mnemonic.trim().split(_whitespaceRe).length;
-    return _buildSendForm(context, mnemonic, wordCount);
+    // v0.2.x deviance closure: the mnemonic-paste re-entry view is
+    // gone. The send form is rendered unconditionally; the password
+    // field inside it gates the actual sign operation. `mnemonic`
+    // is no longer read here (it was the empty-string sentinel
+    // before — `walletShow(password)` is the new auth path).
+    return _buildSendForm(context, '', 0);
   }
 
   Widget _buildLockedView() {
@@ -405,45 +458,6 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 );
               },
               child: const Text('Unlock'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMnemonicReentryView(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text('Send (${widget.network})')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Re-enter the mnemonic to authorize this transaction.',
-            ),
-            const SizedBox(height: 16),
-            MnemonicPasteField(
-              key: _mnemonicFieldKey,
-              expectedWordCount: 12, // default; user can pick via dropdown v0.2
-              onChanged: (_) {},
-              onSubmit: _onReentrySubmit,
-            ),
-            const SizedBox(height: 16),
-            FilledButton(
-              key: const Key('send_screen_mnemonic_unlock'),
-              onPressed: _running
-                  ? null
-                  : () {
-                      // Trigger the field's submit (validates word
-                      // count + ack internally, then fires
-                      // `_onReentrySubmit`). Avoids holding the
-                      // cleartext in screen state.
-                      final state = _mnemonicFieldKey.currentState as dynamic;
-                      state?.submit();
-                    },
-              child: const Text('Unlock for signing'),
             ),
           ],
         ),
@@ -499,10 +513,77 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                   onChanged: _onFeeChanged,
                 ),
                 const SizedBox(height: 16),
+                // v0.2.x deviance closure: password re-auth replaces
+                // the mnemonic paste. Rust decrypts internally +
+                // returns a fresh signing handle per send; mnemonic
+                // never crosses FFI as raw bytes. The password is
+                // cleared on successful send (see `_submit`).
+                TextField(
+                  key: const Key('send_screen_password'),
+                  controller: _passwordController,
+                  obscureText: true,
+                  enableSuggestions: false,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Wallet password (re-auth to sign)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
                 if (error != null) ...[
                   StatusBadge(kind: error.kind),
                   const SizedBox(height: 8),
-                  Text(userMessageForFfiException(error)),
+                  // Issue #265 C1 fix: per-op copy (keys on
+                  // `error.op`) instead of the kind-only fallback.
+                  // Previously the kind-only copy function
+                  // mapped `FfiException(op: 'esplora_client_new',
+                  // kind: esplora)` to the misleading "Invalid
+                  // recovery phrase — please re-enter." copy —
+                  // SendScreen has no recovery-phrase field in
+                  // v0.2.x. The new helper surfaces the actual
+                  // failure arm.
+                  Text(userMessageForFfiExceptionWithOp(error)),
+                  const SizedBox(height: 4),
+                  // Op + code expose WHICH FFI call failed so the
+                  // "Auth error" chip / "Invalid recovery phrase"
+                  // copy doesn't lie about the root cause when the
+                  // real failure lives in `esplora_client_new` /
+                  // `wallet_load` rather than the wallet_show password
+                  // path. Same op + code as `FfiException.toString()`
+                  // but routed through `error.op` + `error.code` so we
+                  // don't surface `messageForDebug` (L12 CRITICAL #2 —
+                  // may contain mnemonic / password bytes verbatim).
+                  Text(
+                    'FFI op: ${error.op} (code ${error.code})',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                  ),
+                  // Issue #265 C1 + L12 review MEDIUM #1: render the
+                  // Rust thread-local diagnostic so operators see WHY
+                  // the FFI op failed, not just THAT. Scrubbed via
+                  // BtcLogFilter.redact — the Rust side does NOT
+                  // sanitize mnemonic/password bytes (Issue #242), so
+                  // any direct interpolation of `error.lastError`
+                  // risks a leak. `BtcLogFilter` strips BIP-39 word
+                  // sequences and 64-char hex digests before display.
+                  // Mirrors the `_SyncFailedBanner` pattern in
+                  // `balance_card.dart` for `WalletDetail.lastError`.
+                  if (error.lastError != null &&
+                      error.lastError!.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Builder(builder: (context) {
+                      const filter = BtcLogFilter();
+                      final scrubbed = filter.redact(error.lastError ?? '');
+                      return Text(
+                        scrubbed,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.outline,
+                              fontFamily: 'monospace',
+                            ),
+                      );
+                    }),
+                  ],
                   const SizedBox(height: 8),
                 ],
                 if (result != null)
