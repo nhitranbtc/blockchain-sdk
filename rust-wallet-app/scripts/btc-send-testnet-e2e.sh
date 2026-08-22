@@ -97,6 +97,12 @@ fi
 : "${BTC_E2E_ESPLORA_URL:=https://blockstream.info/testnet/api}"
 : "${BTC_E2E_POLL_TIMEOUT:=600}"
 : "${BTC_E2E_MODE:=single}"
+# BTC_E2E_STEP controls incremental re-enable of gate_single stages.
+#   0 = btc wallet balance (default; safe, no broadcast)
+#   1 = + btc wallet send (captures txid; no poll)
+#   2 = + poll_tx_confirmed
+#   3 = + assert_recipient_paid (full original gate)
+: "${BTC_E2E_STEP:=0}"
 
 # --- Resolve mnemonic ---
 resolve_mnemonic() {
@@ -241,7 +247,24 @@ record_step() {
 # --- Gates ---
 gate_single() {
     echo -e "${BOLD}=== Gate: single-recipient send (Story 5) ===${RESET}"
+    echo "  BTC_E2E_STEP=$BTC_E2E_STEP (0=balance, 1=+send, 2=+poll, 3=+assert)"
 
+    # STEP-0 (always): sender balance check — no broadcast.
+    local balance
+    balance=$(btc wallet balance \
+        --mnemonic "$MNEMONIC_PHRASE" \
+        --network testnet \
+        --esplora-url "$BTC_E2E_ESPLORA_URL" \
+        ${BTC_E2E_SPKI_PIN:+--pin-spki "$BTC_E2E_SPKI_PIN"} \
+    ) || {
+        record_step FAIL "balance check" "btc wallet balance returned non-zero"
+        return 1
+    }
+    record_step PASS "balance check" "$balance sat"
+    [[ "$BTC_E2E_STEP" -lt 1 ]] && return 0
+
+    # STEP-1: send tx (captures txid; does NOT poll or assert yet).
+    # STEP-1: re-enable for $BTC_E2E_STEP >= 1
     local txid
     txid=$(btc wallet send \
         --mnemonic "$MNEMONIC_PHRASE" \
@@ -252,21 +275,26 @@ gate_single() {
         --esplora-url "$BTC_E2E_ESPLORA_URL" \
         ${BTC_E2E_SPKI_PIN:+--pin-spki "$BTC_E2E_SPKI_PIN"} \
     ) || {
-        record_step FAIL "single-recipient send" "btc wallet send returned non-zero"
+        record_step FAIL "send" "btc wallet send returned non-zero"
         return 1
     }
-
-    # Capture txid for downstream gates.
     echo "$txid" > /tmp/btc-e2e-single-txid.txt
     echo "  txid: $txid"
+    record_step PASS "send" "txid=$txid"
+    [[ "$BTC_E2E_STEP" -lt 2 ]] && return 0
 
+    # STEP-2: poll until confirmed.
+    # STEP-2: re-enable for $BTC_E2E_STEP >= 2
     if poll_tx_confirmed "$txid"; then
-        record_step PASS "single-recipient send" "txid=$txid (confirmed)"
+        record_step PASS "confirmed" "txid=$txid"
     else
-        record_step FAIL "single-recipient send" "txid=$txid (not confirmed within ${BTC_E2E_POLL_TIMEOUT}s)"
+        record_step FAIL "confirmed" "txid=$txid (not confirmed within ${BTC_E2E_POLL_TIMEOUT}s)"
         return 1
     fi
+    [[ "$BTC_E2E_STEP" -lt 3 ]] && return 0
 
+    # STEP-3: assert recipient paid (full original gate).
+    # STEP-3: re-enable for $BTC_E2E_STEP >= 3
     if assert_recipient_paid "$txid" "$BTC_E2E_RECIPIENT"; then
         record_step PASS "recipient received funds" "$BTC_E2E_RECIPIENT"
     else
@@ -293,6 +321,7 @@ gate_bumfee() {
 # --- Dispatch ---
 echo -e "${BOLD}btc-send-testnet-e2e.sh${RESET} — L29 live testnet E2E"
 echo "Mode:           $BTC_E2E_MODE"
+echo "Step:           $BTC_E2E_STEP (0=balance, 1=+send, 2=+poll, 3=+assert)"
 echo "Recipient:      $BTC_E2E_RECIPIENT"
 echo "Amount (sat):   $BTC_E2E_AMOUNT_SAT"
 echo "Fee rate:       $FEE_RATE sat/vB"
