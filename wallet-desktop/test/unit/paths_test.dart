@@ -50,4 +50,53 @@ void main() {
     final b = await appDataDir();
     expect(a.path, b.path);
   });
+
+  test('subdirFor rejects empty name', () async {
+    await expectLater(
+      () => subdirFor(''),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('subdirFor rejects parent-directory traversal segment', () async {
+    await expectLater(
+      () => subdirFor('..'),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('subdirFor rejects traversal embedded in path', () async {
+    await expectLater(
+      () => subdirFor('../etc'),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('subdirFor rejects absolute paths', () async {
+    await expectLater(
+      () => subdirFor('/etc/passwd'),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('subdirFor rejects nested separator (single-segment-only)', () async {
+    await expectLater(
+      () => subdirFor('foo/bar'),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('subdirFor rejects backslash traversal on Windows', () async {
+    await expectLater(
+      () => subdirFor(r'..\foo'),
+      throwsA(isA<ArgumentError>()),
+    );
+  }, skip: !Platform.isWindows);
+
+  test('subdirFor rejects Windows drive-letter absolute path', () async {
+    await expectLater(
+      () => subdirFor(r'C:\foo'),
+      throwsA(isA<ArgumentError>()),
+    );
+  }, skip: !Platform.isWindows);
 }

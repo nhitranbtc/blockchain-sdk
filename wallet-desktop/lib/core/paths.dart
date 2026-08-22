@@ -17,7 +17,44 @@ Future<Directory> appDataDir() async {
 
 /// Returns (and creates) a named subdirectory under [appDataDir].
 /// Recursive create is idempotent across runs.
+///
+/// **Path-traversal defense (Issue #176)**: rejects `name` values that
+/// could escape `appDataDir`. Throws [ArgumentError] before any
+/// filesystem side effect, so the caller cannot accidentally `create()`
+/// outside the app sandbox. Valid names are single-segment only
+/// (`btc`, `tmp`, `wallet_data`) — no path separators, no `..`
+/// substrings. All 3 production callers pass literal constants so the
+/// stricter single-segment contract has zero migration impact.
 Future<Directory> subdirFor(String name) async {
+  _validateSubdirName(name);
   final base = await appDataDir();
   return Directory(p.join(base.path, name)).create(recursive: true);
+}
+
+/// Rejects subdir names that could escape `appDataDir` (CWE-22).
+/// Throws [ArgumentError] before any filesystem side effect.
+///
+/// Validation runs synchronously before any `await` in [subdirFor], so
+/// no TOCTOU window exists between the check and `Directory.create()`.
+void _validateSubdirName(String name) {
+  if (name.isEmpty) {
+    throw ArgumentError.value(name, 'name', 'must not be empty');
+  }
+  if (p.isAbsolute(name)) {
+    throw ArgumentError.value(name, 'name', 'must not be absolute');
+  }
+  if (RegExp(r'[\\/]').hasMatch(name)) {
+    throw ArgumentError.value(
+      name,
+      'name',
+      'must not contain path separators (single-segment names only)',
+    );
+  }
+  if (name.contains('..')) {
+    throw ArgumentError.value(
+      name,
+      'name',
+      'must not contain ".."',
+    );
+  }
 }
