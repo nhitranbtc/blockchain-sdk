@@ -161,12 +161,20 @@ final class FfiException implements Exception {
   /// fires in debug builds to catch the mistake. Unknown codes fall
   /// back to [FfiErrorKind.unknown].
   ///
+  /// [lastError] (Issue #265): optional per-op diagnostic string
+  /// surfaced from the Rust thread-local `ffi_last_error_message`.
+  /// Display-only in UI — NEVER included in [toString] (L12 CRITICAL
+  /// #2). Null when no thread-local diagnostic is available (e.g.
+  /// older `wallet_create` / `wallet_import` paths that don't call
+  /// `set_last_error` on the Rust side).
+  ///
   /// Const factory impossible: `_kindFromCode` is runtime-mapped.
   factory FfiException.fromCode({
     required int code,
     required String op,
     String? messageForDebug,
     Object? cause,
+    String? lastError,
   }) {
     assert(code != 0,
         'FfiException.fromCode called with Ok code 0; callers must not throw on success');
@@ -177,6 +185,7 @@ final class FfiException implements Exception {
       op: op,
       messageForDebug: messageForDebug,
       cause: cause,
+      lastError: lastError,
     );
   }
 
@@ -186,6 +195,7 @@ final class FfiException implements Exception {
     required this.op,
     this.messageForDebug,
     this.cause,
+    this.lastError,
   });
 
   /// Failure category. UI code switches on this to pick a user-facing
@@ -223,12 +233,21 @@ final class FfiException implements Exception {
   /// the caller is responsible for scrubbing before chaining.
   final Object? cause;
 
+  /// Optional per-op diagnostic string from the Rust thread-local
+  /// `ffi_last_error_message` (Issue #265). Display-only — UI code
+  /// surfaces it to the operator for triage (e.g. "rustls crypto
+  /// provider missing: aws_lc_rs"). **NEVER** routed through
+  /// [toString] / logger / crash reporter (L12 CRITICAL #2 — same
+  /// trust boundary as [messageForDebug]). Null when no diagnostic
+  /// was recorded.
+  final String? lastError;
+
   /// Renders the exception for logs and crash reporters.
   ///
-  /// **Redaction contract:** never includes [messageForDebug]. The Rust
-  /// side does NOT sanitize the message (Issue #242, 2026-08-21) — it
-  /// may contain mnemonic or password bytes verbatim. Includes `op`,
-  /// `kind.name`, and `code` only.
+  /// **Redaction contract:** never includes [messageForDebug] nor
+  /// [lastError]. The Rust side does NOT sanitize either field
+  /// (Issue #242, 2026-08-21) — they may contain mnemonic or password
+  /// bytes verbatim. Includes `op`, `kind.name`, and `code` only.
   @override
   String toString() => 'FfiException(op: $op, kind: ${kind.name}, code: $code)';
 
@@ -286,6 +305,35 @@ final class FfiException implements Exception {
       default:
         return FfiErrorKind.unknown;
     }
+  }
+}
+
+/// User-facing copy keyed on the FFI **op name** (Issue #265 C1 fix).
+/// Prefer this over [userMessageForFfiException] when the caller has
+/// the full [FfiException] (with `op`) — it tells the user the actual
+/// failure arm (`esplora_client_new`, `wallet_load`, etc.) instead of
+/// the kind-only fallback that lumps unrelated failures under a single
+/// static string (the bug: `esplora_client_new` rendered as
+/// "Invalid recovery phrase — please re-enter.").
+///
+/// **Out of scope:** the per-op map deliberately stays small. Unknown
+/// ops fall through to [userMessageForFfiException] so legacy callers
+/// (Tasks 11-16 screens without the full exception object) still work.
+///
+/// **NEVER** include `messageForDebug` in the returned copy — L12
+/// CRITICAL #2.
+String userMessageForFfiExceptionWithOp(FfiException e) {
+  switch (e.op) {
+    case 'esplora_client_new':
+      return 'Could not connect to Esplora — check network configuration.';
+    case 'wallet_show':
+      return 'Could not unlock — check password and try again.';
+    case 'wallet_load':
+      return 'Could not load wallet — file may be corrupted.';
+    case 'wallet_send':
+      return 'Could not broadcast transaction — see details below.';
+    default:
+      return userMessageForFfiException(e);
   }
 }
 

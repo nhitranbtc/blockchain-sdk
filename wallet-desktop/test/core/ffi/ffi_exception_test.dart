@@ -199,4 +199,123 @@ void main() {
       expect(e.cause, isNull);
     });
   });
+
+  group('FfiException.lastError (Issue #265 — Rust thread-local surface)', () {
+    test('lastError is null by default', () {
+      final e = FfiException.fromCode(code: -1, op: 'wallet_create');
+      expect(e.lastError, isNull);
+    });
+
+    test(
+      'lastError is preserved when provided to fromCode '
+      '(facade _ffiError will populate from ffi_last_error_message)',
+      () {
+        final e = FfiException.fromCode(
+          code: -11,
+          op: 'esplora_client_new',
+          lastError: 'reqwest client build: builder error',
+        );
+        expect(e.lastError, equals('reqwest client build: builder error'));
+      },
+    );
+
+    test(
+      'toString NEVER includes lastError (L12 CRITICAL #2 — lastError is '
+      'display-only in UI, not logged via toString)',
+      () {
+        final e = FfiException.fromCode(
+          code: -11,
+          op: 'esplora_client_new',
+          lastError: 'rustls crypto provider missing: aws_lc_rs',
+        );
+        final rendered = e.toString();
+        expect(rendered.contains('rustls'), isFalse);
+        expect(rendered.contains('aws_lc_rs'), isFalse);
+      },
+    );
+
+    test(
+      '12-word BIP-39 mnemonic-shaped payload in lastError does NOT '
+      'leak via toString, the kind-only user copy, or the per-op user '
+      'copy (L12 CRITICAL #2 + L12 review MEDIUM #2 — load-bearing '
+      'redaction check)',
+      () {
+        // The 12-word sequence below is the canonical BIP-39 "abandon"
+        // test vector — the exact pattern `BtcLogFilter.redact`
+        // strips. The previous `rustls crypto provider missing` test
+        // only had 5 words and never tripped the BIP-39 regex, so
+        // this assertion is the load-bearing one.
+        const mnemonic = 'abandon abandon abandon abandon abandon abandon '
+            'abandon abandon abandon abandon abandon about';
+        final e = FfiException.fromCode(
+          code: -11,
+          op: 'esplora_client_new',
+          lastError: mnemonic,
+        );
+        // 1. toString — used by `developer.log` / Sentry sinks.
+        expect(e.toString().contains('abandon'), isFalse);
+        // 2. kind-only user copy — legacy callers.
+        expect(
+          userMessageForFfiException(e).contains('abandon'),
+          isFalse,
+        );
+        // 3. per-op user copy — the new SendScreen render path.
+        expect(
+          userMessageForFfiExceptionWithOp(e).contains('abandon'),
+          isFalse,
+        );
+        // 4. Direct field access is allowed (debug-only), but
+        // confirms the field actually carries the payload (the
+        // sink-side scrubbing is the only defense — verified by
+        // BtcLogFilter unit tests separately).
+        expect(e.lastError, equals(mnemonic));
+      },
+    );
+  });
+
+  group('userMessageForFfiExceptionWithOp (Issue #265 C1 fix)', () {
+    test(
+      'esplora_client_new renders Esplora copy (was "Invalid recovery phrase" '
+      'pre-fix)',
+      () {
+        final e = FfiException.fromCode(code: -1, op: 'esplora_client_new');
+        final copy = userMessageForFfiExceptionWithOp(e);
+        expect(copy, contains('Esplora'));
+        expect(copy, isNot(contains('recovery phrase')));
+      },
+    );
+
+    test(
+      'wallet_show renders password copy (was generic "Invalid recovery '
+      'phrase")',
+      () {
+        final e = FfiException.fromCode(code: -34, op: 'wallet_show');
+        final copy = userMessageForFfiExceptionWithOp(e);
+        expect(copy, contains('password'));
+        expect(copy, isNot(contains('recovery phrase')));
+      },
+    );
+
+    test('wallet_load renders corruption copy', () {
+      final e = FfiException.fromCode(code: -34, op: 'wallet_load');
+      final copy = userMessageForFfiExceptionWithOp(e);
+      expect(copy, contains('corrupted'));
+    });
+
+    test('wallet_send renders broadcast copy', () {
+      final e = FfiException.fromCode(code: -1, op: 'wallet_send');
+      final copy = userMessageForFfiExceptionWithOp(e);
+      expect(copy, contains('broadcast'));
+    });
+
+    test(
+      'unknown op falls back to kind-only userMessageForFfiException '
+      '(no regression for legacy callers)',
+      () {
+        final e = FfiException.fromCode(code: -1, op: 'wallet_create');
+        final copy = userMessageForFfiExceptionWithOp(e);
+        expect(copy, equals(userMessageForFfiException(e)));
+      },
+    );
+  });
 }

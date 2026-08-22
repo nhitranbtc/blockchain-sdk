@@ -707,6 +707,51 @@ class WalletCore implements WalletCoreApi {
   /// Task 9 closes L12 CRITICAL #1 — callers in Tasks 10-16 match
   /// `on FfiException catch (e) when (e.kind == FfiErrorKind.x)`
   /// instead of parsing message strings.
-  FfiException _ffiError(String op, int code) =>
-      FfiException.fromCode(code: code, op: op);
+  ///
+  /// **Issue #265 — C1 async FFI surface**: reads the Rust
+  /// thread-local `ffi_last_error_message` (set via `set_last_error`
+  /// on the Rust side before returning the non-zero `FfiError` code)
+  /// and attaches it to the exception as [FfiException.lastError].
+  /// UI code calls [userMessageForFfiExceptionWithOp] to surface the
+  /// per-op diagnostic alongside the per-op user copy.
+  ///
+  /// **Thread-locality**: the borrowed CString is invalidated by
+  /// the NEXT FFI call on this thread that triggers `set_last_error`.
+  /// We read it via `toDartString` IMMEDIATELY (zero-copy into Dart
+  /// heap) — same pattern as `showWallet` for `WalletSyncStatus =
+  /// SyncFailed`.
+  ///
+  /// **Older Rust crate** (L12 review MEDIUM): if
+  /// `ffi_last_error_message` is unresolved (older build), the
+  /// `static final` binding throws `ArgumentError` on first
+  /// `lookupFunction` access. Without a guard, that throw
+  /// propagates out of `_ffiError` and bypasses the
+  /// `on FfiException catch (e)` matchers in Tasks 10-16 screens —
+  /// the caller expects an `FfiException`, gets an `ArgumentError`.
+  /// Wrap the binding access in try/catch so the diagnostic path
+  /// degrades to `lastError: null` instead of breaking the error
+  /// contract. Same fallback for `toDartString` if the Rust side
+  /// emits non-UTF-8 bytes (rare; defense-in-depth).
+  FfiException _ffiError(String op, int code) {
+    String? lastError;
+    try {
+      final errPtr = WalletOpsBindings.ffiLastErrorMessage();
+      if (errPtr != nullptr) {
+        lastError = errPtr.toDartString();
+      }
+    } catch (_) {
+      // Older Rust crate (no `ffi_last_error_message` export) OR
+      // non-UTF-8 thread-local payload. The exception path itself
+      // must still produce a typed FfiException so the
+      // `on FfiException catch (e)` handlers match — silently
+      // dropping the diagnostic is acceptable (the operator sees
+      // the per-op copy + op/code, just not the Rust diagnostic).
+      lastError = null;
+    }
+    return FfiException.fromCode(
+      code: code,
+      op: op,
+      lastError: lastError,
+    );
+  }
 }

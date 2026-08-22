@@ -127,10 +127,14 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       } catch (e) {
         // If handle creation fails (bad password, no Esplora), the
         // user will see the error in the fee estimate catch below.
+        // L12 review LOW #3: scrub via BtcLogFilter.redact at the
+        // call site so a future Sentry-style sink that reflects on
+        // the typed FfiException fields can't leak `lastError`.
+        const filter = BtcLogFilter();
         developer.log(
           'ensureHandles failed',
           name: 'send_screen',
-          error: e,
+          error: filter.redact(e.toString()),
         );
       }
       if (!mounted) return;
@@ -202,10 +206,13 @@ class _SendScreenState extends ConsumerState<SendScreen> {
       });
     } catch (e) {
       // Silent fallback per Task 21 L12 design. Log for debug.
+      // L12 review LOW #3: scrub via BtcLogFilter.redact at the
+      // call site (matches the pattern at `_submit`'s catch).
+      const filter = BtcLogFilter();
       developer.log(
         'feeEstimate failed',
         name: 'send_screen',
-        error: e,
+        error: filter.redact(e.toString()),
       );
     }
   }
@@ -526,7 +533,57 @@ class _SendScreenState extends ConsumerState<SendScreen> {
                 if (error != null) ...[
                   StatusBadge(kind: error.kind),
                   const SizedBox(height: 8),
-                  Text(userMessageForFfiException(error)),
+                  // Issue #265 C1 fix: per-op copy (keys on
+                  // `error.op`) instead of the kind-only fallback.
+                  // Previously the kind-only copy function
+                  // mapped `FfiException(op: 'esplora_client_new',
+                  // kind: esplora)` to the misleading "Invalid
+                  // recovery phrase — please re-enter." copy —
+                  // SendScreen has no recovery-phrase field in
+                  // v0.2.x. The new helper surfaces the actual
+                  // failure arm.
+                  Text(userMessageForFfiExceptionWithOp(error)),
+                  const SizedBox(height: 4),
+                  // Op + code expose WHICH FFI call failed so the
+                  // "Auth error" chip / "Invalid recovery phrase"
+                  // copy doesn't lie about the root cause when the
+                  // real failure lives in `esplora_client_new` /
+                  // `wallet_load` rather than the wallet_show password
+                  // path. Same op + code as `FfiException.toString()`
+                  // but routed through `error.op` + `error.code` so we
+                  // don't surface `messageForDebug` (L12 CRITICAL #2 —
+                  // may contain mnemonic / password bytes verbatim).
+                  Text(
+                    'FFI op: ${error.op} (code ${error.code})',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                  ),
+                  // Issue #265 C1 + L12 review MEDIUM #1: render the
+                  // Rust thread-local diagnostic so operators see WHY
+                  // the FFI op failed, not just THAT. Scrubbed via
+                  // BtcLogFilter.redact — the Rust side does NOT
+                  // sanitize mnemonic/password bytes (Issue #242), so
+                  // any direct interpolation of `error.lastError`
+                  // risks a leak. `BtcLogFilter` strips BIP-39 word
+                  // sequences and 64-char hex digests before display.
+                  // Mirrors the `_SyncFailedBanner` pattern in
+                  // `balance_card.dart` for `WalletDetail.lastError`.
+                  if (error.lastError != null &&
+                      error.lastError!.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Builder(builder: (context) {
+                      const filter = BtcLogFilter();
+                      final scrubbed = filter.redact(error.lastError ?? '');
+                      return Text(
+                        scrubbed,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.outline,
+                              fontFamily: 'monospace',
+                            ),
+                      );
+                    }),
+                  ],
                   const SizedBox(height: 8),
                 ],
                 if (result != null)
