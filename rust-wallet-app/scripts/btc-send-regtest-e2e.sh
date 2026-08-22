@@ -132,8 +132,16 @@ record_step() {
 
 # bitcoin-cli wrapper. L12: pass user/pass via --rpcuser/--rpcpassword
 # flags, NOT userinfo-in-URL (see Issue #35).
+#
+# If `BTC_DOCKER_CONTAINER` is set, route the call through
+# `docker exec -i <container>` — useful when bitcoind runs in a
+# container but the script runs on the host (no host bitcoin-cli).
 bitcoin_cli() {
-    "$BTC_RPC_CLI" \
+    local prefix=()
+    if [[ -n "${BTC_DOCKER_CONTAINER:-}" ]]; then
+        prefix=(docker exec -i "$BTC_DOCKER_CONTAINER" )
+    fi
+    "${prefix[@]}" "$BTC_RPC_CLI" \
         -regtest \
         -rpcuser="$BTC_RPC_USER" \
         -rpcpassword="$BTC_RPC_PASS" \
