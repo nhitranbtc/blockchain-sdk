@@ -298,6 +298,7 @@ class WalletCore implements WalletCoreApi {
     final outAddressType = calloc<Uint8>();
     final outFirstAddress = calloc<Pointer<Utf8>>();
     final outBalanceSat = calloc<Uint64>();
+    final outSyncStatus = calloc<Uint8>();
     final outWalletHandle = calloc<Pointer<Void>>();
     try {
       final rc = WalletOpsBindings.walletShow(
@@ -313,6 +314,7 @@ class WalletCore implements WalletCoreApi {
         outAddressType,
         outFirstAddress,
         outBalanceSat,
+        outSyncStatus,
         outWalletHandle,
       );
       if (rc != 0) {
@@ -345,6 +347,25 @@ class WalletCore implements WalletCoreApi {
       // provided (see sync block above); otherwise `0` (legacy
       // v0.2.0 behavior — useful for offline test fixtures).
       final balanceSat = outBalanceSat.value;
+      // out_sync_status (Issue #263): `WalletSyncStatus` byte
+      // (0 Synced / 1 EmptyWallet / 2 SyncFailed). Lets the detail
+      // screen render a red banner + Retry button when sync fails
+      // (previously silent — the operator couldn't distinguish
+      // empty wallet from broken Esplora sync).
+      final syncStatus = FfiSyncStatus.fromCode(outSyncStatus.value);
+      // Issue #263 — C1 fix: surface the Rust `set_last_error`
+      // diagnostic to the UI. Read the borrowed thread-local
+      // `CString` IMMEDIATELY after `walletShow` returns (any
+      // subsequent FFI call on this thread could overwrite it).
+      // Only populate for `SyncFailed` (other statuses don't
+      // emit diagnostic context).
+      String? lastError;
+      if (syncStatus == FfiSyncStatus.syncFailed) {
+        final errPtr = WalletOpsBindings.ffiLastErrorMessage();
+        if (errPtr != nullptr) {
+          lastError = errPtr.toDartString();
+        }
+      }
       // Dart string for addressType (matches legacy btc wallet show
       // --json encoding for the detail screen).
       final addressTypeStr = switch (addressType) {
@@ -368,6 +389,8 @@ class WalletCore implements WalletCoreApi {
           addressType: addressTypeStr,
           firstAddress: firstAddress,
           balance: Balance(confirmedSat: balanceSat),
+          syncStatus: syncStatus,
+          lastError: lastError,
         ),
         // The signing handle — caller passes to walletSend /
         // walletBalance / walletSync. Free via walletLoadFree. Null
@@ -391,6 +414,7 @@ class WalletCore implements WalletCoreApi {
       calloc.free(outAddressType);
       calloc.free(outFirstAddress);
       calloc.free(outBalanceSat);
+      calloc.free(outSyncStatus);
       calloc.free(outWalletHandle);
       password.dispose();
     }

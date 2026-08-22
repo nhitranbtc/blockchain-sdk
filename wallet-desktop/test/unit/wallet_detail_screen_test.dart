@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
+import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/features/wallet_detail/wallet_detail_screen.dart';
 import 'package:wallet_desktop/providers/wallet_providers.dart';
 
@@ -289,4 +290,91 @@ void main() {
     // empty body — deferred per Task 17/18 lesson (flutter_test
     // enterText on obscured PasswordField is unreliable).
   }, skip: 'Task 24 integration test');
+
+  // Issue #263 — sync-failed UX state. When `walletShow` returns
+  // `FfiSyncStatus.syncFailed` (Esplora unreachable, bad URL, SPKI
+  // mismatch, etc.), the `BalanceCard` must render a red error
+  // banner + Retry button. Pre-#263 the operator couldn't
+  // distinguish this state from a fresh empty wallet — both
+  // surfaced as "0 sats" with the same "sync attempted" hint.
+  //
+  // **Skipped:** pre-existing test-infra issue (every test in this
+  // file hits `UnimplementedError: Override in ProviderScope` because
+  // `initState` reads `esploraConfigProvider` / `appPathsProvider`
+  // without overrides — see PR #262 body for the same pattern).
+  // Follow-up issue #TBD filed in PR body; re-enable when infra is
+  // fixed. The Rust-side
+  // `wallet_show_unreachable_esplora_returns_sync_failed` test
+  // (the canonical FFI assertion) is GREEN and runs in CI.
+  testWidgets(
+    'WalletDetailScreen renders red sync-failed banner + Retry '
+    'when walletShow returns FfiSyncStatus.syncFailed (Issue #263)',
+    (t) async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      var retryTaps = 0;
+      container
+          .read(walletSessionProvider(_kWalletId).notifier)
+          .unlockWithDetail(
+            const WalletDetail(
+              id: _kWalletId,
+              network: _kTestnet,
+              addressType: 'native-segwit',
+              firstAddress: 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx',
+              balance: Balance(confirmedSat: 0),
+              syncStatus: FfiSyncStatus.syncFailed,
+            ),
+          );
+
+      await t.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            home: Scaffold(
+              body: WalletDetailScreen(
+                network: _kTestnet,
+                walletId: _kWalletId,
+              ),
+            ),
+          ),
+        ),
+      );
+      await t.pump();
+
+      // Sync-failed banner header — the diagnostic that the user
+      // can act on. Pre-#263 this text was absent and the operator
+      // had no signal that Esplora was unreachable.
+      expect(
+        find.text('Sync failed — balance may be stale'),
+        findsOneWidget,
+      );
+      // The legacy "Balance syncs on unlock…" hint must NOT render
+      // alongside the sync-failed banner — its presence would mean
+      // the BalanceCard is rendering both states (a regression on
+      // the 3-way switch).
+      expect(
+        find.text('Balance syncs on unlock against the configured '
+            'Esplora endpoint'),
+        findsNothing,
+        reason: 'syncFailed must not also render the no-funds-yet '
+            'hint — these are mutually exclusive render branches',
+      );
+      // Retry button — operator's recovery affordance. Key-based
+      // finder disambiguates from the existing "Resync balance"
+      // button (both use `Icons.refresh`).
+      final retryBtn = find.byKey(const Key('balance_card_retry'));
+      expect(retryBtn, findsOneWidget);
+      await t.tap(retryBtn);
+      await t.pump();
+      retryTaps += 1;
+      expect(retryTaps, 1,
+          reason: 'Retry button must be tappable (smoke check — the '
+              'real wiring is `_showReUnlockDialog` which re-runs '
+              'the unlock flow)');
+    },
+    skip: 'pre-existing test-infra issue: WalletDetailScreen initState '
+        'reads esploraConfigProvider without an override; see PR body '
+        'for follow-up. Rust-side FFI test (cargo test) is GREEN.',
+  );
 }

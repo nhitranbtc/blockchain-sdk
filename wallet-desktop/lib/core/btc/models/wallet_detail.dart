@@ -22,6 +22,7 @@
 
 import 'package:meta/meta.dart';
 
+import '../../ffi/ffi_enums.dart';
 import 'dto_parse_exception.dart';
 
 @immutable
@@ -45,6 +46,8 @@ class WalletDetail {
     required this.addressType,
     required this.firstAddress,
     required this.balance,
+    this.syncStatus = FfiSyncStatus.emptyWallet,
+    this.lastError,
   });
   final String id;
   final String network;
@@ -62,6 +65,20 @@ class WalletDetail {
   /// screen hides `AddressChip` when this is empty.
   final String firstAddress;
   final Balance balance;
+
+  /// Issue #263 — sync classification returned by `walletShow`.
+  /// Defaults to [FfiSyncStatus.emptyWallet] for legacy JSON-decoded
+  /// data (where the field is absent) — preserves the pre-#263 UX of
+  /// rendering the "no funds yet" hint instead of the sync-failed
+  /// banner.
+  final FfiSyncStatus syncStatus;
+
+  /// Issue #263 — diagnostic message from Rust's `set_last_error`
+  /// (e.g. `wallet_show esplora client: ...`). Populated by
+  /// [WalletCore.showWallet] via [WalletOpsBindings.ffiLastErrorMessage]
+  /// when [syncStatus] is [FfiSyncStatus.syncFailed]; `null` for
+  /// other statuses (defensive — they don't emit diagnostic context).
+  final String? lastError;
 
   factory WalletDetail.fromJson(Map<String, dynamic> j) {
     final balanceRaw = j['balance'];
