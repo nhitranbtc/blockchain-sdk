@@ -13,16 +13,17 @@
 // array).
 
 import 'dart:ffi';
+import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/btc/models/fee_estimate.dart';
-import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
 import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
 import 'package:wallet_desktop/core/wallet_core_api.dart';
+import 'package:wallet_desktop/providers/app_paths_provider.dart';
 import 'package:wallet_desktop/providers/wallet_core_provider.dart';
 import 'package:wallet_desktop/providers/wallet_providers.dart';
 
@@ -196,6 +197,15 @@ void main() {
       );
       final container = ProviderContainer(overrides: [
         walletCoreProvider.overrideWithValue(fake),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier
+        // hangs in loading state.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -209,6 +219,15 @@ void main() {
       final fake = _FakeWalletCore(); // default fixture = []
       final container = ProviderContainer(overrides: [
         walletCoreProvider.overrideWithValue(fake),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier
+        // hangs in loading state.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -225,6 +244,15 @@ void main() {
       );
       final container = ProviderContainer(overrides: [
         walletCoreProvider.overrideWithValue(fake),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier
+        // hangs in loading state.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -246,6 +274,15 @@ void main() {
       );
       final container = ProviderContainer(overrides: [
         walletCoreProvider.overrideWithValue(fake),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier
+        // hangs in loading state.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -263,6 +300,15 @@ void main() {
       final fake = _FakeWalletCore(fixture: const ['wlt-abc']);
       final container = ProviderContainer(overrides: [
         walletCoreProvider.overrideWithValue(fake),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier
+        // hangs in loading state.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 

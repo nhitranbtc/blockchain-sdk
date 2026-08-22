@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:ffi';
 
@@ -91,7 +92,6 @@ class _SendScreenState extends ConsumerState<SendScreen> {
   bool _running = false;
   FfiException? _error;
   SendResult? _result;
-  String _password = '';
 
   /// Persistent controller for the Fee-rate field (L12 flutter-reviewer
   /// Task 21 CRITICAL #2 — inline construction leaks controllers and
@@ -138,7 +138,7 @@ class _SendScreenState extends ConsumerState<SendScreen> {
         );
       }
       if (!mounted) return;
-      _fetchFeeEstimate(walletId, network);
+      unawaited(_fetchFeeEstimate(walletId, network));
     });
     // If the wallet locks from another screen (detail-screen lock
     // button), clear the in-flight flags so a stale `_running` /
@@ -612,5 +612,3 @@ class _SendScreenState extends ConsumerState<SendScreen> {
     );
   }
 }
-
-final _whitespaceRe = RegExp(r'\s+');

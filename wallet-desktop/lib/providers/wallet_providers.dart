@@ -9,7 +9,6 @@ import '../core/btc/models/wallet_detail.dart';
 import '../core/ffi/ffi_enums.dart';
 import '../core/ffi/ffi_exception.dart';
 import '../core/ffi/secret_buffer.dart';
-import '../core/wallet_core.dart';
 import '../core/wallet_core_api.dart';
 import 'app_paths_provider.dart';
 import 'esplora_config_provider.dart';
@@ -288,16 +287,6 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
         phrase: phrase,
         baseDir: appPaths.walletDataDir.path,
       );
-      walletHandle ??= core.walletFromMnemonic(
-        network: network,
-        phrase: phrase,
-        // Default to NativeSegwit (most common wallet type). If the
-        // original wallet used a different address type the sync
-        // still finds its UTXOs (bdk derives the same addresses
-        // regardless of which descriptor is requested via the FFI
-        // — the sync hits the same address set).
-        addressType: FfiAddressType.nativeSegwit,
-      );
       if (walletHandle == nullptr) {
         // Both paths returned null — drop esplora + bail. The
         // session still has the read-only detail (no handles);
@@ -321,7 +310,7 @@ class WalletSessionNotifier extends FamilyNotifier<WalletSession?, String> {
       detail: _refreshBalance(
         core: core,
         detail: current.detail,
-        walletHandle: walletHandle!,
+        walletHandle: walletHandle,
         esploraHandle: esploraHandle,
       ),
       walletHandle: walletHandle,

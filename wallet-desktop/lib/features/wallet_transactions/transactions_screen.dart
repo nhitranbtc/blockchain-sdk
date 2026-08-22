@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
@@ -99,7 +100,7 @@ class _TransactionsScreenState extends ConsumerState<TransactionsScreen> {
         );
       }
       if (!mounted) return;
-      _load(walletId, network);
+      unawaited(_load(walletId, network));
     });
     ref.listenManual<Object?>(
       walletSessionProvider(widget.walletId),
