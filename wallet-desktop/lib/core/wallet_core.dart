@@ -426,6 +426,7 @@ class WalletCore implements WalletCoreApi {
 
   /// Constructs an `EsploraClient` handle for the given URL. SPKI pin
   /// is required for non-localhost hosts (F20 enforcement).
+  @override
   Pointer<Void> esploraClientNew({
     required Pointer<Utf8> url,
     Pointer<Utf8>? spkiPinB64,
@@ -441,6 +442,7 @@ class WalletCore implements WalletCoreApi {
   }
 
   /// Drops an `EsploraClient` handle. Idempotent on null.
+  @override
   void esploraClientFree(Pointer<Void> handle) {
     if (handle == nullptr) return;
     EsploraBindings.esploraClientFree(handle);
@@ -476,6 +478,7 @@ class WalletCore implements WalletCoreApi {
   /// `phrase` `SecretBuffer` is auto-disposed after the FFI call.
   /// Rust expects `*const c_char` (NUL-terminated), so we allocate a
   /// NUL-terminated copy from the byte buffer.
+  @override
   Pointer<Void> walletFromMnemonic({
     required SecretBuffer phrase,
     required FfiNetwork network,
@@ -516,6 +519,7 @@ class WalletCore implements WalletCoreApi {
   /// The Rust side wraps the incoming C string in `Secret<String>`
   /// (zeroize-on-drop). Mirrors the lifetime pattern from
   /// `walletFromMnemonic`.
+  @override
   Pointer<Void> walletLoad({
     required String baseDir,
     required String walletId,
@@ -546,12 +550,14 @@ class WalletCore implements WalletCoreApi {
   /// Drops a `WalletHandle` returned by [walletLoad]. Idempotent on
   /// null. Body identical to [walletFree] — separate method for
   /// call-site clarity (which load created the handle).
+  @override
   void walletLoadFree(Pointer<Void> handle) {
     if (handle == nullptr) return;
     EsploraBindings.walletLoadFree(handle);
   }
 
   /// Syncs the wallet against Esplora (pulls UTXOs + chain tip).
+  @override
   void walletSync({
     required Pointer<Void> walletHandle,
     required Pointer<Void> esploraHandle,
@@ -564,6 +570,7 @@ class WalletCore implements WalletCoreApi {
   }
 
   /// Returns the confirmed balance in satoshis.
+  @override
   int walletBalance({
     required Pointer<Void> walletHandle,
     required Pointer<Void> esploraHandle,
@@ -587,6 +594,7 @@ class WalletCore implements WalletCoreApi {
   }
 
   /// Sends satoshis to a recipient. Returns the txid hex string.
+  @override
   String walletSend({
     required Pointer<Void> walletHandle,
     required Pointer<Void> esploraHandle,

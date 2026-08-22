@@ -1,16 +1,17 @@
 import 'dart:ffi';
+import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/btc/models/fee_estimate.dart';
-import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
 import 'package:wallet_desktop/core/ffi/secret_buffer.dart';
 import 'package:wallet_desktop/core/wallet_core_api.dart';
 import 'package:wallet_desktop/features/wallet_list/wallet_list_screen.dart';
+import 'package:wallet_desktop/providers/app_paths_provider.dart';
 import 'package:wallet_desktop/providers/wallet_core_provider.dart';
 import 'package:wallet_desktop/routing/wallet_routes.dart';
 
@@ -179,6 +180,12 @@ void main() {
     (t) async {
       final container = ProviderContainer(overrides: [
         walletCoreProvider.overrideWithValue(_FakeWalletCore()),
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -205,6 +212,16 @@ void main() {
         walletCoreProvider.overrideWithValue(
           _FakeWalletCore(fixture: const ['wlt-abc', 'wlt-def']),
         ),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier is
+        // stuck in loading state (CircularProgressIndicator never
+        // settles → pumpAndSettle hangs).
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -234,6 +251,16 @@ void main() {
             'abcdef0123456789abcdef0123456789',
           ]),
         ),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier is
+        // stuck in loading state (CircularProgressIndicator never
+        // settles → pumpAndSettle hangs).
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -266,6 +293,16 @@ void main() {
             ),
           ),
         ),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier
+        // is stuck in loading state (CircularProgressIndicator never
+        // settles → pumpAndSettle hangs).
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -277,6 +314,10 @@ void main() {
           ),
         ),
       );
+      // pumpAndSettle works now that the appPathsProvider override
+      // unblocks the loading state (CircularProgressIndicator only
+      // renders until appPathsProvider.future resolves; before the
+      // override it never did, so pumpAndSettle hung).
       await t.pumpAndSettle();
 
       // L12 review MED #3 fix: kind-mapped copy from
@@ -300,6 +341,16 @@ void main() {
             ),
           ),
         ),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier is
+        // stuck in loading state (CircularProgressIndicator never
+        // settles → pumpAndSettle hangs).
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -328,6 +379,16 @@ void main() {
         walletCoreProvider.overrideWithValue(
           _FakeWalletCore(fixture: const ['wlt-abc']),
         ),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier is
+        // stuck in loading state (CircularProgressIndicator never
+        // settles → pumpAndSettle hangs).
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 
@@ -368,6 +429,16 @@ void main() {
             '../settings',
           ]),
         ),
+        // WalletsListNotifier awaits appPathsProvider.future before
+        // calling listWallets; without this override the notifier is
+        // stuck in loading state (CircularProgressIndicator never
+        // settles → pumpAndSettle hangs).
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
       ]);
       addTearDown(container.dispose);
 

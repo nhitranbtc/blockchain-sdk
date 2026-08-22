@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/ffi/ffi_exception.dart';
+import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/widgets/address_chip.dart';
 import 'package:wallet_desktop/widgets/balance_card.dart';
@@ -27,7 +28,7 @@ void main() {
       confirmedSat: 100000,
     );
     await tester.pumpWidget(const MaterialApp(
-      home: Scaffold(body: BalanceCard(balance: bal)),
+      home: Scaffold(body: BalanceCard(balance: bal, syncStatus: FfiSyncStatus.synced)),
     ));
     expect(find.textContaining('100000'), findsOneWidget);
   });
