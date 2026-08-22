@@ -1,20 +1,55 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/features/wallet_detail/wallet_detail_screen.dart';
+import 'package:wallet_desktop/providers/app_paths_provider.dart';
+import 'package:wallet_desktop/providers/esplora_config_provider.dart';
 import 'package:wallet_desktop/providers/wallet_providers.dart';
 
 const _kTestnet = 'testnet';
 const _kWalletId = 'wlt-abc';
+
+/// Test-only `EsploraConfigNotifier` that bypasses the F20 file-path
+/// read. Bypasses the default `throw UnimplementedError` from
+/// `esploraConfigFilePathProvider` and the F20 enforcement in
+/// `EsploraConfig.defaults('testnet')` (which throws for public
+/// networks — see `esplora_config_provider.dart:43-58`). Uses
+/// `EsploraConfig.forTesting` to bypass F20 entirely (test-only API).
+class _FakeEsploraConfigNotifier extends EsploraConfigNotifier {
+  @override
+  Future<EsploraConfig> build() async => EsploraConfig.forTesting(
+        network: _kTestnet,
+        url: 'http://127.0.0.1:50002/api',
+      );
+}
 
 void main() {
   testWidgets(
     'WalletDetailScreen shows the Unlock form (Password + Unlock button) '
     'when the wallet session is null',
     (t) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        // appPathsProvider: WalletsListNotifier + WalletSessionNotifier
+        // await appPathsProvider.future before unlocking. Without this
+        // override, the notifier hangs in AsyncLoading and
+        // pumpWidget loops on CircularProgressIndicator.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
+        // esploraConfigProvider: WalletDetailScreen.initState reads
+        // this. Default `esploraConfigFilePathProvider` throws
+        // UnimplementedError; default `EsploraConfig.defaults('testnet')`
+        // throws StateError (F20 enforcement). Override with a fake
+        // notifier that returns a test-only `EsploraConfig.forTesting`.
+        esploraConfigProvider.overrideWith(() => _FakeEsploraConfigNotifier()),
+      ]);
       addTearDown(container.dispose);
 
       await t.pumpWidget(
@@ -36,14 +71,30 @@ void main() {
       expect(find.byType(TextField), findsOneWidget);
       expect(find.text('Unlock'), findsOneWidget);
     },
-    skip: true,
   );
 
   testWidgets(
     'WalletDetailScreen shows balance + first address + nav buttons '
     'when the wallet session has a parsed detail',
     (t) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        // appPathsProvider: WalletsListNotifier + WalletSessionNotifier
+        // await appPathsProvider.future before unlocking. Without this
+        // override, the notifier hangs in AsyncLoading and
+        // pumpWidget loops on CircularProgressIndicator.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
+        // esploraConfigProvider: WalletDetailScreen.initState reads
+        // this. Default `esploraConfigFilePathProvider` throws
+        // UnimplementedError; default `EsploraConfig.defaults('testnet')`
+        // throws StateError (F20 enforcement). Override with a fake
+        // notifier that returns a test-only `EsploraConfig.forTesting`.
+        esploraConfigProvider.overrideWith(() => _FakeEsploraConfigNotifier()),
+      ]);
       addTearDown(container.dispose);
 
       // Seed the session so the screen boots into the unlocked view.
@@ -114,14 +165,30 @@ void main() {
       expect(find.byKey(const Key('wallet_detail_history')), findsOneWidget);
       expect(find.byKey(const Key('wallet_detail_lock')), findsOneWidget);
     },
-    skip: true,
   );
 
   testWidgets(
     'WalletDetailScreen lock button clears the wallet session '
     '(returns to the Unlock form)',
     (t) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        // appPathsProvider: WalletsListNotifier + WalletSessionNotifier
+        // await appPathsProvider.future before unlocking. Without this
+        // override, the notifier hangs in AsyncLoading and
+        // pumpWidget loops on CircularProgressIndicator.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
+        // esploraConfigProvider: WalletDetailScreen.initState reads
+        // this. Default `esploraConfigFilePathProvider` throws
+        // UnimplementedError; default `EsploraConfig.defaults('testnet')`
+        // throws StateError (F20 enforcement). Override with a fake
+        // notifier that returns a test-only `EsploraConfig.forTesting`.
+        esploraConfigProvider.overrideWith(() => _FakeEsploraConfigNotifier()),
+      ]);
       addTearDown(container.dispose);
 
       // Seed the session as unlocked.
@@ -187,7 +254,6 @@ void main() {
       // Balance card gone.
       expect(find.text('12345 sats'), findsNothing);
     },
-    skip: true,
   );
 
   // Issue #261: firstAddress is populated offline by Rust
@@ -204,7 +270,24 @@ void main() {
     'no sync-pending sentinel, and address-specific URLs '
     '(Issue #261 — closes v0.2.0 deviance)',
     (t) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        // appPathsProvider: WalletsListNotifier + WalletSessionNotifier
+        // await appPathsProvider.future before unlocking. Without this
+        // override, the notifier hangs in AsyncLoading and
+        // pumpWidget loops on CircularProgressIndicator.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
+        // esploraConfigProvider: WalletDetailScreen.initState reads
+        // this. Default `esploraConfigFilePathProvider` throws
+        // UnimplementedError; default `EsploraConfig.defaults('testnet')`
+        // throws StateError (F20 enforcement). Override with a fake
+        // notifier that returns a test-only `EsploraConfig.forTesting`.
+        esploraConfigProvider.overrideWith(() => _FakeEsploraConfigNotifier()),
+      ]);
       addTearDown(container.dispose);
 
       // The canonical BIP-84 testnet vector (not a real wallet —
@@ -279,7 +362,6 @@ void main() {
           reason: 'Faucet button must render when firstAddress is '
               'populated (post-#261)');
     },
-    skip: true,
   );
 
   // Issue #261: firstAddress is populated offline by Rust
@@ -296,7 +378,24 @@ void main() {
     'no sync-pending sentinel, and address-specific URLs '
     '(Issue #261 — closes v0.2.0 deviance)',
     (t) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        // appPathsProvider: WalletsListNotifier + WalletSessionNotifier
+        // await appPathsProvider.future before unlocking. Without this
+        // override, the notifier hangs in AsyncLoading and
+        // pumpWidget loops on CircularProgressIndicator.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
+        // esploraConfigProvider: WalletDetailScreen.initState reads
+        // this. Default `esploraConfigFilePathProvider` throws
+        // UnimplementedError; default `EsploraConfig.defaults('testnet')`
+        // throws StateError (F20 enforcement). Override with a fake
+        // notifier that returns a test-only `EsploraConfig.forTesting`.
+        esploraConfigProvider.overrideWith(() => _FakeEsploraConfigNotifier()),
+      ]);
       addTearDown(container.dispose);
 
       // The canonical BIP-84 testnet vector (not a real wallet —
@@ -371,7 +470,6 @@ void main() {
           reason: 'Faucet button must render when firstAddress is '
               'populated (post-#261)');
     },
-    skip: true,
   );
 
   // v0.2 deferred (Task 18/19 lesson): end-to-end "type password →
@@ -406,7 +504,24 @@ void main() {
     'WalletDetailScreen renders red sync-failed banner + Retry '
     'when walletShow returns FfiSyncStatus.syncFailed (Issue #263)',
     (t) async {
-      final container = ProviderContainer();
+      final container = ProviderContainer(overrides: [
+        // appPathsProvider: WalletsListNotifier + WalletSessionNotifier
+        // await appPathsProvider.future before unlocking. Without this
+        // override, the notifier hangs in AsyncLoading and
+        // pumpWidget loops on CircularProgressIndicator.
+        appPathsProvider.overrideWith((_) async => AppPaths(
+              dataDir: Directory.systemTemp,
+              btcDir: Directory.systemTemp,
+              tmpDir: Directory.systemTemp,
+              walletDataDir: Directory.systemTemp,
+            )),
+        // esploraConfigProvider: WalletDetailScreen.initState reads
+        // this. Default `esploraConfigFilePathProvider` throws
+        // UnimplementedError; default `EsploraConfig.defaults('testnet')`
+        // throws StateError (F20 enforcement). Override with a fake
+        // notifier that returns a test-only `EsploraConfig.forTesting`.
+        esploraConfigProvider.overrideWith(() => _FakeEsploraConfigNotifier()),
+      ]);
       addTearDown(container.dispose);
 
       var retryTaps = 0;
