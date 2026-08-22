@@ -367,6 +367,20 @@ impl EsploraClient {
     /// it. For `TlsPolicy::SystemRoots`, this uses reqwest's default
     /// rustls backend (system roots).
     fn build_http_client(tls: &TlsPolicy) -> Result<reqwest::Client> {
+        // Issue #266: rustls 0.23 requires an explicit crypto
+        // provider install (the `ring` provider was the default in
+        // rustls 0.22; 0.23 dropped that default). Without this,
+        // `reqwest::Client::builder().build()` fails with the cryptic
+        // `builder error` because no TLS backend is registered.
+        // `OnceLock` makes the install call idempotent + thread-safe
+        // (subsequent calls are no-ops after the first successful
+        // install — `install_default()` returns `Err(AlreadyInstalled)`
+        // which we ignore).
+        use std::sync::OnceLock;
+        static CRYPTO_INIT: OnceLock<()> = OnceLock::new();
+        CRYPTO_INIT.get_or_init(|| {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
         match tls {
             TlsPolicy::Pinned(pins) => {
                 let pins = Arc::new(pins.clone());
@@ -528,6 +542,38 @@ mod tests {
         let c = EsploraClient::new(url, TlsPolicy::SystemRoots).unwrap();
         assert_eq!(c.base_url.as_str(), "https://blockstream.info/api/");
         assert!(matches!(c.tls, TlsPolicy::SystemRoots));
+    }
+
+    /// Issue #266 regression guard: production code MUST install the
+    /// rustls crypto provider itself (via `OnceLock` at the top of
+    /// `build_http_client`). The existing `init_crypto()` helper
+    /// above is a belt-and-braces backup; this test asserts that even
+    /// without that backup, `EsploraClient::new` succeeds because
+    /// production code owns the install.
+    ///
+    /// Note: this test relies on a fresh process state OR running
+    /// before any other test that calls `init_crypto()`. In parallel
+    /// test execution (`cargo test` default), prior tests in the
+    /// same `tests` module may have installed the provider globally
+    /// and this test would pass spuriously. To force the regression
+    /// check, run with `cargo test -- --test-threads=1` AND ensure
+    /// this test is the first to touch `EsploraClient::new`. The
+    /// production-side `OnceLock` makes the install idempotent.
+    #[test]
+    fn new_installs_crypto_provider_via_production_code() {
+        // Intentionally NOT calling init_crypto() — this test
+        // verifies production code owns the install. If the OnceLock
+        // in `build_http_client` is ever removed, this test fails
+        // (when run in isolation or first in execution order).
+        let url = EsploraUrl::new("https://127.0.0.1:1/api").unwrap();
+        let result = EsploraClient::new(url, TlsPolicy::SystemRoots);
+        assert!(
+            result.is_ok(),
+            "EsploraClient::new failed to build reqwest client — \
+             rustls crypto provider not installed by production \
+             code (Issue #266 regression). err: {:?}",
+            result.err(),
+        );
     }
 
     #[test]
