@@ -1,0 +1,100 @@
+[package]
+name = "alloy-v1-spike"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+# Empty [workspace] table signals "this is its own crate, not part of the
+# rust-wallet-app umbrella workspace" — keeps the spike out of umbrella CI.
+[workspace]
+
+# Standalone spike workspace — NOT added to rust-wallet-app umbrella members.
+# Tests the alloy v1.x API surface for the eth/ crate spike (Issue #293).
+# Operator-driven; V3 (live RPC) + V4 (Anvil spawn) require explicit opt-in env vars per L29.
+
+[dependencies]
+# Per Issue #293 Q1: pin meta `alloy` to exact 1.8.3 (latest 1.x line; MSRV 1.91
+# < workspace toolchain 1.94). Sub-crates (alloy-primitives@1.6.1, alloy-signer-local@1.0.22,
+# alloy-sol-types@1.6.1, alloy-provider@1.0.22, alloy-rpc-types@1.0.22) float within
+# the 1.x line — alloy's meta crate enforces unified semver compatibility.
+alloy = { version = "=1.8.3", default-features = false, features = [
+    "std",
+    "signers",
+    "signer-local",
+    "providers",
+    "transport-http",
+    "rpc-types",
+    "rpc-client",
+    "network",
+] }
+
+# Sub-crates declared explicitly so tests can `use alloy_primitives::...` etc.
+# Versions align with what alloy@1.8.3 transitively pulls; cargo resolver
+# keeps them compatible.
+alloy-primitives = { version = "^1.6", default-features = false, features = ["std"] }
+alloy-signer-local = { version = "^1.0", features = ["mnemonic"] }
+alloy-provider = { version = "^1.0" }
+alloy-network = { version = "^1.0" }
+alloy-rpc-types = { version = "^1.0" }
+alloy-sol-types = { version = "^1.6" }
+alloy-transport-http = { version = "^1.0", features = ["reqwest-rustls-tls"] }
+
+# Reused from Bitcoin side (workspace dep). ETH BIP-39/BIP-32 share the same primitives.
+bip39 = { version = "2.2", features = ["zeroize", "rand"] }
+
+# V7 SPKI pinning — rustls with custom ServerCertVerifier.
+rustls = "=0.23"
+alloy-consensus = { version = "=1.8.3" }
+alloy-eips = { version = "=1.8.3" }
+
+# Constant-time hash compare for V7 SPKI pin (avoids timing oracle that could
+# leak the pinned hash byte-by-byte). Same `subtle` dep as umbrella workspace.
+subtle = "2"
+
+# Util
+hex = "0.4"
+sha2 = "0.10"
+
+[dev-dependencies]
+# V4 — Anvil in-process spawn via alloy-node-bindings.
+alloy-node-bindings = { version = "=1.8.3" }
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[[test]]
+name = "v2_mnemonic"
+path = "tests/v2_mnemonic.rs"
+
+[[test]]
+name = "v3_live_rpc"
+path = "tests/v3_live_rpc.rs"
+
+[[test]]
+name = "v4_anvil_send"
+path = "tests/v4_anvil_send.rs"
+
+[[test]]
+name = "v5_erc20_calldata"
+path = "tests/v5_erc20_calldata.rs"
+
+[[test]]
+name = "v6_erc20_anvil"
+path = "tests/v6_erc20_anvil.rs"
+
+[[test]]
+name = "v7_spki_pin"
+path = "tests/v7_spki_pin.rs"
+
+# Operator-driven Sepolia e2e samples (Issue #299 — template for #298).
+# L29: never run in CI. RUN_ETH_E2E=1 cargo test --test <name> -- --ignored
+[[test]]
+name = "e2e_sepolia_balance"
+path = "tests/e2e_sepolia_balance.rs"
+
+[[test]]
+name = "e2e_sepolia_send_native"
+path = "tests/e2e_sepolia_send_native.rs"
+
+[[test]]
+name = "e2e_sepolia_erc20_balance"
+path = "tests/e2e_sepolia_erc20_balance.rs"
