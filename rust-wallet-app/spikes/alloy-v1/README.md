@@ -12,13 +12,16 @@ builds do not include it.
 | ID | Test                                                  | Status      | Operator opt-in              |
 | -- | ----------------------------------------------------- | ----------- | ---------------------------- |
 | V1 | `alloy 1.8.3` + transitive deps compile               | runs always | `cargo check`                |
-| V2 | `MnemonicBuilder::new().phrase(mnemonic).build()` → expected ETH address at `m/44'/60'/0'/0/0` | runs always | `cargo test --test v2_mnemonic` |
+| V2 | `MnemonicBuilder::english().phrase(mnemonic).index(0).build()` → expected ETH address at `m/44'/60'/0'/0/0` | runs always | `cargo test --test v2_mnemonic` |
 | V3 | `provider.get_block_number()` against `https://ethereum.reth.rs/rpc` | ignored | `RUN_V3_LIVE_RPC=1 cargo test --test v3_live_rpc -- --ignored` (env var AND `--ignored` flag both required) |
 | V4 | `provider.send_transaction(...)` against local Anvil + `get_receipt()` | ignored | `RUN_V4_ANVIL=1 cargo test --test v4_anvil_send -- --ignored` (env var AND `--ignored` flag both required; needs foundry) |
+| V5 | ERC-20 `transferCall` calldata → first 4 bytes `0xa9059cbb` | runs always | `cargo test --test v5_erc20_calldata` |
+| V6 | Anvil `MockERC20` `sol!` definition + constructor calldata round-trip | ignored | `RUN_V6_ANVIL=1 cargo test --test v6_erc20_anvil -- --ignored` (env var AND `--ignored` flag both required; needs foundry) |
 | V7 | SPKI-pinned `rustls::ServerCertVerifier` accepts matching SPKI + rejects non-matching | runs always | `cargo test --test v7_spki_pin` |
 
-V5 (ERC-20 calldata `0xa9059cbb`) and V6 (Anvil MockERC20 + balanceOf) are
-**deferred to the eth/ crate implementation** (per issue #293 resolution).
+V5/V6 deferred to eth/ crate implementation per accepted recommendation; spike ships
+the type-level verification (calldata selector for V5; `MockERC20` `sol!` + constructor
+calldata for V6) so the eth/ crate Phase 3 implementation has a known-good API surface.
 
 ## Run it
 

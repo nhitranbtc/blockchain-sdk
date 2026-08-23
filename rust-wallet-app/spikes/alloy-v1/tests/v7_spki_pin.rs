@@ -54,7 +54,6 @@ impl SpkiSha256 {
 /// signatures — `verify_tls12_signature` and `verify_tls13_signature` return
 /// `Ok` unconditionally. **Safe to migrate to eth/ crate ONLY after
 /// composing with a webpki verifier that performs those checks.**
-#[doc(hidden)]
 #[derive(Debug)]
 struct SpkiPinnedVerifier {
     pinned: SpkiSha256,
@@ -83,12 +82,16 @@ impl ServerCertVerifier for SpkiPinnedVerifier {
 
         // Constant-time compare — avoids timing oracle that could leak the
         // pinned hash byte-by-byte. Mirrors Bitcoin F20 + F50 (`subtle` dep).
+        //
+        // SECURITY: the rejection error message MUST NOT echo the pinned
+        // hash — emitting it would make the timing-attack defense moot
+        // (attacker learns the pin directly from the error string). The
+        // observed hash is also omitted; only a constant message is
+        // returned. eth/ crate MUST follow the same pattern.
         if observed.0.ct_eq(&self.pinned.0).unwrap_u8() != 1 {
-            return Err(RustlsError::General(format!(
-                "V7 SPKI pin: cert SPKI hash {} does not match pinned {}",
-                hex::encode(observed.0),
-                hex::encode(self.pinned.0),
-            )));
+            return Err(RustlsError::General(
+                "V7 SPKI pin: cert SPKI hash does not match pinned hash".into(),
+            ));
         }
 
         // SPIKE-ONLY: production must defer chain validation to webpki here.
@@ -117,8 +120,8 @@ impl ServerCertVerifier for SpkiPinnedVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        // Subset chosen for the spike; eth/ crate must mirror the schemes
-        // rustls's webpki verifier accepts (full list).
+        // ⚠️  SPIKE-ONLY list — eth/ crate MUST mirror the full set rustls's
+        // webpki verifier accepts (~14 schemes), not this 6-scheme subset.
         vec![
             SignatureScheme::ECDSA_NISTP256_SHA256,
             SignatureScheme::ECDSA_NISTP384_SHA384,

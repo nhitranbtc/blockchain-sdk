@@ -72,5 +72,13 @@ name = "v4_anvil_send"
 path = "tests/v4_anvil_send.rs"
 
 [[test]]
+name = "v5_erc20_calldata"
+path = "tests/v5_erc20_calldata.rs"
+
+[[test]]
+name = "v6_erc20_anvil"
+path = "tests/v6_erc20_anvil.rs"
+
+[[test]]
 name = "v7_spki_pin"
 path = "tests/v7_spki_pin.rs"
