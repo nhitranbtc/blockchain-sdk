@@ -47,21 +47,29 @@ impl SpkiSha256 {
 }
 
 /// SPIKE-ONLY: `ServerCertVerifier` that accepts ONLY certificates whose SPKI
-/// hash matches the pinned value. Rejects all others with `RustlsError::General`.
+/// hash matches any pin in the set. Rejects all others with `RustlsError::General`
+/// (constant error string — no pin leak).
 ///
 /// **Does NOT** delegate to webpki/aws-lc-rs for chain validation, hostname
 /// check, expiration, OCSP, or revocation. **Does NOT** verify TLS handshake
 /// signatures — `verify_tls12_signature` and `verify_tls13_signature` return
-/// `Ok` unconditionally. **Safe to migrate to eth/ crate ONLY after
-/// composing with a webpki verifier that performs those checks.**
+/// `Ok` unconditionally.
+///
+/// **Migration to eth/ crate requires composition order:**
+/// 1. SPKI pin match (this code)
+/// 2. webpki-verify hostname + chain + expiration + revocation
+///
+/// Single-pin field is spike-only. eth/ crate Phase 2 Task 5 must use
+/// `SpkiPinSet` (mirror Bitcoin `bitcoin-wallet-core/src/chain/spki.rs:134`)
+/// to support cert rotation (Bitcoin H-3).
 #[derive(Debug)]
 struct SpkiPinnedVerifier {
-    pinned: SpkiSha256,
+    pins: Vec<SpkiSha256>,
 }
 
 impl SpkiPinnedVerifier {
     fn new(pinned: SpkiSha256) -> Self {
-        Self { pinned }
+        Self { pins: vec![pinned] }
     }
 }
 
@@ -80,17 +88,22 @@ impl ServerCertVerifier for SpkiPinnedVerifier {
         })?;
         let observed = SpkiSha256::from_spki_der(&spki_der);
 
-        // Constant-time compare — avoids timing oracle that could leak the
-        // pinned hash byte-by-byte. Mirrors Bitcoin F20 + F50 (`subtle` dep).
+        // Constant-time compare against each pin in the set. Avoids timing
+        // oracle that could leak the pinned hash byte-by-byte. Mirrors
+        // Bitcoin F20 + F50 (`subtle` dep) + `SpkiPinSet::matches` pattern.
         //
         // SECURITY: the rejection error message MUST NOT echo the pinned
-        // hash — emitting it would make the timing-attack defense moot
-        // (attacker learns the pin directly from the error string). The
-        // observed hash is also omitted; only a constant message is
-        // returned. eth/ crate MUST follow the same pattern.
-        if observed.0.ct_eq(&self.pinned.0).unwrap_u8() != 1 {
+        // hash or the observed hash — emitting them would make the
+        // timing-attack defense moot (attacker learns the pin directly
+        // from the error string). Only a constant message is returned.
+        // eth/ crate MUST follow the same pattern.
+        let matched = self
+            .pins
+            .iter()
+            .any(|pin| observed.0.ct_eq(&pin.0).unwrap_u8() == 1);
+        if !matched {
             return Err(RustlsError::General(
-                "V7 SPKI pin: cert SPKI hash does not match pinned hash".into(),
+                "V7 SPKI pin: cert SPKI hash does not match any pinned hash".into(),
             ));
         }
 

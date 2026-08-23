@@ -75,7 +75,7 @@ rust-wallet-app/crates/eth/    # CLI binary
 **Steps:**
 - [ ] Step 1: Add `eth-wallet-core` to umbrella `members`
 - [ ] Step 2: Add `alloy = "=1.8.3"` to workspace deps with minimal features
-- [ ] Step 3: Implement `mnemonic::generate_12_word()` + `derive_address()` using `MnemonicBuilder::english().phrase().index(0).build()` pattern (V2 verified path)
+- [ ] Step 3: Implement `mnemonic::generate_12_word()` + `derive_address()` using `MnemonicBuilder::english().phrase(m).index(0).expect("valid account index").build().expect("build signer")` (full V2 verified chain with both `Result`-returning calls handled)
 - [ ] Step 4: Write `tests/mnemonic.rs` mirroring V2 — all-`abandon` mnemonic → `0x9858EfFD232B4033E47d90003D41EC34EcaEda94`
 - [ ] Step 5: Verify gate (cargo fmt + clippy --all-targets + test)
 - [ ] Step 6: Commit `feat(eth): scaffold eth-wallet-core crate — MnemonicBuilder + derivation path (Task 1)`
@@ -97,7 +97,7 @@ rust-wallet-app/crates/eth/    # CLI binary
 - [ ] Step 4: Commit
 
 ### Task 4: Error enum + serde
-- [ ] Step 1: 17-variant Error enum mirroring Bitcoin Error schema (Q1 derives from deep-dive)
+- [ ] Step 1: 17-variant Error enum mirroring Bitcoin Error schema
 - [ ] Step 2: thiserror impl + `Result<T, Error>` alias
 - [ ] Step 3: Commit
 
