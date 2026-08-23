@@ -38,11 +38,17 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # L37 hygiene: pin to immutable tag commit SHAs.
-      # Tag resolution (verified via GitHub API):
-      #   actions/checkout@v4.4.0     → 11d5960a326750d5838078e36cf38b85af677262
-      #   dtolnay/rust-toolchain@1.94.0 → 35d8a35b823d6c20db516f5c35eb0a9640942c17 (1.94.0 branch HEAD; version-pinned)
-      #   Swatinem/rust-cache@v2.7.3   → 23bce251a8cd2ffc3c1075eaa2367cf899916d84
+      # L37 hygiene: pin to immutable tag commit SHAs. Dependabot
+      # (`.github/dependabot.yml`, github-actions ecosystem, weekly cadence)
+      # opens PRs that bump the SHA when upstream publishes a new tag/commit.
+      #
+      #   actions/checkout@v4.4.0     → 11d5960a326750d5838078e36cf38b85af677262 (immutable tag)
+      #   dtolnay/rust-toolchain@1.94.0 → 35d8a35b823d6c20db516f5c35eb0a9640942c17
+      #     NOTE: dtolnay/rust-toolchain has no `1.94.0` git tag (only `v1`);
+      #     this is the 1.94.0 version-named branch HEAD (mutable in theory,
+      #     but the maintainer only pushes 1.94.x patch commits — Dependabot
+      #     bumps the SHA automatically).
+      #   Swatinem/rust-cache@v2.7.3   → 23bce251a8cd2ffc3c1075eaa2367cf899916d84 (immutable tag)
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
