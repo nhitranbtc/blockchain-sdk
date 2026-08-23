@@ -10,10 +10,12 @@
 pub mod crypto;
 pub mod error;
 pub mod mnemonic;
+pub mod provider;
 pub mod signer;
 pub mod wallet;
 
 pub use error::{Error, Result};
+pub use provider::{new_http, new_http_insecure, new_http_pinned, spki_pin_from_hex, SpkiSha256};
 pub use signer::{
     encoded_envelope, sign_erc20_tx_bytes, sign_message, sign_native_eth_tx, sign_typed_data,
     SignError, SignedEip1559,
