@@ -1,17 +1,11 @@
 name: alloy-v1 spike (Issue #293)
 
 # Verifies the alloy 1.8.3 API surface for the future `eth-wallet-core` crate
-# (PR #294). Runs V1/V2/V5/V7 deterministic tests in CI.
+# (PR #294). Runs V1/V2/V4/V5/V6/V7 in CI (deterministic + anvil-backed).
 #
-# V3 (live RPC against https://ethereum.reth.rs/rpc) + V4 + V6 (anvil spawn)
-# stay `#[ignore]` operator-only per L29. Run locally:
+# V3 (live RPC against https://ethereum.reth.rs/rpc) stays `#[ignore]`
+# operator-only per L29. Run locally:
 #   RUN_V3_LIVE_RPC=1 cargo test --test v3_live_rpc -- --ignored --nocapture
-#   RUN_V4_ANVIL=1   cargo test --test v4_anvil_send -- --ignored --nocapture
-#   RUN_V6_ANVIL=1   cargo test --test v6_erc20_anvil -- --ignored --nocapture
-# Foundry install was removed from CI per L37 supply-chain-credential-pinning
-# + supply-chain-mutable-artifact-source findings (mutable `nightly` tag +
-# warn-and-continue SHA gate fail-open). Local verification of V4/V6 captured
-# in PR #294 commit 6f1afdd.
 
 on:
   push:
@@ -33,9 +27,9 @@ concurrency:
 
 jobs:
   build:
-    name: alloy-v1 spike (deterministic V1/V2/V5/V7)
+    name: alloy-v1 spike (V1/V2/V4/V5/V6/V7 with anvil for V4+V6)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
 
     steps:
       # L37 hygiene: pin to immutable tag commit SHAs. Dependabot
@@ -70,6 +64,31 @@ jobs:
           workspaces: rust-wallet-app/spikes/alloy-v1 -> target
           cache-on-failure: false
 
+      # Foundry (anvil + cast) — install prebuilt nightly tarball.
+      # Foundry does NOT publish per-commit assets or SHA256SUMS files; the only
+      # immutable pin is the SHA of the tarball that was verified-good at commit
+      # time. Trade-off acknowledged: rolling `nightly` tag is mutable, but the
+      # pinned SHA + fail-closed check (`set -e` + no soft-fail branch) prevents
+      # silent degradation. To refresh the pin when foundry ships a new nightly:
+      #   curl -fsSL -o /tmp/foundry.tar.gz \
+      #     "https://github.com/foundry-rs/foundry/releases/download/nightly/foundry_nightly_linux_amd64.tar.gz"
+      #   sha256sum /tmp/foundry.tar.gz
+      # Then update FOUNDRY_SHA256_LINUX_AMD64 below.
+      - name: Install Foundry (anvil + cast)
+        env:
+          FOUNDRY_TARBALL: foundry_nightly_linux_amd64.tar.gz
+          FOUNDRY_SHA256_LINUX_AMD64: 71ff4cb01b295557267b7f5775d185efd74d838599fa122e7cd7aa0272d580d4
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.foundry"
+          curl -fsSL -o /tmp/foundry.tar.gz \
+            "https://github.com/foundry-rs/foundry/releases/download/nightly/${FOUNDRY_TARBALL}"
+          # Fail-closed SHA256 verify (no warn-and-continue branch per L37).
+          echo "${FOUNDRY_SHA256_LINUX_AMD64}  /tmp/foundry.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/foundry.tar.gz -C "${HOME}/.foundry" anvil cast
+          echo "${HOME}/.foundry" >> "${GITHUB_PATH}"
+          anvil --version
+
       - name: V1 — compile (alloy 1.8.3 + sub-crates + bip32/bip39/reqwest/rustls/tokio/sha2/subtle/hex)
         working-directory: rust-wallet-app/spikes/alloy-v1
         run: cargo check --all-targets
@@ -86,13 +105,26 @@ jobs:
         working-directory: rust-wallet-app/spikes/alloy-v1
         run: cargo test --test v2_mnemonic -- --nocapture
 
+      - name: V4 — Anvil send_signed_native_eth_tx (with foundry)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        env:
+          RUN_V4_ANVIL: '1'
+        run: cargo test --test v4_anvil_send -- --ignored --nocapture
+
       - name: V5 — ERC-20 transferCall calldata → 0xa9059cbb (deterministic)
         working-directory: rust-wallet-app/spikes/alloy-v1
         run: cargo test --test v5_erc20_calldata -- --nocapture
+
+      - name: V6 — Anvil MockERC20 sol! + constructor calldata (with foundry)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        env:
+          RUN_V6_ANVIL: '1'
+        run: cargo test --test v6_erc20_anvil -- --ignored --nocapture
 
       - name: V7 — SPKI pin accept/reject (deterministic, constant-time compare)
         working-directory: rust-wallet-app/spikes/alloy-v1
         run: cargo test --test v7_spki_pin -- --nocapture
 
-      # V3 (live RPC), V4 + V6 (anvil) intentionally NOT run in CI per L29.
-      # See local operator-run commands at top of file.
+      # V3 (live RPC against https://ethereum.reth.rs/rpc) intentionally NOT run in CI
+      # per L29 (operator-driven). Run locally:
+      #   RUN_V3_LIVE_RPC=1 cargo test --test v3_live_rpc -- --ignored --nocapture
