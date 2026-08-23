@@ -86,8 +86,10 @@ jobs:
           # Fail-closed SHA256 verify (no warn-and-continue branch per L37).
           echo "${FOUNDRY_SHA256_LINUX_AMD64}  /tmp/foundry.tar.gz" | sha256sum -c -
           tar -xzf /tmp/foundry.tar.gz -C "${HOME}/.foundry" anvil cast
+          # GITHUB_PATH only applies to SUBSEQUENT steps; verify install
+          # in-step by prepending PATH explicitly.
+          "${HOME}/.foundry/anvil" --version
           echo "${HOME}/.foundry" >> "${GITHUB_PATH}"
-          anvil --version
 
       - name: V1 — compile (alloy 1.8.3 + sub-crates + bip32/bip39/reqwest/rustls/tokio/sha2/subtle/hex)
         working-directory: rust-wallet-app/spikes/alloy-v1
