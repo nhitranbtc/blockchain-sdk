@@ -1,0 +1,24 @@
+[package]
+name = "eth"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "MIT"
+description = "`eth` CLI for the eth-wallet-core v0.2.0 library"
+# Task 10 (Issue #309) — Phase 4 CLI scaffold. Mirrors BTC's
+# rust-wallet-app/crates/btc/ structure. This initial scaffold ships
+# the clap subcommand LAYOUT per the 27-story spec; subcommand
+# business logic is wired in follow-up issues as the underlying library
+# surfaces (Tasks 2-9) stabilize.
+publish = false
+
+[[bin]]
+name = "eth"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+eth-wallet-core = { path = "../eth-wallet-core" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+hex = { workspace = true }
