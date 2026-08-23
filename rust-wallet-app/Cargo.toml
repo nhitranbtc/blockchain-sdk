@@ -5,6 +5,7 @@ members = [
     "crates/bitcoin-wallet-core",
     "crates/btc",
     "crates/eth-wallet-core",
+    "crates/eth",
 ]
 
 [workspace.package]
@@ -71,6 +72,9 @@ cbindgen = "0.27"
 
 # Encoding (used by crypto::bip137 for base64-encoded message signatures)
 base64 = "0.22"
+
+# Hex (used by eth-wallet-core for SPKI pin decoding + token JSON serialization)
+hex = "0.4"
 
 # Wallet ID + filesystem layout (Task 54d / Issue #64, ADR 0001)
 uuid = { version = "1", features = ["v4", "serde"] }
