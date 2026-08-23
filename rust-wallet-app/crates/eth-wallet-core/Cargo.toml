@@ -1,0 +1,17 @@
+[package]
+name = "eth-wallet-core"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.94"
+license = "MIT"
+description = "Ethereum (ETH + ERC-20) wallet library built on alloy v1.8.x"
+# Phase 0 of eth-wallet-core plan (`docs/superpowers/plans/2026-08-23-eth-wallet-core.md`).
+# Task 1 scaffold = mnemonic generation + BIP-44 derivation → Address. Issue #295.
+publish = false
+
+[dependencies]
+# all v1.8.x workspace deps. Features kept minimal for Task 1.
+alloy-primitives = { workspace = true }
+alloy-signer-local = { workspace = true }
+bip39 = { workspace = true }
+zeroize = { workspace = true }

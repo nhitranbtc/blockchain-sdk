@@ -27,6 +27,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
 - [L42] Verify staged set before commit (`git diff --cached --stat` after every `git add`)
+- [L45] Issues labeled `rust-eth-core` route to the integration branch, never main directly
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -875,6 +876,39 @@ Operator confirms via PR comment + flips the `L29` acceptance box.
 - Combine with L6 (approval gates before `git commit`) and L13 step 12 (PAUSE for commit approval): three-stage guard = `add → verify staged → commit`. The verify-staged step is the cheapest, fastest catch — runs in <1s and prevents the costliest recovery.
 - Anti-pattern: relying on `git status` alone. The two-column output (`M file` = staged; ` M file` = unstaged) is hard to scan for unexpected content under load. `--cached --stat` gives a single clean list of what's about to ship.
 - Companion check before commit: `git log --oneline @{u}..HEAD` — confirm the commits ahead of upstream match what you intend to push (catches accidental mixed commits in the same way).
+
+---
+
+## L45 — Issues labeled `rust-eth-core` route to the integration branch, never main directly
+
+**Trigger**: 2026-08-23 session bootstrap. PR #294 (alloy v1.8 spike + eth-wallet-core plan) merged to main. User requested a dedicated integration branch for the eth-wallet-core v0.2 work: `docs/superpowers/plans/2026-08-23-eth-wallet-core.md` (12 tasks #295 + #301-#311). Workflow + CODEOWNERS bootstrapped on integration branch `rust-eth-core` (commits `04fb6d2` + `701a294`); user authorized autonomous `auto push and commit, PR, merge on rust-eth-core` for the 12-task duration.
+
+**Rule**:
+
+1. **Integration branch canonical**: New branch `rust-eth-core` is the single landing zone for any PR labeled `rust-eth-core`. Created off `main` immediately after PR #294 landed; carries the new CI workflow `.github/workflows/rust-eth-core-ci.yml` (label-routing + verify-gate) and `CODEOWNERS` entry.
+2. **Sub-task branches**: Each Plan Task is one PR. Sub-task branches fork from `rust-eth-core`, NOT from main. Naming convention `task/eth-wallet-core-v0.2/<n>-<slug>` (e.g., `task/eth-wallet-core-v0.2/1-scaffold`).
+3. **PR base = `rust-eth-core`**: Every sub-task PR opens with `--base rust-eth-core --head <sub-task-branch>`. The `label-routing` job in `rust-eth-core-ci.yml` fails the CI check if the PR is missing the `rust-eth-core` label — guards base-branch + label consistency.
+4. **CODEOWNERS routes review**: `.github/CODEOWNERS` auto-assigns `@nhitranbtc` for eth-wallet-core crate paths + plan + user-stories + deep-dive + agent-docs + the workflow file. Single accountable approver before each sub-task merge.
+5. **Merge flow**: Sub-task PRs squash-merge into `rust-eth-core` per `gh pr merge <N> --squash --delete-branch`. No `--admin` needed for the integration branch.
+6. **Final cut at v0.2 completion**: After Task 12 #311 ships, ONE PR cuts `rust-eth-core` → main. This PR uses explicit `"merge PR N with --admin and delete-branch, approved"` phrasing per L6 (the bare "approve" triggered the post-action classifier block on PR #294 earlier this session).
+7. **No direct-to-main PRs for eth-wallet-core surfaces**: A sub-task PR accidentally targeting main must be closed + re-opened against `rust-eth-core`. The integration branch is the gate.
+
+**Why**:
+
+- **L25 sub-task workflow** in canonical form: each Plan Task is one PR; the integration branch accumulates sub-task work in one place; main stays releasable throughout the v0.2 build. Prevents the "ship half-baked crate to main" failure mode where individual tasks land out-of-order.
+- **Label-based CI gating** catches the rare case where base-branch matches but label is missing (operator mis-set via web UI). `label-routing` job is the safety net beneath the CODEOWNERS human review.
+- **CODEOWNERS single-approver pattern** keeps one person accountable before each sub-task merge. Per `rust-eth-core` is a 12-PR cadence; the same person who approves sub-task-by-sub-task also cuts the final-cut-at-v0.2 → review consistency.
+- **Final cut as one PR**: collapsing 12 sub-task commits into one v0.2 release commit keeps `main` history clean per L25 rule 6. Releases from `rust-eth-core` once, after all 12 Tasks pass CI.
+
+**Apply**:
+
+- **Task pickup (L13 step 3)**: Read the issue's labels FIRST. If the issue carries `rust-eth-core`, branch off `rust-eth-core` — never off main. (12 issues in flight as of 2026-08-23: #295 + #301-#311.)
+- **PR open**: `gh pr create --base rust-eth-core --head <sub-task-branch> --label rust-eth-core --body-file <path>`. Keep the `label-routing` CI check green.
+- **PR merge (sub-task)**: `gh pr merge <N> --squash --delete-branch` — no `--admin` flag required (integration branch has no admin-bypass-requiring protection).
+- **Post-merge housekeeping**: After sub-task merges into `rust-eth-core`, switch back to `rust-eth-core`, pull, branch the next sub-task off the now-included state. Don't carry local edits across merges.
+- **Final cut at #311**: ONE PR titled `chore(eth): release cut v0.2.0 — eth-wallet-core landing (#311, `rust-eth-core` → main)`. L24 cascade travels WITH this PR (CHANGELOG `[Unreleased]` → `[v0.2.0]` section + User Stories table checkbox flip). L21 estimate-report + ai-cost-report updates via sub-agent dispatch per L13 step 19.
+- **Drift recovery** (if a sub-task PR accidentally targeted main): close the bad PR, redo from `rust-eth-core` base. L13 Q9 off-rails recovery applies — pause + revert-to-last-green + follow-up issue + ledger entry.
+- **Workspace hygiene**: After the v0.2 final cut, close `rust-eth-core` (delete from origin). The `.github/workflows/rust-eth-core-ci.yml` + `CODEOWNERS` entries can be retired or repurposed for the next multi-task integration cycle.
 
 ---
 
