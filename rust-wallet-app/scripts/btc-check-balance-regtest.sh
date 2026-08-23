@@ -118,9 +118,17 @@ BTC_BIN="$REPO_ROOT/target/debug/btc"
 # --- Step 3: create wallet (optional) ---
 if (( CREATE_WALLET )); then
     echo -e "${BOLD}=== Step 3: create wallet ===${RESET}"
-    log_step "btc wallet create --words 12 --network regtest"
+    log_step "data-dir: $DATA_DIR"
+    log_step "running: $BTC_BIN --data-dir $DATA_DIR wallet create --words 12 --network regtest --password <redacted>"
     CREATE_OUT=$(echo "demo-pw" | "$BTC_BIN" --data-dir "$DATA_DIR" wallet create \
         --words 12 --network regtest --password "demo-pw" 2>&1 | tee /tmp/btc-check-balance-create.log)
+    CREATE_RC=$?
+    log_step "btc wallet create exit=$CREATE_RC, log=/tmp/btc-check-balance-create.log"
+    if [[ $CREATE_RC -ne 0 ]]; then
+        echo "wallet create failed (exit $CREATE_RC)" >&2
+        cat /tmp/btc-check-balance-create.log >&2
+        exit 1
+    fi
     # Extract the mnemonic from the create output so the next step (sync)
     # doesn't need a separate --mnemonic arg.
     if [[ -z "$MNEMONIC" ]]; then
@@ -129,7 +137,7 @@ if (( CREATE_WALLET )); then
             MNEMONIC=$(echo "$CREATE_OUT" | awk '/^Mnemonic/{getline; print}' | tr -s ' ')
         fi
         if [[ -n "$MNEMONIC" ]]; then
-            log_step "captured mnemonic from create output: $MNEMONIC"
+            log_step "captured mnemonic from create output (12 words)"
         else
             echo "Could not extract mnemonic from create output" >&2
             exit 1
@@ -139,76 +147,113 @@ fi
 
 # --- Step 4: list wallets ---
 echo -e "${BOLD}=== Step 4: list wallets ===${RESET}"
-log_step "btc wallet list --network regtest"
-"$BTC_BIN" --data-dir "$DATA_DIR" wallet list --network regtest 2>&1 | head -10
+log_step "running: $BTC_BIN --data-dir $DATA_DIR wallet list --network regtest"
+LIST_OUT=$("$BTC_BIN" --data-dir "$DATA_DIR" wallet list --network regtest 2>&1)
+LIST_RC=$?
+WALLET_COUNT=$(echo "$LIST_OUT" | grep -cE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' || echo 0)
+log_step "wallet list exit=$LIST_RC, $WALLET_COUNT wallet(s)"
+echo "$LIST_OUT" | head -10
 
 # --- Step 5: derive first receive address ---
 echo -e "${BOLD}=== Step 5: derive first receive address ===${RESET}"
-log_step "btc wallet sync (Esplora fallback via error path)"
+log_step "running: $BTC_BIN wallet sync --mnemonic <redacted> --network regtest --esplora-url http://localhost:50001/regtest/api"
+log_step "(when Esplora is unreachable, the btc error path prints the request URL — grep extracts the address)"
 SYNC_OUT=$("$BTC_BIN" --data-dir "$DATA_DIR" wallet sync \
     --mnemonic "$MNEMONIC" \
     --network regtest \
-    --esplora-url http://localhost:50001/regtest/api 2>&1 || true)
+    --esplora-url "http://localhost:50001/regtest/api" 2>&1 || true)
+SYNC_RC=$?
+log_step "sync fallback exit=$SYNC_RC, output length=${#SYNC_OUT} bytes"
 RECIPIENT=$(echo "$SYNC_OUT" | grep -oE 'bcrt1q[a-z0-9]{38,}|tb1q[a-z0-9]{38,}|2[A-Za-z0-9]{33,}|m[A-Za-z0-9]{33,}|n[A-Za-z0-9]{33,}' | head -1)
 if [[ -z "$RECIPIENT" ]]; then
     echo "Could not derive address from sync output" >&2
     echo "$SYNC_OUT"
     exit 1
 fi
-log_step "address: $RECIPIENT"
+log_step "derived recipient (via Esplora-bypass URL grep): $RECIPIENT"
 echo "  regtest native-segwit, BIP-84 m/84'/1'/0'/0/0"
 
 # --- Step 6: fund ---
 echo -e "${BOLD}=== Step 6: fund ===${RESET}"
-log_step "bitcoin-cli sendtoaddress $RECIPIENT $FUND_BTC"
+log_step "running: docker exec $CONTAINER bitcoin-cli -regtest -rpcuser=$RPC_USER -rpcpassword=<redacted> -rpcwallet=$WALLET_NAME sendtoaddress $RECIPIENT $FUND_BTC"
 FUND_TXID=$(docker exec "$CONTAINER" bitcoin-cli -regtest \
     -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" -rpcwallet="$WALLET_NAME" \
     sendtoaddress "$RECIPIENT" "$FUND_BTC" 2>&1)
+if [[ ! "$FUND_TXID" =~ ^[0-9a-f]{64}$ ]]; then
+    log_step "sendtoaddress failed: $FUND_TXID"
+    echo "funding failed" >&2
+    exit 1
+fi
+log_step "funding tx: $FUND_TXID"
 echo "  funding tx: $FUND_TXID"
 
 # --- Step 7: mine confirmation ---
 echo -e "${BOLD}=== Step 7: mine 1 confirmation block ===${RESET}"
+log_step "running: docker exec $CONTAINER bitcoin-cli -regtest -rpcuser=$RPC_USER -rpcpassword=<redacted> -rpcwallet=$WALLET_NAME getnewaddress"
 MINER_ADDR=$(docker exec "$CONTAINER" bitcoin-cli -regtest \
     -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" -rpcwallet="$WALLET_NAME" \
     getnewaddress)
+log_step "miner reward addr: $MINER_ADDR"
+log_step "running: docker exec $CONTAINER bitcoin-cli -regtest ... generatetoaddress 1 $MINER_ADDR"
 docker exec "$CONTAINER" bitcoin-cli -regtest \
     -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" -rpcwallet="$WALLET_NAME" \
     generatetoaddress 1 "$MINER_ADDR" >/dev/null
-log_step "mined 1 block (height: $(docker exec "$CONTAINER" bitcoin-cli -regtest -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" getblockcount))"
+NEW_HEIGHT=$(docker exec "$CONTAINER" bitcoin-cli -regtest \
+    -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" getblockcount)
+log_step "mined 1 confirmation block (height now $NEW_HEIGHT)"
 
 # --- Step 8: return balance ---
 echo -e "${BOLD}=== Step 8: balance ===${RESET}"
-# Find the recipient's vout (sendtoaddress puts change at vout 0 in
-# bitcoind 25+, recipient at vout 1 — but order varies; iterate to match).
+log_step "running: $BTC_BIN wallet balance --mnemonic <redacted> --network regtest --esplora-url http://localhost:50001/regtest/api"
+log_step "(canonical btc cli show balance — returns total wallet balance in sats via bdk + Esplora)"
+# Try the canonical btc CLI first (requires a working Esplora).
+BAL_SATS_RAW=$("$BTC_BIN" --data-dir "$DATA_DIR" wallet balance \
+    --mnemonic "$MNEMONIC" \
+    --network regtest \
+    --esplora-url "http://localhost:50001/regtest/api" 2>&1 || true)
+BAL_RC=$?
+BAL_SATS_RAW_STRIPPED=$(echo "$BAL_SATS_RAW" | tr -d '[:space:]')
+log_step "btc wallet balance: exit=$BAL_RC, output=\"$BAL_SATS_RAW\""
 BAL_BTC=""
+BAL_SATS=""
 RECIPIENT_VOUT=""
-for vout in 0 1 2 3; do
-    UTXO_JSON=$(docker exec "$CONTAINER" bitcoin-cli -regtest \
-        -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" \
-        gettxout "$FUND_TXID" "$vout" 2>&1)
-    if [[ "$UTXO_JSON" != "{"* ]]; then
-        continue  # no UTXO at this vout (likely spent)
+if [[ "$BAL_RC" -eq 0 ]] && [[ "$BAL_SATS_RAW_STRIPPED" =~ ^[0-9]+$ ]]; then
+    log_step "btc cli show balance: OK (${BAL_SATS_RAW_STRIPPED} sats)"
+    BAL_SATS="$BAL_SATS_RAW_STRIPPED"
+    BAL_BTC=$(awk -v sats="$BAL_SATS" 'BEGIN { printf "%.8f", sats / 100000000 }')
+else
+    log_step "btc cli show balance: FAILED (exit=$BAL_RC, output non-numeric or error)"
+    log_step "FALLBACK: per-vout bitcoin-cli gettxout loop (no Esplora required)"
+    for vout in 0 1 2 3; do
+        log_step "checking vout=$vout"
+        UTXO_JSON=$(docker exec "$CONTAINER" bitcoin-cli -regtest \
+            -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" \
+            gettxout "$FUND_TXID" "$vout" 2>&1)
+        if [[ "$UTXO_JSON" != "{"* ]]; then
+            log_step "vout=$vout: not found (spent or empty)"
+            continue
+        fi
+        VOUT_ADDR=$(echo "$UTXO_JSON" | grep -oE '"address":\s*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
+        VOUT_VAL=$(echo "$UTXO_JSON" | grep -oE '"value":\s*[0-9.]+' | head -1 | sed -E 's/.*"value":\s*//')
+        log_step "vout=$vout: addr=$VOUT_ADDR value=$VOUT_VAL"
+        if [[ "$VOUT_ADDR" == "$RECIPIENT" ]]; then
+            BAL_BTC="$VOUT_VAL"
+            CONFIRMATIONS=$(echo "$UTXO_JSON" | grep -oE '"confirmations":\s*[0-9]+' | head -1 | sed -E 's/.*"confirmations":\s*//')
+            RECIPIENT_VOUT="$vout"
+            log_step "matched recipient at vout=$vout"
+            break
+        fi
+    done
+    if [[ -z "$BAL_BTC" ]] || [[ ! "$BAL_BTC" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        echo "Could not find recipient UTXO in $FUND_TXID for addr $RECIPIENT" >&2
+        echo "Last UTXO JSON: $UTXO_JSON" >&2
+        exit 1
     fi
-    # Use grep -oE for JSON field extraction (multi-line JSON safe).
-    VOUT_ADDR=$(echo "$UTXO_JSON" | grep -oE '"address":\s*"[^"]+"' | head -1 | sed -E 's/.*"([^"]+)"$/\1/')
-    if [[ "$VOUT_ADDR" == "$RECIPIENT" ]]; then
-        BAL_BTC=$(echo "$UTXO_JSON" | grep -oE '"value":\s*[0-9.]+' | head -1 | sed -E 's/.*"value":\s*//')
-        CONFIRMATIONS=$(echo "$UTXO_JSON" | grep -oE '"confirmations":\s*[0-9]+' | head -1 | sed -E 's/.*"confirmations":\s*//')
-        RECIPIENT_VOUT="$vout"
-        break
-    fi
-done
-# L12 / security: validate balance is numeric before feeding awk, then
-# pass as a -v DATA variable (not interpolated into the program text).
-if [[ -z "$BAL_BTC" ]] || [[ ! "$BAL_BTC" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-    echo "Could not find recipient UTXO in $FUND_TXID for addr $RECIPIENT" >&2
-    echo "Last UTXO JSON: $UTXO_JSON" >&2
-    exit 1
+    BAL_SATS=$(awk -v btc="$BAL_BTC" 'BEGIN { printf "%.0f", btc * 100000000 }')
+    log_step "FALLBACK complete: ${BAL_BTC} BTC (${BAL_SATS} sats), confirmations=${CONFIRMATIONS:-?}"
 fi
-BAL_SATS=$(awk -v btc="$BAL_BTC" 'BEGIN { printf "%.0f", btc * 100000000 }')
-log_step "address:  $RECIPIENT"
-log_step "utxo:     $FUND_TXID:$RECIPIENT_VOUT"
-log_step "balance:  ${BAL_BTC} BTC (${BAL_SATS} sats), confirmations=$CONFIRMATIONS"
+log_step "address:   $RECIPIENT"
+log_step "balance:   ${BAL_BTC} BTC (${BAL_SATS} sats)"
 
 # also show the bitcoind default-wallet balance (mining reward)
 MINING_BAL_BTC=$(docker exec "$CONTAINER" bitcoin-cli -regtest \
@@ -220,7 +265,7 @@ echo
 echo -e "${GREEN}${BOLD}Result:${RESET}"
 echo "  recipient: $RECIPIENT"
 echo "  balance:   $BAL_BTC BTC ($BAL_SATS sats)"
-echo "  confirmations: $CONFIRMATIONS"
-echo "  funding tx: $FUND_TXID (recipient at vout $RECIPIENT_VOUT)"
+[[ -n "$RECIPIENT_VOUT" ]] && echo "  recipient_vout: $RECIPIENT_VOUT"
+echo "  funding tx: $FUND_TXID"
 
 exit 0
