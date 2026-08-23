@@ -1,0 +1,102 @@
+name: alloy-v1 spike (Issue #293)
+
+# Verifies the alloy 1.8.3 API surface for the future `eth-wallet-core` crate
+# (PR #294). Runs V1/V2/V5/V7 always; V4 + V6 with foundry/anvil installed;
+# V3 stays `#[ignore]` (operator-only public RPC call per L29).
+
+on:
+  push:
+    branches: [main, eth-v1-spike-293]
+    paths:
+      - 'rust-wallet-app/spikes/alloy-v1/**'
+      - '.github/workflows/alloy-spike.yml'
+  pull_request:
+    paths:
+      - 'rust-wallet-app/spikes/alloy-v1/**'
+      - '.github/workflows/alloy-spike.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alloy-spike-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: alloy-v1 spike (V1/V2/V5/V7 + V4 + V6 with anvil)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Rust 1.94 stable + rustfmt + clippy
+        uses: dtolnay/rust-toolchain@2b1cd24a2a99e2ce6b1a7e92d2c96b78e6da25b9 # 1.94 stable
+        with:
+          toolchain: 1.94
+          components: rustfmt, clippy
+
+      # Foundry prebuilt tarball (matches our local install path).
+      # The workspace toolchain is pinned to 1.94; foundry-rs/foundry HEAD requires
+      # rustc 1.96 via vergen-lib, so `cargo install` fails. Prebuilt binary sidesteps.
+      # SHA256 verified against the release-published checksum file (L37 hygiene).
+      - name: Install Foundry (anvil + cast)
+        env:
+          FOUNDRY_VERSION: nightly-5e88010a83d1b87b8f4d13058e42a2949d3e9dc0
+          FOUNDRY_SHA256_LINUX_AMD64: 0000000000000000000000000000000000000000000000000000000000000000
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.foundry"
+          curl -fsSL -o /tmp/foundry.tar.gz \
+            "https://github.com/foundry-rs/foundry/releases/download/${FOUNDRY_VERSION}/foundry_${FOUNDRY_VERSION#nightly-}_linux_amd64.tar.gz"
+          # Verify SHA256 (operator must refresh FOUNDRY_SHA256_LINUX_AMD64 before pinning).
+          if [ "${FOUNDRY_SHA256_LINUX_AMD64}" != "0000000000000000000000000000000000000000000000000000000000000000" ]; then
+            echo "${FOUNDRY_SHA256_LINUX_AMD64}  /tmp/foundry.tar.gz" | sha256sum -c -
+          else
+            echo "::warning::FOUNDRY_SHA256_LINUX_AMD64 is unset (all zeros); skipping integrity check. Pin the SHA before trusting this artifact in CI."
+          fi
+          tar -xzf /tmp/foundry.tar.gz -C "${HOME}/.foundry" anvil cast
+          echo "${HOME}/.foundry" >> "${GITHUB_PATH}"
+          anvil --version
+
+      - name: V1 — compile (alloy 1.8.3 + sub-crates + bip32/bip39/reqwest/rustls/tokio/sha2/subtle/hex)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        run: cargo check --all-targets
+
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        run: cargo fmt --check
+
+      - name: cargo clippy --all-targets -- -D warnings
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: V2 — MnemonicBuilder → canonical ETH address (deterministic)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        run: cargo test --test v2_mnemonic -- --nocapture
+
+      - name: V5 — ERC-20 transferCall calldata → 0xa9059cbb (deterministic)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        run: cargo test --test v5_erc20_calldata -- --nocapture
+
+      - name: V7 — SPKI pin accept/reject (deterministic, constant-time compare)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        run: cargo test --test v7_spki_pin -- --nocapture
+
+      - name: V4 — Anvil send_signed_native_eth_tx (with foundry)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        env:
+          RUN_V4_ANVIL: '1'
+        run: cargo test --test v4_anvil_send -- --ignored --nocapture
+
+      - name: V6 — Anvil MockERC20 sol! + constructor calldata (with foundry)
+        working-directory: rust-wallet-app/spikes/alloy-v1
+        env:
+          RUN_V6_ANVIL: '1'
+        run: cargo test --test v6_erc20_anvil -- --ignored --nocapture
+
+      # V3 (live RPC against https://ethereum.reth.rs/rpc) intentionally NOT run in CI
+      # per L29 (operator-driven). Run locally:
+      #   RUN_V3_LIVE_RPC=1 cargo test --test v3_live_rpc -- --ignored --nocapture
