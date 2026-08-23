@@ -56,6 +56,19 @@ Or with a mnemonic file:
 EOF
 }
 
+# Auto-source the operator env file if present. Lets the operator
+# run `bash btc-send-regtest-e2e.sh` without manually running
+# `set -a; source e2e-regtest.env; set +a` first. Skipped silently
+# when the file doesn't exist. Runs BEFORE the opt-in check so the
+# env's BTC_E2E_REGTEST=1 is honored.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/e2e-regtest.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/e2e-regtest.env"
+    set +a
+fi
+
 # --- Default: usage + exit (CI-safe) ---
 if [[ "${BTC_E2E_REGTEST:-0}" != "1" ]]; then
     usage
@@ -128,6 +141,15 @@ record_step() {
         FAIL) echo -e "  ${RED}✗ FAIL${RESET} ${BOLD}$name${RESET} ${detail:+— $detail}"; n_fail=$((n_fail + 1)) ;;
         SKIP) echo -e "  ${YELLOW}○ SKIP${RESET} ${BOLD}$name${RESET} ${detail:+— $detail}"; n_skip=$((n_skip + 1)) ;;
     esac
+}
+
+# Per-step log line. Surfaces every action (including intermediate btc
+# invocations) so an operator can see exactly which subcommand failed
+# when a gate FAILs. Timestamp prefix helps correlate with Docker
+# container logs when BTC_DOCKER_CONTAINER is set.
+log_step() {
+    local msg="$1"
+    printf '  %s %s\n' "$(date '+%H:%M:%S')" "$msg" >&2
 }
 
 # bitcoin-cli wrapper. L12: pass user/pass via --rpcuser/--rpcpassword
@@ -242,13 +264,17 @@ echo "Fee rate:   $BTC_E2E_FEE_RATE_SAT_PER_VB sat/vB"
 echo "Mnemonic:   $([[ -n "${BTC_E2E_MNEMONIC:-}" ]] && echo '<env>' || echo "file:$BTC_E2E_MNEMONIC_FILE")"
 echo
 
+log_step "wait_for_bitcoind: probing $BTC_RPC_URL via ${BTC_DOCKER_CONTAINER:-host}"
 wait_for_bitcoind
+log_step "ensure_wallet: bitcoind 24+ doesn't auto-create; checking listwallets"
 ensure_wallet
+log_step "preflight complete (Esplora at $BTC_ESPLORA_URL must be reachable; bring it up out-of-band)"
 
 # --- Steps ---
 
 # Step 0: Derive sender address + initial balance
 echo -e "${BOLD}=== Step 0: sync + balance ===${RESET}"
+log_step "0.1 btc wallet sync (network=$BTC_E2E_NETWORK, esplora=$BTC_ESPLORA_URL)"
 sync_out=$(btc wallet sync \
     --mnemonic "$MNEMONIC_PHRASE" \
     --network "$BTC_E2E_NETWORK" \
@@ -261,8 +287,10 @@ SENDER_ADDR=$(echo "$sync_out" | grep -oE 'tb1q[a-z0-9]{38,}|bc1q[a-z0-9]{38,}|2
     record_step FAIL "derive sender address" "no address in sync output"
     exit 1
 }
+log_step "0.2 derived sender address: $SENDER_ADDR"
 record_step PASS "sync + derive sender address" "$SENDER_ADDR"
 
+log_step "0.3 btc wallet balance"
 BALANCE=$(btc wallet balance \
     --mnemonic "$MNEMONIC_PHRASE" \
     --network "$BTC_E2E_NETWORK" \
@@ -272,41 +300,50 @@ BALANCE=$(btc wallet balance \
 }
 BALANCE_SAT=$(echo "$BALANCE" | grep -oE '[0-9]+' | head -1)
 [[ -z "$BALANCE_SAT" ]] && BALANCE_SAT=0
+log_step "0.4 initial balance: ${BALANCE_SAT} sat"
 record_step PASS "initial balance" "${BALANCE_SAT} sat"
 
 # Default recipient to sender (self-send) when unspecified
 : "${BTC_E2E_RECIPIENT:=$SENDER_ADDR}"
+log_step "0.5 recipient: $BTC_E2E_RECIPIENT (defaulted from sender if unset)"
 echo "Recipient: $BTC_E2E_RECIPIENT"
 
 # Step 1: Fund sender if balance insufficient
 echo -e "${BOLD}=== Step 1: fund sender (if needed) ===${RESET}"
 REQUIRED=$((BTC_E2E_AMOUNT_SAT + BTC_E2E_FEE_RATE_SAT_PER_VB * 200))  # rough upper bound
+log_step "1.1 balance=${BALANCE_SAT} sat, required=${REQUIRED} sat (amount + ~200 vbytes fee)"
 if (( BALANCE_SAT >= REQUIRED )); then
     record_step SKIP "fund sender" "balance ${BALANCE_SAT} >= required ${REQUIRED}"
 else
-    echo "  mining 101 blocks to mature coinbase..."
+    log_step "1.2 mining 101 blocks to mature coinbase"
     mine_blocks 101 >/dev/null || {
         record_step FAIL "mine 101 blocks" "bitcoin-cli generatetoaddress failed"
         exit 1
     }
+    log_step "1.3 coinbase matured (101 confirmations)"
     record_step PASS "mine 101 blocks" "coinbase matured"
 
     FUND_AMT_BTC=$(awk "BEGIN { printf \"%.8f\", ${BTC_E2E_AMOUNT_SAT}/100000000 + 0.001 }")
+    log_step "1.4 bitcoin-cli sendtoaddress $SENDER_ADDR $FUND_AMT_BTC"
     TXID_FUND=$(bitcoin_cli sendtoaddress "$SENDER_ADDR" "$FUND_AMT_BTC") || {
         record_step FAIL "sendtoaddress" "bitcoin-cli sendtoaddress failed"
         exit 1
     }
+    log_step "1.5 funding tx: $TXID_FUND"
     record_step PASS "sendtoaddress" "txid=$TXID_FUND amount=$FUND_AMT_BTC"
 
+    log_step "1.6 mining $BTC_E2E_FUND_MIN_CONFIRMATIONS confirmation block(s)"
     mine_blocks "$BTC_E2E_FUND_MIN_CONFIRMATIONS" >/dev/null || {
         record_step FAIL "mine confirmation block" "bitcoin-cli generatetoaddress failed"
         exit 1
     }
+    log_step "1.7 funding confirmed"
     record_step PASS "mine 1 confirmation block" "funded"
 fi
 
 # Step 2: Send (capture txid)
 echo -e "${BOLD}=== Step 2: send ===${RESET}"
+log_step "2.1 btc wallet send (recipient=$BTC_E2E_RECIPIENT, amount=$BTC_E2E_AMOUNT_SAT sat, fee=$BTC_E2E_FEE_RATE_SAT_PER_VB sat/vB)"
 TXID=$(btc wallet send \
     --mnemonic "$MNEMONIC_PHRASE" \
     --network "$BTC_E2E_NETWORK" \
@@ -323,18 +360,22 @@ TXID=$(echo "$TXID" | grep -oE '[0-9a-f]{64}' | tail -1)
     record_step FAIL "parse txid" "got: $TXID"
     exit 1
 }
+log_step "2.2 captured txid: $TXID"
 echo "  txid: $TXID"
 record_step PASS "send" "txid=$TXID"
 
 # Step 3: Mine 1 block (confirm) + poll
 echo -e "${BOLD}=== Step 3: mine + poll confirmation ===${RESET}"
+log_step "3.1 mining 1 confirmation block"
 mine_blocks 1 >/dev/null || {
     record_step FAIL "mine 1 block" "bitcoin-cli generatetoaddress failed"
     exit 1
 }
+log_step "3.2 block mined; polling Esplora /tx/$TXID/status (timeout=${BTC_E2E_POLL_TIMEOUT}s)"
 record_step PASS "mine 1 block" "block mined"
 
 if poll_tx_confirmed "$TXID"; then
+    log_step "3.3 tx confirmed"
     record_step PASS "tx confirmed" "txid=$TXID"
 else
     record_step FAIL "tx confirmed" "not confirmed within ${BTC_E2E_POLL_TIMEOUT}s"
@@ -343,7 +384,9 @@ fi
 
 # Step 4: Assert recipient paid
 echo -e "${BOLD}=== Step 4: assert recipient paid ===${RESET}"
+log_step "4.1 GET $BTC_ESPLORA_URL/tx/$TXID (assert recipient in vout set)"
 if assert_recipient_paid "$TXID" "$BTC_E2E_RECIPIENT"; then
+    log_step "4.2 recipient found in tx outputs"
     record_step PASS "recipient received funds" "$BTC_E2E_RECIPIENT"
 else
     record_step FAIL "recipient NOT in tx outputs" "$BTC_E2E_RECIPIENT"
@@ -352,7 +395,9 @@ fi
 
 # Step 5: Sanity check fee-estimates
 echo -e "${BOLD}=== Step 5: btc fee-estimates ===${RESET}"
+log_step "5.1 btc fee-estimates --network $BTC_E2E_NETWORK"
 if btc fee-estimates --network "$BTC_E2E_NETWORK" --esplora-url "$BTC_ESPLORA_URL" 2>&1 | grep -qE '[0-9]+'; then
+    log_step "5.2 fee-estimates returned numeric output"
     record_step PASS "btc fee-estimates" "see output above"
 else
     record_step FAIL "btc fee-estimates" "no numeric output"
