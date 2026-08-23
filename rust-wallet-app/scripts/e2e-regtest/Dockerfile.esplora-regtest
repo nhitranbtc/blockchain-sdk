@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         g++ \
         cmake \
+        clang \
+        libclang-dev \
         git \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -42,10 +44,11 @@ WORKDIR /build
 RUN git clone --depth 1 --branch "${ELECTRS_REF}" \
         https://github.com/romanz/electrs.git .
 
-# --features electrum-rocksdb enables the RocksDB-backed index (vs the
-# default in-memory store, which would re-index on every container restart).
-RUN cargo build --release \
-        --features electrum-rocksdb
+# Default features only (`metrics` per romanz/electrs's Cargo.toml).
+# The `electrs-rocksdb` Cargo dep is always-on (not a feature flag) so
+# RocksDB indexing works out of the box; the Electrum protocol also ships
+# in defaults via the same dep. No `--features` needed.
+RUN cargo build --release
 
 # -----------------------------------------------------------------------------
 # Stage 2: runtime — electrs binary + Python shim

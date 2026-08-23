@@ -41,17 +41,28 @@ POLL_HOST=$([ "$BIND_HOST" = "0.0.0.0" ] && echo "127.0.0.1" || echo "$BIND_HOST
 
 echo "[start.sh] launching electrs: bitcoind=${BITCOIND_RPC_HOST}:${BITCOIND_RPC_PORT} p2p=${BITCOIND_P2P_PORT} network=${ELECTRS_NETWORK}"
 
-# --http-disable keeps electrs off its built-in HTTP (we serve Esplora via shim).
+# Synthesize a bitcoind-format cookie file from the env-supplied
+# RPC_USER/PASS. bitcoind's `.cookie` file format is literally
+# `USER:PASSWORD\n`. We can't read bitcoind's actual cookie file (its
+# datadir isn't shared between containers), so we generate one with the
+# same contents from compose env vars. electrs prefers `--cookie-file`
+# auth over config-file `auth` (configure_me intentional non-CLI auth per
+# `internal/config_specification.toml`); this approach sidesteps that.
+mkdir -p "${HOME}/.bitcoin/regtest"
+printf "%s:%s\n" "${BITCOIND_RPC_USER}" "${BITCOIND_RPC_PASS}" > "${HOME}/.bitcoin/regtest/.cookie"
+chmod 0600 "${HOME}/.bitcoin/regtest/.cookie"
+
+# --disable-electrum-rpc keeps electrs off its built-in HTTP/TCP server
+# (we serve Esplora shape via shim). NOT --http-disable (renamed upstream).
 # --daemon-p2p-addr lets electrs follow the regtest chain (mempool awareness).
 electrs \
     --network "${ELECTRS_NETWORK}" \
     --electrum-rpc-addr "${ELECTRS_RPC_ADDR}" \
     --db-dir "${ELECTRS_DB_DIR}" \
     --daemon-rpc-addr "${BITCOIND_RPC_HOST}:${BITCOIND_RPC_PORT}" \
-    --daemon-rpc-user "${BITCOIND_RPC_USER}" \
-    --daemon-rpc-pass "${BITCOIND_RPC_PASS}" \
+    --cookie-file "${HOME}/.bitcoin/regtest/.cookie" \
     --daemon-p2p-addr "${BITCOIND_RPC_HOST}:${BITCOIND_P2P_PORT}" \
-    --http-disable \
+    --disable-electrum-rpc \
     &
 ELECTRS_PID=$!
 
