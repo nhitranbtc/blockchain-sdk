@@ -52,3 +52,8 @@ insecure_tls = []
 [dev-dependencies]
 # Hermetic per-test base_dir for the WalletManager round-trip tests.
 tempfile = { workspace = true }
+# Task 9 (Issue #308): Anvil spawn per V6 spike evidence
+# (rust-wallet-app/spikes/alloy-v1/tests/v6_erc20_anvil.rs). Dev-only.
+alloy-node-bindings = { version = "=1.8.3" }
+# tokio runtime for the L29-gated Anvil smoke test.
+tokio = { workspace = true }
