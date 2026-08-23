@@ -119,6 +119,14 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: cargo audit
+        # SECURITY (per automated review 2026-08-23): the 4 `--ignore` flags
+        # below mirror the umbrella `ci.yml` rationale — transitive dev-deps
+        # without upstream fixes yet. See `rust-wallet-app/deny.toml` for
+        # the canonical list. Add inline justification per advisory:
+        #   RUSTSEC-2026-0098: transitive via rust-bitcoin regtest deps; no fix upstream
+        #   RUSTSEC-2026-0099: same transitive chain (testcontainers-tokio-tar)
+        #   RUSTSEC-2026-0104: same transitive chain
+        #   RUSTSEC-2025-0111: pre-existing umbrella allowance (see ci.yml history)
         working-directory: rust-wallet-app
         run: |
           cargo audit \
@@ -126,3 +134,21 @@ jobs:
             --ignore RUSTSEC-2026-0099 \
             --ignore RUSTSEC-2026-0104 \
             --ignore RUSTSEC-2025-0111
+
+  # Split from the old combined lint-audit job so deny runs in parallel with
+  # audit — same per-concern shape as umbrella `ci.yml`. Both gates are
+  # independently enforced.
+  rust-deny:
+    name: Rust deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny
+        working-directory: rust-wallet-app
+        run: cargo deny check
