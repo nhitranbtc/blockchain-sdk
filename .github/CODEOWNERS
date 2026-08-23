@@ -1,0 +1,28 @@
+# CODEOWNERS — auto-request-review routing.
+#
+# Format: `<pattern>    <@user>` — last match wins.
+# Patterns use fnmatch glob syntax (`*`, `**`).
+# See: https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-pull-requests/about-code-owners
+
+# Default fallback: project owner reviews anything not otherwise routed.
+/    @nhitranbtc
+
+# eth-wallet-core crate (Issue #295 / Tasks #301-#311) — owner reviews
+# changes integrated via the `rust-eth-core` branch workflow.
+# Per L25 sub-task workflow: PRs from sub-task branches target rust-eth-core
+# first; code-owner auto-review keeps the integration accountable to a
+# single approver before the final rust-eth-core -> main cut.
+# Includes both source + tests + bundled JSON tokens; umbrella workspace
+# edition config also covered.
+/rust-wallet-app/crates/eth-wallet-core/    @nhitranbtc
+/rust-wallet-app/crates/eth-wallet-core/**   @nhitranbtc
+
+# Plan + docs scoped to eth-wallet-core mirror the code review.
+/docs/superpowers/plans/2026-08-23-eth-wallet-core.md    @nhitranbtc
+/docs/wallets/2026-08-23-eth-wallet-user-stories.md      @nhitranbtc
+/docs/wallets/2026-08-23-ethereum-rust-sdks-deep-dive.md @nhitranbtc
+/docs/agents/eth-wallet-core/                           @nhitranbtc
+
+# Integration-branch CI (this workflow): owner reviews any change to the
+# routing logic itself.
+/.github/workflows/rust-eth-core-ci.yml    @nhitranbtc

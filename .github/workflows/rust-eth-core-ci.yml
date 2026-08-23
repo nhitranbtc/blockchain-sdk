@@ -1,0 +1,128 @@
+name: rust-eth-core
+
+# CI for the `rust-eth-core` integration branch.
+#
+# Scope: any PR that targets `rust-eth-core` (NOT main). Each issue labeled
+# `rust-eth-core` (#295, #301-#311) feeds work via a sub-task branch that
+# PRs into this branch. At v0.2 completion, a final cut PR merges
+# `rust-eth-core` -> main (per L25).
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the umbrella
+# ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain@stable`,
+# `Swatinem/rust-cache@v2`). No SHA pins available yet; tag-based reference
+# acceptable per L37 rule 2 (verified-cached SHAs land in a follow-up commit
+# after the first successful CI run captures the resolved SHAs).
+
+on:
+  push:
+    branches: [rust-eth-core]
+  pull_request:
+    branches: [rust-eth-core]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Guard: PR must carry the `rust-eth-core` label, which is the routing
+  # signal for the v0.2 integration branch. PRs without the label shouldn't
+  # have targeted this branch (base branch mismatch is the bigger gate; this
+  # catches the rare case where base is correct but label is missing).
+  # SECURITY: pass label JSON via env var + redirect jq output to /dev/null;
+  # do NOT propagate label content into shell variables (label fields are
+  # user-controlled on maintainer-enabled repos).
+  label-routing:
+    name: Label routing check
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Fail if missing rust-eth-core label
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
+        run: |
+          echo "PR labels: $LABELS_JSON"
+          if ! echo "$LABELS_JSON" | jq -e '.[] | select(.name == "rust-eth-core")' >/dev/null; then
+            echo "::error::PR missing label rust-eth-core — issue scope is for the integration branch only."
+            exit 1
+          fi
+
+  rust-fmt:
+    name: Rust fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo clippy
+        working-directory: rust-wallet-app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rust-test:
+    name: Rust test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo build
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test
+        working-directory: rust-wallet-app
+        run: cargo test --workspace
+
+  # Per L29, the eth-wallet-core e2e Sepolia tests are #[ignore] + opt-in
+  # env var. CI must never run them — public-RPC flake + rate-limit risk.
+  # Explicit skip per L29 enforced below (no `cargo test -- --ignored`).
+  rust-audit:
+    name: Rust audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        working-directory: rust-wallet-app
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
