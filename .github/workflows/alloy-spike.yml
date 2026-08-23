@@ -29,14 +29,26 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      # L37 hygiene: pin to immutable tag commit SHAs (not mutable branch HEADs).
+      # Tag resolution (verified via GitHub API):
+      #   actions/checkout@v4.4.0     → 11d5960a326750d5838078e36cf38b85af677262
+      #   dtolnay/rust-toolchain@1.94.0 → 35d8a35b823d6c20db516f5c35eb0a9640942c17 (1.94.0 branch HEAD; version-pinned, not rolling)
+      #   Swatinem/rust-cache@v2.7.3   → 23bce251a8cd2ffc3c1075eaa2367cf899916d84
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 branch HEAD
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Install Rust 1.94 stable + rustfmt + clippy
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # main branch HEAD
+        uses: dtolnay/rust-toolchain@35d8a35b823d6c20db516f5c35eb0a9640942c17 # 1.94.0
         with:
           toolchain: 1.94
           components: rustfmt, clippy
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@23bce251a8cd2ffc3c1075eaa2367cf899916d84 # v2.7.3
+        with:
+          workspaces: rust-wallet-app/spikes/alloy-v1 -> target
 
       # Foundry prebuilt tarball (matches our local install path).
       # The workspace toolchain is pinned to 1.94; foundry-rs/foundry HEAD requires
@@ -44,13 +56,13 @@ jobs:
       # SHA256 verified against the release-published checksum file (L37 hygiene).
       - name: Install Foundry (anvil + cast)
         env:
-          FOUNDRY_VERSION: nightly-5e88010a83d1b87b8f4d13058e42a2949d3e9dc0
+          FOUNDRY_TARBALL: foundry_nightly_linux_amd64.tar.gz
           FOUNDRY_SHA256_LINUX_AMD64: 0000000000000000000000000000000000000000000000000000000000000000
         run: |
           set -euo pipefail
           mkdir -p "${HOME}/.foundry"
           curl -fsSL -o /tmp/foundry.tar.gz \
-            "https://github.com/foundry-rs/foundry/releases/download/${FOUNDRY_VERSION}/foundry_${FOUNDRY_VERSION#nightly-}_linux_amd64.tar.gz"
+            "https://github.com/foundry-rs/foundry/releases/download/nightly/${FOUNDRY_TARBALL}"
           # Verify SHA256 (operator must refresh FOUNDRY_SHA256_LINUX_AMD64 before pinning).
           if [ "${FOUNDRY_SHA256_LINUX_AMD64}" != "0000000000000000000000000000000000000000000000000000000000000000" ]; then
             echo "${FOUNDRY_SHA256_LINUX_AMD64}  /tmp/foundry.tar.gz" | sha256sum -c -
