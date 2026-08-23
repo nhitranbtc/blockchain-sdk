@@ -2171,9 +2171,19 @@ dependencies = [
 name = "eth-wallet-core"
 version = "0.2.0"
 dependencies = [
+ "aes-gcm",
  "alloy-primitives",
  "alloy-signer-local",
+ "argon2",
  "bip39",
+ "directories",
+ "hex",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "uuid",
  "zeroize",
 ]
 
