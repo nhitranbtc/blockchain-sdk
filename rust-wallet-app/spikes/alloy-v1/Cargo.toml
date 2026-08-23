@@ -45,6 +45,8 @@ bip39 = { version = "2.2", features = ["zeroize", "rand"] }
 
 # V7 SPKI pinning — rustls with custom ServerCertVerifier.
 rustls = "=0.23"
+alloy-consensus = { version = "=1.8.3" }
+alloy-eips = { version = "=1.8.3" }
 
 # Constant-time hash compare for V7 SPKI pin (avoids timing oracle that could
 # leak the pinned hash byte-by-byte). Same `subtle` dep as umbrella workspace.
