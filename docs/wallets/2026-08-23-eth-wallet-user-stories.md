@@ -44,7 +44,7 @@ Each story is implemented via one or more `alloy` sub-crates. This table is the 
 | 24 | Add custom ERC-20 token by contract address | `sol! { function decimals() ...; function symbol() ...; }` + `provider.call` | `U256`, `String` | n/a |
 | 25 | Approve ERC-20 spending (for DEX) | `sol! { function approve(address spender, uint256 value) external returns (bool); }` + `provider.send_transaction` | `approveCall`, `Bytes` calldata | n/a |
 | 26 | Use Anvil local node for testing | `--rpc-url http://localhost:8545`; `provider.get_chain_id()` asserts `0x7a69` (31337) | `u64` chain id | n/a |
-| 27 | Sign EIP-712 typed data | `alloy-signer-local::PrivateKeySigner::sign_typed_data_sync` | `alloy_primitives::eip712::TypedData`, `Signature` | n/a |
+| 27 | Sign EIP-712 typed data (v0.3 deferred) | `alloy-signer-local::PrivateKeySigner::sign_typed_data_sync` | `alloy_primitives::eip712::TypedData`, `Signature` | n/a |
 | Cross-cutting | `--json` everywhere; stable exit codes; no daemons | `serde_json`; `std::process::ExitCode` | n/a | n/a |
 | Cross-cutting | `Secret<Mnemonic>` zeroize (v0.2 hygiene) | `zeroize::Zeroizing<Mnemonic>` (mirror Bitcoin Task 30) | n/a | `bip39::Mnemonic` (wrap) |
 | Cross-cutting | EIP-55 checksum address display | `alloy_primitives::Address::to_checksum_buffer(None)` | `Address` | n/a |
@@ -84,7 +84,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 | 12 | `sol!` macro for inline ABI typing | Story 21 (transfer) + Story 22 (balanceOf) + Story 24 (decimals/symbol) + Story 25 (approve) | ✅ |
 | 13 | Raw `provider.call(&req)` for view calls | Story 22 (balanceOf) + Story 24 (decimals/symbol) | ✅ |
 | 14 | Sign EIP-191 personal message | Story 18 | ✅ |
-| 15 | Sign EIP-712 typed data | Story 27 | ✅ |
+| 15 | Sign EIP-712 typed data | v0.3 deferred (Story 27 captured for traceability) | ⚠️ defer (v0.3) |
 | 16 | `Signature::recover_address_from_msg` | Story 18 (verify signer) | ✅ |
 | 17 | `alloy_chains` chain metadata (mainnet, sepolia, anvil) | Story 10 (mainnet) + Story 26 (anvil) | ✅ |
 | 18 | `MnemonicBuilder::derivation_path` override | Story 20 (path variant) | ✅ |
@@ -525,7 +525,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 ---
 
-## Story 27 — Sign EIP-712 typed data (Bob)
+## Story 27 — Sign EIP-712 typed data (Bob) **[v0.3 deferred — captured for traceability, not in v0.2 scope]**
 
 > As Bob, I want to sign EIP-712 typed structured data (e.g., a `Permit` message for gasless approvals, or a `MetaMask` `Order` for a DEX), so I can interact with dApps that require typed-data signatures.
 
@@ -559,6 +559,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 ## Out of scope for v1 (separate user stories when shipped)
 
+- **EIP-712 typed-data signing** (Story 27). Needed for some ERC-20 approvals + DEX interactions; alloy supports it via `sign_typed_data_sync`. **Deferred to v0.3** to keep v0.2 ship surface minimal. Story body + acceptance criteria retained above for v0.3 traceability.
 - **L2 chains** (Optimism, Arbitrum, Base, Polygon). The `ChainId::Ethereum(u32)` placeholder in `chain-traits/src/lib.rs:21` already supports the discriminator — drop in another chain-id constant + another RPC URL. UX: `--network optimism|arbitrum|base|polygon` flag.
 - **ENS resolution** (`alice.eth` → address). `alloy-ens` sub-crate exists if added later.
 - **Hardware wallet** (Ledger, Trezor, Keystone) via `alloy-signer-ledger` / `alloy-signer-trezor`.
