@@ -12,9 +12,19 @@ publish = false
 [dependencies]
 # all v1.8.x workspace deps. Features kept minimal for Task 1.
 alloy-primitives = { workspace = true }
+alloy-signer = { version = "=1.8.3" }  # Signer trait (transitive via signer-local but pinned to keep 1.x synced)
 alloy-signer-local = { workspace = true }
 bip39 = { workspace = true }
 zeroize = { workspace = true }
+
+# Task 3 (Issue #302) — sign-only primitives. Adds the consensus / network /
+# rpc-types / eips / sol-types sub-crates needed to build & sign EIP-1559
+# tx envelopes + ABI calldata, plus EIP-191 / EIP-712 typed signatures.
+alloy-consensus = { version = "=1.8.3" }
+alloy-eips = { version = "=1.8.3" }
+alloy-network = { version = "^1.0" }
+alloy-rpc-types = { version = "^1.0" }
+alloy-sol-types = { version = "^1.6" }
 
 # Task 2 (Issue #301) — Argon2id KDF + AES-256-GCM + WalletManager persistence.
 # All from workspace [workspace.dependencies] (no per-crate re-pin).
