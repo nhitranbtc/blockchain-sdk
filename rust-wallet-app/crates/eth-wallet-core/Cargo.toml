@@ -16,6 +16,7 @@ alloy-signer = { version = "=1.8.3" }  # Signer trait (transitive via signer-loc
 alloy-signer-local = { workspace = true }
 bip39 = { workspace = true }
 reqwest = { workspace = true }  # for crate-wide Error From<reqwest::Error> (Task 4)
+subtle = { workspace = true }  # constant-time SPKI hash compare (Task 5)
 zeroize = { workspace = true }
 
 # Task 3 (Issue #302) — sign-only primitives. Adds the consensus / network /
@@ -24,6 +25,7 @@ zeroize = { workspace = true }
 alloy-consensus = { version = "=1.8.3" }
 alloy-eips = { version = "=1.8.3" }
 alloy-network = { version = "^1.0" }
+alloy-provider = { version = "^1.0" }  # ProviderBuilder + RootProvider (Task 5/6)
 alloy-rpc-types = { version = "^1.0" }
 alloy-sol-types = { version = "^1.6" }
 alloy-transport = { version = "^1.0" }  # TransportError type for crate-wide Error From impl (Task 4)
