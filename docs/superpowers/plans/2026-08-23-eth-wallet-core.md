@@ -143,6 +143,7 @@ rust-wallet-app/crates/eth/    # CLI binary
 - [ ] Step 1: `rust-wallet-app/scripts/eth-send-sepolia-e2e.sh` (mirror Bitcoin pattern)
 - [ ] Step 2: `#[ignore]` integration test against Sepolia testnet RPC
 - [ ] Step 3: Commit
+- Follow-up: #298 (per-user-story e2e — post-v0.2 expansion of this smoke)
 
 ### Task 12: Release cut
 - [ ] Step 1: L24 — CHANGELOG `[v0.2.0]` entry + User Stories table checkbox flip
@@ -151,6 +152,7 @@ rust-wallet-app/crates/eth/    # CLI binary
 
 ## Out of scope (deferred to v0.3+)
 
+- Per-user-story testnet e2e ([#298](https://github.com/nhitranbtc/blockchain-sdk/issues/298), 10 RPC-touching stories → `tests/e2e_sepolia/` + `tests/e2e_mainnet/`, L29 operator-driven). Post-v0.2.
 - EIP-712 typed-data signing (already deferred per PR #290/#291/#292 reconcile)
 - L2 chains (Optimism/Arbitrum/Base/Polygon) — v1.x
 - ENS name resolution — v1.x
