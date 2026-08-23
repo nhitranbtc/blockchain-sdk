@@ -4,6 +4,8 @@
 **Companion to:** [Ethereum Rust SDK deep-dive](2026-08-23-ethereum-rust-sdks-deep-dive.md) + [Bitcoin user stories precedent](2026-08-05-btc-wallet-user-stories.md)
 **Surface:** `eth` CLI binary inside `rust-wallet-app/crates/eth/` next to `btc/`. **Default network = Sepolia testnet (chain id 11155111).** Mainnet opt-in via `--network mainnet` (chain id 1). Anvil regtest opt-in via `--rpc-url http://localhost:8545` (chain id 31337).
 
+**Wallet identity (per #297 B1):** user-facing identifier = `--name` (string); internal `wallet_id` (UUID) generated at create time and used for cross-wallet uniqueness on disk. Mirrors BTC v0.1 PR #81 user model.
+
 Personas:
 
 - **Alice** — Ethereum power user. Manages multiple wallets across chains. Wants CLI control + scriptable commands + ERC-20 stablecoin transfers.
@@ -107,7 +109,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - **4 deferred to v1.x** (ENS, Ledger/Trezor, Flashbots, WebSocket subs)
 - **0 explicitly rejected beyond the 1 already counted as a non-goal in Story 15**
 
-(Total: 21 + 2 + 1 + 4 = 28 = all use cases accounted for.)
+(Total: 21 + 2 + 1 + 4 = 28 = all use cases accounted for. Per #297 M1: row 28 — "Gas-filler + nonce-filler auto-management" — is counted as covered via Story 15 non-goal, not as a primary story match. The "21 covered" subset includes rows 1–20 + row 28.)
 
 **No alloy use cases required by v0.2 are missing from the user stories.** The 27 stories + the 2 internal-only operations cover the full surface of alloy that the `eth` CLI exposes.
 
@@ -121,7 +123,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 - `eth wallet create --name test-wallet` runs in <1s on a developer laptop.
 - Output shows: 12-word BIP-39 mnemonic, first receive address (EIP-55 checksum), chain id + network name, wallet name.
-- Mnemonic written to `~/.local/share/eth/test-wallet/mnemonic.txt` with mode 0600.
+- Mnemonic written encrypted to `~/.local/share/eth/test-wallet/mnemonic.enc` (Argon2id + AES-256-GCM per F5/F6, mirrors BTC v0.1). On every CLI call that touches key material, `eth` prompts `wallet unlock:` for the passphrase (or reads `ETH_WALLET_PASSPHRASE` env var). Decrypted mnemonic lives only in zeroized memory; nothing plaintext touches disk.
 - Command exits 0 on success, non-zero on filesystem error.
 - A prominent `WARNING` line reminds the user to back up the mnemonic before continuing.
 - Running the command twice with the same name fails with exit code 2 and message `wallet 'test-wallet' already exists`.
@@ -142,6 +144,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 **Acceptance criteria:**
 
 - `eth wallet import --name recovered --mnemonic "word1 word2 ... word12" --network sepolia` accepts a valid mnemonic.
+- `eth wallet import --name dev --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` imports a raw secp256k1 key (per #297 G4). Validates the scalar is `< secp256k1::ORDER`; rejects out-of-range or zero-key with exit 2 (`invalid private key: out of range`).
 - Invalid checksum returns exit code 2 + clear error `invalid mnemonic: checksum mismatch`.
 - Imported wallet produces the same first address as the source (verified by deterministic derivation).
 - BIP39 passphrase (`--passphrase "..."`) supported; empty passphrase is the default.
@@ -151,7 +154,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 ---
 
-## Story 3 — Check ETH balance (Alice, Carol)
+## Story 3 — Check ETH balance (Alice, Carol) **[DEPRECATED → Story 12 in v0.3]**
 
 > As Carol, I want to see my confirmed ETH balance in a single line, so I know how much I can spend right now.
 
@@ -162,11 +165,11 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - If RPC fails, the command retries once, then prints `rpc failed: <reason>` and exits 3.
 - Reads nonce + balance from a single batched `eth_getBalance` + `eth_getTransactionCount` request (where supported).
 - Output balance in wei by default; `--unit eth|gwei|wei` (default `wei`); `--human` prints `1.2345 ETH`.
-- **Note:** v0.2 uses stateless mnemonic inline (mirrors BTC v0.1 PR #81). Named-wallet model is a future Story 12 enhancement.
+- **Note (per #297 B3):** v0.2 uses stateless mnemonic inline (mirrors BTC v0.1 PR #81). Named-wallet model is Story 12, deferred to v0.3.
 
 ---
 
-## Story 4 — Sync chain state (Alice)
+## Story 4 — Sync chain state (Alice) **[DEPRECATED → Story 12 in v0.3]**
 
 > As Alice, I want to force a full chain sync, so I can see incoming transactions that arrived since the last sync.
 
@@ -176,7 +179,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - Output: `block_number=<N> chain_id=<ID> nonce=<N>` (same format as `eth wallet balance`).
 - Exit 0 on success. Exit 3 on RPC failure.
 - A subsequent `eth wallet balance` reflects the synced state without a second sync (cached nonce + block number).
-- **Note:** v0.2 uses stateless mnemonic inline; named-wallet model deferred to Story 12.
+- **Note (per #297 B3):** v0.2 uses stateless mnemonic inline; named-wallet model is Story 12, deferred to v0.3.
 
 ---
 
@@ -222,7 +225,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - Unconfirmed txs show `confirmations: 0` with `pending` tag (requires `--pending` flag to include).
 - `eth tx get --tx-hash 0xDeF... --rpc-url <URL>` returns full details of one tx (decoded fields + receipt status).
 - Exit 0 even if no transactions yet.
-- **Note:** v0.2 does not maintain a local tx index — every `tx list` call scans blocks (slow). Local tx index is a v0.3 Story 12 enhancement.
+- **Note (per #297 M2):** v0.2 maintains an in-memory block cache (block_number + nonce per call, from Story 4 `sync`) but NOT a local tx-history index. Every `tx list` call scans blocks (slow). Local tx index is a v0.3 enhancement.
 
 ---
 
@@ -241,14 +244,14 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
   economy:     31 gwei  (base: 30, priority: 1)
   ```
 
-- Tier derivation: priority fee = percentile(50, 70, 80, 95) over last 20 blocks via `eth_feeHistory`; max fee = base fee (next block estimate) + priority.
+- Tier derivation (per #297 G1): `fastest` = 95th percentile, `half_hour` = 80th, `hour` = 70th, `economy` = 50th — over last 20 blocks via `eth_feeHistory`. Max fee = base fee (next block estimate) + priority.
 - Output refreshed on every call (live fetch, not cached).
 - Exit 3 on RPC failure.
-- `--json` outputs the same as a JSON object.
+- `--json` outputs the same as a JSON object with schema `{tier: string, max_fee_gwei: number, base_fee_gwei: number, priority_fee_gwei: number}` (per #297 M6).
 
 ---
 
-## Story 9 — List / show / delete / rename wallets (Alice, Bob)
+## Story 9 — List / show / delete / rename wallets (Alice, Bob) **[DEPRECATED → Story 12 in v0.3]**
 
 > As Alice, I want to list all my wallets in the data directory and manage them, so I can pick one quickly.
 
@@ -262,10 +265,11 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - `eth wallet rename --name w --to w2` renames the wallet in place. Exits 4 if `w2` already exists.
 - Empty directory: `eth wallet list` prints `(no wallets)` and exits 0.
 - Corrupt wallets (no `mnemonic.txt`): listed but marked `(corrupt — missing mnemonic.txt)`.
+- **Note (per #297 B3):** v0.2 MVP only; superseded by Story 12 in v0.3.
 
 ---
 
-## Story 10 — Use mainnet explicitly (Alice)
+## Story 10 — Use mainnet explicitly (Alice) **[DEPRECATED → Story 12 in v0.3]**
 
 > As Alice, I want to create and use a mainnet wallet, so I can use real ETH.
 
@@ -277,6 +281,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - A confirmation prompt requires typing `yes` to proceed; default is abort.
 - Output shows `WARNING: this wallet uses real ETH on Ethereum mainnet. Funds are at risk.` before the mnemonic.
 - Exit 1 if user does not type `yes`.
+- **Note (per #297 B3):** v0.2 MVP only; superseded by Story 12 in v0.3.
 
 ---
 
@@ -293,18 +298,17 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 ---
 
-## Story 12 — Persist wallet across CLI invocations (Alice)
+## Story 12 — Persist wallet across CLI invocations (Alice) **[v0.3 — per #297 B3]**
 
 > As Alice, I want each CLI invocation to find my wallets without re-deriving from the mnemonic, so it's fast.
 
 **Acceptance criteria:**
 
-- First `eth wallet create` writes a plaintext mnemonic to `$XDG_DATA_HOME/eth/wallets/<network>/<wallet_id>.txt` per ADR 0001 (UUID wallet id, like BTC v0.1).
-- Subsequent `eth wallet show --id <wallet_id> --network <NET>` reads the mnemonic, derives keys, syncs via RPC, prints the wallet state.
+- First `eth wallet create` writes an encrypted mnemonic to `$XDG_DATA_HOME/eth/wallets/<network>/<wallet_id>.enc` per ADR 0001 (UUID wallet id, like BTC v0.1). Argon2id + AES-256-GCM (F5/F6) — no plaintext on disk.
+- Subsequent `eth wallet show --id <wallet_id> --network <NET>` prompts unlock (or reads `ETH_WALLET_PASSPHRASE`), reads the encrypted mnemonic, derives keys, syncs via RPC, prints the wallet state.
 - If the data dir is on slow disk (HDD, network FS), `eth wallet show` still completes in <500ms after sync.
 - If the file is missing or unreadable, the command exits 2 with `wallet '<id>' is missing or corrupt`.
-- v0.3 will add Argon2id + AES-256-GCM encryption (F5/F6 — mirrors Bitcoin v0.2).
-- **Note:** v0.2 uses UUID-based wallet IDs (not user-supplied names), matching Bitcoin v0.1 PR #81.
+- **Note (per #297 B1 + B2):** v0.2 uses UUID-based wallet IDs (internal `wallet_id`) with user-facing `--name` flag for cross-wallet operations. v0.2 ships encryption from day 1; no plaintext fallback.
 
 ---
 
@@ -314,7 +318,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 **Acceptance criteria:**
 
-- `eth send --mnemonic <words> --batch <file>` reads a CSV file (`address,amount_eth` per line) and sends each as a separate transaction.
+- `eth send --mnemonic <words> --batch <file>` reads a CSV file (per #297 M3: format = `address,amount_eth` per line; no header row; trim whitespace; ignore blank lines and `# comment` lines) and sends each as a separate transaction.
 - Up to 100 recipients per `--batch` (CLI-enforced; exit 2 with `max 100 recipients per batch`).
 - Default fee tier `half_hour`. Override via `--fee fastest|...` or `--max-fee-gwei`.
 - Output: `batch sent. count: 3, txs: [0xAbC..., 0xDeF..., 0x123...], total: 0.05 ETH, total_fees: 0.00021 ETH`.
@@ -376,7 +380,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - `eth send speed-up --mnemonic <words> --tx-hash 0xAbC... --rpc-url <URL> --max-fee-gwei 60` reads the original tx (via `provider.get_transaction_by_hash`), extracts its nonce + to + value + input, builds a new tx with the same nonce + higher `max_fee_per_gas`, signs + broadcasts.
 - `--max-fee-gwei` must be `>` the original tx's `max_fee_per_gas`. Exit 2 with `new max_fee must exceed original` if not.
 - Output on success: `sped up. new_tx_hash: 0xDeF... (old_tx_hash: 0xAbC..., nonce: 7, fee_increase: 30 gwei)`.
-- Exit 4 if the original tx is not found on-chain (could be in mempool only — v0.3 enhancement).
+- Exit 4 if original tx not found in last N blocks (`--lookback-blocks`, default 200, per #297 G5). No mempool lookup in v0.2 (`subscribe_pending_transactions` deferred to v0.3).
 - Exit 5 if the original tx is already mined and confirmed (no point speeding up).
 - **Note:** this is the EVM equivalent of BTC's RBF (BIP-125). EVM has no native RBF signaling — same-nonce + higher-fee is the convention.
 
@@ -419,9 +423,10 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 **Acceptance criteria:**
 
-- `eth wallet create --name w --derivation-path m/44'/60'/0'/0/0` (Ledger-style, default — index at account slot).
-- `eth wallet create --name w --derivation-path m/44'/60'/0'/0/{idx}` (MetaMask-style — index at address slot). Implemented as `--account-index` shorthand: `--account-index N` becomes `m/44'/60'/0'/0/<N>` (treats N as address index, not account index).
-- `--derivation-path` and `--account-index` are mutually exclusive. Exit 2 with `pick one of --derivation-path or --account-index`.
+- `eth wallet create --name w --derivation-path m/44'/60'/0'/0/0` (Ledger-style, default — account slot = 0, address slot = 0).
+- `--address-index N` shorthand (per #297 G2): expands to `m/44'/60'/0'/0/<N>` (BIP-44 address index, 5th position).
+- `--account-index M` shorthand: expands to `m/44'/60'/<M>'/0/0` (BIP-44 account index, 3rd position).
+- `--derivation-path`, `--address-index`, and `--account-index` are mutually exclusive. Exit 2 with `pick one of --derivation-path, --address-index, or --account-index`.
 - Validation: path must start with `m/44'/60'/`. Exit 2 with `derivation path must start with m/44'/60'/`.
 - Output always shows the path used, so the user can verify.
 
@@ -453,7 +458,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 **Acceptance criteria:**
 
 - `eth erc20 balance --mnemonic <words> --token USDC --rpc-url <URL>` prints `address=0xAbC... token=USDC balance=12.34` (human-readable, with `decimals` query applied).
-- `--all` (default for the first call) iterates over the token registry and prints one line per token.
+- `--all` (per #297 M4: explicit flag only, no stateful first-call default) iterates over the token registry and prints one line per token.
 - `--json` outputs a JSON object (`{token, address, balance, decimals}`).
 - Exit 0 even if all balances are 0.
 - **Note:** requires `sol! { function balanceOf(address) external view returns (uint256); }` + raw `provider.call` — does not require deploying a contract binding.
@@ -476,7 +481,10 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
   ```
 
 - `--json` outputs the same as a JSON array.
-- Tokens are loaded from `rust-wallet-app/crates/eth/tokens/mainnet.json` + `sepolia.json` + `anvil.json` (bundled in the binary at compile time via `include_str!`).
+- Tokens are loaded from two sources (per #297 G3):
+  1. **Bundled** (compile-time via `include_str!`): `rust-wallet-app/crates/eth/tokens/mainnet.json` + `sepolia.json` + `anvil.json`.
+  2. **User** (runtime from `$XDG_CONFIG_HOME/eth/tokens/<network>.json`): operator-added tokens from Story 24.
+- **Resolution rule:** user registry wins over bundled on symbol collision. `--list --include-bundled` prints both with a source tag (`bundled` / `user`).
 - Empty registry: prints `(no tokens registered)` and exits 0.
 
 ---
@@ -493,6 +501,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - `eth erc20 register --remove --symbol FOOBAR` removes a user-added token.
 - Validation: `decimals()` must return 0-36 (exit 2 with `invalid decimals: <N>` if out of range).
 - Validation: `symbol()` must return 1-11 printable ASCII chars (exit 2 with `invalid symbol: <s>`).
+- Validation: `name()` must return 1-256 chars of UTF-8 with no control characters (exit 2 with `invalid name: <s>`, per #297 M7).
 
 ---
 
@@ -520,12 +529,12 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - `eth --network anvil --rpc-url http://localhost:8545 wallet create --name dev` works against Anvil (chain id 31337 = `0x7a69`).
 - `provider.get_chain_id()` is asserted at startup; mismatch with `--network anvil` fails fast (exit 3 with `expected chain_id 31337, got <N>`).
 - Anvil's prefunded accounts (a long list of `0x...` private keys known to Anvil) can be imported via `eth wallet import --private-key 0xac0974...` (the standard Anvil dev key #0).
-- `eth erc20 deploy --token-name Foo --token-symbol FOO --decimals 18` deploys a `MockERC20` contract to Anvil (uses `sol! { constructor(string name, string symbol, uint8 decimals) }` + a hand-rolled ERC-20 minimal contract). Returns the deployed contract address.
+- `eth erc20 deploy --token-name Foo --token-symbol FOO --decimals 18` deploys a `MockERC20` contract to Anvil (per #297 M8: uses `sol!` macro + compile-time bytecode embedded via `include_bytes!`, matching Plan Task 8 / Q8 resolution). Returns the deployed contract address.
 - Anvil integration uses `alloy-node-bindings::AnvilInstance` as a `[dev-dependencies]` only (not in production builds).
 
 ---
 
-## Story 27 — Sign EIP-712 typed data (Bob) **[v0.3 deferred — captured for traceability, not in v0.2 scope]**
+## Story 27 — Sign EIP-712 typed data (Bob) **[v0.2 — per #297 D1, un-deferred from v0.3]**
 
 > As Bob, I want to sign EIP-712 typed structured data (e.g., a `Permit` message for gasless approvals, or a `MetaMask` `Order` for a DEX), so I can interact with dApps that require typed-data signatures.
 
@@ -536,14 +545,16 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - Output format: `address: 0xAbC...\ndigest: 0x...32bytes\nsignature: 0x...65bytes`.
 - `--verify <recovered_addr>` sanity-check via `signature.recover_typed_data(&typed_data)`.
 - Exit 0 on success. Exit 2 if JSON is malformed. Exit 4 if `--address` is not wallet-owned.
-- **Note:** v0.2 covers `sign_typed_data_sync` only; full `eip712` domain separation + complex nested types come via v0.3.
+- **Note (v0.2 subset, per #297 D1):** v0.2 ships `sign_typed_data_sync` + `signature.recover_typed_data(&typed_data)` only. Full domain-separation + complex nested types land in v0.3.
 
 ---
 
 ## Cross-cutting acceptance criteria (apply to all stories)
 
 - **Help text:** every command accepts `--help` and prints a clear, multi-line description with examples.
-- **Exit codes:** documented and stable (0 = success, 1 = user abort, 2 = bad input, 3 = upstream/RPC error, 4 = insufficient funds / unknown wallet, 5 = signing/broadcast error).
+- **Exit codes (per #297 M11):** documented and stable (0 = success, 1 = user abort, 2 = bad input, 3 = upstream/RPC error, 4 = wallet/balance issue (insufficient funds, unknown wallet, insufficient token balance, missing pre-image), 5 = signing/RPC/broadcast error).
+- **Tx types (per #297 G6):** Reads accept legacy (type 0) + EIP-2930 (type 1) + EIP-1559 (type 2). Writes = EIP-1559 only in v0.2. Pre-London `eth send` is rejected with exit 2; pre-London reads in tx-history work transparently.
+- **Mnemonic at rest (per #297 B2):** encrypted with Argon2id + AES-256-GCM (F5/F6) — never plaintext. Operator must run `eth wallet unlock` (or set `ETH_WALLET_PASSPHRASE`) on every CLI call that touches key material.
 - **Output:** human-readable by default; `--json` flag on every command that produces data.
 - **Stderr for diagnostics:** logs and errors go to stderr; stdout contains only the requested data (safe to pipe).
 - **No background processes:** every `eth` invocation is a single foreground command. No daemons.
@@ -553,13 +564,13 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - **Gas unit:** all gas-related flags accept gwei (`--max-fee-gwei 30`) or wei (`--max-fee-wei 30000000000`). Reject ambiguity.
 - **Confirmation prompts** (`mainnet`, `drain`, `unlimited approval`, `--no-private` export): require typing `yes` (not `y`); default is abort; exit code 1 on abort.
 - **Bounded inputs:** batch limited to 100 recipients (Story 13); `--gas-limit` bounded `>= 21000`; derivation path must start with `m/44'/60'/`.
-- **TLS pinning:** when `--rpc-url` points to a pinned endpoint (e.g., `https://cloudflare-eth.com`), the custom SPKI verifier (Bitcoin F20 pattern) is applied. `--allow-insecure-tls` flag disables pinning (debug only).
+- **TLS pinning (per #297 M10):** when `--rpc-url` points to a pinned endpoint (e.g., `https://cloudflare-eth.com`), the custom SPKI verifier applies. Cross-ref: V7 spike `rust-wallet-app/spikes/alloy-v1/tests/v7_spki_pin.rs` + Bitcoin `bitcoin-wallet-core/src/chain/spki.rs` (F20 SPKI pin pattern). `--allow-insecure-tls` flag disables pinning (debug only).
 
 ---
 
 ## Out of scope for v1 (separate user stories when shipped)
 
-- **EIP-712 typed-data signing** (Story 27). Needed for some ERC-20 approvals + DEX interactions; alloy supports it via `sign_typed_data_sync`. **Deferred to v0.3** to keep v0.2 ship surface minimal. Story body + acceptance criteria retained above for v0.3 traceability.
+- **EIP-712 typed-data signing** (Story 27). Needed for some ERC-20 approvals + DEX interactions; alloy supports it via `sign_typed_data_sync`. **v0.2 ships `sign_typed_data_sync` + `signature.recover_typed_data` per #297 D1.** Full domain-separation + complex nested types remain v0.3.
 - **L2 chains** (Optimism, Arbitrum, Base, Polygon). The `ChainId::Ethereum(u32)` placeholder in `chain-traits/src/lib.rs:21` already supports the discriminator — drop in another chain-id constant + another RPC URL. UX: `--network optimism|arbitrum|base|polygon` flag.
 - **ENS resolution** (`alice.eth` → address). `alloy-ens` sub-crate exists if added later.
 - **Hardware wallet** (Ledger, Trezor, Keystone) via `alloy-signer-ledger` / `alloy-signer-trezor`.
@@ -569,10 +580,10 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - **WebSocket subscriptions** (`subscribe_logs`, `subscribe_pending_transactions`). CLI is request/response; subscriptions belong in a long-running daemon.
 - **Multi-sig wallets** (Safe, Gnosis Safe). Different signer model.
 - **Watch-only wallet import** from an xpub (no signing key). v0.3 (mirrors Bitcoin Plan Task 32).
-- **Local tx index** (cached tx history). v0.3.
+- **Local tx index** (cached tx history; Story 7 "every `tx list` call scans blocks" workaround). v0.3 (per #297 D2).
 - **Encrypted mnemonic at rest** (Argon2id + AES-256-GCM per F5/F6). v0.3 (mirrors Bitcoin v0.2).
 - **Silent payments / payment codes**. No mature Rust SDK for EVM.
 - **Other EVM chains** (BSC, Avalanche C-Chain, Fantom). Add via chain-id constant + RPC URL, no code changes.
 - **Plausible-deniability multi-bucket wallet**. v1.0+.
-- **REST/HTTP interface** (Breez-style server). Separate spec.
+- **REST/HTTP interface** (Breez-style server). Separate spec. Owner: TBD (per #297 M12 — open follow-up needed).
 - **Mobile (iOS/Android) integration**. Phase 2 via UniFFI (mirrors Bitcoin Phase 2).
