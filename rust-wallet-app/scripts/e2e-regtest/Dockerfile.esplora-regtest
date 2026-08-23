@@ -1,0 +1,94 @@
+# syntax=docker/dockerfile:1.7
+#
+# Dockerfile.esplora-regtest — custom regtest-compatible Esplora image for
+# issue #286 (path B). Replaces `blockstream/esplora:latest` in compose.
+#
+# Multi-stage build:
+#   - Stage 1 (electrs-builder): Rust + libssl/gcc/g++/cmake to compile
+#     mempool/electrs@v0.10.10 from source with RocksDB indexing backend.
+#   - Stage 2 (runtime): debian-slim + python venv with aiohttp +
+#     python-bitcoinlib. Carries the compiled electrs binary + shim.py +
+#     start.sh. dumb-init as PID 1 for clean SIGTERM forwarding.
+#
+# Build context: rust-wallet-app/scripts/e2e-regtest/
+#   - shim.py and start.sh live alongside the Dockerfile
+#   - compose `build: { context: ., dockerfile: Dockerfile.esplora-regtest }`
+#     resolves `context` to this directory
+#
+# Result image: e2e-esplora-regtest:local (tag set in compose)
+
+# -----------------------------------------------------------------------------
+# Stage 1: compile electrs
+# -----------------------------------------------------------------------------
+FROM rust:1.94-slim-bookworm AS electrs-builder
+
+# romanz/electrs is the original electrs fork (now feature-stable) which owns
+# the v0.10.x line. mempool/electrs is the active fork, but its tags go
+# v0.4.x → v3.0.0-beta1 (no v0.10.x). Pin to romanz for our regtest use case
+# (simpler Electron protocol surface, no mempool-specific patches needed).
+ARG ELECTRS_REF=v0.10.4
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl-dev \
+        pkg-config \
+        gcc \
+        g++ \
+        cmake \
+        git \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone --depth 1 --branch "${ELECTRS_REF}" \
+        https://github.com/romanz/electrs.git .
+
+# --features electrum-rocksdb enables the RocksDB-backed index (vs the
+# default in-memory store, which would re-index on every container restart).
+RUN cargo build --release \
+        --features electrum-rocksdb
+
+# -----------------------------------------------------------------------------
+# Stage 2: runtime — electrs binary + Python shim
+# -----------------------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-venv \
+        ca-certificates \
+        dumb-init \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/shim-venv \
+    && /opt/shim-venv/bin/pip install --no-cache-dir --upgrade pip \
+    && /opt/shim-venv/bin/pip install --no-cache-dir \
+        'aiohttp>=3.9'
+
+# Carry compiled electrs binary
+COPY --from=electrs-builder /build/target/release/electrs /usr/local/bin/electrs
+
+# Carry shim + entrypoint script
+COPY shim.py /usr/local/bin/shim.py
+COPY start.sh /usr/local/bin/start.sh
+
+# electrs indexed state dir (named volume mounted at runtime)
+RUN mkdir -p /var/lib/electrs/db && chmod 0755 /var/lib/electrs/db
+
+# Defaults match the bitcoind service in docker-compose.yml. Override per-
+# environment via the compose `environment:` block.
+ENV ELECTRS_NETWORK=regtest \
+    # electrs binds internal-only (loopback) on 50002; shim routes Esplora
+    # HTTP from 50001 onto it. Avoids a port collision in the container.
+    ELECTRS_RPC_ADDR=127.0.0.1:50002 \
+    ELECTRS_DB_DIR=/var/lib/electrs/db \
+    BITCOIND_RPC_HOST=bitcoind \
+    BITCOIND_RPC_PORT=18443 \
+    BITCOIND_RPC_USER=foo \
+    BITCOIND_RPC_PASS=bar \
+    BITCOIND_P2P_PORT=18444 \
+    SHIM_BIND=0.0.0.0:50001
+
+EXPOSE 50001
+
+# dumb-init reaps zombies + forwards signals. entrypoint is start.sh which
+# backgrounds electrs then execs shim.py.
+ENTRYPOINT ["dumb-init", "--", "/usr/local/bin/start.sh"]

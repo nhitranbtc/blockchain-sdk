@@ -18,21 +18,30 @@ services:
       retries: 30
 
   esplora:
-    image: blockstream/esplora:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.esplora-regtest
+    image: e2e-esplora-regtest:local
     container_name: e2e-esplora-regtest
     depends_on:
       bitcoind:
         condition: service_healthy
     environment:
-      # Blockstream Esplora env vars (verified against blockstream/esplora:latest).
-      # bitcoind is reachable as 'bitcoind' on the Docker network
-      # (esplora -> bitcoind via the bridge).
-      DAEMON_RPC_ADDR: "bitcoind:18443"
-      DAEMON_RPC_USER: "foo"
-      DAEMON_RPC_PASS: "bar"
-      ELECTRS_NETWORK: "regtest"
-      ELECTRS_HTTP_PORT: "50001"
-      HTTP_PORT: "50001"
+      # Defaults baked into Dockerfile.esplora-regtest. Overrides here for
+      # per-stack divergence. Two processes inside the container:
+      #   - electrs binds 127.0.0.1:50002 (loopback only; internal routing)
+      #   - shim binds 0.0.0.0:50001 (the externally-exposed Esplora HTTP port)
+      # The shim translates Esplora HTTP requests into Electrum-protocol
+      # calls against electrs on 127.0.0.1:50002.
+      BITCOIND_RPC_HOST: "bitcoind"
+      BITCOIND_RPC_PORT: "18443"
+      BITCOIND_RPC_USER: "foo"
+      BITCOIND_RPC_PASS: "bar"
+      ELECTRS_RPC_ADDR: "127.0.0.1:50002"
+      ELECTRS_HOST: "127.0.0.1"
+      ELECTRS_PORT: "50002"
+    volumes:
+      - esplora-regtest-db:/var/lib/electrs/db
     ports:
       - "50001:50001"
     healthcheck:
@@ -40,4 +49,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 60
-      start_period: 30s
+      start_period: 120s
+
+volumes:
+  esplora-regtest-db:

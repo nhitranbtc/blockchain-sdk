@@ -1,0 +1,29 @@
+# Build context hygiene for Dockerfile.esplora-regtest. Anything matched here
+# never crosses the Docker daemon boundary on a `docker compose build`.
+#
+# The Dockerfile ONLY needs:
+#   - Dockerfile.esplora-regtest
+#   - shim.py           (COPY'd by stage 2)
+#   - start.sh          (COPY'd by stage 2)
+# Everything else in this directory is operator-facing infra that should
+# stay on the host.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.tests/
+*.swp
+
+# Operator scripts + compose — not part of the image
+up.sh
+down.sh
+docker-compose.yml
+README.md
+tests/
+
+# Local overrides / cache
+.git/
+.gitignore
+*.log
+.env
+.env.*
