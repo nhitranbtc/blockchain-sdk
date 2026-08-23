@@ -668,6 +668,8 @@ name = "alloy-v1-spike"
 version = "0.0.0"
 dependencies = [
  "alloy",
+ "alloy-consensus",
+ "alloy-eips",
  "alloy-network",
  "alloy-node-bindings",
  "alloy-primitives",
