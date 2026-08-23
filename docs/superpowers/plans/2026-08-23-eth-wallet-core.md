@@ -60,7 +60,7 @@ rust-wallet-app/crates/eth/    # CLI binary
 
 ## Phase 0 — Scaffold + canonical mnemonic test (1 task)
 
-### Task 1: Crate scaffold + V2 mirror test
+### Task 1 (#295): Crate scaffold + V2 mirror test
 
 **Files:**
 - Create: `rust-wallet-app/crates/eth-wallet-core/Cargo.toml`
@@ -82,7 +82,7 @@ rust-wallet-app/crates/eth/    # CLI binary
 
 ## Phase 1 — Core wallet ops (3 tasks)
 
-### Task 2: WalletManager + create/import/list/delete
+### Task 2 (#301): WalletManager + create/import/list/delete
 - [ ] Step 1: Implement `WalletManager` holding `RwLock<HashMap<WalletId, Zeroizing<Mnemonic>>>`
 - [ ] Step 2: Implement `create_wallet(words, password) -> WalletCreated`
 - [ ] Step 3: Implement `import_wallet(phrase, password) -> WalletId` (Q7 — wraps in Zeroizing)
@@ -90,62 +90,62 @@ rust-wallet-app/crates/eth/    # CLI binary
 - [ ] Step 5: Tests for each op + persistence (SQLite or sled; mirror Bitcoin `WalletStore`)
 - [ ] Step 6: Commit
 
-### Task 3: Sign-only path (no broadcast)
+### Task 3 (#302): Sign-only path (no broadcast)
 - [ ] Step 1: Implement `sign_native_eth_tx(signer, tx) -> SignedTx`
 - [ ] Step 2: Implement `sign_erc20_transfer(signer, token, to, amount) -> SignedTx` (ERC-20 calldata via `sol!`)
 - [ ] Step 3: Tests using V2 signer (deterministic)
 - [ ] Step 4: Commit
 
-### Task 4: Error enum + serde
+### Task 4 (#303): Error enum + serde
 - [ ] Step 1: 17-variant Error enum mirroring Bitcoin Error schema
 - [ ] Step 2: thiserror impl + `Result<T, Error>` alias
 - [ ] Step 3: Commit
 
 ## Phase 2 — RPC integration (2 tasks)
 
-### Task 5: Provider + raw reqwest SPKI pin (Q2 + Q4)
+### Task 5 (#304): Provider + raw reqwest SPKI pin (Q2 + Q4)
 - [ ] Step 1: Implement `provider::new_http_pinned(rpc_url, pinned_spki_sha256) -> Result<Provider, Error>` — uses raw reqwest + custom `ServerCertVerifier` (V7 pattern) + `alloy::Provider::new_http_with_client(...)` or hand-rolled JSON-RPC for pinned endpoints
 - [ ] Step 2: Tests: V7 production test — hit `https://ethereum.reth.rs/rpc` with pinned SPKI (capture from `openssl s_client`) → returns block_number; with wrong SPKI → connection rejected
 - [ ] Step 3: Commit
 
-### Task 6: Provider for non-pinned endpoints (Q4)
+### Task 6 (#305): Provider for non-pinned endpoints (Q4)
 - [ ] Step 1: Implement `provider::new_http(rpc_url) -> Provider` using `alloy::ProviderBuilder::new().connect_http(...)` — for localhost Anvil + untrusted-dev endpoints
 - [ ] Step 2: Commit
 
 ## Phase 3 — ERC-20 stablecoin (3 tasks)
 
-### Task 7: ERC-20 calldata + selector (V5)
+### Task 7 (#306): ERC-20 calldata + selector (V5)
 - [ ] Step 1: Implement `erc20::transfer_calldata(to: Address, value: U256) -> Bytes` using `alloy_sol_types::sol! transfer(address,uint256)`. First 4 bytes must be `0xa9059cbb`.
 - [ ] Step 2: Test: V5 mirror — `transferCall { to, value }.abi_encode()` produces calldata with prefix `0xa9059cbb`
 - [ ] Step 3: Commit
 
-### Task 8: Token registry + decimals cache (Q5, Q6, Q9)
+### Task 8 (#307): Token registry + decimals cache (Q5, Q6, Q9)
 - [ ] Step 1: Define `Token` struct (address, symbol, decimals, chain_id) in `tokens.rs`
 - [ ] Step 2: Bundle `tokens/mainnet.json` (USDC, USDT) + `tokens/sepolia.json` (USDC Sepolia)
 - [ ] Step 3: Implement `tokens::load_chain(chain_id) -> Vec<Token>`
 - [ ] Step 4: Implement `tokens::query_decimals(provider, token_addr) -> u8` — one `eth_call decimals()` per token at startup, cache in-memory
 - [ ] Step 5: Commit
 
-### Task 9: Anvil regtest for ERC-20 (V6, Q8)
+### Task 9 (#308): Anvil regtest for ERC-20 (V6, Q8)
 - [ ] Step 1: Add `alloy-node-bindings` as `[dev-dependencies]`
 - [ ] Step 2: Test: spin up Anvil, deploy `MockERC20` (5-line sol! + `ContractInstance::deploy`), call `transfer(...)`, assert recipient `balanceOf` reflects change
 - [ ] Step 3: Commit
 
 ## Phase 4 — CLI + verification (3 tasks)
 
-### Task 10: `eth` CLI scaffold
+### Task 10 (#309): `eth` CLI scaffold
 - [ ] Step 1: Create `rust-wallet-app/crates/eth/` binary crate
 - [ ] Step 2: clap subcommands: `create`, `import`, `list`, `show`, `delete`, `send-native`, `send-erc20`, `balance`, `update-tokens` (Q9)
 - [ ] Step 3: Tests + smoke run against Anvil regtest
 - [ ] Step 4: Commit
 
-### Task 11: Sepolia smoke script (operator-driven per L29)
+### Task 11 (#310): Sepolia smoke script (operator-driven per L29)
 - [ ] Step 1: `rust-wallet-app/scripts/eth-send-sepolia-e2e.sh` (mirror Bitcoin pattern)
 - [ ] Step 2: `#[ignore]` integration test against Sepolia testnet RPC
 - [ ] Step 3: Commit
 - Follow-up: #298 (per-user-story e2e — post-v0.2 expansion of this smoke)
 
-### Task 12: Release cut
+### Task 12 (#311): Release cut
 - [ ] Step 1: L24 — CHANGELOG `[v0.2.0]` entry + User Stories table checkbox flip
 - [ ] Step 2: L21 — update estimate-report + ai-cost-report
 - [ ] Step 3: Tag `v0.2.0` + push
