@@ -43,6 +43,12 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 hex = "0.4"  # compact JSON serialization of EncryptedBlob
 
+[features]
+# `insecure_tls` enables `provider::new_http_insecure` for dev/CI. Defaults
+# to DEBUG-only via `debug_assertions` cfg in src/provider.rs; this feature
+# is opt-in for release builds that need it (rare).
+insecure_tls = []
+
 [dev-dependencies]
 # Hermetic per-test base_dir for the WalletManager round-trip tests.
 tempfile = { workspace = true }

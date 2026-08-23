@@ -101,24 +101,27 @@ pub fn new_http(rpc_url: Url) -> Result<RootProvider<Ethereum>> {
 /// ```
 ///
 /// **Status: API surface ships in v0.2; the verifier wiring is deferred.**
-/// See the module-level doc for context. The function STILL takes + stores
-/// the `pinned_spki_sha256` so callers can migrate to the verified path
-/// without changing the call site.
-///
-/// Use the [`new_http_insecure`] knob for local dev / CI — the
-/// production code-path MUST NOT use it.
+/// Until the follow-up issue (PR #266 carry) lands the actual
+/// `rustls::ServerCertVerifier` integration, this function REFUSES to
+/// return a verifier-less provider (which would silently fall back to
+/// system trust roots — a broken-security-control per the review).
+/// Callers MUST use `new_http` for non-pinned endpoints until the
+/// verifier wires in; `Error::SpkiKeyPinMismatch` signals the gap.
 pub fn new_http_pinned(
-    rpc_url: Url,
-    pinned_spki_sha256: SpkiSha256,
+    _rpc_url: Url,
+    _pinned_spki_sha256: SpkiSha256,
 ) -> Result<RootProvider<Ethereum>> {
-    let _pinned = pinned_spki_sha256; // accepted + stored at the call site (no TLS hookup yet)
-    Ok(RootProvider::new_http(rpc_url))
+    Err(Error::SpkiKeyPinMismatch {
+        expected_hex: "<see PR #316 follow-up issue>".to_string(),
+        got_hex: "verifier not yet wired; use new_http for non-pinned endpoints until rustls::ServerCertVerifier integration lands".to_string(),
+    })
 }
 
 /// Insecure variant of `new_http_pinned` that BYPASSES the SPKI pin
-/// check. **Debug-only.** Production code MUST NOT use this — the
-/// function exists so CI (which may not have outbound TLS access to the
-/// pinned endpoint) can still exercise the code path.
+/// check. **Debug-only.** Production code MUST NOT be able to reference
+/// this — gated behind `debug_assertions` so release builds can't link
+/// against it. CI + dev use this for fast iteration against local Anvil.
+#[cfg(any(debug_assertions, feature = "insecure_tls"))]
 pub fn new_http_insecure(rpc_url: Url) -> Result<RootProvider<Ethereum>> {
     Ok(RootProvider::new_http(rpc_url))
 }
