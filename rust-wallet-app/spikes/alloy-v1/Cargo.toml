@@ -84,3 +84,17 @@ path = "tests/v6_erc20_anvil.rs"
 [[test]]
 name = "v7_spki_pin"
 path = "tests/v7_spki_pin.rs"
+
+# Operator-driven Sepolia e2e samples (Issue #299 — template for #298).
+# L29: never run in CI. RUN_ETH_E2E=1 cargo test --test <name> -- --ignored
+[[test]]
+name = "e2e_sepolia_balance"
+path = "tests/e2e_sepolia_balance.rs"
+
+[[test]]
+name = "e2e_sepolia_send_native"
+path = "tests/e2e_sepolia_send_native.rs"
+
+[[test]]
+name = "e2e_sepolia_erc20_balance"
+path = "tests/e2e_sepolia_erc20_balance.rs"

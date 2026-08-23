@@ -23,6 +23,61 @@ V5/V6 deferred to eth/ crate implementation per accepted recommendation; spike s
 the type-level verification (calldata selector for V5; `MockERC20` `sol!` + constructor
 calldata for V6) so the eth/ crate Phase 3 implementation has a known-good API surface.
 
+## Sepolia sample tests (Issue #299, template for #298)
+
+The three `e2e_sepolia_*.rs` tests are reference implementations for the broader
+per-user-story e2e suite tracked in [#298](https://github.com/nhitranbtc/blockchain-sdk/issues/298).
+One sample per story-class:
+
+| Test                     | Story | What it proves                                              |
+| ------------------------ | ----- | ----------------------------------------------------------- |
+| `e2e_sepolia_balance`    | 3     | Read-only `provider.get_balance(addr)` against Sepolia      |
+| `e2e_sepolia_send_native`| 5     | Signed EIP-1559 tx + `pending.get_receipt()` (status=true)   |
+| `e2e_sepolia_erc20_balance` | 22 | `sol!`-typed `balanceOf` via `provider.call` + ABI decode    |
+
+All three are `#[ignore]` (L29 operator-driven — never run in CI).
+
+### Required env vars
+
+| Var                     | Used by                | Default                                 |
+| ----------------------- | ---------------------- | --------------------------------------- |
+| `RUN_ETH_E2E`           | all 3                  | must be `1` (other values → SKIP)       |
+| `ETH_E2E_RPC_URL`       | all 3                  | none — required                         |
+| `ETH_E2E_MNEMONIC`      | all 3 (or `_FILE`)     | mutually exclusive w/ `ETH_E2E_MNEMONIC_FILE` |
+| `ETH_E2E_RECIPIENT`     | send_native            | derived `m/44'/60'/0'/0/1`              |
+| `ETH_E2E_TOKEN_ADDRESS` | erc20_balance          | none — required when erc20 target runs  |
+
+### Sepolia ETH (operator fund)
+
+Sample mnemonic must be funded first — visit one of:
+
+- https://sepoliafaucet.com/
+- https://www.alchemy.com/faucets/ethereum-sepolia
+- https://www.infura.io/faucet/sepolia
+
+Funds m/44'/60'/0'/0/0 of the phrase (Story 5 sender).
+
+### Operator run
+
+```bash
+# From repo root.
+ETH_E2E_TESTNET=1 \
+  ETH_E2E_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com \
+  ETH_E2E_MNEMONIC_FILE=$HOME/.sepolia-test-mnem.txt \
+  ETH_E2E_TOKEN_ADDRESS=0x1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287 \
+  bash rust-wallet-app/scripts/eth-send-sepolia-e2e.sh
+```
+
+Each target logs to `/tmp/eth-e2e-<target>.log` (one of `balance`,
+`send_native`, `erc20_balance`). Override with `ETH_E2E_TEST_TARGETS="balance erc20_balance"`
+to skip the state-changing send. Exit code is non-zero if any selected target fails.
+
+### Promotion path
+
+When `eth-wallet-core` crate ships (Plan Task 1), these samples migrate to
+`rust-wallet-app/crates/eth-wallet-core/tests/e2e_sepolia/`. Issue #299 keeps
+the spike paths until the crate exists.
+
 ## Run it
 
 ```bash
@@ -78,8 +133,13 @@ rust-wallet-app/spikes/alloy-v1/
 ├── Cargo.toml          # standalone, NOT in umbrella members
 ├── README.md           # this file
 └── tests/
-    ├── v2_mnemonic.rs   # deterministic BIP-39 → address
-    ├── v3_live_rpc.rs   # live RPC against reth.rs (#[ignore])
-    ├── v4_anvil_send.rs # Anvil spawn + signed tx (#[ignore])
-    └── v7_spki_pin.rs   # rustls ServerCertVerifier SPKI pin
+    ├── v2_mnemonic.rs          # deterministic BIP-39 → address
+    ├── v3_live_rpc.rs          # live RPC against reth.rs (#[ignore])
+    ├── v4_anvil_send.rs        # Anvil spawn + signed tx (#[ignore])
+    ├── v5_erc20_calldata.rs    # ERC-20 calldata selector check
+    ├── v6_erc20_anvil.rs       # Anvil MockERC20 sol! (#[ignore])
+    ├── v7_spki_pin.rs          # rustls ServerCertVerifier SPKI pin
+    ├── e2e_sepolia_balance.rs        # Story 3 sample (#[ignore], Issue #299)
+    ├── e2e_sepolia_send_native.rs    # Story 5 sample (#[ignore], Issue #299)
+    └── e2e_sepolia_erc20_balance.rs  # Story 22 sample (#[ignore], Issue #299)
 ```
