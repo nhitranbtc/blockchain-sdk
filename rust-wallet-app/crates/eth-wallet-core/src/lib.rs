@@ -7,6 +7,7 @@
 //! mapping per #297 M11. Subsequent Tasks add RPC provider (Task 5),
 //! ERC-20 surface (Tasks 7-9), and the `eth` CLI scaffold (Task 10).
 
+pub mod chain;
 pub mod crypto;
 pub mod erc20;
 pub mod error;

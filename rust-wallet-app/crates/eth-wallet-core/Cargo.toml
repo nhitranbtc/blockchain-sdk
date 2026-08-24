@@ -43,6 +43,12 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 hex = "0.4"  # compact JSON serialization of EncryptedBlob
 
+# Task 5 (Issue #304) — SPKI pin verifier. `rustls::client::danger::ServerCertVerifier`
+# trait impl so we can build a custom verifier for production RPC endpoints.
+# `sha2` for the SPKI SHA-256 digest (constant-time compare via `subtle`).
+rustls = { workspace = true }
+sha2 = { workspace = true }
+
 [features]
 # `insecure_tls` enables `provider::new_http_insecure` for dev/CI. Defaults
 # to DEBUG-only via `debug_assertions` cfg in src/provider.rs; this feature
