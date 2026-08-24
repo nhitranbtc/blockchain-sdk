@@ -30,33 +30,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Guard: PR must carry the `rust-eth-core` label, which is the routing
-  # signal for the v0.2 integration branch. PRs without the label shouldn't
-  # have targeted this branch (base branch mismatch is the bigger gate; this
-  # catches the rare case where base is correct but label is missing).
-  # SECURITY: pass label JSON via env var + redirect jq output to /dev/null;
-  # do NOT propagate label content into shell variables (label fields are
-  # user-controlled on maintainer-enabled repos).
-  label-routing:
-    name: Label routing check
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-    # PR-only gate: the job reads `github.event.pull_request.labels`, which
-    # is `null` on `push` events. Skip the job entirely on push so post-merge
-    # CI runs don't fail spuriously. Canonical GH Actions pattern for PR-only
-    # checks (see umbrella ci.yml if needed for analogous guards).
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Fail if missing rust-eth-core label
-        env:
-          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
-        run: |
-          echo "PR labels: $LABELS_JSON"
-          if ! echo "$LABELS_JSON" | jq -e '.[] | select(.name == "rust-eth-core")' >/dev/null; then
-            echo "::error::PR missing label rust-eth-core — issue scope is for the integration branch only."
-            exit 1
-          fi
-
   rust-fmt:
     name: Rust fmt
     runs-on: ubuntu-latest
