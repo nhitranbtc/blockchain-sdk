@@ -220,6 +220,44 @@ fn wallet_create_with_duplicate_name_yields_exit_4() {
 }
 
 #[test]
+fn erc20_send_command_without_token_yields_exit_2() {
+    // L28 Gate C checklist (code-reviewer IMPORTANT): missing --token
+    // branch was uncovered. RED: neither --token nor --token-address
+    // provided → real impl rejects with InvalidInput (exit 2).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "erc20",
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "p",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "1000",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "missing --token must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--token") || stderr.contains("token"),
+        "stderr should mention --token: {stderr}",
+    );
+}
+
+#[test]
 fn tx_list_command_against_unreachable_rpc_is_not_a_stub() {
     // Per Issue #339 PR-B cycle 5: `eth tx list` is currently a stub
     // returning `Error::Rpc("tx list: wired in PR-B follow-up...")`. PR-B
