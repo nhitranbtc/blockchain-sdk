@@ -16,7 +16,6 @@ alloy-signer = { version = "=1.8.3" }  # Signer trait (transitive via signer-loc
 alloy-signer-local = { workspace = true }
 bip39 = { workspace = true }
 reqwest = { workspace = true }  # for crate-wide Error From<reqwest::Error> (Task 4)
-subtle = { workspace = true }  # constant-time SPKI hash compare (Task 5)
 zeroize = { workspace = true }
 
 # Task 3 (Issue #302) — sign-only primitives. Adds the consensus / network /
@@ -43,11 +42,9 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 hex = "0.4"  # compact JSON serialization of EncryptedBlob
 
-# Task 5 (Issue #304) — SPKI pin verifier. `rustls::client::danger::ServerCertVerifier`
-# trait impl so we can build a custom verifier for production RPC endpoints.
-# `sha2` for the SPKI SHA-256 digest (constant-time compare via `subtle`).
-rustls = { workspace = true }
-sha2 = { workspace = true }
+# Task 5 (Issue #304) — DEFERRED. The SPKI pin verifier + `new_http_pinned`
+# API surface were removed entirely pending webpki composition. Production
+# builds use `new_http` (default rustls TLS + system CAs) for all RPC.
 
 [features]
 # `insecure_tls` enables `provider::new_http_insecure` for dev/CI. Defaults
