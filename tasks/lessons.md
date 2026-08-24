@@ -28,6 +28,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
 - [L42] Verify staged set before commit (`git diff --cached --stat` after every `git add`)
 - [L45] Issues labeled `rust-eth-core` route to the integration branch, never main directly
+- [L46] L13 step 13 commit gate: verify `git branch --show-current` matches the branch checked out at step 4
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -38,7 +39,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Domain | Lessons |
 |---|---|
 | Build / Cargo hygiene | L1 |
-| Git workflow | L6 (approval gates), L8, L14, L42 |
+| Git workflow | L6 (approval gates), L8, L14, L42, L46 |
 | Issue/PR protocol | L9, L24 |
 | Skill + review pair | L11, L12, L13 |
 | Post-merge bookkeeping | L21, L24 |
@@ -83,6 +84,7 @@ before commit.
 - Before `gh pr merge --admin` / `--force-push` / `gh issue close` → name the bypass explicitly ("merge with --admin, approved"). The auto-mode classifier requires literal phrasing for bypass authorization.
 - **Same-scope commit + push — one pause.** When proposing a commit to a feature branch with no pending push, surface BOTH actions in one prompt: *"Commit `<subject>` and push to `origin/<branch>` — approve?"* A literal "approved" / "commit" authorizes the commit AND the subsequent push to the same branch. Required: name the push target + force-flag (or "no force") in the same prompt so the approval scope is explicit.
 - **Two-pause cases (override the bundling):** force-push (`--force` / `--force-with-lease`); push to `main` / release branch; push bundling multiple commits with different scopes; any `--admin` bypass or `gh pr merge --admin`; PR open after push (still requires separate approval per L6 + workflow-approval-required memory). Each of these needs its own dedicated pause.
+- **Show branch name in the approval prompt.** Every commit / push / PR-open pause MUST include the checked-out branch name (`git branch --show-current`) verbatim in the prompt text — e.g. *"Commit `<subject>` on branch `rust-eth-core` and push to `origin/rust-eth-core` — approve?"* The branch name lets the reviewer confirm the destination matches intent (L46 destination check + L45 integration-branch routing). If the prompt omits the branch name, the approval is incomplete — re-prompt with the branch included.
 - For post-merge bookkeeping commits (CHANGELOG/lessons) → still pause. User's "approved" message earlier in the session is for the prior action, not subsequent commits (per the never-auto-commit memory).
 
 ---
@@ -909,6 +911,35 @@ Operator confirms via PR comment + flips the `L29` acceptance box.
 - **Final cut at #311**: ONE PR titled `chore(eth): release cut v0.2.0 — eth-wallet-core landing (#311, `rust-eth-core` → main)`. L24 cascade travels WITH this PR (CHANGELOG `[Unreleased]` → `[v0.2.0]` section + User Stories table checkbox flip). L21 estimate-report + ai-cost-report updates via sub-agent dispatch per L13 step 19.
 - **Drift recovery** (if a sub-task PR accidentally targeted main): close the bad PR, redo from `rust-eth-core` base. L13 Q9 off-rails recovery applies — pause + revert-to-last-green + follow-up issue + ledger entry.
 - **Workspace hygiene**: After the v0.2 final cut, close `rust-eth-core` (delete from origin). The `.github/workflows/rust-eth-core-ci.yml` + `CODEOWNERS` entries can be retired or repurposed for the next multi-task integration cycle.
+
+---
+
+## L46 — L13 step 13 commit gate: branch identity check before `commit-push-pr`
+
+**Trigger**: User correction during 2026-08-24 session on `rust-eth-core`. Running step 13 (`commit-commands:commit-push-pr`) without confirming the currently checked-out branch matches the branch captured at L13 step 4 risks committing to the wrong line — e.g., landing v0.2 work on main instead of the `rust-eth-core` integration branch (L45 violation), or pushing a sub-task branch while still on the parent.
+
+**Rule**: Before invoking step 13, run `git branch --show-current` and confirm the output equals the branch name recorded at L13 step 4 (karpathy + branch checkout). If they differ → STOP. Re-run step 4 (`git checkout <branch-from-step-4>`) before continuing. The check is mandatory regardless of how recently the checkout happened (session restart, tab switch, prior `gh pr merge --delete-branch` etc. can all move HEAD silently).
+
+**Why**: `commit-push-pr` is irreversible per L6 — once a SHA lands on a branch (especially the wrong one), recovery requires revert or force-rewrite, both visible in public history. The branch name is a single source of truth that `git` itself tracks; cross-checking it at the moment of commit eliminates the entire class of "wrong-branch commit" mistakes at zero cost.
+
+**Apply**:
+
+```bash
+# At step 13, BEFORE commit-push-pr:
+EXPECTED="<branch from L13 step 4>"   # e.g. rust-eth-core, task/eth-wallet-core-v0.2/1-scaffold
+ACTUAL=$(git branch --show-current)
+if [ "$ACTUAL" != "$EXPECTED" ]; then
+  echo "Branch mismatch: expected=$EXPECTED actual=$ACTUAL"
+  git checkout "$EXPECTED"
+  # re-verify, then proceed
+fi
+```
+
+- **Record the expected branch at step 4**: write it down in the working scratch (chat scratch or `.superpowers/sdd/<plan>/progress.md` per L14). Don't rely on memory — session restarts erase it.
+- **Re-check after any branch-modifying operation** in the same session: `gh pr merge --squash --delete-branch`, `git rebase`, `git checkout -`, manual branch switch via IDE.
+- **Pair with L42**: L42 audits the staged set (content); L46 audits the destination (branch). Both run at the same commit gate. Two checks, one pause.
+- **Pair with L6 prompt shape**: when surfacing the commit for approval, include the branch name verbatim per L6 ("Show branch name in the approval prompt"). Example: *"Commit `chore(eth): scaffold` on branch `rust-eth-core` — approve?"* The L46 destination check is the gate before the prompt; the branch name in the prompt is the gate the reviewer reads.
+- **Mismatch recovery**: if a commit already landed on the wrong branch, do NOT force-push. Per L6 + L13 Q9 off-rails: pause, surface the mistake, revert via new commit on correct branch + cherry-pick or revert on wrong branch. Ledger entry required.
 
 ---
 
