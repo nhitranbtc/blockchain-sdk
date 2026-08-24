@@ -30,7 +30,7 @@ use clap::{Parser, Subcommand};
 
 use crate::handlers::{
     open_manager, open_provider, print_wallet_created, tx_get, tx_list_stub, wallet_balance,
-    wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20_stub,
+    wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20,
     wallet_send_native, wallet_show,
 };
 use eth_wallet_core::{Error, Network};
@@ -232,6 +232,10 @@ enum Erc20Action {
     },
     Send {
         #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
         token: Option<String>,
         #[arg(long)]
         token_address: Option<String>,
@@ -241,6 +245,8 @@ enum Erc20Action {
         amount: String,
         #[arg(long)]
         gas_limit: Option<u64>,
+        #[arg(long, default_value = "sepolia")]
+        network: String,
     },
     List {
         #[arg(long, default_value = "false")]
@@ -401,7 +407,63 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
             Command::SignMessage { .. } | Command::SignTyped { .. } => Err(
                 eth_wallet_core::Error::Rpc("sign-message / sign-typed: deferred".into()),
             ),
-            Command::Erc20 { .. } => wallet_send_erc20_stub(),
+            Command::Erc20 { action } => match action {
+                Erc20Action::Send {
+                    name,
+                    password,
+                    token,
+                    token_address,
+                    to,
+                    amount,
+                    gas_limit,
+                    network,
+                } => {
+                    let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");
+                    let provider = open_provider(rpc)?;
+                    let to_str = to
+                        .as_deref()
+                        .ok_or_else(|| Error::InvalidInput("--to required".into()))?;
+                    let to_addr = Address::from_str(to_str)
+                        .map_err(|e| Error::InvalidInput(format!("invalid --to address: {e}")))?;
+                    let amount_wei: U256 = amount
+                        .parse()
+                        .map_err(|e| Error::InvalidInput(format!("invalid --amount: {e}")))?;
+                    let token_str =
+                        token
+                            .as_deref()
+                            .or(token_address.as_deref())
+                            .ok_or_else(|| {
+                                Error::InvalidInput("--token or --token-address required".into())
+                            })?;
+                    let token_addr = Address::from_str(token_str).map_err(|e| {
+                        Error::InvalidInput(format!("invalid --token address: {e}"))
+                    })?;
+                    let gas = gas_limit.unwrap_or(65_000);
+
+                    let (n, p) = match (name.as_deref(), password.as_deref()) {
+                        (Some(n), Some(p)) => (n, p),
+                        _ => {
+                            return Err(Error::InvalidInput(
+                                "--name and --password required".into(),
+                            ));
+                        }
+                    };
+                    let net = Network::parse_cli(&network)
+                        .map_err(|e| Error::InvalidInput(e.to_string()))?;
+                    let wallet_id = mgr
+                        .lookup_by_name(n, net)
+                        .map_err(crate::handlers::map_wallet_err)?;
+                    let signer = mgr
+                        .unlock_signer(wallet_id, p.as_bytes())
+                        .map_err(crate::handlers::map_wallet_err)?;
+
+                    wallet_send_erc20(&provider, &signer, token_addr, to_addr, amount_wei, gas)
+                        .await
+                }
+                _ => Err(eth_wallet_core::Error::Rpc(
+                    "erc20 non-Send action deferred past #337".into(),
+                )),
+            },
         }
     })
 }

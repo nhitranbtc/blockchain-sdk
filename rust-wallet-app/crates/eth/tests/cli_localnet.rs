@@ -220,6 +220,43 @@ fn wallet_create_with_duplicate_name_yields_exit_4() {
 }
 
 #[test]
+fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
+    // Per Issue #339 PR-B cycle 4: `eth erc20 send` is currently a stub
+    // returning `Error::Rpc("wallet send-erc20: wired in PR-B follow-up...")`.
+    // PR-B replaces the stub with sign + broadcast. RED: stub string
+    // leaks into stderr → assertion fails. GREEN: real impl returns
+    // network error (unreachable RPC) → assertion passes. No Anvil
+    // required (unreachable port = deterministic network failure).
+    // Mirrors `send_command_against_unreachable_rpc_is_not_a_stub` for
+    // the ERC-20 sibling.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "erc20",
+            "send",
+            "--token",
+            "0x0000000000000000000000000000000000000000",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "1000",
+            "--rpc-url",
+            "http://127.0.0.1:1", // unreachable
+        ],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("PR-B follow-up"),
+        "erc20 send still wired to PR-B stub:\nstdout: {}\nstderr: {stderr}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+}
+
+#[test]
 fn send_command_without_to_address_yields_exit_2() {
     // L12 review finding (CRITICAL): missing --to defaulted to the zero
     // address — silent ETH burn. Per code-reviewer + type-design both

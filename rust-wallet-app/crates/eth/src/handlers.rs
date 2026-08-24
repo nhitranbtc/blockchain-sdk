@@ -350,10 +350,47 @@ pub async fn wallet_send_native(
     Ok(())
 }
 
-pub fn wallet_send_erc20_stub() -> Result<()> {
-    Err(Error::Rpc(
-        "wallet send-erc20: wired in PR-B follow-up (Issue #337 phase 2)".into(),
-    ))
+/// Send an ERC-20 transfer. Cycle 4 (#339 PR-B): sign + broadcast via
+/// `send_raw_transaction`. Token resolution (symbol vs address) and
+/// dynamic decimals land in cycle 5+ alongside gas estimation.
+pub async fn wallet_send_erc20(
+    provider: &RootProvider<Ethereum>,
+    signer: &PrivateKeySigner,
+    token: Address,
+    to: Address,
+    amount_wei: U256,
+    gas_limit: u64,
+) -> Result<()> {
+    let from = signer.address();
+    let chain_id = provider
+        .get_chain_id()
+        .await
+        .map_err(|e| Error::Rpc(format!("get_chain_id: {e}")))?;
+    let nonce_val = provider
+        .get_transaction_count(from)
+        .await
+        .map_err(|e| Error::Rpc(format!("get_transaction_count: {e}")))?;
+
+    let calldata = eth_wallet_core::erc20::transfer_calldata(to, amount_wei);
+    let signed = eth_wallet_core::sign_erc20_tx_bytes(
+        signer,
+        token,
+        calldata,
+        U256::ZERO, // ERC-20 transfer sends 0 native ETH
+        nonce_val,
+        chain_id,
+        1_000_000_000u128, // max_fee_per_gas — 1 gwei Anvil default
+        1_000_000_000u128, // max_priority_fee_per_gas
+        gas_limit,
+    )
+    .map_err(|e| Error::Rpc(format!("sign-erc20: {e}")))?;
+    let bytes = eth_wallet_core::encoded_envelope(&signed);
+    let pending = provider
+        .send_raw_transaction(&bytes)
+        .await
+        .map_err(|e| Error::Rpc(format!("send_raw_transaction (erc20): {e}")))?;
+    println!("{}", pending.tx_hash());
+    Ok(())
 }
 
 pub async fn tx_list_stub() -> Result<()> {
