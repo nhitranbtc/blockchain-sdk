@@ -297,3 +297,78 @@ If all 7 pass, the 5 chosen crates are confirmed correct for v0.2.
 - tiny-keccak (Keccak-256 hash): <https://crates.io/crates/tiny-keccak> (v2.0.2, CC0)
 - ruint (U256 backing alloy): <https://crates.io/crates/ruint> (v1.20.0, alloy-rs maintainership)
 - BIP-39 wordlist (English): implicit via `bip39` crate (already in workspace)
+
+## Appendix: Async test function priority (2026-08-24)
+
+**Status:** Authoritative for all eth-wallet-core (and any future async-touching bitcoin-wallet-core) test additions.
+
+**Tracking issue:** #333 — [eth-wallet-core] Write async test functions (not sync) for all new tests.
+
+### Rule
+
+Every new test function under `rust-wallet-app/crates/eth-wallet-core/` MUST be declared `async fn` and annotated with `#[tokio::test]` (default flavor) — or `#[tokio::test(flavor = "multi_thread")]` when the test body spawns concurrent tasks.
+
+Sync `#[test]` is forbidden for any code path that touches:
+- `alloy_provider::Provider` (RPC client)
+- `reqwest` transport (raw HTTP, including SPKI pin verifier)
+- `tokio::time::timeout` or other tokio primitives
+- `alloy_signer_local` async APIs (e.g. `MnemonicBuilder::build()` returns a future)
+
+### Rationale
+
+1. **API fidelity** — alloy APIs are async-first. Sync wrappers (`tokio::runtime::Runtime::block_on`) hide runtime errors and panic-on-drop semantics.
+2. **CI stability** — `tokio::time::timeout` is the correct primitive for bounding flaky network calls; sync `#[test]` cannot use it without an inner runtime.
+3. **Cancellation** — async tests integrate with tokio's cancellation tree; sync tests leak.
+4. **Future-proofing** — once a sync test needs to spawn a task or join a future, it must be rewritten. Async-first avoids the rewrite.
+
+### Canonical pattern
+
+```rust
+use tokio::time::{timeout, Duration};
+
+#[tokio::test]
+async fn wallet_create_then_show_returns_same_address() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mgr = WalletManager::open(dir.path(), Network::Mainnet).await?;
+
+    let created = mgr.create_wallet("alpha", None).await?;
+    let shown = mgr.show_wallet("alpha").await?;
+
+    assert_eq!(created.address, shown.address);
+    Ok(())
+}
+
+#[tokio::test]
+async fn rpc_call_bounded_by_timeout() {
+    let provider = ProviderBuilder::new().connect_http(MAINNET_RPC.parse().unwrap());
+    let res = timeout(Duration::from_secs(5), provider.get_block_number()).await;
+    assert!(res.is_ok(), "RPC must respond within 5s");
+}
+```
+
+### Anti-patterns (forbidden)
+
+```rust
+// BAD — sync test for async code
+#[test]
+fn wallet_create_then_show() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mgr = rt.block_on(WalletManager::open(...)).unwrap();
+    // ...block_on inside block_on, nested runtime panic risk...
+}
+
+// BAD — async fn but sync attribute
+#[test]
+async fn derive_address() { /* never compiles cleanly with #[test] */ }
+```
+
+### Enforcement
+
+- PR review checklist must verify every new `#[test]` in `eth-wallet-core/` is `#[tokio::test]` + `async fn`.
+- `cargo clippy` does not catch this; rely on review.
+- Issue #333 tracks rollout. Existing sync tests in `bitcoin-wallet-core/` (which has no async deps in v0.1) remain valid; any future BTC test touching async must migrate.
+
+### Related
+
+- #333 — policy issue (parent)
+- All open eth-wallet-core issues now cross-link to #333 via issue-body footer (see `gh issue list --label rust-eth-core`).
