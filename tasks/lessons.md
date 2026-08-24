@@ -29,6 +29,8 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L42] Verify staged set before commit (`git diff --cached --stat` after every `git add`)
 - [L45] Issues labeled `rust-eth-core` route to the integration branch, never main directly
 - [L46] Branch-identity gate: verify `git branch --show-current` matches expected before `git add`, `git commit`, and `commit-push-pr`
+- [L47] Drift-scan can refute issue premise — no-repro closure type
+- [L48] `git stash` can carry diagnostic residue into the next task
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -39,8 +41,8 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 | Domain | Lessons |
 |---|---|
 | Build / Cargo hygiene | L1 |
-| Git workflow | L6 (approval gates), L8, L14, L42, L46 |
-| Issue/PR protocol | L9, L24 |
+| Git workflow | L6 (approval gates), L8, L14, L42, L46, L48 |
+| Issue/PR protocol | L9, L24, L47 |
 | Skill + review pair | L11, L12, L13 |
 | Post-merge bookkeeping | L21, L24 |
 | Client product | L28 |
@@ -953,6 +955,58 @@ fi
   - Wrong `git add` → `git restore --staged <files>` then `git checkout <expected>` and re-add.
   - Wrong `git commit` → `git reset --soft HEAD~1` (keep changes staged), `git checkout <expected>`, re-commit. NEVER `--hard` (loses staged content). Ledger entry required.
   - Wrong `commit-push-pr` → per L6 + L13 Q9 off-rails: pause, surface the mistake, revert via new commit on correct branch + cherry-pick or revert on wrong branch. Do NOT force-push. Ledger entry required.
+
+---
+
+## L47 — Drift-scan can refute issue premise (no-repro closure type)
+
+**Trigger**: 2026-08-24 #323 close. Issue body claimed BTC FFI tests regressed. Drift scan (per L13 step 4a) showed `git log` had no test code change since the last green run; the cited SHA + symptom combination never appeared in the cited file. Issue premise was stale relative to actual repo state.
+
+**Rule**: Before pickup on any "tests regressed" / "feature broken" / "X stopped working" issue, validate the premise against current repo state. If `git log --all -- <cited-path>` + `grep -n "<cited-symptom>"` + a local re-run of the cited failure mode all come back clean, the premise is stale. Close the issue as **no-repro** with drift evidence — do NOT start implementation work against a refuted premise.
+
+**Why**: Implementation work against a stale premise burns hours writing code that solves a problem that does not exist. Drift scan is the cheapest test: if the cited artifact never contained the cited symptom, the issue is asking you to fix a fiction. Closing with evidence (rather than silently no-oping) preserves the audit trail and protects the next reader from re-doing the drift scan.
+
+**Apply**:
+
+- At pickup (L13 step 4a), expand the drift scan to cover the issue's failure claim, not just the plan/spec citations:
+
+  ```bash
+  git log --all -- <cited-file-or-path>          # was anything changed since the symptom appeared?
+  grep -n "<cited-symptom>" <cited-file>         # does the symptom ever appear in cited history?
+  <local re-run of the cited failure mode>       # does it fail today?
+  ```
+
+- All three clean → premise is stale → close with drift evidence in body + `[x]` no-repro state + link to L47 in close comment.
+- One or more dirty → premise holds → proceed with normal L13 pipeline.
+
+**Anti-patterns**:
+
+- "I'll start the fix and see if the symptom reproduces" — pickup is too late; do the drift scan first.
+- Closing as "stale" without drift evidence — leaves the next reader no audit trail to confirm the close was sound.
+- Bulk-closing multiple issues on a "no repro" hunch — each close needs its own drift scan.
+
+---
+
+## L48 — `git stash` can carry diagnostic residue into the next task
+
+**Trigger**: 2026-08-24 session. After resolving #323 (no-repro close per L47), `git stash list` held an entry from an earlier diagnostic sequence — a WIP test file referencing a SHA + symbol name that no longer matched the closed issue. Had `git stash pop` run implicitly as part of the next task's setup, the residue would have entered the working tree silently and risked bundling into the next commit.
+
+**Rule**: After closing any task that involved temporary WIP files (debug prints, scratch test cases, diagnostic scripts), audit `git stash list` BEFORE pickup of the next task on the same branch. If a stash entry exists, decide explicitly: drop it (`git stash drop`) or land it (`git stash show -p | git apply` + commit with a real scope). Do NOT let `git stash pop` run implicitly as part of the next task's setup.
+
+**Why**: Stash residue is silent. It does not appear in `git status` until popped. Once popped, the file is in the working tree and looks like normal WIP — the next `git add` will pick it up, the next commit will bundle it, the L42 verify-staged gate may or may not catch it depending on whether the operator notices the unfamiliar filename. Pre-emptive audit before the next task starts is cheaper than post-commit recovery.
+
+**Apply**:
+
+- After task close (any path: merged, no-repro, deferred): run `git stash list` — if non-empty, name each entry by its branch-context + WIP-purpose before deciding.
+- Default action: `git stash drop`. WIP diagnostic files are throwaway by definition; if the work was real, it would have been committed long ago.
+- Exception: stash contains real-but-uncommitted scope → land it as a named commit (`git stash show -p | git apply` + commit with descriptive subject). Do NOT pop in-place.
+- Pair with L42 (verify staged set): same discipline, applied to git's stash namespace instead of the index.
+
+**Anti-patterns**:
+
+- `git stash pop` without an explicit reason — the pop is the residue vector; everything after it inherits the WIP scope.
+- "I'll just commit the stash content with the next task's changes" — bundles unrelated work; defeats L6 (one commit = one scope).
+- Assuming `git stash list` is empty after a clean merge — stash entries persist across `gh pr merge --delete-branch` if the merge did not consume them.
 
 ---
 
