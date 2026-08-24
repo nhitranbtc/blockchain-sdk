@@ -18,10 +18,16 @@ version = 2
 # via testcontainers 0.23.3. Maintainer archived the crate; no safe upgrade.
 # Switch to `astral-tokio-tar` (per upstream recommendation) when testcontainers
 # publishes a release that pulls it. Dev-dep only (testcontainers).
+#
+# paste 1.0.15 (RUSTSEC-2024-0436): unmaintained proc-macro. Transitive via
+# alloy-primitives 1.6.1 → alloy-chains → alloy-hardforks → alloy-node-bindings
+# (eth-wallet-core dev-deps). No direct upgrade path; track upstream alloy
+# for paste-2 migration once it lands in a stable release.
 ignore = [
     "RUSTSEC-2025-0141", "RUSTSEC-2025-0134",
     "RUSTSEC-2026-0098", "RUSTSEC-2026-0099", "RUSTSEC-2026-0104",
     "RUSTSEC-2025-0111",
+    "RUSTSEC-2024-0436",
 ]
 
 [licenses]
