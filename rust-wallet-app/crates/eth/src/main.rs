@@ -1,46 +1,37 @@
-//! `eth` CLI binary — Issue #309 (Task 10).
+//! `eth` CLI binary — Issue #309 (Task 10) scaffold + Issue #337 (Task 13
+//! follow-up) wiring.
 //!
-//! Initial scaffold: clap subcommand LAYOUT per the 27-story spec.
-//! Business logic per subcommand lands in follow-up issues once Task 11
-//! (Sepolia smoke) shows the underlying library stable.
+//! ## Subcommand structure (per Issue #309 + #337)
 //!
-//! ## Subcommand structure (per Issue #309)
+//! PR-A wires these against Anvil-backed handlers:
+//! - `wallet create --name --network --password`
+//! - `wallet import --name --mnemonic | --private-key --password --network`
+//! - `wallet list | show --name|--id --network | delete --name|--id --network`
+//! - `wallet balance --address --network --unit [--rpc-url]`
+//! - `tx get --tx-hash [--rpc-url]`
 //!
-//! - `wallet create --name --network --rpc-url --derivation-path`
-//! - `wallet import --name --mnemonic | --private-key --network`
-//! - `wallet balance --network --rpc-url --unit --human`
-//! - `wallet sync --network --rpc-url`
-//! - `wallet list | show | delete`
-//! - `send --to --amount --network --rpc-url --fee | --max-fee-gwei --priority-fee-gwei
-//!       --nonce --gas-limit --batch | --drain | --speed-up --dry-run --wait`
-//! - `tx list --since-block --limit --pending` / `tx get --tx-hash`
-//! - `fee --network --rpc-url`
-//! - `config show --json`
-//! - `sign-message --mnemonic --message --address --verify` (Story 18)
-//! - `sign-typed --mnemonic --typed-data|--typed-data-file --address --verify` (Story 27)
-//! - `erc20 balance --token|--all --network --rpc-url --json` (Story 22)
-//! - `erc20 send --token|--token-address --to --amount --gas-limit` (Story 21)
-//! - `erc20 list --json [--include-bundled]` (Story 23)
-//! - `erc20 register --address|--list|--remove --symbol` (Story 24)
-//! - `erc20 approve --token --spender --amount|--amount unlimited|max` (Story 25)
-//! - `erc20 deploy --token-name --token-symbol --decimals` (Story 26, anvil-only)
+//! PR-B (deferred per #337 split): `wallet send-native`, `wallet send-erc20`,
+//! `tx list`. Handlers return `Error::Rpc("...wired in PR-B...")` so the
+//! user-facing message is honest about scope.
+//!
+//! ## Exit codes
+//!
+//! Forwarded from `eth_wallet_core::error::Error::exit_code()` per #297 M11.
+//! Stable 0..=5: success / user-abort / bad-input / rpc / wallet-balance /
+//! signing-broadcast. `std::process::exit` carries the code to the shell.
+
+mod handlers;
+
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-/// Stable exit codes per #297 M11 (forwarded from
-/// `eth-wallet-core::error::Error::exit_code()`).
-///
-/// | Code | Meaning                                                          |
-/// | ---- | ---------------------------------------------------------------- |
-/// | 0    | success                                                          |
-/// | 1    | user abort (confirm_prompt declined)                             |
-/// | 2    | bad input (CLI flag parsing, validation)                         |
-/// | 3    | RPC / upstream error                                              |
-/// | 4    | wallet / balance issue                                            |
-/// | 5    | signing / broadcast error                                         |
-///
-/// The CLI maps errors in `main.rs::run()` to these; `std::process::ExitCode`
-/// carries them to the shell.
+use crate::handlers::{
+    open_manager, open_provider, print_wallet_created, tx_get, tx_list_stub, wallet_balance,
+    wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20_stub,
+    wallet_send_native_stub, wallet_show,
+};
+
 #[derive(Parser, Debug)]
 #[command(name = "eth", version, about = "Ethereum wallet CLI (alloy v1.8.x)")]
 struct Cli {
@@ -48,11 +39,16 @@ struct Cli {
     command: Command,
 
     /// Default RPC URL (overrides per-subcommand).
-    /// Per #297 M10 SPKI pin is applied via the
-    /// `provider::new_http_pinned` codepath (currently fail-closed per
-    /// the PR #316 security review follow-up).
+    /// Per #297 M10 SPKI pin was deferred per #330 — `provider::new_http`
+    /// (default rustls TLS + system CAs) handles all RPC traffic.
     #[arg(long, global = true, env = "ETH_RPC_URL")]
     rpc_url: Option<String>,
+
+    /// Override the wallet-store base directory (default: XDG data dir).
+    /// Tests + CI inject `ETH_DATA_DIR=<tempdir>` so wallet state stays
+    /// hermetic per-test.
+    #[arg(long, global = true, env = "ETH_DATA_DIR")]
+    data_dir: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -61,16 +57,21 @@ enum Command {
         #[command(subcommand)]
         action: WalletAction,
     },
+    /// Send a transaction (native ETH or ERC-20). PR-B only — returns
+    /// Error::Rpc in PR-A. Issue #337 phase 2.
     Send(SendArgs),
     Tx {
         #[command(subcommand)]
         action: TxAction,
     },
+    /// Query fee parameters (gas price, base fee). Deferred — returns
+    /// Error::Rpc in PR-A.
     Fee(FeeArgs),
     Config {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Sign an EIP-191 message. Deferred — returns Error::Rpc in PR-A.
     SignMessage {
         #[arg(long)]
         message: String,
@@ -81,6 +82,8 @@ enum Command {
         #[arg(long)]
         verify: Option<String>,
     },
+    /// Sign EIP-712 typed data. Deferred — blocked on alloy eip712
+    /// feature flag per #302 sign_typed_data follow-up.
     SignTyped {
         #[arg(long, conflicts_with = "typed_data_file")]
         typed_data: Option<String>,
@@ -105,27 +108,32 @@ enum WalletAction {
     Create {
         #[arg(long)]
         name: String,
+        #[arg(long)]
+        password: String,
         #[arg(long, default_value = "sepolia")]
         network: String,
-        #[arg(long)]
-        derivation_path: Option<String>,
     },
     Import {
         #[arg(long)]
         name: String,
+        #[arg(long)]
+        password: String,
+        #[arg(long, default_value = "sepolia")]
+        network: String,
         #[arg(long, conflicts_with = "private_key")]
         mnemonic: Option<String>,
         #[arg(long, conflicts_with = "mnemonic")]
         private_key: Option<String>,
-        #[arg(long, default_value = "sepolia")]
-        network: String,
     },
     Balance {
+        #[arg(long)]
+        address: String,
         #[arg(long, default_value = "sepolia")]
         network: String,
         #[arg(long)]
         unit: Option<String>,
     },
+    /// Sync wallet with chain state (rebuild meta from on-chain). Deferred.
     Sync {
         #[arg(long, default_value = "sepolia")]
         network: String,
@@ -136,12 +144,16 @@ enum WalletAction {
         name: Option<String>,
         #[arg(long)]
         id: Option<String>,
+        #[arg(long, default_value = "sepolia")]
+        network: String,
     },
     Delete {
         #[arg(long)]
         name: Option<String>,
         #[arg(long)]
         id: Option<String>,
+        #[arg(long, default_value = "sepolia")]
+        network: String,
     },
 }
 
@@ -257,71 +269,102 @@ fn main() {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let exit_code = run(cli);
+    let exit_code = match run(cli) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("error: {e}");
+            e.exit_code()
+        }
+    };
     std::process::exit(exit_code);
 }
 
-fn run(cli: Cli) -> i32 {
-    // v0.2 scaffold: each subcommand is a placeholder that confirms the
-    // clap layout parses correctly. Business logic per Issue #309 ships in
-    // follow-up PRs once the underlying library surfaces stabilize.
-    match cli.command {
-        Command::Version => {
-            println!("eth {}", env!("CARGO_PKG_VERSION"));
-            0
+fn run(cli: Cli) -> eth_wallet_core::Result<()> {
+    let mgr = open_manager(cli.data_dir.as_ref())?;
+
+    // Local tokio runtime for the few async handlers (balance, tx get).
+    // The handlers themselves are async; we drive them here with
+    // `block_on` because main is sync. Per #333 sync-fns touching async
+    // deps are an explicit carve-out — only `cli main()` does this, never
+    // test code.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| eth_wallet_core::Error::Rpc(format!("tokio: {e}")))?;
+
+    rt.block_on(async {
+        match cli.command {
+            Command::Version => {
+                println!("eth {}", env!("CARGO_PKG_VERSION"));
+                Ok(())
+            }
+            Command::Wallet { action } => match action {
+                WalletAction::Create {
+                    name,
+                    password,
+                    network,
+                } => {
+                    let created = wallet_create(&mgr, &name, &password, &network)?;
+                    print_wallet_created(&created);
+                    Ok(())
+                }
+                WalletAction::Import {
+                    name,
+                    password,
+                    network,
+                    mnemonic,
+                    private_key,
+                } => {
+                    let created = wallet_import(
+                        &mgr,
+                        &name,
+                        &password,
+                        &network,
+                        mnemonic.as_deref(),
+                        private_key.as_deref(),
+                    )?;
+                    print_wallet_created(&created);
+                    Ok(())
+                }
+                WalletAction::Balance {
+                    address,
+                    network: _,
+                    unit,
+                } => {
+                    let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");
+                    let provider = open_provider(rpc)?;
+                    wallet_balance(&provider, &address, unit.as_deref()).await
+                }
+                WalletAction::Sync { .. } => Err(eth_wallet_core::Error::Rpc(
+                    "wallet sync: deferred past #337 (follow-up)".into(),
+                )),
+                WalletAction::List => wallet_list(&mgr),
+                WalletAction::Show { name, id, network } => {
+                    wallet_show(&mgr, name.as_deref(), id.as_deref(), &network)
+                }
+                WalletAction::Delete { name, id, network } => {
+                    wallet_delete(&mgr, name.as_deref(), id.as_deref(), &network)
+                }
+            },
+            Command::Send(_) => wallet_send_native_stub(),
+            Command::Tx { action } => match action {
+                TxAction::Get { tx_hash } => {
+                    let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");
+                    let provider = open_provider(rpc)?;
+                    tx_get(&provider, &tx_hash).await
+                }
+                TxAction::List { .. } => tx_list_stub().await,
+            },
+            Command::Fee(_) => Err(eth_wallet_core::Error::Rpc(
+                "fee: deferred past #337 (follow-up)".into(),
+            )),
+            Command::Config { .. } => Err(eth_wallet_core::Error::Rpc(
+                "config: deferred past #337 (follow-up)".into(),
+            )),
+            Command::SignMessage { .. } | Command::SignTyped { .. } => Err(
+                eth_wallet_core::Error::Rpc("sign-message / sign-typed: deferred".into()),
+            ),
+            Command::Erc20 { .. } => wallet_send_erc20_stub(),
         }
-        Command::Wallet { action } => {
-            println!("[v0.2 scaffold] wallet action: {:?}", action);
-            0
-        }
-        Command::Send(args) => {
-            println!("[v0.2 scaffold] send args: {:?}", args);
-            0
-        }
-        Command::Tx { action } => {
-            println!("[v0.2 scaffold] tx action: {:?}", action);
-            0
-        }
-        Command::Fee(args) => {
-            println!("[v0.2 scaffold] fee args: {:?}", args);
-            0
-        }
-        Command::Config { action } => {
-            println!("[v0.2 scaffold] config action: {:?}", action);
-            0
-        }
-        Command::SignMessage {
-            message,
-            mnemonic,
-            address,
-            verify,
-        } => {
-            println!(
-                "[v0.2 scaffold] sign-message: message_len={} mnemonic_provided={} address_provided={} verify={:?}",
-                message.len(), mnemonic.is_some(), address.is_some(), verify
-            );
-            0
-        }
-        Command::SignTyped {
-            typed_data,
-            typed_data_file,
-            mnemonic,
-            address,
-            verify,
-        } => {
-            println!(
-                "[v0.2 scaffold] sign-typed: inline_len={} file_provided={} mnemonic_provided={} address_provided={} verify={:?}",
-                typed_data.as_ref().map(|s| s.len()).unwrap_or(0),
-                typed_data_file.is_some(),
-                mnemonic.is_some(),
-                address.is_some(),
-                verify
-            );
-            0
-        }
-        Command::Erc20 { action } => {
-            println!("[v0.2 scaffold] erc20 action: {:?}", action);
-            0
-        }
-    }
+    })
 }

@@ -5,19 +5,19 @@
 //!     mirror) + UUID `wallet_id` + user-facing `--name`. Per #297 B1
 //!     (named wallets only, UUID is internal) and B2 (Argon2id from day 1).
 //!   * Persistence at `<base_dir>/wallets/<network>/<wallet_id>.enc`
-//!     (JSON blob).
+//!     (JSON blob) PLUS `<wallet_id>.meta.json` (WalletMeta, plaintext
+//!     JSON for fast list/show without decrypting the blob).
 //!   * Per-call unlock: `unlock(wallet_id, password) -> Zeroizing<Mnemonic>`
 //!     re-derives the in-memory key from the encrypted blob.
-//!
-//! Task 4 will replace the local `WalletError` with the 17-variant Error
-//! enum; the public method signatures are forward-compatible.
-//!
-//! Task 4 will replace the local `WalletError` with the 17-variant Error
-//! enum; the public method signatures are forward-compatible.
+//!   * Private-key blobs: `unlock_signer(wallet_id, password)` returns a
+//!     `PrivateKeySigner` (handles both mnemonic-derived and pk-imported
+//!     wallets). `unlock()` returns `WalletError::Corrupt` for pk blobs
+//!     per the existing test contract (wallet_manager.rs:113-119).
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,6 +39,9 @@ const PROJECT_QUALIFIER: &str = "btc";
 const PROJECT_ORG: &str = "nhitran";
 const PROJECT_APP: &str = "eth-wallet-core";
 
+/// Companion file extension for plaintext `WalletMeta` next to each `.enc`.
+const META_EXT: &str = "meta.json";
+
 /// Logical network for a wallet (Task 10 CLI will pass --network).
 /// Default = Sepolia for v0.2 (cross-cutting testnet default per #291).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,11 +57,28 @@ impl Network {
         Network::Sepolia
     }
 
-    fn as_dir_name(&self) -> &'static str {
+    pub fn as_dir_name(&self) -> &'static str {
         match self {
             Network::Mainnet => "mainnet",
             Network::Sepolia => "sepolia",
             Network::Anvil => "anvil",
+        }
+    }
+
+    /// Parse from CLI `--network` flag. Lowercase, tolerant of common
+    /// aliases. Returns `Error::InvalidInput` on unknown values so the
+    /// CLI surfaces exit code 2 (bad input) — not `WalletError::Path`
+    /// which would translate to exit 3 (Rpc) per #337 type-design
+    /// CRITICAL fix.
+    pub fn parse_cli(s: &str) -> crate::Result<Self> {
+        use crate::Error;
+        match s.to_ascii_lowercase().as_str() {
+            "mainnet" | "1" => Ok(Network::Mainnet),
+            "sepolia" | "11155111" => Ok(Network::Sepolia),
+            "anvil" | "31337" | "dev" | "local" => Ok(Network::Anvil),
+            other => Err(Error::InvalidInput(format!(
+                "unknown network '{other}' — expected mainnet|sepolia|anvil"
+            ))),
         }
     }
 }
@@ -85,18 +105,23 @@ impl EncryptedBlob {
     }
 }
 
-/// In-memory cached metadata for a wallet. Does NOT include the mnemonic
-/// (mnemonic stays in `Zeroizing<Mnemonic>` after `unlock`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Plaintext metadata persisted alongside the encrypted blob. Used by
+/// `list_wallets` and `show` so the CLI can render wallet identity without
+/// unlocking. Safe to be plaintext — contains wallet_id (UUID), user-chosen
+/// name, network, first-receive address, derivation path, creation time.
+/// Never contains mnemonic, private key, or password material.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WalletMeta {
     pub wallet_id: Uuid,
     pub name: String,
     pub network: Network,
     pub address: Address,
+    pub derivation_path: String,
     pub created_at_secs: u64,
 }
 
-/// Summary returned by `list_wallets`.
+/// Summary returned by `list_wallets`. Mirrors `WalletMeta` so the CLI
+/// doesn't need to deserialize `WalletMeta` directly.
 #[derive(Debug, Clone, Serialize)]
 pub struct WalletInfo {
     pub wallet_id: Uuid,
@@ -135,6 +160,8 @@ pub enum WalletError {
     AlreadyExists { name: String, network: Network },
     #[error("wallet {wallet_id} not found")]
     NotFound { wallet_id: Uuid },
+    #[error("wallet '{name}' not found on {network:?}")]
+    NotFoundByName { name: String, network: Network },
     #[error("corrupt wallet file: {reason}")]
     Corrupt { reason: String },
 }
@@ -157,9 +184,19 @@ impl WalletManager {
         Self::open_at(base_dir)
     }
 
-    /// Open a wallet store at an explicit `base_dir` (used by tests).
+    /// Open a wallet store at an explicit `base_dir` (used by tests + CLI
+    /// when `ETH_DATA_DIR` is set).
     pub fn open_at(base_dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(&base_dir)?;
+        // Tighten the directory to mode 0o700 so other local users cannot
+        // enumerate wallet UUIDs + names. Defense-in-depth per #337
+        // security-audit H-1. Skipped on non-unix targets (Windows will
+        // need ACL handling when the platform surface grows).
+        #[cfg(unix)]
+        {
+            let perms = std::fs::Permissions::from_mode(0o700);
+            std::fs::set_permissions(&base_dir, perms)?;
+        }
         let mut wallets: HashMap<Uuid, EncryptedBlob> = HashMap::new();
         // Scan existing on-disk wallets into the in-memory cache.
         scan_disk_into(&base_dir, &mut wallets)?;
@@ -167,6 +204,17 @@ impl WalletManager {
             base_dir,
             wallets: RwLock::new(wallets),
         })
+    }
+
+    /// Returns true if a wallet named `name` already exists on `network`.
+    /// Used by `create_wallet_for_network` / `import_wallet_for_network` /
+    /// `import_private_key` to enforce the (name, network) uniqueness
+    /// invariant documented on `WalletError::AlreadyExists`. Without
+    /// this check, two wallets with the same name could coexist and the
+    /// second one becomes dead state (lookup_by_name resolves to the
+    /// first only). Added in #337 type-design CRITICAL fix.
+    pub fn name_exists_on_network(&self, name: &str, network: Network) -> bool {
+        self.lookup_by_name(name, network).is_ok()
     }
 
     /// Generate a fresh 12-word mnemonic, encrypt under `password`, persist
@@ -188,6 +236,12 @@ impl WalletManager {
             return Err(WalletError::Crypto(CryptoError::Argon2(
                 "password must be non-empty".to_string(),
             )));
+        }
+        if self.name_exists_on_network(name, network) {
+            return Err(WalletError::AlreadyExists {
+                name: name.to_string(),
+                network,
+            });
         }
 
         // 1. Generate fresh mnemonic (F47 zeroize treatment handled inside
@@ -215,9 +269,20 @@ impl WalletManager {
         let wallet_id = Uuid::new_v4();
         let network_dir = self.base_dir.join(network.as_dir_name());
         fs::create_dir_all(&network_dir)?;
-        let path = wallet_path(&network_dir, wallet_id);
+        let enc_path = wallet_path(&network_dir, wallet_id);
+        let meta_path = meta_path(&network_dir, wallet_id);
 
-        write_atomic(&path, &serde_json::to_vec(&blob)?)?;
+        write_atomic(&enc_path, &serde_json::to_vec(&blob)?)?;
+        let meta = WalletMeta {
+            wallet_id,
+            name: name.to_string(),
+            network,
+            address,
+            derivation_path: "m/44'/60'/0'/0/0".to_string(),
+            created_at_secs: now_secs(),
+        };
+        write_atomic(&meta_path, &serde_json::to_vec(&meta)?)?;
+
         self.wallets
             .write()
             .map_err(|_| WalletError::Path("wallet store poisoned".into()))?
@@ -231,18 +296,37 @@ impl WalletManager {
         })
     }
 
-    /// Import an existing BIP-39 mnemonic (12/15/18/21/24 words).
+    /// Import an existing BIP-39 mnemonic (12/15/18/21/24 words). Uses
+    /// the default network (Sepolia). Prefer `import_wallet_for_network`
+    /// from CLI code so the `--network` flag is honored.
     pub fn import_wallet(
         &self,
         name: &str,
         phrase: &str,
         password: &[u8],
     ) -> Result<WalletCreated> {
-        let network = Network::default_v0_2();
+        self.import_wallet_for_network(name, phrase, password, Network::default_v0_2())
+    }
+
+    /// Network-aware import (CLI uses this; the bare `import_wallet` is the
+    /// legacy alias preserved for back-compat with existing tests).
+    pub fn import_wallet_for_network(
+        &self,
+        name: &str,
+        phrase: &str,
+        password: &[u8],
+        network: Network,
+    ) -> Result<WalletCreated> {
         if password.is_empty() {
             return Err(WalletError::Crypto(CryptoError::Argon2(
                 "password must be non-empty".to_string(),
             )));
+        }
+        if self.name_exists_on_network(name, network) {
+            return Err(WalletError::AlreadyExists {
+                name: name.to_string(),
+                network,
+            });
         }
         let mnemonic_parsed = Mnemonic::parse_in(Language::English, phrase)
             .map_err(|e| WalletError::Mnemonic(format!("parse: {e}")))?;
@@ -259,8 +343,19 @@ impl WalletManager {
         let wallet_id = Uuid::new_v4();
         let network_dir = self.base_dir.join(network.as_dir_name());
         fs::create_dir_all(&network_dir)?;
-        let path = wallet_path(&network_dir, wallet_id);
-        write_atomic(&path, &serde_json::to_vec(&blob)?)?;
+        let enc_path = wallet_path(&network_dir, wallet_id);
+        let meta_path = meta_path(&network_dir, wallet_id);
+        write_atomic(&enc_path, &serde_json::to_vec(&blob)?)?;
+        let meta = WalletMeta {
+            wallet_id,
+            name: name.to_string(),
+            network,
+            address,
+            derivation_path: "m/44'/60'/0'/0/0".to_string(),
+            created_at_secs: now_secs(),
+        };
+        write_atomic(&meta_path, &serde_json::to_vec(&meta)?)?;
+
         self.wallets
             .write()
             .map_err(|_| WalletError::Path("wallet store poisoned".into()))?
@@ -287,6 +382,12 @@ impl WalletManager {
                 "password must be non-empty".to_string(),
             )));
         }
+        if self.name_exists_on_network(name, network) {
+            return Err(WalletError::AlreadyExists {
+                name: name.to_string(),
+                network,
+            });
+        }
         let key_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
             .map_err(|e| WalletError::PrivateKey(format!("hex: {e}")))?;
         let signer = PrivateKeySigner::from_slice(&key_bytes)
@@ -306,8 +407,19 @@ impl WalletManager {
         let address = signer.address();
         let network_dir = self.base_dir.join(network.as_dir_name());
         fs::create_dir_all(&network_dir)?;
-        let path = wallet_path(&network_dir, wallet_id);
-        write_atomic(&path, &serde_json::to_vec(&blob)?)?;
+        let enc_path = wallet_path(&network_dir, wallet_id);
+        let meta_path = meta_path(&network_dir, wallet_id);
+        write_atomic(&enc_path, &serde_json::to_vec(&blob)?)?;
+        let meta = WalletMeta {
+            wallet_id,
+            name: name.to_string(),
+            network,
+            address,
+            derivation_path: "m/44'/60'/0'/0/0".to_string(),
+            created_at_secs: now_secs(),
+        };
+        write_atomic(&meta_path, &serde_json::to_vec(&meta)?)?;
+
         self.wallets
             .write()
             .map_err(|_| WalletError::Path("store poisoned".into()))?
@@ -323,26 +435,94 @@ impl WalletManager {
         })
     }
 
-    /// List all wallets under the base_dir (does NOT decrypt).
+    /// List all wallets under the base_dir. Reads `<wallet_id>.meta.json`
+    /// files for plaintext metadata so the CLI can render identity without
+    /// unlocking. Falls back to placeholder metadata for legacy wallets
+    /// created before meta.json persistence shipped.
     pub fn list_wallets(&self) -> Result<Vec<WalletInfo>> {
-        let wallets = self
-            .wallets
-            .read()
-            .map_err(|_| WalletError::Path("store poisoned".into()))?;
-        let mut out: Vec<WalletInfo> = Vec::with_capacity(wallets.len());
-        for (wallet_id, _blob) in wallets.iter() {
-            out.push(WalletInfo {
-                wallet_id: *wallet_id,
-                name: format!("wallet-{}", &wallet_id.to_string()[..8]),
-                network: Network::Sepolia,
-                address: Address::ZERO,
-                derivation_path: "m/44'/60'/0'/0/0".to_string(),
-            });
+        let mut out: Vec<WalletInfo> = Vec::new();
+        for network in [Network::Mainnet, Network::Sepolia, Network::Anvil] {
+            let network_dir = self.base_dir.join(network.as_dir_name());
+            let entries = match fs::read_dir(&network_dir) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                // Path::extension returns only the last component — for
+                // `xxx.meta.json` it returns "json", not "meta.json". Match
+                // the full filename suffix instead.
+                let is_meta = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|name| name.ends_with(&format!(".{META_EXT}")));
+                if !is_meta {
+                    continue;
+                }
+                let meta_bytes = match fs::read(&p) {
+                    Ok(b) => b,
+                    Err(_) => continue,
+                };
+                let meta: WalletMeta = match serde_json::from_slice(&meta_bytes) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                out.push(WalletInfo {
+                    wallet_id: meta.wallet_id,
+                    name: meta.name,
+                    network: meta.network,
+                    address: meta.address,
+                    derivation_path: meta.derivation_path,
+                });
+            }
         }
         Ok(out)
     }
 
-    /// Delete a wallet by ID. Removes the on-disk file + in-memory entry.
+    /// Resolve a wallet_id by `name` + `network`. Returns `NotFoundByName`
+    /// if no matching wallet exists.
+    pub fn lookup_by_name(&self, name: &str, network: Network) -> Result<Uuid> {
+        let network_dir = self.base_dir.join(network.as_dir_name());
+        let entries = match fs::read_dir(&network_dir) {
+            Ok(e) => e,
+            Err(_) => {
+                return Err(WalletError::NotFoundByName {
+                    name: name.to_string(),
+                    network,
+                });
+            }
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let is_meta = p
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|name| name.ends_with(&format!(".{META_EXT}")));
+            if !is_meta {
+                continue;
+            }
+            let meta_bytes = match fs::read(&p) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let meta: WalletMeta = match serde_json::from_slice(&meta_bytes) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            if meta.name == name {
+                return Ok(meta.wallet_id);
+            }
+        }
+        Err(WalletError::NotFoundByName {
+            name: name.to_string(),
+            network,
+        })
+    }
+
+    /// Delete a wallet by ID. Removes the on-disk .enc + .meta.json files
+    /// + in-memory cache entry. If the wallet was created before
+    ///   meta.json persistence shipped, only .enc is removed (no
+    ///   .meta.json to find).
     pub fn delete_wallet(&self, wallet_id: Uuid) -> Result<()> {
         let mut wallets = self
             .wallets
@@ -362,12 +542,23 @@ impl WalletManager {
             }
         };
         fs::remove_file(&path)?;
+
+        // Also remove the companion meta.json if present (best-effort —
+        // legacy wallets pre-meta.json may not have one).
+        let meta = path.with_extension(META_EXT);
+        if meta.exists() {
+            let _ = fs::remove_file(&meta);
+        }
         Ok(())
     }
 
     /// Unlock the wallet's mnemonic by deriving the AES key from `password`
     /// and decrypting the persisted blob. Returns a `Zeroizing<Mnemonic>`
     /// that auto-wipes on drop (F47).
+    ///
+    /// **Returns `WalletError::Corrupt` for private-key wallets.** CLI code
+    /// that needs to sign transactions for pk-imported wallets should call
+    /// `unlock_signer(wallet_id, password)` instead.
     pub fn unlock(&self, wallet_id: Uuid, password: &[u8]) -> Result<Zeroizing<Mnemonic>> {
         let wallets = self
             .wallets
@@ -388,11 +579,11 @@ impl WalletManager {
             reason: format!("utf8: {e}"),
         })?;
         if s.starts_with("0x") {
-            // Private-key import — surface as a Mnemonic-shaped error for
-            // Task 2; Task 10 will use the signer directly via a separate
-            // `unlock_signer(wallet_id, password)` path.
+            // Private-key import — surface as a Mnemonic-shaped error per
+            // the wallet_manager.rs:113-119 contract. Callers needing the
+            // signer should call `unlock_signer` instead.
             Err(WalletError::Corrupt {
-                reason: "private-key wallet: use unlock_signer in Task 10 to get the signer".into(),
+                reason: "private-key wallet: use unlock_signer to get the signer".into(),
             })
         } else {
             let parsed =
@@ -400,6 +591,55 @@ impl WalletManager {
                     reason: format!("mnemonic parse: {e}"),
                 })?;
             Ok(Zeroizing::new(parsed))
+        }
+    }
+
+    /// Unlock a wallet and return a `PrivateKeySigner` ready for
+    /// `sign_native_eth_tx` / `sign_erc20_tx_bytes` (Task 3). Handles
+    /// both mnemonic-derived and private-key-imported wallets:
+    ///
+    /// - Mnemonic blob → re-derive `PrivateKeySigner` from m/44'/60'/0'/0/0.
+    /// - Private-key blob → parse hex bytes into `PrivateKeySigner`.
+    /// - Wrong password → `WalletError::Crypto` (AES-GCM auth tag).
+    pub fn unlock_signer(&self, wallet_id: Uuid, password: &[u8]) -> Result<PrivateKeySigner> {
+        let wallets = self
+            .wallets
+            .read()
+            .map_err(|_| WalletError::Path("store poisoned".into()))?;
+        let blob = wallets
+            .get(&wallet_id)
+            .ok_or(WalletError::NotFound { wallet_id })?;
+
+        let salt = parse_blob_salt(blob)?;
+        let nonce = parse_blob_nonce(blob)?;
+        let ciphertext = blob.ciphertext.as_slice();
+        let key = crypto::derive_key(password, &salt)?;
+        let key_arr: [u8; KEY_LEN] = key.as_slice()[..KEY_LEN].try_into().expect("KEY_LEN");
+        let plaintext = crypto::decrypt(&key_arr, &nonce, ciphertext)?;
+
+        let s = std::str::from_utf8(&plaintext).map_err(|e| WalletError::Corrupt {
+            reason: format!("utf8: {e}"),
+        })?;
+        if let Some(hex_str) = s.strip_prefix("0x") {
+            // Private-key blob — parse hex bytes into a signer.
+            let key_bytes =
+                hex::decode(hex_str).map_err(|e| WalletError::PrivateKey(format!("hex: {e}")))?;
+            PrivateKeySigner::from_slice(&key_bytes)
+                .map_err(|e| WalletError::PrivateKey(format!("from_slice: {e}")))
+        } else {
+            // Mnemonic blob — derive signer at m/44'/60'/0'/0/0.
+            let parsed =
+                Mnemonic::parse_in(Language::English, s).map_err(|e| WalletError::Corrupt {
+                    reason: format!("mnemonic parse: {e}"),
+                })?;
+            let phrase = parsed.to_string();
+            let signer = MnemonicBuilder::english()
+                .phrase(phrase.as_str())
+                .index(0)
+                .expect("valid index")
+                .build()
+                .expect("mnemonic build");
+            Ok(signer)
         }
     }
 
@@ -421,10 +661,21 @@ fn wallet_path(network_dir: &Path, wallet_id: Uuid) -> PathBuf {
     network_dir.join(format!("{wallet_id}.enc"))
 }
 
+fn meta_path(network_dir: &Path, wallet_id: Uuid) -> PathBuf {
+    network_dir.join(format!("{wallet_id}.{META_EXT}"))
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = path.with_extension("enc.tmp");
     {
         let mut f = fs::File::create(&tmp)?;
+        // mode 0o600 — owner read/write only. Per #337 security-audit H-1
+        // the default umask would leave encrypted blobs world-readable.
+        #[cfg(unix)]
+        {
+            let perms = std::fs::Permissions::from_mode(0o600);
+            f.set_permissions(perms)?;
+        }
         f.write_all(bytes)?;
         f.sync_all()?;
     }
@@ -521,4 +772,138 @@ pub fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn password() -> Vec<u8> {
+        b"correct horse battery staple".to_vec()
+    }
+
+    #[test]
+    fn network_parse_accepts_known_aliases() {
+        assert_eq!(Network::parse_cli("mainnet").unwrap(), Network::Mainnet);
+        assert_eq!(Network::parse_cli("Sepolia").unwrap(), Network::Sepolia);
+        assert_eq!(Network::parse_cli("anvil").unwrap(), Network::Anvil);
+        assert_eq!(Network::parse_cli("dev").unwrap(), Network::Anvil);
+        assert_eq!(Network::parse_cli("31337").unwrap(), Network::Anvil);
+        assert!(Network::parse_cli("polygon").is_err());
+    }
+
+    #[test]
+    fn list_wallets_returns_real_name_after_meta_write() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        mgr.create_wallet("alpha", &password()).unwrap();
+        mgr.import_wallet(
+            "beta-import",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            &password(),
+        )
+        .unwrap();
+
+        let listed = mgr.list_wallets().unwrap();
+        assert_eq!(listed.len(), 2);
+        let names: Vec<&str> = listed.iter().map(|w| w.name.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"beta-import"));
+        // No more placeholder `wallet-<uuid8>`.
+        for w in &listed {
+            assert!(
+                !w.name.starts_with("wallet-"),
+                "name leaked placeholder: {}",
+                w.name
+            );
+            assert_ne!(w.address, Address::ZERO, "address leaked ZERO");
+            assert_eq!(w.network, Network::Sepolia);
+            assert_eq!(w.derivation_path, "m/44'/60'/0'/0/0");
+        }
+    }
+
+    #[test]
+    fn lookup_by_name_resolves_wallet_id() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let created = mgr.create_wallet("findme", &password()).unwrap();
+
+        let resolved = mgr.lookup_by_name("findme", Network::Sepolia).unwrap();
+        assert_eq!(resolved, created.wallet_id);
+        assert!(mgr.lookup_by_name("nope", Network::Sepolia).is_err());
+    }
+
+    #[test]
+    fn unlock_signer_works_for_mnemonic_wallet() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let w = mgr.create_wallet("signer-test", &password()).unwrap();
+
+        let signer = mgr.unlock_signer(w.wallet_id, &password()).unwrap();
+        assert_eq!(signer.address(), w.address);
+    }
+
+    #[test]
+    fn unlock_signer_works_for_private_key_wallet() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let pk = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        let w = mgr
+            .import_private_key("pk-signer-test", pk, &password())
+            .unwrap();
+
+        let signer = mgr.unlock_signer(w.wallet_id, &password()).unwrap();
+        let expected: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+            .parse()
+            .unwrap();
+        assert_eq!(signer.address(), expected);
+    }
+
+    #[test]
+    fn delete_wallet_removes_both_enc_and_meta() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let w = mgr.create_wallet("del-meta-test", &password()).unwrap();
+
+        let enc = tmp
+            .path()
+            .join("sepolia")
+            .join(format!("{}.enc", w.wallet_id));
+        let meta = tmp
+            .path()
+            .join("sepolia")
+            .join(format!("{}.meta.json", w.wallet_id));
+        assert!(enc.exists());
+        assert!(meta.exists(), "meta.json must exist alongside .enc");
+
+        mgr.delete_wallet(w.wallet_id).unwrap();
+        assert!(!enc.exists(), ".enc must be removed");
+        assert!(!meta.exists(), ".meta.json must be removed");
+    }
+
+    #[test]
+    fn import_wallet_for_network_persists_under_correct_dir() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let created = mgr
+            .import_wallet_for_network(
+                "anvil-test",
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+                &password(),
+                Network::Anvil,
+            )
+            .unwrap();
+        assert_eq!(created.network, Network::Anvil);
+        assert!(tmp
+            .path()
+            .join("anvil")
+            .join(format!("{}.enc", created.wallet_id))
+            .exists());
+        assert!(tmp
+            .path()
+            .join("anvil")
+            .join(format!("{}.meta.json", created.wallet_id))
+            .exists());
+    }
 }
