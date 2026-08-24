@@ -23,14 +23,17 @@
 mod handlers;
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use alloy_primitives::{Address, U256};
 use clap::{Parser, Subcommand};
 
 use crate::handlers::{
     open_manager, open_provider, print_wallet_created, tx_get, tx_list_stub, wallet_balance,
     wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20_stub,
-    wallet_send_native_stub, wallet_show,
+    wallet_send_native, wallet_show,
 };
+use eth_wallet_core::{Error, Network};
 
 #[derive(Parser, Debug)]
 #[command(name = "eth", version, about = "Ethereum wallet CLI (alloy v1.8.x)")]
@@ -159,6 +162,10 @@ enum WalletAction {
 
 #[derive(clap::Args, Debug)]
 struct SendArgs {
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    password: Option<String>,
     #[arg(long)]
     to: Option<String>,
     #[arg(long, default_value = "0")]
@@ -346,7 +353,37 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     wallet_delete(&mgr, name.as_deref(), id.as_deref(), &network)
                 }
             },
-            Command::Send(_) => wallet_send_native_stub(),
+            Command::Send(args) => {
+                let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");
+                let provider = open_provider(rpc)?;
+                let to_str = args
+                    .to
+                    .as_deref()
+                    .ok_or_else(|| Error::InvalidInput("--to required".into()))?;
+                let to = Address::from_str(to_str)
+                    .map_err(|e| Error::InvalidInput(format!("invalid --to address: {e}")))?;
+                let amount_wei: U256 = args
+                    .amount
+                    .parse()
+                    .map_err(|e| Error::InvalidInput(format!("invalid --amount: {e}")))?;
+
+                let (name, password) = match (args.name.as_deref(), args.password.as_deref()) {
+                    (Some(n), Some(p)) => (n, p),
+                    _ => {
+                        return Err(Error::InvalidInput("--name and --password required".into()));
+                    }
+                };
+                let net = Network::parse_cli(&args.network)
+                    .map_err(|e| Error::InvalidInput(e.to_string()))?;
+                let wallet_id = mgr
+                    .lookup_by_name(name, net)
+                    .map_err(crate::handlers::map_wallet_err)?;
+                let signer = mgr
+                    .unlock_signer(wallet_id, password.as_bytes())
+                    .map_err(crate::handlers::map_wallet_err)?;
+
+                wallet_send_native(&provider, &signer, to, amount_wei).await
+            }
             Command::Tx { action } => match action {
                 TxAction::Get { tx_hash } => {
                     let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");

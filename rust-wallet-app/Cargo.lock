@@ -2421,6 +2421,8 @@ dependencies = [
  "alloy-node-bindings",
  "alloy-primitives",
  "alloy-provider",
+ "alloy-rpc-types",
+ "alloy-signer-local",
  "alloy-transport-http",
  "clap",
  "eth-wallet-core",

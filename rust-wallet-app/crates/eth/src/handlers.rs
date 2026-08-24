@@ -24,6 +24,8 @@ use std::str::FromStr;
 use alloy_network::Ethereum;
 use alloy_primitives::{Address, B256, U256};
 use alloy_provider::{Provider, RootProvider};
+use alloy_rpc_types::TransactionRequest;
+use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest::Url;
 
 use eth_wallet_core::error::{Error, Result};
@@ -61,7 +63,7 @@ pub fn open_provider(rpc_url: &str) -> Result<RootProvider<Ethereum>> {
 /// - NotFound → WalletNotFound (4)
 /// - NotFoundByName → WalletNotFound + tracing event with the name
 /// - AlreadyExists → WalletExists (4)
-fn map_wallet_err(e: WalletError) -> Error {
+pub(crate) fn map_wallet_err(e: WalletError) -> Error {
     match e {
         WalletError::Io(_) | WalletError::Path(_) => Error::Rpc(format!("wallet: {e}")),
         WalletError::Json(_) | WalletError::Corrupt { .. } => Error::WalletCorrupt {
@@ -305,11 +307,47 @@ fn format_wei_as(wei: U256, decimals: u32) -> String {
 // PR-B deferred handlers (compile-time stubs)
 // ---------------------------------------------------------------------------
 
-/// Stub for `wallet send-native`. PR-B replaces this with sign + broadcast.
-pub fn wallet_send_native_stub() -> Result<()> {
-    Err(Error::Rpc(
-        "wallet send-native: wired in PR-B follow-up (Issue #337 phase 2)".into(),
-    ))
+/// Send a native ETH transaction. Cycle 3 (#339 PR-B): sign EIP-1559
+/// envelope locally, then broadcast via `send_raw_transaction`. Anvil
+/// gas price hardcoded at 1 gwei; cycle 4+ replaces with dynamic fee
+/// estimation + receipt/wait handling.
+pub async fn wallet_send_native(
+    provider: &RootProvider<Ethereum>,
+    signer: &PrivateKeySigner,
+    to: Address,
+    amount_wei: U256,
+) -> Result<()> {
+    let from = signer.address();
+    let chain_id = provider
+        .get_chain_id()
+        .await
+        .map_err(|e| Error::Rpc(format!("get_chain_id: {e}")))?;
+    let nonce_val = provider
+        .get_transaction_count(from)
+        .await
+        .map_err(|e| Error::Rpc(format!("get_transaction_count: {e}")))?;
+
+    let tx_req = TransactionRequest {
+        from: Some(from),
+        to: Some(alloy_primitives::TxKind::Call(to)),
+        value: Some(amount_wei),
+        chain_id: Some(chain_id),
+        nonce: Some(nonce_val),
+        gas: Some(21000u64),
+        max_fee_per_gas: Some(1_000_000_000u128), // 1 gwei — Anvil default
+        max_priority_fee_per_gas: Some(1_000_000_000u128),
+        ..Default::default()
+    };
+
+    let signed = eth_wallet_core::sign_native_eth_tx(signer, tx_req)
+        .map_err(|e| Error::Rpc(format!("sign: {e}")))?;
+    let bytes = eth_wallet_core::encoded_envelope(&signed);
+    let pending = provider
+        .send_raw_transaction(&bytes)
+        .await
+        .map_err(|e| Error::Rpc(format!("send_raw_transaction: {e}")))?;
+    println!("{}", pending.tx_hash());
+    Ok(())
 }
 
 pub fn wallet_send_erc20_stub() -> Result<()> {

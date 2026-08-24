@@ -26,6 +26,8 @@ alloy-primitives = { workspace = true }
 alloy-provider = { version = "^1.0" }
 alloy-network = { version = "^1.0" }
 alloy-transport-http = { version = "^1.0" }
+alloy-rpc-types = { version = "^1.0" }
+alloy-signer-local = { version = "^1.0", features = ["mnemonic"] }
 # uuid for wallet_id parsing in handlers + WalletNotFound construction;
 # tokio for the current-thread runtime that drives async handlers in
 # main(). Both are dev-only for eth-wallet-core but main + handlers are

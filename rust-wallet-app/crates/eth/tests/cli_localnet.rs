@@ -20,6 +20,19 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
+/// Skip helper for Anvil-gated tests (L29): if `RUN_ANVIL_E2E` is unset,
+/// log and return early. Declared above the always-on tests so any
+/// `#[ignore]`-marked Anvil test in the file can use it regardless of
+/// its position relative to the Anvil-gated section.
+macro_rules! anvil_or_skip {
+    () => {
+        if std::env::var("RUN_ANVIL_E2E").ok().as_deref() != Some("1") {
+            eprintln!("[cli_localnet] SKIP — set RUN_ANVIL_E2E=1 to run");
+            return;
+        }
+    };
+}
+
 /// Resolve the path to the `eth` binary under test. Cargo provides this via
 /// the `CARGO_BIN_EXE_<name>` env var for integration tests.
 fn eth_bin() -> PathBuf {
@@ -206,19 +219,352 @@ fn wallet_create_with_duplicate_name_yields_exit_4() {
     );
 }
 
+#[test]
+fn send_command_without_to_address_yields_exit_2() {
+    // L12 review finding (CRITICAL): missing --to defaulted to the zero
+    // address — silent ETH burn. Per code-reviewer + type-design both
+    // flagged this. RED: missing --to was accepted and broadcast to
+    // 0x000…000. GREEN: rejected with InvalidInput (exit 2).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "p",
+            "--amount",
+            "1000",
+            "--rpc-url",
+            "http://127.0.0.1:1",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "missing --to must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--to"),
+        "stderr should mention --to: {stderr}",
+    );
+}
+
+#[test]
+fn send_command_with_invalid_to_yields_exit_2() {
+    // L28 Gate C checklist (code-reviewer IMPORTANT): invalid --to
+    // address branch was uncovered. RED: garbage address passed parse.
+    // GREEN: rejected with InvalidInput (exit 2).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "p",
+            "--to",
+            "0xnot-an-address",
+            "--amount",
+            "1000",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "invalid --to must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[test]
+fn send_command_with_invalid_amount_yields_exit_2() {
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "p",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "not-a-number",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "invalid --amount must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--amount") || stderr.contains("amount"),
+        "stderr should mention amount: {stderr}",
+    );
+}
+
+#[test]
+fn send_command_with_unknown_wallet_yields_exit_4() {
+    // L28 Gate C checklist (code-reviewer IMPORTANT): unknown wallet
+    // name branch (WalletNotFoundByName → exit 4) was uncovered.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "ghost",
+            "--password",
+            "p",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "1000",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(4),
+        "unknown wallet must yield wallet/balance exit code (4)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ghost"),
+        "stderr should preserve the user-supplied name: {stderr}",
+    );
+}
+
+#[test]
+fn send_command_with_wrong_password_yields_exit_5() {
+    // L28 Gate C checklist (code-reviewer IMPORTANT): wrong-password
+    // branch (DecryptionFailed → exit 5) was uncovered. RED: cycle-2
+    // code returned generic DecryptionFailed regardless of underlying
+    // WalletError variant. GREEN: map_wallet_err preserves variant → exit
+    // 5 for actual Crypto failure (wrong password = AES-GCM auth tag
+    // mismatch).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "alpha",
+            "--password",
+            "right-password",
+        ],
+    );
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "WRONG-password",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "1000",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(5),
+        "wrong password must yield signing-broadcast exit code (5)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.to_lowercase().contains("password") || stderr.to_lowercase().contains("decrypt"),
+        "stderr should mention password/decryption: {stderr}",
+    );
+}
+
+#[test]
+fn send_command_with_wallet_identity_attempts_unlock() {
+    // Per Issue #339 PR-B cycle 2: `eth send` must accept --name +
+    // --password so the handler can unlock the signer before broadcast.
+    // RED: clap rejects unknown flags → stderr mentions "unexpected" /
+    // "Usage:" → assertion fails. GREEN: flags accepted, handler reaches
+    // unlock + broadcast path (still fails at unreachable RPC, but no
+    // longer a clap rejection).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // Pre-create a wallet so --name resolves.
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password",
+        ],
+    );
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "1000",
+            "--rpc-url",
+            "http://127.0.0.1:1", // unreachable
+        ],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("Usage:"),
+        "send doesn't yet accept --name / --password:\nstderr: {stderr}",
+    );
+}
+
+#[test]
+fn send_command_against_unreachable_rpc_is_not_a_stub() {
+    // Per Issue #337 PR-B: `eth send` is currently a stub returning
+    // `Error::Rpc("wallet send-native: wired in PR-B follow-up...")`. PR-B
+    // replaces the stub with sign+broadcast. RED: stub string leaks into
+    // stderr → assertion fails. GREEN: real impl returns network error
+    // (unreachable RPC) → assertion passes. No Anvil required (the
+    // unreachable port = deterministic network failure).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "1000",
+            "--rpc-url",
+            "http://127.0.0.1:1", // unreachable
+        ],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("PR-B follow-up"),
+        "send still wired to PR-B stub:\nstdout: {}\nstderr: {stderr}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn send_command_against_anvil_returns_tx_hash() {
+    // Per Issue #339 PR-B cycle 3+4: `eth send` must sign + broadcast a
+    // real native ETH tx against Anvil. RED: cycle 2 uses
+    // `provider.send_transaction` (no signing) → broadcast fails with
+    // "missing signature" / nonce mismatch → assertion fails. GREEN:
+    // switch to `sign_native_eth_tx` + `encoded_envelope` +
+    // `provider.send_raw_transaction` → tx hash returned.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new().spawn();
+    let endpoint = anvil.endpoint();
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // Anvil dev mnemonic #0: "test test ... junk" → address
+    // 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 pre-funded with 10000 ETH.
+    // This is the canonical Anvil default mnemonic (matches `alloy`'s docs
+    // and the address Anvil uses for account #0).
+    let phrase = "test test test test test test test test test test test junk";
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "anvil-acct",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password",
+        ],
+    );
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "send",
+            "--name",
+            "anvil-acct",
+            "--password",
+            "test-password",
+            "--to",
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", // Anvil account #1
+            "--amount",
+            "1000000000000000000", // 1 ETH in wei
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "send must succeed against Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // stdout should contain a tx hash (0x + 64 hex chars = 66 chars total).
+    let hex_count = stdout
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit() && *c != '\n')
+        .count();
+    assert!(
+        stdout.contains("0x") && hex_count >= 64,
+        "expected tx hash (0x + 64 hex chars) in stdout, got: {stdout}",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Anvil-gated RPC tests (L29 opt-in)
 // ---------------------------------------------------------------------------
-
-/// Skip helper: if `RUN_ANVIL_E2E` is unset, log and return early.
-macro_rules! anvil_or_skip {
-    () => {
-        if std::env::var("RUN_ANVIL_E2E").ok().as_deref() != Some("1") {
-            eprintln!("[cli_localnet] SKIP — set RUN_ANVIL_E2E=1 to run");
-            return;
-        }
-    };
-}
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
