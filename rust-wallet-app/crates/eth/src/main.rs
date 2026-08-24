@@ -388,7 +388,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     .unlock_signer(wallet_id, password.as_bytes())
                     .map_err(crate::handlers::map_wallet_err)?;
 
-                wallet_send_native(&provider, &signer, to, amount_wei).await
+                wallet_send_native(&provider, &signer, net, to, amount_wei).await
             }
             Command::Tx { action } => match action {
                 TxAction::Get { tx_hash } => {
@@ -461,8 +461,10 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                         .unlock_signer(wallet_id, p.as_bytes())
                         .map_err(crate::handlers::map_wallet_err)?;
 
-                    wallet_send_erc20(&provider, &signer, token_addr, to_addr, amount_wei, gas)
-                        .await
+                    wallet_send_erc20(
+                        &provider, &signer, net, token_addr, to_addr, amount_wei, gas,
+                    )
+                    .await
                 }
                 _ => Err(eth_wallet_core::Error::Rpc(
                     "erc20 non-Send action deferred past #337".into(),

@@ -285,6 +285,46 @@ pub async fn tx_get(provider: &RootProvider<Ethereum>, tx_hash: &str) -> Result<
 // helpers
 // ---------------------------------------------------------------------------
 
+/// Redact RPC URL substrings from an upstream alloy error before
+/// formatting it into a user-visible `Error::Rpc` string. H-6 finding
+/// from L12 security review: alloy's transport error `Display` embeds
+/// the full RPC URL, which an attacker-controlled node could weaponize
+/// for log poisoning or operator phishing.
+fn redact_rpc_error(e: impl std::fmt::Display) -> String {
+    let raw = e.to_string();
+    // Match any `http://...` or `https://...` substring up to the next
+    // whitespace, quote, or end-of-string. Conservative — over-redacts
+    // rather than under-redacts.
+    let mut out = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if (i + 7 <= bytes.len() && &bytes[i..i + 7] == b"http://")
+            || (i + 8 <= bytes.len() && &bytes[i..i + 8] == b"https://")
+        {
+            out.push_str("<rpc-url-redacted>");
+            // Skip past the scheme.
+            i += if &bytes[i..i + 7] == b"http://" { 7 } else { 8 };
+            // Skip until whitespace, quote, ')', or end.
+            while i < bytes.len()
+                && !bytes[i].is_ascii_whitespace()
+                && bytes[i] != b'"'
+                && bytes[i] != b'\''
+                && bytes[i] != b')'
+            {
+                i += 1;
+            }
+        } else {
+            // Push one UTF-8 char (could be multi-byte).
+            let ch_end = i + 1;
+            // Defensive: don't push partial multi-byte.
+            out.push_str(std::str::from_utf8(&bytes[i..ch_end]).unwrap_or("?"));
+            i = ch_end;
+        }
+    }
+    out
+}
+
 /// Format a `U256` wei amount as `<whole>.<frac>` with `decimals` fractional
 /// digits (zero-padded). Returns just `<whole>` when the fractional part
 /// is zero.
@@ -314,24 +354,31 @@ fn format_wei_as(wei: U256, decimals: u32) -> String {
 pub async fn wallet_send_native(
     provider: &RootProvider<Ethereum>,
     signer: &PrivateKeySigner,
+    wallet_network: eth_wallet_core::Network,
     to: Address,
     amount_wei: U256,
 ) -> Result<()> {
     let from = signer.address();
-    let chain_id = provider
+    let provider_chain_id = provider
         .get_chain_id()
         .await
-        .map_err(|e| Error::Rpc(format!("get_chain_id: {e}")))?;
+        .map_err(|e| Error::Rpc(format!("get_chain_id: {}", redact_rpc_error(&e))))?;
+    let expected_chain_id = wallet_network.chain_id();
+    if provider_chain_id != expected_chain_id {
+        return Err(Error::InvalidInput(format!(
+            "rpc chain_id {provider_chain_id} does not match wallet network {wallet_network:?} (expected {expected_chain_id})"
+        )));
+    }
     let nonce_val = provider
         .get_transaction_count(from)
         .await
-        .map_err(|e| Error::Rpc(format!("get_transaction_count: {e}")))?;
+        .map_err(|e| Error::Rpc(format!("get_transaction_count: {}", redact_rpc_error(&e))))?;
 
     let tx_req = TransactionRequest {
         from: Some(from),
         to: Some(alloy_primitives::TxKind::Call(to)),
         value: Some(amount_wei),
-        chain_id: Some(chain_id),
+        chain_id: Some(provider_chain_id),
         nonce: Some(nonce_val),
         gas: Some(21000u64),
         max_fee_per_gas: Some(1_000_000_000u128), // 1 gwei — Anvil default
@@ -345,7 +392,7 @@ pub async fn wallet_send_native(
     let pending = provider
         .send_raw_transaction(&bytes)
         .await
-        .map_err(|e| Error::Rpc(format!("send_raw_transaction: {e}")))?;
+        .map_err(|e| Error::Rpc(format!("send_raw_transaction: {}", redact_rpc_error(&e))))?;
     println!("{}", pending.tx_hash());
     Ok(())
 }
@@ -356,20 +403,27 @@ pub async fn wallet_send_native(
 pub async fn wallet_send_erc20(
     provider: &RootProvider<Ethereum>,
     signer: &PrivateKeySigner,
+    wallet_network: eth_wallet_core::Network,
     token: Address,
     to: Address,
     amount_wei: U256,
     gas_limit: u64,
 ) -> Result<()> {
     let from = signer.address();
-    let chain_id = provider
+    let provider_chain_id = provider
         .get_chain_id()
         .await
-        .map_err(|e| Error::Rpc(format!("get_chain_id: {e}")))?;
+        .map_err(|e| Error::Rpc(format!("get_chain_id: {}", redact_rpc_error(&e))))?;
+    let expected_chain_id = wallet_network.chain_id();
+    if provider_chain_id != expected_chain_id {
+        return Err(Error::InvalidInput(format!(
+            "rpc chain_id {provider_chain_id} does not match wallet network {wallet_network:?} (expected {expected_chain_id})"
+        )));
+    }
     let nonce_val = provider
         .get_transaction_count(from)
         .await
-        .map_err(|e| Error::Rpc(format!("get_transaction_count: {e}")))?;
+        .map_err(|e| Error::Rpc(format!("get_transaction_count: {}", redact_rpc_error(&e))))?;
 
     let calldata = eth_wallet_core::erc20::transfer_calldata(to, amount_wei);
     let signed = eth_wallet_core::sign_erc20_tx_bytes(
@@ -378,17 +432,19 @@ pub async fn wallet_send_erc20(
         calldata,
         U256::ZERO, // ERC-20 transfer sends 0 native ETH
         nonce_val,
-        chain_id,
+        provider_chain_id,
         1_000_000_000u128, // max_fee_per_gas — 1 gwei Anvil default
         1_000_000_000u128, // max_priority_fee_per_gas
         gas_limit,
     )
-    .map_err(|e| Error::Rpc(format!("sign-erc20: {e}")))?;
+    .map_err(|e| Error::Rpc(format!("sign-erc20: {}", redact_rpc_error(&e))))?;
     let bytes = eth_wallet_core::encoded_envelope(&signed);
-    let pending = provider
-        .send_raw_transaction(&bytes)
-        .await
-        .map_err(|e| Error::Rpc(format!("send_raw_transaction (erc20): {e}")))?;
+    let pending = provider.send_raw_transaction(&bytes).await.map_err(|e| {
+        Error::Rpc(format!(
+            "send_raw_transaction (erc20): {}",
+            redact_rpc_error(&e)
+        ))
+    })?;
     println!("{}", pending.tx_hash());
     Ok(())
 }

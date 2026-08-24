@@ -629,6 +629,8 @@ async fn send_command_against_anvil_returns_tx_hash() {
             phrase,
             "--password",
             "test-password",
+            "--network",
+            "anvil",
         ],
     );
 
@@ -642,6 +644,8 @@ async fn send_command_against_anvil_returns_tx_hash() {
             "anvil-acct",
             "--password",
             "test-password",
+            "--network",
+            "anvil",
             "--to",
             "0x70997970C51812dc3A010C7d01b50e0d17dc79C8", // Anvil account #1
             "--amount",

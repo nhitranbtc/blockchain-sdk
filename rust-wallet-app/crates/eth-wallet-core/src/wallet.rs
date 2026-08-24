@@ -65,6 +65,17 @@ impl Network {
         }
     }
 
+    /// EIP-155 chain id for this network. Used by handlers to cross-
+    /// check the RPC-reported chain_id against the wallet's network
+    /// before signing (chain_id trust-boundary per L12 review).
+    pub fn chain_id(&self) -> u64 {
+        match self {
+            Network::Mainnet => 1,
+            Network::Sepolia => 11_155_111,
+            Network::Anvil => 31_337,
+        }
+    }
+
     /// Parse from CLI `--network` flag. Lowercase, tolerant of common
     /// aliases. Returns `Error::InvalidInput` on unknown values so the
     /// CLI surfaces exit code 2 (bad input) — not `WalletError::Path`
