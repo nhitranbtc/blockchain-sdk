@@ -220,6 +220,36 @@ fn wallet_create_with_duplicate_name_yields_exit_4() {
 }
 
 #[test]
+fn tx_list_command_against_unreachable_rpc_is_not_a_stub() {
+    // Per Issue #339 PR-B cycle 5: `eth tx list` is currently a stub
+    // returning `Error::Rpc("tx list: wired in PR-B follow-up...")`. PR-B
+    // replaces the stub with provider.get_logs / get_block_number scan.
+    // RED: stub string leaks into stderr → assertion fails. GREEN: real
+    // impl returns network error (unreachable RPC) → assertion passes.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "tx",
+            "list",
+            "--limit",
+            "5",
+            "--rpc-url",
+            "http://127.0.0.1:1", // unreachable
+        ],
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("PR-B follow-up"),
+        "tx list still wired to PR-B stub:\nstdout: {}\nstderr: {stderr}",
+        String::from_utf8_lossy(&out.stdout),
+    );
+}
+
+#[test]
 fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
     // Per Issue #339 PR-B cycle 4: `eth erc20 send` is currently a stub
     // returning `Error::Rpc("wallet send-erc20: wired in PR-B follow-up...")`.

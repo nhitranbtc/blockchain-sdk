@@ -393,10 +393,16 @@ pub async fn wallet_send_erc20(
     Ok(())
 }
 
-pub async fn tx_list_stub() -> Result<()> {
-    Err(Error::Rpc(
-        "tx list: wired in PR-B follow-up (Issue #337 phase 2)".into(),
-    ))
+/// List recent transactions on the chain. Cycle 5 (#339 PR-B): minimal
+/// get_block_number scan — proves the path is wired. Cycle 6 replaces
+/// with `provider.get_logs(Filter)` address-scoped scan + topic decode.
+pub async fn tx_list(provider: &RootProvider<Ethereum>, limit: u32) -> Result<()> {
+    let block = provider
+        .get_block_number()
+        .await
+        .map_err(|e| Error::Rpc(format!("get_block_number: {e}")))?;
+    println!("latest_block={block} limit={limit}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

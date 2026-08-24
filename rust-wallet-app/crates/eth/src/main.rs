@@ -29,7 +29,7 @@ use alloy_primitives::{Address, U256};
 use clap::{Parser, Subcommand};
 
 use crate::handlers::{
-    open_manager, open_provider, print_wallet_created, tx_get, tx_list_stub, wallet_balance,
+    open_manager, open_provider, print_wallet_created, tx_get, tx_list, wallet_balance,
     wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20,
     wallet_send_native, wallet_show,
 };
@@ -396,7 +396,11 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     let provider = open_provider(rpc)?;
                     tx_get(&provider, &tx_hash).await
                 }
-                TxAction::List { .. } => tx_list_stub().await,
+                TxAction::List { limit, .. } => {
+                    let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");
+                    let provider = open_provider(rpc)?;
+                    tx_list(&provider, limit).await
+                }
             },
             Command::Fee(_) => Err(eth_wallet_core::Error::Rpc(
                 "fee: deferred past #337 (follow-up)".into(),
