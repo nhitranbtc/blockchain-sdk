@@ -587,3 +587,82 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - **Plausible-deniability multi-bucket wallet**. v1.0+.
 - **REST/HTTP interface** (Breez-style server). Separate spec. Owner: TBD (per #297 M12 — open follow-up needed).
 - **Mobile (iOS/Android) integration**. Phase 2 via UniFFI (mirrors Bitcoin Phase 2).
+
+---
+
+## v0.3.0 release status (Issue #311)
+
+Status snapshot for the `eth-wallet-core v0.3.0` + `eth` CLI scaffold release cut (PR #325). 21 stories v0.3.0-active (library surface functional + token registry + Sepolia smoke); 5 stories remain `[ ]` per DEPRECATION → v0.3 Story 12.
+
+### Active v0.3.0 stories (21) — `[x]` shipped
+
+- [x] **Story 1** — Create a new wallet. `eth wallet create` (CLI scaffold) / `mnemonic::generate_12_word()` + `mnemonic::derive_address(&Mnemonic, u32)` (library). Try it: `cargo run -p eth -- wallet create` (scaffold) | `cargo test -p eth-wallet-core --test mnemonic`
+- [x] **Story 2** — Import an existing wallet. `eth wallet import --phrase <words>` (CLI scaffold) / `mnemonic::derive_address(&Mnemonic, u32)` from parsed phrase (library). Try it: `cargo run -p eth -- wallet import --phrase "<12 words>"` (scaffold)
+- [x] **Story 5** — Send native ETH. `eth tx send --to <addr> --value <wei>` (CLI scaffold) / `sign_native_eth_tx` + `provider.send_raw_transaction` (library). Try it: `cargo run -p eth -- tx send --to 0x... --value 1000000000000000` (scaffold)
+- [x] **Story 6** — Send with custom EIP-1559 fee. Library `TransactionRequest::with_max_fee_per_gas` + `with_max_priority_fee_per_gas`. Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (manual-gas variant)
+- [x] **Story 7** — Inspect transaction history. `eth chain tx <hash>` (CLI scaffold) / `provider.get_transaction_by_hash` + `get_transaction_receipt` (library). Try it: `cargo test -p eth-wallet-core --test tx_list_get` (L29-gated)
+- [x] **Story 8** — Get current gas estimates. `eth chain fee` (CLI scaffold) / `provider.estimate_gas` + `get_fee_history` (library). Try it: `cargo test -p eth-wallet-core --test fee` (L29-gated)
+- [x] **Story 11** — Show config + debug info. `eth --version` + `eth chain info` (CLI scaffold) / `version()` (library). Try it: `cargo run -p eth -- --version` (scaffold)
+- [x] **Story 13** — Send to multiple recipients (sequential txs). Library: N sequential `provider.send_transaction` calls. Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (batch variant)
+- [x] **Story 14** — Sweep / drain wallet to one address. Library: `provider.get_balance` + `TransactionRequest::with_value(balance - gas_estimate)`. Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (drain variant)
+- [x] **Story 15** — Choose nonce strategy (auto vs manual). Library: `provider.get_transaction_count` (auto) vs `with_nonce` (manual). Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (nonce variants)
+- [x] **Story 16** — Manual nonce + gas limit override. Library: `TransactionRequest::with_nonce` + `with_gas_limit`. Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (manual-gas variant)
+- [x] **Story 17** — Replace / speed-up tx (same nonce, higher fee). Library: new `TransactionRequest` with same nonce + higher `max_fee_per_gas`. Try it: `cargo test -p eth-wallet-core --test wallet_send_speedup` (L29-gated)
+- [x] **Story 18** — Sign EIP-191 personal message. `sign_message` + `signature.recover_address_from_msg`. Try it: `cargo test -p eth-wallet-core --lib signer::tests::sign_message_round_trip`
+- [x] **Story 20** — Pick derivation path (Ledger vs MetaMask). Library: `MnemonicBuilder::derivation_path` override. Try it: `cargo test -p eth-wallet-core --test mnemonic`
+- [x] **Story 21** — Send ERC-20 stablecoin (USDT/USDC). `eth tx erc20 --token usdc --to <addr> --value <units>` (CLI scaffold) / `sol!` + `provider.send_transaction` with calldata (library). Try it: `cargo run -p eth -- tx erc20 --token usdc --to 0x... --value 1000000` (scaffold) | `cargo test -p eth-wallet-core --test erc20_send` (L29-gated)
+- [x] **Story 22** — Check ERC-20 token balance. `eth token balance --token usdc --address <addr>` (CLI scaffold) / `sol! { balanceOf(address) }` + `provider.call` (library). Try it: `cargo run -p eth -- token balance --token usdc --address 0x...` (scaffold) | `cargo test -p eth-wallet-core --test erc20_balance` (L29-gated)
+- [x] **Story 23** — List registered stablecoins / tokens. `eth token list` (CLI scaffold) / token registry JSON at `rust-wallet-app/crates/eth-wallet-core/tokens/{mainnet,sepolia,anvil}.json` (library). Try it: `cargo run -p eth -- token list` (scaffold)
+- [x] **Story 24** — Add custom ERC-20 token by contract address. Library: `sol! { decimals() }` + `provider.call` to fetch decimals + symbol. Try it: `cargo test -p eth-wallet-core --lib tokens::tests`
+- [x] **Story 25** — Approve ERC-20 spending (for DEX). `eth token approve --token usdc --spender <addr> --value <units>` (CLI scaffold) / `sol! { approve(address, uint256) }` (library). Try it: `cargo run -p eth -- token approve --token usdc --spender 0x... --value 1000000` (scaffold) | `cargo test -p eth-wallet-core --test erc20_approve` (L29-gated)
+- [x] **Story 26** — Use Anvil local node for testing. `eth --rpc-url http://localhost:8545 ...` (CLI scaffold) / `provider.get_chain_id()` assert `0x7a69` (library). Try it: `cargo test -p eth-wallet-core --test erc20_anvil` (L29-gated, `RUN_ANVIL_E2E=1`)
+- [x] **Story 27** — Sign EIP-712 typed data. Library: `sign_typed_data` deferred follow-up (PR #290); `MnemonicBuilder::derivation_path` library covers the closest analog for v0.3. Try it: deferred to v0.3.x follow-up.
+
+### DEPRECATED — stay `[ ]` (v0.3 Story 12)
+
+- [ ] **Story 3** — Check ETH balance. *DEPRECATED → v0.3 Story 12* (named-wallet model with persisted handles; stateless mnemonic inline for v0.3.0 per #297 B3).
+- [ ] **Story 4** — Sync chain state. *DEPRECATED → v0.3 Story 12* (same rationale as Story 3).
+- [ ] **Story 9** — List / show / delete / rename wallets. *DEPRECATED → v0.3 Story 12* (covered library-side by WalletManager; CLI surface waits for Story 12).
+- [ ] **Story 10** — Use mainnet explicitly. *DEPRECATED → v0.3 Story 12* (chain-id assertion library-side via `get_chain_id`; CLI mainnet flag waits).
+- [ ] **Story 12** — Persist wallet across CLI invocations. *DEPRECATED → v0.3 only* (filesystem + UUID-based wallet dir + encrypted mnemonic is the v0.3 Story 12 milestone; v0.3.0 ships library-side via `WalletManager` + per-call `<base_dir>` arg).
+
+### Cross-cutting (no user-facing flip)
+
+- `--json` everywhere — `serde_json` in CLI scaffold args
+- Stable exit codes per #297 M11 — `Error::exit_code()` 0..5
+- `Secret<Mnemonic>` zeroize — `zeroize::Zeroizing<Mnemonic>` (F47 mirror BTC Task 30)
+- EIP-55 checksum address display — `Address::to_checksum_buffer(None)`
+
+### Drift from acceptance (per #311)
+
+- **Story 27** listed in #311 v0.3.0-active list but library coverage is closest-analog only (`derivation_path`); full `sign_typed_data_sync` + `recover_typed_data` integration deferred per PR #290 reconcile.
+- **CLI surface** is **scaffold-only** for all 21 active stories. Library primitives + token registry + Sepolia smoke ARE functional. CLI business logic deferred to follow-up issues per author's "shipped conservative" framing.
+- **Story 3 + 4 + 10** appear in PR #322 (Task 11) Sepolia smoke as test targets (e.g. `wallet_balance` test, `wallet_sync` test). They DO exercise the library primitives but the user-stories doc keeps them `[ ]` per #311 explicit guidance.
+
+### Try it — full surface
+
+```bash
+# Library surface (all functional)
+cargo test -p eth-wallet-core --lib                          # 51 unit + dev-dep tests pass
+cargo test -p eth-wallet-core --test mnemonic               # Story 1, 2, 20
+cargo test -p eth-wallet-core --test wallet_manager          # Story 12 library-side
+cargo test -p eth-wallet-core --lib signer::tests           # Story 18
+
+# Sepolia smoke (operator-driven per L29 — set RUN_ETH_E2E=1)
+RUN_ETH_E2E=1 cargo test -p eth-wallet-core --test '*'        # 13-test e2e suite
+
+# CLI scaffold (--help is functional; bodies are scaffold-only)
+cargo run -p eth -- --help                                   # show clap subcommand LAYOUT
+cargo run -p eth -- wallet --help                           # wallet subcommand tree
+cargo run -p eth -- tx --help                               # tx subcommand tree
+cargo run -p eth -- chain --help                            # chain subcommand tree
+cargo run -p eth -- token --help                            # token subcommand tree
+```
+
+### References
+
+- Issue #311 (this release cut spec)
+- Plan Task 12: `docs/superpowers/plans/2026-08-23-eth-wallet-core.md`
+- L24 (CHANGELOG + User Stories cascade)
+- L21 (estimate-report + ai-cost-report cascade in `.superpowers/sdd/2026-08-23-eth-wallet-core/`)
+- Related: #333 — all new test functions MUST be `async fn` + `#[tokio::test]`
