@@ -187,3 +187,96 @@ btc message verify \
 - **`--password-file` rejects** symlinks + world/group-readable files (F19 pattern).
 - **Three password flags are mutually exclusive** at the clap parse layer.
 - **Live testnet smoke tests are `#[ignore]`'d** (L29); run manually with `cargo test --workspace -- --ignored`.
+
+## `eth` CLI
+
+The `eth` binary (crate `eth/`, subcommand of `eth-wallet-core/`) is the command-line entry point for Ethereum wallet operations. Source: `crates/eth/src/{main,handlers}.rs`. Built on alloy v1.8.x; anvil regtest + Sepolia testnet. v0.3.x PR-A wires the sync + read subcommands (#337); PR-B lands sign + broadcast.
+
+### Subcommands
+
+| Subcommand | Purpose | Source |
+|---|---|---|
+| `eth wallet create --name --password --network` | Generate BIP-39 mnemonic, persist encrypted wallet. Prints `wallet_id`. | #337 PR-A + #301 Task 2 |
+| `eth wallet import --name --password --network --mnemonic \| --private-key` | Import existing BIP-39 mnemonic (12/15/18/21/24 words) OR raw secp256k1 private-key hex. | #337 PR-A + #301 Task 2 |
+| `eth wallet list` | List all wallets on disk (reads `<wallet_id>.meta.json` per network). | #337 PR-A |
+| `eth wallet show --name \| --id --network` | Show wallet metadata (name, address, derivation path). | #337 PR-A |
+| `eth wallet delete --name \| --id --network` | Delete a wallet by name or UUID. | #337 PR-A |
+| `eth wallet balance --address --unit [--rpc-url]` | ETH balance of `address` via Anvil/Sepolia RPC. `--unit` ∈ `wei` / `gwei` / `eth`. | #337 PR-A + #305 Task 6 |
+| `eth tx get --tx-hash [--rpc-url]` | Look up transaction by 32-byte hex hash. | #337 PR-A + #305 Task 6 |
+| `eth wallet send-native` / `eth wallet send-erc20` / `eth tx list` | PR-B. Returns `Error::Rpc("...wired in PR-B follow-up (#337 phase 2)")`. | deferred |
+| `eth erc20 *` / `eth fee` / `eth config` / `eth sign-message` / `eth sign-typed` / `eth wallet sync` | PR-B / never (scaffold). | deferred |
+
+### Global flags
+
+| Flag | Notes |
+|---|---|
+| `--rpc-url <URL>` (env `ETH_RPC_URL`, default `http://127.0.0.1:8545`) | Provider endpoint for read paths. Loopback default; SPKI pin deferred per #330. |
+| `--data-dir <PATH>` (env `ETH_DATA_DIR`) | Wallet-store base directory. Default: `$XDG_DATA_HOME/nhitran/eth-wallet-core/wallets`. Tests inject a `tempfile::TempDir`. |
+
+### `eth wallet create` / `eth wallet import` flags
+
+| Flag | Notes |
+|---|---|
+| `--name <NAME>` | Required. User-facing wallet handle. Must match `^[A-Za-z0-9 _-]{1,32}$` (PR-B hardening — currently any UTF-8 string). |
+| `--password <PWD>` | Required. ⚠️ Currently argv-visible (shell history + process list). PR-B replaces with `rpassword` / stdin. |
+| `--network <NET>` | Default `sepolia`. Accepts `mainnet` / `sepolia` / `anvil` / chain-id `1` / `11155111` / `31337` / `dev` / `local`. Unknown → exit 2 (`Error::InvalidInput`). |
+
+### `eth wallet balance` flags
+
+| Flag | Notes |
+|---|---|
+| `--address <ADDR>` | Required. 20-byte hex address (EIP-55 checksum optional). |
+| `--unit <UNIT>` | Optional. `wei` / `gwei` / `eth` (default `eth`). |
+| `--rpc-url <URL>` | Optional. See global flags. |
+
+### `eth tx get` flags
+
+| Flag | Notes |
+|---|---|
+| `--tx-hash <HEX>` | Required. 32-byte hex hash with or without `0x` prefix. Unknown → exit 3 (`Error::Rpc`). |
+
+### Environment variables
+
+| Env var | Effect |
+|---|---|
+| `ETH_RPC_URL` | Fallback for global `--rpc-url` |
+| `ETH_DATA_DIR` | Fallback for global `--data-dir` |
+| `RUN_ANVIL_E2E` | Set to `1` to enable Anvil-gated binary integration tests (`cargo test -p eth --test cli_localnet -- --ignored`). |
+
+### Build + run
+
+```bash
+cd rust-wallet-app
+cargo build --release -p eth
+./target/release/eth --help
+./target/release/eth wallet --help
+```
+
+### Examples
+
+```bash
+# Local Anvil-backed wallet flow (loopback RPC, ephemeral data dir)
+ETH_DATA_DIR=/tmp/eth-demo ANVIL=$(which anvil)
+if [ -z "$ANVIL" ]; then echo "install foundry"; exit 1; fi
+$ANVIL &  # boots at http://127.0.0.1:8545 with 10 prefunded dev accounts
+sleep 1
+
+eth wallet create --name alpha --password p1 --network anvil
+eth wallet list
+eth wallet show --name alpha --network anvil
+eth wallet balance --address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+eth tx get --tx-hash 0x0000000000000000000000000000000000000000000000000000000000000000
+
+# Hermetic per-test wallet store via env
+ETH_DATA_DIR=/tmp/eth-test eth wallet create --name beta --password p2
+
+# Sepolia flow (operator-driven per L29 — needs funded wallet + RPC)
+ETH_RPC_URL=https://sepolia.infura.io/v3/<KEY> eth wallet balance --address 0x...
+```
+
+### Security notes
+
+- **Mnemonic / private-key on argv** — `eth wallet import --mnemonic "<words>"` and `--password` expose secrets to shell history + `ps auxe`. PR-B replaces `--password` with `rpassword` / stdin. `--mnemonic` will get the same treatment when PR-B lands sign + broadcast.
+- **Encrypted blob file mode 0o600** — per #337 PR-A, `WalletManager::write_atomic` sets explicit permissions on Unix targets; default umask 0022 would have left blobs world-readable.
+- **RPC SPKI pin removed** — `provider::new_http` uses default rustls TLS + system CAs (per #330). Reintroducing SPKI pin requires `rustls::client::WebPkiServerVerifier` composition + `webpki` verifier (out of scope for #337).
+- **Live testnet smoke tests** (`tests/erc20_anvil.rs`, the `#[ignore]` tests in `cli_localnet.rs`) are operator-driven per L29; run with `RUN_ANVIL_E2E=1` (or `RUN_ETH_E2E=1` for Sepolia e2e). Default `cargo test` runs the always-on sync subset.

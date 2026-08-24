@@ -666,3 +666,81 @@ cargo run -p eth -- token --help                            # token subcommand t
 - L24 (CHANGELOG + User Stories cascade)
 - L21 (estimate-report + ai-cost-report cascade in `.superpowers/sdd/2026-08-23-eth-wallet-core/`)
 - Related: #333 — all new test functions MUST be `async fn` + `#[tokio::test]`
+
+---
+
+## v0.3.x PR-A status (Issue #337, branch `task/eth-wallet-core-v0.2/13-cli-anvil-a-sync-read`, commit `262daac`, PR #338)
+
+Post-v0.3.0 follow-up that flips 5 of the 9 LAYOUT stubs from "scaffold" to Anvil-backed. Per-issue user-confirmed split into 2 sub-PRs (PR-A = sync + read; PR-B = sign + broadcast deferred to follow-up issue).
+
+### Stories flipped to `[x]` by PR-A (5)
+
+- [x] **Story 1** — Create a new wallet. **PR-A wired** `eth wallet create --name --password --network` against `WalletManager::create_wallet_for_network`. Try it: `ETH_DATA_DIR=/tmp/wallet-demo cargo run -p eth -- wallet create --name alpha --password p1 --network anvil`
+- [x] **Story 2** — Import an existing wallet. **PR-A wired** `eth wallet import --name --password --network --mnemonic|--private-key`. Try it: same as Story 1, swap `create` → `import --mnemonic "<12 words>"`.
+- [x] **Story 9** — List / show / delete / rename wallets. **PR-A wired** `eth wallet list`, `eth wallet show --name|--id --network`, `eth wallet delete --name|--id --network` against `WalletManager::{list_wallets, lookup_by_name, delete_wallet}`. (Rename is deferred — out of scope for PR-A.) Try it: `cargo run -p eth -- wallet list` / `wallet show --name alpha` / `wallet delete --name alpha`.
+- [x] **Story 3** — Check ETH balance. **PR-A wired** `eth wallet balance --address --unit [--rpc-url]` against `provider.get_balance(addr)` via `new_http(url)`. Try it: with Anvil running: `cargo run -p eth -- --rpc-url http://127.0.0.1:8545 wallet balance --address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`. Note: previously DEPRECATED → v0.3 Story 12 per #311; PR-A promotes back to active per #337 scope.
+- [x] **Story 26** — Use Anvil local node for testing. **PR-A wired** `--rpc-url` global flag + `provider.get_balance` + `provider.get_transaction_by_hash` paths. Try it: see Story 3 command above. Story 26 was already `[x]` from PR #318; PR-A extends the active surface.
+
+### Stories still `[ ]` (PR-B deferred — 4)
+
+- [ ] **Story 5** — Send native ETH. CLI stub returns `Err(Error::Rpc("wallet send-native: wired in PR-B follow-up (#337 phase 2)"))`. PR-B owns: sign via `unlock_signer` + broadcast via `send_raw_transaction`. Library surface already functional.
+- [ ] **Story 6** — Custom EIP-1559 fee. PR-B owns: `--max-fee-gwei --priority-fee-gwei` flag wiring + nonce + gas plumbing through `TransactionRequest`.
+- [ ] **Story 13/14/15/16/17** — Batch / drain / nonce strategy / manual gas / replace-by-fee. All deferred to PR-B alongside Story 5 wiring.
+- [ ] **Story 21** — Send ERC-20 stablecoin. CLI stub returns PR-B error message. PR-B owns: `sign_erc20_tx_bytes` + calldata via `tokens::lookup_by_symbol` for decimals.
+- [ ] **Story 7** — Transaction history (tx list). CLI stub returns PR-B error message. PR-B owns: `provider.get_logs(filter)` scan over recent blocks.
+- [ ] **Story 4** — Sync chain state. `eth wallet sync` returns PR-B error message. PR-B owns: chain-state resync (deferred per #309).
+
+### Stories unchanged (no PR-A surface impact)
+
+- [x] **Story 18** — Sign EIP-191 personal message. Library surface only; CLI flag wiring deferred.
+- [x] **Story 20** — Pick derivation path. Library surface only.
+- [x] **Story 22/23/24/25** — ERC-20 surface. Library + registry surface only; CLI flag wiring deferred.
+- [x] **Story 27** — Sign EIP-712 typed data. Already deferred per `sign_typed_data` follow-up (alloy eip712 feature flag decision).
+
+### New CLI surface (PR-A)
+
+| Flag | Surface |
+|---|---|
+| `--data-dir <PATH>` (global, env `ETH_DATA_DIR`) | Hermetic wallet-store location. Tests inject a `tempfile::TempDir`. |
+| `--password <PWD>` (wallet create + import, required) | Wallet encryption password. ⚠️ Currently argv-visible — PR-B replaces with `rpassword` / stdin. |
+| `--name <NAME>` (wallet create + import + show + delete) | User-facing wallet handle. |
+| `--address <ADDR>` (wallet balance, required) | Target address for balance query. |
+| `--network <NET>` (wallet create + import + show + delete + balance) | `mainnet` / `sepolia` / `anvil` / chain-id `1` / `11155111` / `31337` / `dev` / `local`. |
+| `--unit <UNIT>` (wallet balance) | `wei` / `gwei` / `eth` (default `eth`). |
+| `--tx-hash <HEX>` (tx get) | 32-byte hex transaction hash. |
+| `--rpc-url <URL>` (global, env `ETH_RPC_URL`, default `http://127.0.0.1:8545`) | RPC endpoint for read paths. |
+
+### Library gaps closed (PR-A side effects)
+
+- `WalletMeta` JSON now persisted alongside `.enc` as `<wallet_id>.meta.json`. `list_wallets` returns real name/address/network (was returning placeholder `wallet-<uuid8>` / `Address::ZERO`).
+- `import_wallet_for_network` honors `--network` flag (was hardcoded Sepolia).
+- `unlock_signer(wallet_id, password)` returns `PrivateKeySigner` for both mnemonic + private-key wallets; unlocks the PR-B sign paths without an extra round of library work.
+- New `Error::InvalidInput(String)` + `Error::WalletNotFoundByName { name, network }` variants (16 → 18) so CLI parse + lookup-miss errors flow through the same `exit_code()` table.
+- `Network::parse_cli` returns `Error::InvalidInput` directly (exit 2) on unknown network — was previously `Error::Rpc` (exit 3).
+- `(name, network)` uniqueness enforced on create/import (was previously silent data corruption when two wallets shared a name).
+
+### Security hardening (PR-A side effects)
+
+- `write_atomic` + `open_at` set explicit mode `0o600` / `0o700` on Unix targets. Default umask 0022 would have left encrypted blobs world-readable.
+- `map_wallet_err` splits `WalletError::Crypto` (AEAD auth-tag mismatch — wrong password OR tamper) → `Error::DecryptionFailed` (exit 5); was previously mapped to `Error::InvalidMnemonic` (exit 2) — misleading for tamper detection.
+- `tracing::warn!` in `wallet_create` flags `--password` on argv as insecure (shell history + process list). PR-B replaces with `rpassword`.
+
+### Try it (PR-A additions)
+
+```bash
+# PR-A wired CLI surface (sync + read paths against Anvil)
+ETH_DATA_DIR=/tmp/wallet-demo cargo run -p eth -- wallet create --name alpha --password p1 --network anvil
+cargo run -p eth -- wallet list
+cargo run -p eth -- wallet show --name alpha --network anvil
+cargo run -p eth -- wallet delete --name alpha --network anvil
+cargo run -p eth -- --rpc-url http://127.0.0.1:8545 wallet balance --address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+cargo run -p eth -- --rpc-url http://127.0.0.1:8545 tx get --tx-hash 0x000...000
+
+# Binary integration tests (5 always-on + 2 Anvil-gated)
+cargo test -p eth --test cli_localnet                 # always-on sync tests pass
+RUN_ANVIL_E2E=1 cargo test -p eth --test cli_localnet -- --ignored   # full e2e
+```
+
+### Status
+
+PR-A body-flipped #337; issue stays OPEN until PR #338 merges to `rust-eth-core`. PR-B (sign + broadcast) tracked in follow-up issue (pending file) per L13 round budget.
