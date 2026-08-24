@@ -33,7 +33,7 @@ use crate::handlers::{
     wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20,
     wallet_send_native, wallet_show,
 };
-use eth_wallet_core::{Error, Network};
+use eth_wallet_core::{Error, Network, Result};
 
 #[derive(Parser, Debug)]
 #[command(name = "eth", version, about = "Ethereum wallet CLI (alloy v1.8.x)")]
@@ -112,7 +112,7 @@ enum WalletAction {
         #[arg(long)]
         name: String,
         #[arg(long)]
-        password: String,
+        password: Option<String>,
         #[arg(long, default_value = "sepolia")]
         network: String,
     },
@@ -120,7 +120,7 @@ enum WalletAction {
         #[arg(long)]
         name: String,
         #[arg(long)]
-        password: String,
+        password: Option<String>,
         #[arg(long, default_value = "sepolia")]
         network: String,
         #[arg(long, conflicts_with = "private_key")]
@@ -292,6 +292,30 @@ fn main() {
     std::process::exit(exit_code);
 }
 
+/// Resolve the wallet password from one of two sources, in priority order:
+/// 1. `--password` argv (warns: shell history + process-list leak)
+/// 2. `ETH_PASSWORD` env var (preferred for CI / unattended runs)
+///
+/// Returns `Error::InvalidInput` (exit 2) when neither is set. Per L12
+/// review finding C-1: the argv path emits a stderr warning so operators
+/// see the risk even when the call succeeds. Full rpassword / TTY prompt
+/// replacement is a follow-up cycle (the argv path stays supported for
+/// backward compatibility + script-friendliness).
+fn resolve_password(cli_pw: Option<&str>) -> Result<String> {
+    match (cli_pw, std::env::var("ETH_PASSWORD").ok()) {
+        (Some(p), _) => {
+            eprintln!(
+                "warning: --password on command line is insecure (shell history, process list); use ETH_PASSWORD env var in CI"
+            );
+            Ok(p.to_string())
+        }
+        (None, Some(env_pw)) => Ok(env_pw),
+        (None, None) => Err(Error::InvalidInput(
+            "password required: pass --password or set ETH_PASSWORD env var".into(),
+        )),
+    }
+}
+
 fn run(cli: Cli) -> eth_wallet_core::Result<()> {
     let mgr = open_manager(cli.data_dir.as_ref())?;
 
@@ -317,6 +341,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     password,
                     network,
                 } => {
+                    let password = resolve_password(password.as_deref())?;
                     let created = wallet_create(&mgr, &name, &password, &network)?;
                     print_wallet_created(&created);
                     Ok(())
@@ -328,6 +353,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     mnemonic,
                     private_key,
                 } => {
+                    let password = resolve_password(password.as_deref())?;
                     let created = wallet_import(
                         &mgr,
                         &name,
@@ -373,12 +399,11 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     .parse()
                     .map_err(|e| Error::InvalidInput(format!("invalid --amount: {e}")))?;
 
-                let (name, password) = match (args.name.as_deref(), args.password.as_deref()) {
-                    (Some(n), Some(p)) => (n, p),
-                    _ => {
-                        return Err(Error::InvalidInput("--name and --password required".into()));
-                    }
-                };
+                let name = args
+                    .name
+                    .as_deref()
+                    .ok_or_else(|| Error::InvalidInput("--name required".into()))?;
+                let password = resolve_password(args.password.as_deref())?;
                 let net = Network::parse_cli(&args.network)
                     .map_err(|e| Error::InvalidInput(e.to_string()))?;
                 let wallet_id = mgr
@@ -444,14 +469,10 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     })?;
                     let gas = gas_limit.unwrap_or(65_000);
 
-                    let (n, p) = match (name.as_deref(), password.as_deref()) {
-                        (Some(n), Some(p)) => (n, p),
-                        _ => {
-                            return Err(Error::InvalidInput(
-                                "--name and --password required".into(),
-                            ));
-                        }
-                    };
+                    let n = name
+                        .as_deref()
+                        .ok_or_else(|| Error::InvalidInput("--name required".into()))?;
+                    let p = resolve_password(password.as_deref())?;
                     let net = Network::parse_cli(&network)
                         .map_err(|e| Error::InvalidInput(e.to_string()))?;
                     let wallet_id = mgr

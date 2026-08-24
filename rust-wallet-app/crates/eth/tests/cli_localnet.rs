@@ -41,10 +41,15 @@ fn eth_bin() -> PathBuf {
 
 /// Run the `eth` binary with `ETH_DATA_DIR` pointed at `data_dir` (so the
 /// wallet store is isolated). Captures stdout + stderr + exit status.
+///
+/// Strips inherited `ETH_PASSWORD` from the parent shell environment so
+/// tests stay hermetic. Tests that exercise the env-var code path must
+/// call `Command::new` directly and set `ETH_PASSWORD` explicitly.
 fn run_eth(data_dir: &std::path::Path, args: &[&str]) -> std::process::Output {
     Command::new(eth_bin())
         .env("ETH_DATA_DIR", data_dir)
         .env("NO_COLOR", "1")
+        .env_remove("ETH_PASSWORD")
         .args(args)
         .output()
         .expect("spawn eth")
@@ -216,6 +221,162 @@ fn wallet_create_with_duplicate_name_yields_exit_4() {
     assert!(
         stderr.contains("already exists") || stderr.contains("already"),
         "stderr should mention duplicate-name detection: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_create_with_name_too_long_yields_exit_2() {
+    // L12 review finding M-3 (code-reviewer): wallet name accepted any
+    // string, including 1MB blobs and shell-meta names. RED: 33-char name
+    // accepted (no validation). GREEN: rejected with InvalidInput (exit 2)
+    // because name exceeds 32-char regex bound.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "create",
+            "--name",
+            &"x".repeat(33),
+            "--password",
+            "p",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "33-char name must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("wallet name") || stderr.contains("name"),
+        "stderr should mention name validation: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_create_with_name_invalid_chars_yields_exit_2() {
+    // L12 review finding M-3 (code-reviewer): wallet name accepted any
+    // string including shell metacharacters (`;`, `&`, `|`, `$`, etc).
+    // RED: `foo;bar` accepted (no validation). GREEN: rejected because
+    // semicolon not in [A-Za-z0-9 _-] charset.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &["wallet", "create", "--name", "foo;bar", "--password", "p"],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "name with shell metachar must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("invalid char") || stderr.contains("wallet name"),
+        "stderr should mention name charset validation: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_create_with_password_argv_emits_security_warning() {
+    // L12 review finding C-1 (security-auditor HIGH): passing wallet
+    // password via --password leaks into shell history + process list.
+    // RED: cycle 7 silently accepts --password with no operator warning.
+    // GREEN: emit deprecation/security warning to stderr (cycle 8 closes
+    // the operator-visibility half; cycle 8b swaps argv for TTY prompt
+    // via rpassword).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "warn-me",
+            "--password",
+            "test-password",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "create must succeed despite warning\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr_lower = stderr.to_lowercase();
+    assert!(
+        stderr_lower.contains("warning") && stderr_lower.contains("password"),
+        "stderr must contain password-on-argv warning:\nstderr: {stderr}",
+    );
+}
+
+#[test]
+fn send_command_uses_eth_password_env_var_when_argv_missing() {
+    // L12 review finding C-1 (security-auditor): prefer ETH_PASSWORD env
+    // over argv when --password not provided. RED: cycle 7 returns
+    // `--name and --password required` (exit 2). GREEN: env path
+    // triggers, proceeds past unlock (fails later at unreachable RPC,
+    // but NOT at the password-arg check).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // Pre-create wallet using --password (current path).
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "env-acct",
+            "--password",
+            "secret-from-env",
+        ],
+    );
+
+    // Send without --password; set ETH_PASSWORD explicitly.
+    let out = Command::new(eth_bin())
+        .env("ETH_DATA_DIR", &data_dir)
+        .env("NO_COLOR", "1")
+        .env("ETH_PASSWORD", "secret-from-env")
+        .args([
+            "send",
+            "--name",
+            "env-acct",
+            "--to",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--amount",
+            "1000",
+            "--rpc-url",
+            "http://127.0.0.1:1", // unreachable
+        ])
+        .output()
+        .expect("spawn eth");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !stderr.contains("--password required") && !stderr.contains("password required"),
+        "env path should bypass --password required error:\nstderr: {stderr}",
+    );
+    // No warning emitted on env path (warning reserved for argv path).
+    assert!(
+        !stderr.to_lowercase().contains("warning"),
+        "env path should not emit password-on-argv warning:\nstderr: {stderr}",
     );
 }
 

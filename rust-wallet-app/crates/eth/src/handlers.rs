@@ -85,6 +85,31 @@ pub(crate) fn map_wallet_err(e: WalletError) -> Error {
     }
 }
 
+/// Validate a user-supplied wallet name against the L12 review M-3 rule:
+/// 1..=32 chars, charset `[A-Za-z0-9 _-]`. Hand-rolled byte check (no
+/// regex crate) — short, allocation-free on the happy path. Returns
+/// `Error::InvalidInput` (exit 2) on violation so the operator sees the
+/// exact failure reason in stderr.
+pub(crate) fn validate_wallet_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        return Err(Error::InvalidInput("wallet name must not be empty".into()));
+    }
+    if name.len() > 32 {
+        return Err(Error::InvalidInput(format!(
+            "wallet name must be 1..=32 chars, got {}",
+            name.len()
+        )));
+    }
+    for b in name.bytes() {
+        if !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b' ' | b'_' | b'-') {
+            return Err(Error::InvalidInput(format!(
+                "wallet name contains invalid char: {name:?} (allowed: A-Z a-z 0-9 space _ -)"
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Wallet create / import / list / show / delete
 // ---------------------------------------------------------------------------
@@ -95,14 +120,10 @@ pub fn wallet_create(
     password: &str,
     network_str: &str,
 ) -> Result<WalletCreated> {
+    validate_wallet_name(name)?;
     if password.is_empty() {
         return Err(Error::InvalidPassword("password must be non-empty".into()));
     }
-    // Security C-1: warn when password arrives via argv (shell history,
-    // process list). PR-B will replace --password with rpassword / stdin.
-    tracing::warn!(
-        "passing wallet password on the command line is insecure (shell history, process list); use ETH_PASSWORD env var in CI; PR-B will switch to a TTY prompt"
-    );
     let network =
         Network::parse_cli(network_str).map_err(|e| Error::InvalidInput(e.to_string()))?;
     mgr.create_wallet_for_network(name, password.as_bytes(), network)
@@ -117,6 +138,7 @@ pub fn wallet_import(
     mnemonic: Option<&str>,
     private_key: Option<&str>,
 ) -> Result<WalletCreated> {
+    validate_wallet_name(name)?;
     if password.is_empty() {
         return Err(Error::InvalidPassword("password must be non-empty".into()));
     }
