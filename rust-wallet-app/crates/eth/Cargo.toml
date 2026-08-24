@@ -6,10 +6,9 @@ rust-version = "1.94"
 license = "MIT"
 description = "`eth` CLI for the eth-wallet-core v0.2.0 library"
 # Task 10 (Issue #309) — Phase 4 CLI scaffold. Mirrors BTC's
-# rust-wallet-app/crates/btc/ structure. This initial scaffold ships
-# the clap subcommand LAYOUT per the 27-story spec; subcommand
-# business logic is wired in follow-up issues as the underlying library
-# surfaces (Tasks 2-9) stabilize.
+# rust-wallet-app/crates/btc/ structure.
+# Issue #337 (Task 13 follow-up): wire LAYOUT stubs to Anvil-backed
+# implementations.
 publish = false
 
 [[bin]]
@@ -22,3 +21,20 @@ eth-wallet-core = { path = "../eth-wallet-core" }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 hex = { workspace = true }
+# alloy deps for handlers.rs (provider + RPC).
+alloy-primitives = { workspace = true }
+alloy-provider = { version = "^1.0" }
+alloy-network = { version = "^1.0" }
+alloy-transport-http = { version = "^1.0" }
+# uuid for wallet_id parsing in handlers + WalletNotFound construction;
+# tokio for the current-thread runtime that drives async handlers in
+# main(). Both are dev-only for eth-wallet-core but main + handlers are
+# production paths here.
+uuid = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+# Binary integration tests in tests/cli_localnet.rs.
+tempfile = { workspace = true }
+alloy-node-bindings = { version = "=1.8.3" }
+tokio = { workspace = true }

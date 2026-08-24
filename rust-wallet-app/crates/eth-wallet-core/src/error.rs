@@ -105,6 +105,23 @@ pub enum Error {
     /// Exit 5.
     #[error("receipt timeout after {secs}s for tx_hash {tx_hash}")]
     ReceiptTimeout { secs: u64, tx_hash: String },
+
+    /// CLI input failed to parse: bad address hex, bad tx-hash, bad unit,
+    /// missing/incompatible flag combos. Distinct from `InvalidMnemonic` /
+    /// `InvalidPrivateKey` which are library-domain-specific. Exit 2.
+    /// Added in #337 (Task 13 follow-up to #309) so the CLI can surface
+    /// its own parse failures through the same `exit_code()` table.
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+
+    /// Wallet lookup by `(name, network)` failed. Distinct from
+    /// `WalletNotFound` (which carries a `wallet_id`). Exit 4 — same as
+    /// `WalletNotFound` per M11 wallet/balance category.
+    /// Added in #337 fix for type-design CRITICAL: the previous
+    /// `WalletNotFound { wallet_id: uuid::Uuid::nil() }` sentinel lost
+    /// the user-supplied name.
+    #[error("wallet '{name}' not found on {network}")]
+    WalletNotFoundByName { name: String, network: String },
 }
 
 impl Error {
@@ -127,9 +144,11 @@ impl Error {
             | Error::InvalidPrivateKey(_)
             | Error::InvalidPassword(_)
             | Error::NonceMismatch { .. }
-            | Error::FeeTooLow { .. } => 2,
+            | Error::FeeTooLow { .. }
+            | Error::InvalidInput(_) => 2,
 
             Error::WalletNotFound { .. }
+            | Error::WalletNotFoundByName { .. }
             | Error::WalletExists { .. }
             | Error::InsufficientFunds { .. }
             | Error::InsufficientTokenBalance { .. } => 4,
@@ -296,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn all_16_variants_exist_at_compile_time() {
+    fn all_18_variants_exist_at_compile_time() {
         // Compile-time witness: every Error variant is constructed.
         // Adding a new variant requires a test update (per L8/L14 audit).
         // v0.2.0 dropped SpkiKeyPinMismatch (Task 5/Issue #304 deferred).
@@ -340,10 +359,15 @@ mod tests {
             secs: 120,
             tx_hash: "0xab..".into(),
         };
+        let _v17 = Error::InvalidInput("x".into());
+        let _v18 = Error::WalletNotFoundByName {
+            name: "x".into(),
+            network: "sepolia".into(),
+        };
         let _extra = Error::Rpc("ensure this is the last".into());
         drop((
             _v01, _v02, _v03, _v04, _v05, _v06, _v07, _v08, _v09, _v10, _v11, _v12, _v13, _v14,
-            _v15, _v16, _extra,
+            _v15, _v16, _v17, _v18, _extra,
         ));
     }
 }
