@@ -28,7 +28,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
 - [L42] Verify staged set before commit (`git diff --cached --stat` after every `git add`)
 - [L45] Issues labeled `rust-eth-core` route to the integration branch, never main directly
-- [L46] L13 step 13 commit gate: verify `git branch --show-current` matches the branch checked out at step 4
+- [L46] Branch-identity gate: verify `git branch --show-current` matches expected before `git add`, `git commit`, and `commit-push-pr`
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -235,6 +235,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 ## Per task
 3. Pick up issue. Read body. Check if large task or sub-task — see [Sub-task workflow for large tasks](#sub-task-workflow-for-large-tasks) below.
 4. karpathy-guidelines + branch checkout (from integration branch if sub-task per step 3)
+    - **L46 — record expected branch:** note the branch name just checked out (e.g., scratch, ledger per L14). Every later L46 check reads from this record.
 4a. **Drift scan (per L30):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap.
 
 ## Per pipeline step
@@ -285,7 +286,9 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - When in doubt: write the issue. Forgetting backlogs costs more than the 30-60s to file one.
 12. PAUSE for commit approval
     - Max 3 fix rounds; round = one review + one fix commit pair
+    - **L46 — pre-pause destination check:** run `git branch --show-current` and confirm it equals the branch recorded at step 4. If mismatch → `git checkout <expected>`, re-verify, then proceed. The branch name MUST appear verbatim in the approval prompt per L6 ("Show branch name in the approval prompt").
 13. commit-commands:commit-push-pr
+    - **L46 — pre-execute destination re-check:** run `git branch --show-current` again immediately before invoking `commit-push-pr`. Even if step 12's check passed, HEAD may have moved (post-merge housekeeping, `git checkout -`, IDE tab switch). Mismatch → STOP, re-checkout expected branch, then proceed. Pair with L42 (`git diff --cached --stat`): L42 audits content, L46 audits destination, both at the same gate.
 14. **Flip issue checkboxes [ ]→[x] — only after verifying each box is actually completed** (before PR open, after commit-push-pr):
     - **Walk the issue body before flipping** — for every `[ ]` box, confirm the acceptance criterion is actually met in the committed code (test passes, doc landed, dependency merged, etc.). Per L28 (verify-before-claim) + L24 anti-pattern "Flipping the box speculatively before the merge" — every flip must be backed by a verifiable artifact, not intent.
     - **One-by-one audit** — read each checkbox, name the artifact that satisfies it (test name, file:line, commit SHA, PR number), then flip. Bulk-flipping without per-box evidence is the failure mode.
@@ -914,32 +917,42 @@ Operator confirms via PR comment + flips the `L29` acceptance box.
 
 ---
 
-## L46 — L13 step 13 commit gate: branch identity check before `commit-push-pr`
+## L46 — Branch-identity gate: verify `git branch --show-current` before `git add`, `git commit`, and `commit-push-pr`
 
-**Trigger**: User correction during 2026-08-24 session on `rust-eth-core`. Running step 13 (`commit-commands:commit-push-pr`) without confirming the currently checked-out branch matches the branch captured at L13 step 4 risks committing to the wrong line — e.g., landing v0.2 work on main instead of the `rust-eth-core` integration branch (L45 violation), or pushing a sub-task branch while still on the parent.
+**Trigger**: User correction during 2026-08-24 session on `rust-eth-core`. First iteration of this lesson covered only L13 step 13 (`commit-push-pr`). User broadened scope (same session): wrong-branch mistake can land at any point in the commit chain — `git add` stages onto the wrong branch, `git commit` freezes the wrong destination, `commit-push-pr` publishes. Catch at the earliest irreversible step (add = unstageable, commit = revert-only, push = public).
 
-**Rule**: Before invoking step 13, run `git branch --show-current` and confirm the output equals the branch name recorded at L13 step 4 (karpathy + branch checkout). If they differ → STOP. Re-run step 4 (`git checkout <branch-from-step-4>`) before continuing. The check is mandatory regardless of how recently the checkout happened (session restart, tab switch, prior `gh pr merge --delete-branch` etc. can all move HEAD silently).
+**Rule**: Before ANY of `git add`, `git commit`, or `commit-commands:commit-push-pr`, run `git branch --show-current` and confirm the output equals the expected branch (L13 step 4 = `karpathy-guidelines + branch checkout`). If they differ → STOP. Run `git checkout <expected>` and re-verify before continuing. The check is mandatory regardless of how recently the checkout happened (session restart, tab switch, prior `gh pr merge --delete-branch` etc. can all move HEAD silently).
 
-**Why**: `commit-push-pr` is irreversible per L6 — once a SHA lands on a branch (especially the wrong one), recovery requires revert or force-rewrite, both visible in public history. The branch name is a single source of truth that `git` itself tracks; cross-checking it at the moment of commit eliminates the entire class of "wrong-branch commit" mistakes at zero cost.
+**Why**: Each step in the commit chain has a different blast radius:
+
+- **Wrong `git add`** = staged onto wrong branch. Recovery: `git restore --staged <file>` then re-add on correct branch. Cheap.
+- **Wrong `git commit`** = SHA frozen on wrong branch. Recovery: `git reset --soft HEAD~1` (keeps changes staged) or `git reset HEAD~1` (unstages). Local-only revert possible, but the commit SHA appears in reflog until garbage-collected.
+- **Wrong `commit-push-pr`** = SHA published to `origin/<wrong-branch>`. Recovery: revert or force-rewrite — both visible in public history per L6.
+
+Cross-checking branch identity at every command catches the mistake at the cheapest recoverable step. Branch name is git's single source of truth; verification is free.
 
 **Apply**:
 
 ```bash
-# At step 13, BEFORE commit-push-pr:
+# Run BEFORE every git add / git commit / commit-push-pr:
 EXPECTED="<branch from L13 step 4>"   # e.g. rust-eth-core, task/eth-wallet-core-v0.2/1-scaffold
 ACTUAL=$(git branch --show-current)
 if [ "$ACTUAL" != "$EXPECTED" ]; then
   echo "Branch mismatch: expected=$EXPECTED actual=$ACTUAL"
   git checkout "$EXPECTED"
-  # re-verify, then proceed
+  # re-verify ACTUAL == EXPECTED, then proceed
 fi
 ```
 
+- **Three gates, one rule**: check branch before (1) `git add`, (2) `git commit`, (3) `commit-commands:commit-push-pr`. Even if add passed, re-check before commit. Even if commit passed, re-check before push. The check is cheap; the mistake is expensive.
 - **Record the expected branch at step 4**: write it down in the working scratch (chat scratch or `.superpowers/sdd/<plan>/progress.md` per L14). Don't rely on memory — session restarts erase it.
 - **Re-check after any branch-modifying operation** in the same session: `gh pr merge --squash --delete-branch`, `git rebase`, `git checkout -`, manual branch switch via IDE.
 - **Pair with L42**: L42 audits the staged set (content); L46 audits the destination (branch). Both run at the same commit gate. Two checks, one pause.
 - **Pair with L6 prompt shape**: when surfacing the commit for approval, include the branch name verbatim per L6 ("Show branch name in the approval prompt"). Example: *"Commit `chore(eth): scaffold` on branch `rust-eth-core` — approve?"* The L46 destination check is the gate before the prompt; the branch name in the prompt is the gate the reviewer reads.
-- **Mismatch recovery**: if a commit already landed on the wrong branch, do NOT force-push. Per L6 + L13 Q9 off-rails: pause, surface the mistake, revert via new commit on correct branch + cherry-pick or revert on wrong branch. Ledger entry required.
+- **Mismatch recovery by stage**:
+  - Wrong `git add` → `git restore --staged <files>` then `git checkout <expected>` and re-add.
+  - Wrong `git commit` → `git reset --soft HEAD~1` (keep changes staged), `git checkout <expected>`, re-commit. NEVER `--hard` (loses staged content). Ledger entry required.
+  - Wrong `commit-push-pr` → per L6 + L13 Q9 off-rails: pause, surface the mistake, revert via new commit on correct branch + cherry-pick or revert on wrong branch. Do NOT force-push. Ledger entry required.
 
 ---
 
