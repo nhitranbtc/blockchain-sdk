@@ -41,6 +41,11 @@ jobs:
     name: Label routing check
     runs-on: ubuntu-latest
     timeout-minutes: 1
+    # PR-only gate: the job reads `github.event.pull_request.labels`, which
+    # is `null` on `push` events. Skip the job entirely on push so post-merge
+    # CI runs don't fail spuriously. Canonical GH Actions pattern for PR-only
+    # checks (see umbrella ci.yml if needed for analogous guards).
+    if: github.event_name == 'pull_request'
     steps:
       - name: Fail if missing rust-eth-core label
         env:
