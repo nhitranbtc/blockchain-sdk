@@ -32,6 +32,9 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L47] Drift-scan can refute issue premise — no-repro closure type
 - [L48] `git stash` can carry diagnostic residue into the next task
 - [L49] Plugin-structure changes require `plugin-dev:plugin-validator` pre-commit
+- [L50] Harness-style work: `metaharness_oia_audit` weekly or pre-release
+- [L51] Verify post-commit contents — Edit tool can report success without applying
+- [L52] Honest follow-up commit when prior commit message diverges from actual diff
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -241,6 +244,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - Both fire on critical-tier tasks: `pr-review-toolkit:security-auditor` inside L12 review (code-review lens), then `security-review` standalone (security-review lens). Defense in depth.
 - `security-review` is read-only — produces findings; does not modify code. Apply findings via the same fix-loop as L12 review findings.
 - Q4 max-3 cap unaffected: `security-review` is a separate gate, not a sub-agent in the parallel cluster. Counts as 1 skill for the next pipeline step (e.g. step 11 verify).
+- The L11 mapping table's "Pre-PR review" row names `superpowers:requesting-code-review` as the entry point. The wrapper meta-skill orchestrates the toolkit sub-agents (`type-design-analyzer` + `code-reviewer`) below. Always invoke the superpowers wrapper, not the toolkit directly.
 
 ---
 
@@ -259,6 +263,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 3. Pick up issue. Read body. Check if large task or sub-task — see [Sub-task workflow for large tasks](#sub-task-workflow-for-large-tasks) below.
 4. karpathy-guidelines + branch checkout (from integration branch if sub-task per step 3)
     - **L46 — record expected branch:** note the branch name just checked out (e.g., scratch, ledger per L14). Every later L46 check reads from this record.
+    - **L45 — integration-branch routing:** for issues labeled `rust-eth-core` (or any future integration-branch label), fork from the integration branch (`rust-eth-core`), NOT main. PR base = integration branch. Sub-task branches name `task/<plan-slug>/<n>-<slug>`. L46's branch record + L45's routing are the two-branch gates.
 4a. **Drift scan (per L13 step 4a):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap.
 
 ## Per pipeline step
@@ -366,7 +371,10 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - **Anti-pattern:** `[ ]` left unchecked without a deferral note = unfulfilled promise baked into the merged PR. Future-self audits the merged PR and finds the gap.
         - Use `gh pr edit <N> --body "<full body with all boxes resolved>"` (single command) to update the PR body in one audit-trail entry, mirroring step 14's single-edit pattern.
     - **PAUSE for explicit "admin bypass" / "force-push" / "delete-branch" authorization** before `gh pr merge --squash --admin --delete-branch` per L6. The auto-mode classifier requires literal phrasing for bypass arms; generic "approved" is insufficient (this is the documented gap from #64/#66/#68 PRs).
-    - **Run the merge:** `gh pr merge <N> --squash --admin --delete-branch`. The `--delete-branch` removes both local + remote task branch in one call.
+    - **Run the merge:**
+        - **Integration-branch merge (per L45):** `gh pr merge <N> --squash --delete-branch` — no `--admin` flag required. Integration branches have no admin-bypass-requiring protection.
+        - **Main final cut (per L45 v0.2 release pattern):** `gh pr merge <N> --squash --admin --delete-branch` with explicit PAUSE for the `--admin` bypass arm per L6. The auto-mode classifier requires literal "admin bypass" / "force-push" authorization; generic "approved" is insufficient.
+        - The `--delete-branch` removes both local + remote task branch in one call.
     - **Verify issue closed:** `gh issue view <N> --json state` should report `CLOSED`. Squash-merge commit messages containing `Closes #N` / `Fixes #N` auto-close; otherwise `gh issue close <N>` explicitly.
     - **Verify main updated:** `git fetch origin main && git log --oneline origin/main -1` shows the merge SHA at HEAD. Branch protection + admin merge can be silent — verify explicitly per L28.
     - **No rollback:** if merge landed in a wrong state, use `git revert -m 1 <merge-sha>` rather than `git reset --hard`. Merges are immutable public artifacts (per L6).
@@ -402,7 +410,7 @@ Apply at every L13 step (pickup, plan, code, review, verify, commit). Distilled 
 
 | Tier                                                                                         | Pipeline                                                                    |
 | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review                                    |
+| `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review. L49 (plugin-validator) + L51 (post-commit verification) + L52 (honest fix-up if discrepancy) ALWAYS apply when their triggers match — trivial doesn't exempt them. |
 | `normal` (typical feature)                                                                   | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
 | `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`)             |
 | `feature-dev path` (no prior plan / scope undecided)                                          | `feature-dev:feature-dev` phases 1-4 (discover → explore → clarify → architect) produce ad-hoc plan; then L13 steps 9-15d own TDD → review → verify → PAUSE → commit-push-pr → PR review → tech doc → ledger |
@@ -414,7 +422,7 @@ Apply at every L13 step (pickup, plan, code, review, verify, commit). Distilled 
 | 1   | Goals: A (correctness) + C (learning) — speed + reversibility deprioritized                                                                                                                                                                  |
 | 2   | Skill-tag: per-task pickup (not session-start, not per-step)                                                                                                                                                                                 |
 | 3   | Skill-conflict resolution: domain-tag wins; security > correctness > simplicity                                                                                                                                                              |
-| 4   | Max 2 skills per pipeline step (`critical` tier: max 3 — see complexity tier table)                                                                                                                                                          |
+| 4   | Max 2 skills per pipeline step. `critical` tier: max 3 sub-agents in the parallel review cluster (L13 step 10) + 1 standalone security gate (`security-review` per L11 row) + 1 plugin-structure validator (`plugin-dev:plugin-validator` per L49 if trigger matches) = 5 effective skills. Sequential gates don't compound with the cluster cap. |
 | 5   | Fix-loop limit: 3 rounds per task then PAUSE; round = one review + one fix commit pair. Shared budget across pre-commit (step 12) and post-PR-review (step 15). Exceed → PAUSE + revert-to-last-green + follow-up issue + ledger entry (Q9). |
 | 6   | Verify: double-gate (per-step + task-end)                                                                                                                                                                                                    |
 | 7   | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`)                                                                                                                                                                |
@@ -430,6 +438,7 @@ User noticed L13 referenced `pr-review-toolkit:security-auditor` for critical ti
 - L13 step 10 Apply: `security-review` fires as separate gate after L12 review, in addition to the existing `pr-review-toolkit:security-auditor` sub-agent inside L12. Defense in depth.
 - Q4 max-3 cap unaffected (separate gate, not sub-agent).
 - Triggers forward-looking from next picked-up task on `rust-eth-core` (eth-wallet-core v0.2 critical-tier surfaces: key material, signing, encryption, network, persistence). In-flight eth-wallet-core tasks not retroactively re-reviewed; each task's L11 skill-tag includes `security-review` from next pickup.
+- **Fix-up (commit `74e2c88`):** original commit `dc5972c` claimed the L11 row was added but the actual diff only included 2 of 3 intended hunks. Follow-up commit added the missing L11 row with L9 honest disclosure. See L51 (post-commit verification) + L52 (honest fix-up pattern) for the discipline that prevents recurrence.
 
 ## Flutter / Dart adaptation (wallet-desktop)
 
@@ -1083,4 +1092,109 @@ git diff --cached --name-only | grep -E '(plugin\.json|hooks/.*\.(sh|js|ts|py)|s
 - Skipping `plugin-dev:plugin-validator` because "manifest looks fine to me" — manual eyeball misses schema drift the validator catches.
 - Validating then ignoring Critical findings (commit anyway) — same as skipping validator, just slower.
 - Trigger check on `git status` (working tree) instead of `git diff --cached --name-only` (staged) — misses the actual commit contents per L42.
+
+---
+
+## L50 — Harness-style work: `metaharness_oia_audit` weekly or pre-release
+
+**Trigger**: working on a Claude Code plugin, MCP server, agent harness, or any project with metaharness `harnessFit` score > 70 (per `metaharness_score`).
+
+**Rule**: run `metaharness_oia_audit` weekly OR pre-release for the harness repo. Persist record to `metaharness-audit` memory namespace. Use `metaharness_drift_from_history` to detect week-over-week drift.
+
+**Apply**:
+
+- Tool exits with verdict: clean / low / medium / high / critical
+- Clean → log to memory, continue
+- Low/medium → log, plan fix in next cycle
+- High/critical → PAUSE, surface to user, fix before next release
+- `metaharness_drift_from_history` requires a baseline (first audit) — pass `baselineKey` or `baselineFile` to subsequent runs for structural-distance comparison
+- Default `threshold: 0.95` (alert when similarity falls below); tighten to 0.98 for production harnesses
+
+**Why**: harness-style projects ship to user machines. Schema drift, mcp-scan regressions, threat-model gaps surface at install time. Weekly audit catches before release. Memory-persisted record enables trend analysis (week-over-week score drift).
+
+**NOT for blockchain-sdk** (current state): eth-wallet-core = wallet library, not a harness. Metaharness scores it as `unknown_ci` repo type. L50 dormant until first harness-style work.
+
+**Anti-patterns**:
+
+- Running audit then ignoring Critical findings — defeats the gate
+- Tightening threshold to 0.99+ without justification — alert fatigue
+- Treating `unknown_ci` verdict as a failure (it's a misclassification, not a real risk)
+
+---
+
+## L51 — Verify post-commit contents — Edit tool can report success without applying
+
+**Trigger**: any `git commit` that follows a multi-hunk Edit session (≥2 separate Edit tool calls in the same commit).
+
+**Rule**: after `git commit`, BEFORE any `git push`, run `git show --stat <sha>` and verify:
+- All expected files appear in the diff
+- Line counts match the expected hunks (insertions + deletions)
+- Each file's diff matches the intent of the corresponding Edit call
+
+If mismatch (Edit reported success but the change didn't reach the commit):
+- DO NOT amend (per L6, no force-push; commit is destined for push)
+- DO write a follow-up commit with L9 honest disclosure (per L52)
+- DO document the discrepancy in the new commit message (link prior SHA, state what was missing, why)
+
+**Why**: the Edit tool can report success even when the change didn't apply (observed 2026-08-25 in commit `dc5972c` — claimed "L11 mapping table: new row for security-review" but the actual diff only included 2 of 3 intended hunks; the L11 row silently missed). Without post-commit verification, the discrepancy only surfaces at PR review or remote — far more expensive than a follow-up commit.
+
+**Apply**:
+
+```bash
+# After any commit, before push:
+git show --stat <sha> | head -30
+# Verify: file list matches intent, line counts sane
+```
+
+- Single-edit commits: low risk, optional check
+- Multi-edit commits: mandatory check
+- Multi-Edit where each call is in a separate hunk: mandatory check
+- After the check passes → proceed to push per L6 bundling
+
+**Anti-patterns**:
+
+- Trusting Edit tool's success report without verification
+- Amending the prior commit when push already happened (force-push risk per L6)
+- Silently leaving an inaccurate commit message in history
+
+---
+
+## L52 — Honest follow-up commit when prior commit message diverges from actual diff
+
+**Trigger**: discovered that a prior commit's message claims a change that the actual diff doesn't include (or includes a change the message omits).
+
+**Rule**: write a follow-up commit with:
+- Subject prefixed `fix(<scope>):` (e.g. `fix(lessons):`)
+- Body explicitly states: which prior commit, what was missing, why (e.g. "L9 honesty: prior commit message inaccurate; this commit documents the fix in the audit trail")
+- Link the prior commit SHA explicitly
+- DO NOT amend the prior commit (per L6, no force-push on a commit already destined for push; even if not yet pushed, amending breaks the prior commit SHA which other references may point to)
+- DO NOT silently leave the prior message inaccurate (L9 honesty violation)
+
+**Why**: L9 schema (issue body = status, PR body = fix analysis) demands honest reporting. Inaccurate commit messages create audit-trail drift that future-self or reviewers can't trust. A follow-up fix commit with explicit disclosure is cheap; amending hides the mistake; silence compounds the drift.
+
+**Apply** (template for the follow-up commit body):
+
+```text
+fix(<scope>): <one-line summary of fix>
+
+Fixes omission in <prior-sha> — that commit's message claimed <claim>
+but the actual diff only included <what-was-actually-included>. The
+<what-was-missing> was silently missing.
+
+This commit:
+- Adds the missing <change>
+- <other changes>
+
+L9 honesty: prior commit message inaccurate; this commit documents
+the fix in the audit trail.
+```
+
+**Pair with L51** (post-commit verification): L51 catches the discrepancy. L52 codifies the response.
+
+**Anti-patterns**:
+
+- Amending the prior commit when it was already pushed or referenced
+- Rewriting history with `git rebase -i` to "clean up" the inaccurate message
+- Apologizing in the new commit message (L9: state the fact, move on)
+- Skipping the fix because "the change is in the file now" — the audit trail matters more than the line content
 
