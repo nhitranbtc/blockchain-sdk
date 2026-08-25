@@ -69,6 +69,16 @@ macro_rules! sepolia_or_skip {
 /// (per #352 spec).
 const USDT_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
 
+/// Circle USDC on Sepolia — official testnet deployment. 6 decimals
+/// (same as USDT). Faucet: https://faucet.circle.com. No contract
+/// deploy required (Tether does NOT deploy official testnet USDT, so
+/// USDC is the path of least resistance for L29 acceptance runs).
+const USDC_SEPOLIA: alloy_primitives::Address =
+    alloy_primitives::address!("1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287");
+
+/// USDC also 6 decimals. 100 USDC = 100 × 10^6 raw units.
+const USDC_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
+
 /// Resolve the path to the `eth` binary under test. Cargo provides this
 /// via `CARGO_BIN_EXE_<name>` for integration tests (same as
 /// `cli_localnet.rs`).
@@ -333,4 +343,205 @@ async fn alpha_send_beta_100_usdt_against_sepolia() {
 
     // Cleanup: TempDir drops here, removing ETH_DATA_DIR + all wallets.
     // No explicit `wallet delete` needed — the directory is gone.
+}
+
+// ---------------------------------------------------------------------------
+// USDC variant — same alpha→beta 100 transfer pattern, but uses Circle's
+// official Sepolia USDC (0x1c7D4B...Eb287, 6 decimals) instead of an
+// operator-deployed USDT mock. Faucet: https://faucet.circle.com.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "L29 operator smoke — set SEPOLIA_E2E=1 + live creds + SEPOLIA_USDC_ADDRESS to run"]
+async fn alpha_send_beta_100_usdc_against_sepolia() {
+    // Issue #352 acceptance test, USDC variant. Same flow as USDT test
+    // above, but token = Circle's official Sepolia USDC (already
+    // deployed at USDC_SEPOLIA, no contract deploy needed). Operator
+    // pre-funds alpha with Sepolia ETH (gas) + 100 USDC via
+    // https://faucet.circle.com BEFORE running.
+    //
+    // Required env (in addition to the 3 in `sepolia_or_skip!()`):
+    //   SEPOLIA_USDC_ADDRESS — Circle USDC on Sepolia. Hardcoded as
+    //     USDC_SEPOLIA below; the env var is checked for symmetry with
+    //     the USDT fn + lets operator override if Circle ever redeploys.
+    sepolia_or_skip!();
+    if std::env::var("SEPOLIA_USDC_ADDRESS").is_err() {
+        eprintln!("[cli_sepolia] SKIP — set SEPOLIA_USDC_ADDRESS to run");
+        return;
+    }
+    let usdc_address_str = std::env::var("SEPOLIA_USDC_ADDRESS").expect("SEPOLIA_USDC_ADDRESS");
+    let usdc_address_from_env: alloy_primitives::Address = usdc_address_str
+        .parse()
+        .expect("SEPOLIA_USDC_ADDRESS parse");
+    // Prefer the hardcoded constant (Circle's official address); only
+    // fall back to env var if it differs (allows override if Circle
+    // ever redeploys USDC on Sepolia).
+    let usdc_address = if usdc_address_from_env == USDC_SEPOLIA {
+        USDC_SEPOLIA
+    } else {
+        usdc_address_from_env
+    };
+
+    let rpc_url = std::env::var("SEPOLIA_RPC_URL").expect("SEPOLIA_RPC_URL");
+    let parsed_url = alloy_transport_http::reqwest::Url::parse(&rpc_url).expect("rpc url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(parsed_url);
+
+    let alpha_addr: alloy_primitives::Address =
+        alloy_primitives::address!("f39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+
+    // Pre-state: alpha must have >= 100 USDC AND >= 0.01 Sepolia ETH.
+    let usdc = IERC20::new(usdc_address, &provider);
+    let alpha_usdc_before = usdc
+        .balanceOf(alpha_addr)
+        .call()
+        .await
+        .expect("alpha balanceOf pre-state (USDC)");
+    assert!(
+        alpha_usdc_before >= alloy_primitives::U256::from(USDC_TRANSFER_AMOUNT_RAW),
+        "pre-fund missing: alpha has {alpha_usdc_before} raw USDC, need >= {USDC_TRANSFER_AMOUNT_RAW}. \
+         Faucet alpha via https://faucet.circle.com (Circle USDC on Sepolia).",
+    );
+    let alpha_eth_before = provider
+        .get_balance(alpha_addr)
+        .await
+        .expect("alpha get_balance pre-state (Sepolia ETH for gas)");
+    let min_gas_eth: alloy_primitives::U256 =
+        alloy_primitives::U256::from(10_000_000_000_000_000u128); // 0.01 ETH
+    assert!(
+        alpha_eth_before >= min_gas_eth,
+        "gas pre-fund missing: alpha has {alpha_eth_before} wei Sepolia ETH, need >= {min_gas_eth} wei (= 0.01 ETH). \
+         Operator must pre-fund alpha with Sepolia ETH via https://cloudflare-eth.com/faucet or https://sepoliafaucet.com.",
+    );
+
+    // Import alpha wallet (deterministic mnemonic — same as Anvil #0).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+    let phrase = "test test test test test test test test test test test junk";
+    let alpha_import = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "alpha",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password",
+            "--network",
+            "sepolia",
+        ],
+    );
+    let alpha_import_stdout = String::from_utf8_lossy(&alpha_import.stdout);
+    let alpha_import_stderr = String::from_utf8_lossy(&alpha_import.stderr);
+    assert_eq!(
+        alpha_import.status.code(),
+        Some(0),
+        "wallet import alpha must succeed\nstdout: {alpha_import_stdout}\nstderr: {alpha_import_stderr}",
+    );
+
+    // Create beta wallet (random mnemonic). Capture address from stdout.
+    let beta_create = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "beta",
+            "--password",
+            "test-password",
+            "--network",
+            "sepolia",
+        ],
+    );
+    let beta_stdout = String::from_utf8_lossy(&beta_create.stdout);
+    let beta_stderr = String::from_utf8_lossy(&beta_create.stderr);
+    assert_eq!(
+        beta_create.status.code(),
+        Some(0),
+        "wallet create beta must succeed\nstdout: {beta_stdout}\nstderr: {beta_stderr}",
+    );
+    let beta_addr_str = beta_stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("address:").map(|s| s.trim().to_string()))
+        .expect("beta wallet stdout must contain `address:` line");
+    let beta_addr: alloy_primitives::Address = beta_addr_str.parse().expect("beta addr parse");
+
+    // Run the CLI's erc20 send path: alpha -> beta, 100 USDC raw units.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "erc20",
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password",
+            "--token",
+            &usdc_address_str,
+            "--to",
+            &beta_addr_str,
+            "--amount",
+            &USDC_TRANSFER_AMOUNT_RAW.to_string(),
+            "--network",
+            "sepolia",
+            "--rpc-url",
+            &rpc_url,
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "erc20 send must succeed against Sepolia\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let hex_count = stdout
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit() && *c != '\n')
+        .count();
+    assert!(
+        stdout.contains("0x") && hex_count >= 64,
+        "expected tx hash (0x + 64 hex chars) in stdout: {stdout}",
+    );
+
+    let tx_hash_hex = stdout
+        .lines()
+        .find_map(|line| {
+            if line.starts_with("0x") && line.len() == 66 {
+                Some(line.to_string())
+            } else {
+                None
+            }
+        })
+        .expect("stdout must contain tx hash (0x + 64 hex chars)");
+    let tx_hash: alloy_primitives::B256 = tx_hash_hex.parse().expect("tx hash parse");
+    println!("[cli_sepolia] tx_hash: {tx_hash_hex}");
+    let receipt = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        provider.get_transaction_receipt(tx_hash),
+    )
+    .await
+    .expect("timed out waiting for tx receipt after 60s")
+    .expect("get_transaction_receipt error")
+    .expect("tx not mined within 60s — Sepolia mempool stuck or RPC unreliable");
+    assert!(
+        receipt.status(),
+        "tx mined but reverted on-chain — check USDC contract semantics",
+    );
+
+    // Post-state: beta's USDC balance == exactly 100 USDC.
+    let beta_balance_after = usdc
+        .balanceOf(beta_addr)
+        .call()
+        .await
+        .expect("beta balanceOf post-state");
+    assert_eq!(
+        beta_balance_after,
+        alloy_primitives::U256::from(USDC_TRANSFER_AMOUNT_RAW),
+        "beta should have exactly {USDC_TRANSFER_AMOUNT_RAW} raw USDC (= 100 USDC) after receiving from alpha, got {beta_balance_after}",
+    );
+
+    // Cleanup: TempDir drops here.
 }
