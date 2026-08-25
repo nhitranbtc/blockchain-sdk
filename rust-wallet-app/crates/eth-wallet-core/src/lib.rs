@@ -17,9 +17,12 @@ pub mod erc20;
 pub mod error;
 pub mod mnemonic;
 pub mod provider;
+pub mod redact;
 pub mod signer;
 pub mod tokens;
 pub mod wallet;
+
+pub use redact::redact_rpc_url;
 
 pub use error::{Error, Result};
 pub use provider::new_http;

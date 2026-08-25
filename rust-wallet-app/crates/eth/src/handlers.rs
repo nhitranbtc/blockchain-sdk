@@ -302,7 +302,8 @@ pub async fn wallet_balance(
                     .await
                     .map_err(|e| {
                         Error::Rpc(format!(
-                            "decimals() query failed (use --decimals <N> to override): {e}"
+                            "decimals() query failed (use --decimals <N> to override): {}",
+                            redact_rpc_error(&e)
                         ))
                     })?,
             };
@@ -342,39 +343,13 @@ pub async fn tx_get(provider: &RootProvider<Ethereum>, tx_hash: &str) -> Result<
 /// from L12 security review: alloy's transport error `Display` embeds
 /// the full RPC URL, which an attacker-controlled node could weaponize
 /// for log poisoning or operator phishing.
+///
+/// Local wrapper preserved as `redact_rpc_error` so existing
+/// callsites (`send_raw_transaction`, etc.) read naturally; delegates
+/// to the lib-level `eth_wallet_core::redact_rpc_url` (promoted from
+/// this file by Issue #356 security-sweep follow-up).
 fn redact_rpc_error(e: impl std::fmt::Display) -> String {
-    let raw = e.to_string();
-    // Match any `http://...` or `https://...` substring up to the next
-    // whitespace, quote, or end-of-string. Conservative — over-redacts
-    // rather than under-redacts.
-    let mut out = String::with_capacity(raw.len());
-    let bytes = raw.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if (i + 7 <= bytes.len() && &bytes[i..i + 7] == b"http://")
-            || (i + 8 <= bytes.len() && &bytes[i..i + 8] == b"https://")
-        {
-            out.push_str("<rpc-url-redacted>");
-            // Skip past the scheme.
-            i += if &bytes[i..i + 7] == b"http://" { 7 } else { 8 };
-            // Skip until whitespace, quote, ')', or end.
-            while i < bytes.len()
-                && !bytes[i].is_ascii_whitespace()
-                && bytes[i] != b'"'
-                && bytes[i] != b'\''
-                && bytes[i] != b')'
-            {
-                i += 1;
-            }
-        } else {
-            // Push one UTF-8 char (could be multi-byte).
-            let ch_end = i + 1;
-            // Defensive: don't push partial multi-byte.
-            out.push_str(std::str::from_utf8(&bytes[i..ch_end]).unwrap_or("?"));
-            i = ch_end;
-        }
-    }
-    out
+    eth_wallet_core::redact_rpc_url(e)
 }
 
 /// Format a `U256` wei amount as `<whole>.<frac>` with `decimals` fractional

@@ -19,6 +19,7 @@ use alloy_rpc_types::TransactionRequest;
 use alloy_sol_types::{sol, SolCall};
 
 use crate::error::{Error, Result};
+use crate::redact_rpc_url;
 
 // Sol! macro for typed ERC-20 surface. Auto-generates `*Call` structs
 // with `abi_encode()` + `decode()` methods under the `SolCall` trait.
@@ -88,7 +89,7 @@ pub async fn token_balance(
     let raw = provider
         .call(req)
         .await
-        .map_err(|e| Error::Rpc(format!("eth_call balanceOf: {e}")))?;
+        .map_err(|e| Error::Rpc(format!("eth_call balanceOf: {}", redact_rpc_url(&e))))?;
     let balance: U256 = balanceOfCall::abi_decode_returns(&raw)
         .map_err(|e| Error::Rpc(format!("decode balanceOf returns: {e}")))?;
     Ok(balance)
@@ -107,7 +108,7 @@ pub async fn query_decimals(provider: &RootProvider<Ethereum>, token: Address) -
     let raw = provider
         .call(req)
         .await
-        .map_err(|e| Error::Rpc(format!("eth_call decimals: {e}")))?;
+        .map_err(|e| Error::Rpc(format!("eth_call decimals: {}", redact_rpc_url(&e))))?;
     let decimals: u8 = decimalsCall::abi_decode_returns(&raw)
         .map_err(|e| Error::Rpc(format!("decode decimals returns: {e}")))?;
     Ok(decimals)
