@@ -18,7 +18,12 @@ use thiserror::Error;
 /// Each variant maps to a stable exit code via [`crate::error::Error::exit_code`]
 /// per the #297 M11 taxonomy. CLI consumers (Task 10) translate exit codes
 /// 0..=5 directly into `std::process::ExitCode`.
+///
+/// `#[non_exhaustive]` added per Issue #357 — downstream code matching
+/// exhaustively on `Error` must add a wildcard arm. In-crate callers
+/// (e.g. `exit_code()` itself) still see all variants.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
     /// Upstream RPC error: connection refused, HTTP failure, chain-id mismatch,
     /// malformed response. Exit 3.
@@ -122,6 +127,19 @@ pub enum Error {
     /// the user-supplied name.
     #[error("wallet '{name}' not found on {network}")]
     WalletNotFoundByName { name: String, network: String },
+
+    /// ABI decoding failed on a response we did receive over the wire.
+    /// Distinct from `Error::Rpc(_)` which means the RPC itself was
+    /// unreachable or returned HTTP/transport failure. This variant means:
+    /// the RPC answered `200 OK` with bytes that don't decode into the
+    /// expected Solidity return type — typically because the target
+    /// contract is not actually ERC-20 (or the function being queried
+    /// doesn't match the selector). Exit 2 (bad input category — operator
+    /// passed a token address that isn't what they thought).
+    /// Added in Issue #357 (follow-up to #356) so operators can tell
+    /// "contract doesn't speak ERC-20" apart from "RPC unreachable".
+    #[error("ABI decode failed for {context}: {reason}")]
+    AbiDecodeFailed { context: String, reason: String },
 }
 
 impl Error {
@@ -145,7 +163,8 @@ impl Error {
             | Error::InvalidPassword(_)
             | Error::NonceMismatch { .. }
             | Error::FeeTooLow { .. }
-            | Error::InvalidInput(_) => 2,
+            | Error::InvalidInput(_)
+            | Error::AbiDecodeFailed { .. } => 2,
 
             Error::WalletNotFound { .. }
             | Error::WalletNotFoundByName { .. }
@@ -315,10 +334,24 @@ mod tests {
     }
 
     #[test]
-    fn all_18_variants_exist_at_compile_time() {
+    fn abidecode_failed_maps_to_exit_2() {
+        assert_eq!(
+            Error::AbiDecodeFailed {
+                context: "balanceOf".into(),
+                reason: "decode err".into(),
+            }
+            .exit_code(),
+            2
+        );
+    }
+
+    #[test]
+    fn all_19_variants_exist_at_compile_time() {
         // Compile-time witness: every Error variant is constructed.
         // Adding a new variant requires a test update (per L8/L14 audit).
         // v0.2.0 dropped SpkiKeyPinMismatch (Task 5/Issue #304 deferred).
+        // Issue #357 added AbiDecodeFailed for contract-revert vs transport-fail
+        // distinction (#356 follow-up).
         let _v01 = Error::Rpc("x".into());
         let _v02 = Error::InvalidMnemonic("x".into());
         let _v03 = Error::InvalidPrivateKey("x".into());
@@ -364,10 +397,14 @@ mod tests {
             name: "x".into(),
             network: "sepolia".into(),
         };
+        let _v19 = Error::AbiDecodeFailed {
+            context: "balanceOf".into(),
+            reason: "y".into(),
+        };
         let _extra = Error::Rpc("ensure this is the last".into());
         drop((
             _v01, _v02, _v03, _v04, _v05, _v06, _v07, _v08, _v09, _v10, _v11, _v12, _v13, _v14,
-            _v15, _v16, _v17, _v18, _extra,
+            _v15, _v16, _v17, _v18, _v19, _extra,
         ));
     }
 }
