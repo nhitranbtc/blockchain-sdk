@@ -34,9 +34,25 @@ alloy-signer-local = { version = "^1.0", features = ["mnemonic"] }
 # production paths here.
 uuid = { workspace = true }
 tokio = { workspace = true }
+# Issue #341 — load .env from cwd so ETH_NETWORK/ETH_RPC_URL/etc. flow
+# into clap env attrs. `.ok()` swallows missing-file errors so CI/clean
+# checkouts still run.
+dotenvy = "0.15"
+# Issue #341 — `eth config show --json` serializer.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # Binary integration tests in tests/cli_localnet.rs.
 tempfile = { workspace = true }
 alloy-node-bindings = { version = "=1.8.3" }
 tokio = { workspace = true }
+# Issue #343 stablecoin e2e (alpha sends beta 100 USDC on Anvil):
+# alloy-contract for Instance::deploy + call builders, alloy-sol-macro for
+# the `sol!` proc macro that defines MockUSDC inline in the test, and
+# alloy-sol-types for the type primitives the macro generates.
+# Pinned to =1.6.1 because alloy-sol-macro only publishes 1.6.1 on
+# crates.io (latest stable). The macro + alloy-contract must share the
+# same minor for the generated `MockUSDC::deploy` signature to type-check.
+alloy-contract = { version = "=1.6.1" }
+alloy-sol-macro = { version = "=1.6.1" }
+alloy-sol-types = { version = "=1.6.1" }
