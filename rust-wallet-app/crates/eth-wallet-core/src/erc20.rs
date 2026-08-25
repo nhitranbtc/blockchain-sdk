@@ -90,8 +90,11 @@ pub async fn token_balance(
         .call(req)
         .await
         .map_err(|e| Error::Rpc(format!("eth_call balanceOf: {}", redact_rpc_url(&e))))?;
-    let balance: U256 = balanceOfCall::abi_decode_returns(&raw)
-        .map_err(|e| Error::Rpc(format!("decode balanceOf returns: {e}")))?;
+    let balance: U256 =
+        balanceOfCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
+            context: "balanceOf".into(),
+            reason: e.to_string(),
+        })?;
     Ok(balance)
 }
 
@@ -109,8 +112,11 @@ pub async fn query_decimals(provider: &RootProvider<Ethereum>, token: Address) -
         .call(req)
         .await
         .map_err(|e| Error::Rpc(format!("eth_call decimals: {}", redact_rpc_url(&e))))?;
-    let decimals: u8 = decimalsCall::abi_decode_returns(&raw)
-        .map_err(|e| Error::Rpc(format!("decode decimals returns: {e}")))?;
+    let decimals: u8 =
+        decimalsCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
+            context: "decimals".into(),
+            reason: e.to_string(),
+        })?;
     Ok(decimals)
 }
 

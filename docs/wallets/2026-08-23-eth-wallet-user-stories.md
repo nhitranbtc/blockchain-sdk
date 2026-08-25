@@ -457,11 +457,11 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 **Acceptance criteria:**
 
-- `eth erc20 balance --mnemonic <words> --token USDC --rpc-url <URL>` prints `address=0xAbC... token=USDC balance=12.34` (human-readable, with `decimals` query applied).
-- `--all` (per #297 M4: explicit flag only, no stateful first-call default) iterates over the token registry and prints one line per token.
-- `--json` outputs a JSON object (`{token, address, balance, decimals}`).
-- Exit 0 even if all balances are 0.
-- **Note:** requires `sol! { function balanceOf(address) external view returns (uint256); }` + raw `provider.call` — does not require deploying a contract binding.
+- `eth wallet balance --address <addr> --token <USDC_ADDR> --rpc-url <URL>` prints `<scaled> <token-addr>` (e.g. `15.000000 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`), with decimals auto-detected via `decimals()` `eth_call` (selector `0x313ce567`) or `--decimals <N>` override.
+- **Drift from original spec (resolved via #356, commit `9a76f1c` on `rust-eth-core`):** spec body proposed `eth erc20 balance --mnemonic <words> --token USDC` as a separate subcommand; impl extends the existing `eth wallet balance` with `--token <ADDRESS>` (single subcommand covers ETH + token). `<mnemonic>` not required (balance is read-only). `--all` / `--json` deferred (per #356 out-of-scope: multi-token batch queries).
+- **Drift from CLI surface:** spec said `--token USDC` (symbol); impl uses `--token <ADDRESS>` (contract address). Symbol resolution deferred.
+- Exit 0 even if balance is 0. Exit 2 on invalid `--token` address (InvalidInput) or on `balanceOf`/`decimals()` ABI decode failure (per #357 `Error::AbiDecodeFailed` — contract claims to be ERC-20 but isn't). Exit 3 on RPC failure (transport-layer, not decode).
+- **Note:** requires `sol! { function balanceOf(address) external view returns (uint256); }` + raw `provider.call` — does not require deploying a contract binding. Plus `sol! { function decimals() external view returns (uint8); }` for the auto-detect path.
 
 ---
 
@@ -552,7 +552,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 ## Cross-cutting acceptance criteria (apply to all stories)
 
 - **Help text:** every command accepts `--help` and prints a clear, multi-line description with examples.
-- **Exit codes (per #297 M11):** documented and stable (0 = success, 1 = user abort, 2 = bad input, 3 = upstream/RPC error, 4 = wallet/balance issue (insufficient funds, unknown wallet, insufficient token balance, missing pre-image), 5 = signing/RPC/broadcast error).
+- **Exit codes (per #297 M11, refined by #357):** documented and stable (0 = success, 1 = user abort, 2 = bad input — operator passed a value that doesn't fit the function surface, *or* an ABI decode failure on a Solidity call whose response was well-formed HTTP but wrong shape — `Error::AbiDecodeFailed` per #357 distinguishes decode fail from transport fail), 3 = upstream/RPC transport failure (connection refused, HTTP error, chain-id mismatch, malformed response), 4 = wallet/balance issue (insufficient funds, unknown wallet, insufficient token balance, missing pre-image), 5 = signing/RPC/broadcast error.
 - **Tx types (per #297 G6):** Reads accept legacy (type 0) + EIP-2930 (type 1) + EIP-1559 (type 2). Writes = EIP-1559 only in v0.2. Pre-London `eth send` is rejected with exit 2; pre-London reads in tx-history work transparently.
 - **Mnemonic at rest (per #297 B2):** encrypted with Argon2id + AES-256-GCM (F5/F6) — never plaintext. Operator must run `eth wallet unlock` (or set `ETH_WALLET_PASSPHRASE`) on every CLI call that touches key material.
 - **Output:** human-readable by default; `--json` flag on every command that produces data.
