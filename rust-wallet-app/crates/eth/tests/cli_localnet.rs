@@ -126,12 +126,19 @@ const DAI_BALANCEOF_SLOT: u8 = 2;
 
 /// Public mainnet RPC source for `Anvil::new().fork(...)` — alloy docs
 /// `anvil_set_storage_at` example (https://alloy.rs/examples/node-bindings/anvil_set_storage_at/).
-/// Defaults to `https://ethereum.reth.rs/rpc`. Override at compile time
-/// with `MAINNET_RPC_URL=https://your-rpc.example cargo test` if the
-/// default flakes (rate limits, downtime, etc.).
+/// Defaults to `https://ethereum-rpc.publicnode.com` (fork-capable public
+/// gateway with archive-mode support, no signup). Override at compile
+/// time with `MAINNET_RPC_URL=https://your-rpc.example cargo test` if the
+/// default flakes (rate limits, downtime, etc.). Must support
+/// archive-mode `eth_getBlockByNumber` (the call Anvil fork performs to
+/// locate the fork block); Cloudflare's free gateway
+/// (`cloudflare-eth.com`) does NOT support it — see run `32811985548`
+/// (2026-08-25) which timed out 3 tests for that reason. Matches the
+/// env fallback in `.github/workflows/rust-eth-core-ci.yml` (commit
+/// `b443fa6`) so local `cargo test` and CI use the same gateway.
 const MAINNET_RPC_URL: &str = match std::option_env!("MAINNET_RPC_URL") {
     Some(url) => url,
-    None => "https://ethereum.reth.rs/rpc",
+    None => "https://ethereum-rpc.publicnode.com",
 };
 
 /// Resolve the path to the `eth` binary under test. Cargo provides this via
