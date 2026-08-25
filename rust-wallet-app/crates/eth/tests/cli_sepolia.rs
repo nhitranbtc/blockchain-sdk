@@ -74,10 +74,12 @@ const USDT_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
 /// deploy required (Tether does NOT deploy official testnet USDT, so
 /// USDC is the path of least resistance for L29 acceptance runs).
 const USDC_SEPOLIA: alloy_primitives::Address =
-    alloy_primitives::address!("1c7D4B196Cb0F7BB1d743Fbc6116a902379C7238");
+    alloy_primitives::address!("1c7D4B196Cb0C7B01d743Fbc6116a902379C7238");
 
-/// USDC also 6 decimals. 100 USDC = 100 × 10^6 raw units.
-const USDC_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
+/// USDC also 6 decimals. 1 USDC = 1 × 10^6 raw units.
+/// Matches `TRANSFER_RAW` in `scripts/eth_sepolia.sh` and issue #352
+/// acceptance criteria ("beta receives 1 USDC").
+const USDC_TRANSFER_AMOUNT_RAW: u64 = 1_000_000;
 
 /// Resolve the path to the `eth` binary under test. Cargo provides this
 /// via `CARGO_BIN_EXE_<name>` for integration tests (same as
@@ -168,11 +170,10 @@ async fn alpha_send_beta_100_usdt_against_sepolia() {
         .get_balance(alpha_addr)
         .await
         .expect("alpha get_balance pre-state (Sepolia ETH for gas)");
-    let min_gas_eth: alloy_primitives::U256 =
-        alloy_primitives::U256::from(10_000_000_000_000_000u128); // 0.01 ETH
+    let min_gas_eth: alloy_primitives::U256 = alloy_primitives::U256::from(10_000_000_000_000u128); // 0.00001 ETH (enough for 1 ERC-20 tx)
     assert!(
         alpha_eth_before >= min_gas_eth,
-        "gas pre-fund missing: alpha has {alpha_eth_before} wei Sepolia ETH, need >= {min_gas_eth} wei (= 0.01 ETH). \
+        "gas pre-fund missing: alpha has {alpha_eth_before} wei Sepolia ETH, need >= {min_gas_eth} wei (= 0.00001 ETH). \
          Operator must pre-fund alpha with Sepolia ETH via https://cloudflare-eth.com/faucet or https://sepoliafaucet.com.",
     );
 
@@ -405,11 +406,10 @@ async fn alpha_send_beta_100_usdc_against_sepolia() {
         .get_balance(alpha_addr)
         .await
         .expect("alpha get_balance pre-state (Sepolia ETH for gas)");
-    let min_gas_eth: alloy_primitives::U256 =
-        alloy_primitives::U256::from(10_000_000_000_000_000u128); // 0.01 ETH
+    let min_gas_eth: alloy_primitives::U256 = alloy_primitives::U256::from(10_000_000_000_000u128); // 0.00001 ETH (enough for 1 ERC-20 tx)
     assert!(
         alpha_eth_before >= min_gas_eth,
-        "gas pre-fund missing: alpha has {alpha_eth_before} wei Sepolia ETH, need >= {min_gas_eth} wei (= 0.01 ETH). \
+        "gas pre-fund missing: alpha has {alpha_eth_before} wei Sepolia ETH, need >= {min_gas_eth} wei (= 0.00001 ETH). \
          Operator must pre-fund alpha with Sepolia ETH via https://cloudflare-eth.com/faucet or https://sepoliafaucet.com.",
     );
 
@@ -540,7 +540,7 @@ async fn alpha_send_beta_100_usdc_against_sepolia() {
     assert_eq!(
         beta_balance_after,
         alloy_primitives::U256::from(USDC_TRANSFER_AMOUNT_RAW),
-        "beta should have exactly {USDC_TRANSFER_AMOUNT_RAW} raw USDC (= 100 USDC) after receiving from alpha, got {beta_balance_after}",
+        "beta should have exactly {USDC_TRANSFER_AMOUNT_RAW} raw USDC (= 1 USDC) after receiving from alpha, got {beta_balance_after}",
     );
 
     // Cleanup: TempDir drops here.

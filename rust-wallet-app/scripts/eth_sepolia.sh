@@ -1,55 +1,69 @@
 #!/usr/bin/env bash
-# eth_sepolia.sh — L29 operator-driven Sepolia acceptance smoke
+# eth_sepolia.sh — L29 Sepolia acceptance smoke (no wallet/funding ops)
 # (Task 11 / #310 / #352)
 #
-# Walks through alpha -> beta 100 USDC ERC-20 transfer on live Sepolia:
+# Assumes local-alpha + local-beta wallets ALREADY EXIST + are FUNDED
+# (Sepolia ETH for gas + USDC at Circle proxy). Script does NOT call
+# `eth wallet create`, prompt faucets, or poll for funding. Operator
+# pre-creates wallets + funds off-script.
+#
+# Walks through alpha -> beta USDC ERC-20 transfer on live Sepolia:
 #   Step 1: Pre-flight (env, RPC reachable, token contract has code)
-#   Step 2: Show alpha — operator funds Sepolia ETH (gas)
-#   Step 3: Wait + verify Sepolia ETH balance
-#   Step 4: Show alpha + token — operator deploys mock OR funds USDC
-#   Step 5: Wait + verify USDC balance
-#   Step 6: Create alpha + beta wallets in temp ETH_DATA_DIR
-#   Step 7: Run eth erc20 send
-#   Step 8: Wait for tx receipt (up to 60s)
-#   Step 9: Verify beta on-chain USDC balance == 100 USDC
-#   Step 10: Cleanup temp data dir
+#   Step 2: Read alpha ETH balance (read-only — assumes funded)
+#   Step 3: Read alpha USDC balance (read-only — assumes funded)
+#   Step 4: Capture beta pre-transfer USDC balance (delta-check baseline)
+#   Step 5: Run eth erc20 send
+#   Step 6: Wait for tx receipt (up to 60s)
+#   Step 7: Verify beta on-chain USDC balance (delta == TRANSFER_RAW)
+#   Step 8: Final balance summary (post-transfer state on-chain)
+#   Step 9: Summary
 #
 # Per L29: operator-driven, NOT CI. Run manually with creds.
 # Plan: docs/superpowers/plans/2026-08-23-eth-wallet-core.md (Task 11)
 # Issues: #352, #310
 # Refs: PR #353 (the Rust test that mirrors this script flow)
+#
+# RPC note (#355): Sepolia state desyncs on Infura/publicnode (intermittent
+# `execution reverted` on `eth_call balanceOf`). Alchemy Sepolia endpoint
+# recommended: SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/<KEY>
 set -euo pipefail
 
-ALPHA_ADDR="0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-MIN_GAS_WEI=10000000000000000
-TRANSFER_RAW=1000000
-
+# Alpha + Beta addresses + thresholds sourced from .env (operator pre-configured):
+#   ALPHA_ADDRESS — sender (local-alpha wallet, already created off-script)
+#   BETA_ADDRESS  — recipient (local-beta wallet, NO keystore needed; only the
+#                   sender signs, so beta is just an on-chain recipient address)
+#   SEPOLIA_MIN_GAS_WEI  — alpha ETH balance must be ≥ this many wei
+#   SEPOLIA_TRANSFER_RAW — USDC raw units to transfer (6 decimals; 1_000_000 = 1 USDC)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$WORKSPACE_DIR/crates/eth/tests/.env"
 
+# Source .env FIRST so subsequent requires see the exported vars
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "[eth_sepolia] ERROR: $ENV_FILE not found"
+  echo "[eth_sepolia]   Create from tests/.env.example (gitignored, operator-local)"
+  exit 1
+fi
+set -a; source "$ENV_FILE"; set +a
+
+ALPHA_ADDR="${ALPHA_ADDRESS:?ALPHA_ADDRESS must be set in $ENV_FILE (run: eth wallet show)}"
+BETA_ADDR="${BETA_ADDRESS:-0x0785019b1Eb96034B87348512D37Cda000c126Cf}"
+MIN_GAS_WEI="${SEPOLIA_MIN_GAS_WEI:-10000000000000}"
+TRANSFER_RAW="${SEPOLIA_TRANSFER_RAW:-1000000}"
+
+# Local-alpha wallet name (used by `eth erc20 send --name`)
+LOCAL_ALPHA_NAME="${SEPOLIA_LOCAL_ALPHA_NAME:-local-alpha}"
+# Password sourced from .env (WALLET_PASSWORD=...). Falls back to
+# test-password if unset so the script works on a fresh checkout.
+WALLET_PASS="${WALLET_PASSWORD:-test-password}"
+
 step() { echo; echo "========================================"; echo "STEP $1: $2"; echo "========================================"; }
 log()  { echo "[eth_sepolia] $*"; }
-pause() {
-  echo
-  echo "[eth_sepolia] >>> MANUAL ACTION REQUIRED <<<"
-  echo "$*"
-  echo
-  printf "Press ENTER when done (Ctrl+C to abort): "
-  read -r
-}
 
 # Python-based temp dir cleanup (avoids shell-level delete patterns)
 cleanup_tmp() {
   python3 -c "import shutil,sys; shutil.rmtree(sys.argv[1], ignore_errors=True)" "$1" 2>/dev/null || true
 }
-
-if [[ ! -f "$ENV_FILE" ]]; then
-  log "ERROR: $ENV_FILE not found"
-  log "  Create from tests/.env.example (gitignored, operator-local)"
-  exit 1
-fi
-set -a; source "$ENV_FILE"; set +a
 
 : "${SEPOLIA_RPC_URL:?Must set SEPOLIA_RPC_URL in $ENV_FILE}"
 : "${SEPOLIA_USDC_ADDRESS:?Must set SEPOLIA_USDC_ADDRESS (deploy mock or set real address)}"
@@ -58,11 +72,21 @@ RPC="$SEPOLIA_RPC_URL"
 TOKEN_ADDR="$SEPOLIA_USDC_ADDRESS"
 ETH_BIN="$WORKSPACE_DIR/target/debug/eth"
 
+# Persistent wallet dir (gitignored via target/). Survives across script
+# runs so the alpha address + keystore can be reused if the script is
+# interrupted. Address is also persisted to .env (ALPHA_ADDRESS) so other
+# tools/scripts can reference it.
+ALPHA_DATA_DIR="$WORKSPACE_DIR/target/eth_sepolia_alpha_wallet"
+mkdir -p "$ALPHA_DATA_DIR"
+# No cleanup trap — wallet is intentionally persistent.
+
 rpc() {
   local method="$1" params="$2"
-  curl -s -X POST -H "Content-Type: application/json" \
-    --data "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params,\"id\":1}" \
-    "$RPC"
+  # Build JSON via printf + pipe to curl --data-binary @-.
+  # Avoids python subshell pipe (which hangs after `read -r` consumes
+  # stdin) and avoids nested-quote escaping in --data "..." form.
+  printf '%s' "{\"jsonrpc\":\"2.0\",\"method\":\"$method\",\"params\":$params,\"id\":1}" \
+    | curl -s -X POST -H "Content-Type: application/json" --data-binary @- "$RPC"
 }
 
 extract_result() {
@@ -76,7 +100,8 @@ to_decimal() {
 pad_address() {
   local addr="$1"
   local stripped="${addr#0x}"
-  printf "0x%040s" "$stripped" | tr ' ' '0'
+  # Pad 20-byte address to 32-byte ABI slot (left-zero-padded) = 64 hex chars
+  printf "0x%064s" "$stripped" | tr ' ' '0'
 }
 
 # Step 1: Pre-flight
@@ -99,115 +124,51 @@ if [[ -z "$code" || "$code" == "0x" ]]; then
 fi
 log "Token contract bytecode OK ($((${#code} - 2)) hex chars)"
 
-# Step 2: Fund Sepolia ETH
-step 2 "Fund alpha with Sepolia ETH (gas)"
-log "Alpha address: $ALPHA_ADDR"
-log "Required: >= 0.01 Sepolia ETH"
-echo
-echo "  Faucets (any one):"
-echo "    https://cloudflare-eth.com/faucet"
-echo "    https://sepoliafaucet.com  (requires Google login)"
-echo "    https://www.alchemy.com/faucets/ethereum-sepolia"
-echo
-pause "Fund $ALPHA_ADDR with >= 0.01 Sepolia ETH"
-
-# Step 3: Verify Sepolia ETH balance
-step 3 "Verify Sepolia ETH balance"
-log "Polling alpha ETH balance..."
-funded_eth=0
-for i in $(seq 1 30); do
-  bal_hex=$(rpc "eth_getBalance" "[\"$ALPHA_ADDR\",\"latest\"]" | extract_result)
-  [[ -z "$bal_hex" || "$bal_hex" == "0x" ]] && bal_hex="0x0"
-  bal_eth=$(to_decimal "$bal_hex" 1000000000000000000)
-  log "  attempt $i: $bal_eth ETH"
-  if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) >= int(sys.argv[2]) else 1)" "$bal_hex" "$MIN_GAS_WEI"; then
-    log "Sepolia ETH funded: $bal_eth ETH"
-    funded_eth=1
-    break
-  fi
-  sleep 5
-done
-if [[ "$funded_eth" -ne 1 ]]; then
-  log "ERROR: Sepolia ETH funding timeout after 150s"
+# Step 2: Read alpha ETH balance (read-only — assumes operator pre-funded)
+step 2 "Read alpha Sepolia ETH balance (assumes pre-funded)"
+alpha_eth_hex=$(rpc "eth_getBalance" "[\"$ALPHA_ADDR\",\"latest\"]" | extract_result)
+[[ -z "$alpha_eth_hex" || "$alpha_eth_hex" == "0x" ]] && alpha_eth_hex="0x0"
+alpha_eth_human=$(to_decimal "$alpha_eth_hex" 1000000000000000000)
+log "Alpha ETH: $alpha_eth_human ETH (raw: $alpha_eth_hex)"
+if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) >= int(sys.argv[2]) else 1)" "$alpha_eth_hex" "$MIN_GAS_WEI"; then
+  log "OK: alpha has ≥ $MIN_GAS_WEI wei Sepolia ETH for gas"
+else
+  log "ERROR: alpha Sepolia ETH balance below $MIN_GAS_WEI wei threshold — fund alpha first via faucet"
   exit 1
 fi
 
-# Step 4: Fund USDC
-step 4 "Fund alpha with 100 USDC"
-log "Alpha address: $ALPHA_ADDR"
-log "Token contract: $TOKEN_ADDR"
-echo
-echo "  Option A — Deploy your own mock (5 min, Remix):"
-echo "    1. https://remix.ethereum.org -> new file MockUSDC.sol:"
-echo "       // SPDX-License-Identifier: MIT"
-echo "       pragma solidity ^0.8.20;"
-echo "       import '@openzeppelin/contracts/token/ERC20/ERC20.sol';"
-echo "       contract MockUSDC is ERC20 {"
-echo "         constructor() ERC20('USD Coin', 'USDC') {}"
-echo "         function decimals() public pure override returns (uint8) { return 6; }"
-echo "         function mint(address to, uint256 amount) external { _mint(to, amount); }"
-echo "       }"
-echo "    2. Compile (Solidity 0.8.20) -> Deploy & Run (Injected Web3, MetaMask on Sepolia)"
-echo "    3. After deploy, call: mint($ALPHA_ADDR, 100000000)"
-echo "    4. Update SEPOLIA_USDC_ADDRESS in tests/.env to deployed address, re-run script"
-echo
-echo "  Option B — Use existing Sepolia USDC:"
-echo "    https://faucet.circle.com  (claim 10x for 100 USDC, daily limit)"
-echo
-pause "Fund $ALPHA_ADDR with >= 1 USDC (raw: $TRANSFER_RAW)"
-
-# Step 5: Verify USDC balance
-step 5 "Verify USDC balance"
-log "Polling alpha USDC balance..."
-funded_usdc=0
-for i in $(seq 1 30); do
-  padded=$(pad_address "$ALPHA_ADDR")
-  calldata="0x70a08231${padded:2}"
-  bal_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$calldata\"},\"latest\"]" | extract_result)
-  [[ -z "$bal_hex" || "$bal_hex" == "0x" ]] && bal_hex="0x0"
-  bal_human=$(to_decimal "$bal_hex" 1000000)
-  log "  attempt $i: $bal_human USDC"
-  if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) >= int(sys.argv[2]) else 1)" "$bal_hex" "$TRANSFER_RAW"; then
-    log "USDC funded: $bal_human USDC"
-    funded_usdc=1
-    break
-  fi
-  sleep 5
-done
-if [[ "$funded_usdc" -ne 1 ]]; then
-  log "ERROR: USDC funding timeout after 150s"
+# Step 3: Read alpha USDC balance (read-only — assumes operator pre-funded)
+step 3 "Read alpha Circle USDC balance (assumes pre-funded)"
+alpha_padded=$(pad_address "$ALPHA_ADDR")
+alpha_calldata="0x70a08231${alpha_padded:2}"
+alpha_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$alpha_calldata\"},\"latest\"]" | extract_result)
+[[ -z "$alpha_usdc_hex" || "$alpha_usdc_hex" == "0x" ]] && alpha_usdc_hex="0x0"
+alpha_usdc_human=$(to_decimal "$alpha_usdc_hex" 1000000)
+log "Alpha USDC: $alpha_usdc_human USDC (raw: $alpha_usdc_hex)"
+if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) >= int(sys.argv[2]) else 1)" "$alpha_usdc_hex" "$TRANSFER_RAW"; then
+  log "OK: alpha has ≥ $TRANSFER_RAW raw USDC for transfer"
+else
+  log "ERROR: alpha USDC balance below $TRANSFER_RAW raw threshold — fund alpha first via Circle faucet or Remix mint"
   exit 1
 fi
 
-# Step 6: Create wallets
-step 6 "Create alpha + beta wallets in temp ETH_DATA_DIR"
-TMP_DATA=$(mktemp -d -t eth_sepolia.XXXXXX)
-log "Temp ETH_DATA_DIR: $TMP_DATA"
+# Step 4: Capture beta pre-transfer USDC balance (delta-check baseline)
+step 4 "Capture beta pre-transfer USDC balance"
+log "Beta recipient: $BETA_ADDR"
+beta_pre_padded=$(pad_address "$BETA_ADDR")
+beta_pre_calldata="0x70a08231${beta_pre_padded:2}"
+beta_pre_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$beta_pre_calldata\"},\"latest\"]" | extract_result)
+[[ -z "$beta_pre_hex" || "$beta_pre_hex" == "0x" ]] && beta_pre_hex="0x0"
+BETA_USDC_PRE_HEX="$beta_pre_hex"
+BETA_USDC_PRE_HUMAN=$(to_decimal "$beta_pre_hex" 1000000)
+log "Beta pre-transfer USDC: $BETA_USDC_PRE_HUMAN (raw: $beta_pre_hex)"
 
-log "Importing alpha (deterministic Anvil mnemonic #0)..."
-"$ETH_BIN" wallet import \
-  --data-dir "$TMP_DATA" \
-  --name alpha \
-  --mnemonic "test test test test test test test test test test test junk" \
-  --password "test-password" \
-  --network sepolia
-
-log "Creating beta (random mnemonic)..."
-beta_out=$("$ETH_BIN" wallet create \
-  --data-dir "$TMP_DATA" \
-  --name beta \
-  --password "test-password" \
-  --network sepolia)
-BETA_ADDR=$(echo "$beta_out" | grep -E '^address:' | awk '{print $2}' | tr -d ' ')
-log "Beta address: $BETA_ADDR"
-
-# Step 7: Broadcast
-step 7 "Broadcast: alpha -> beta, 100 USDC"
+# Step 5: Broadcast
+step 5 "Broadcast: alpha -> beta, $TRANSFER_RAW raw ($((TRANSFER_RAW / 1000000)) USDC)"
 log "Running eth erc20 send..."
-send_out=$("$ETH_BIN" erc20 send \
-  --data-dir "$TMP_DATA" \
-  --name alpha \
-  --password "test-password" \
+send_out=$(ETH_PASSWORD="$WALLET_PASS" "$ETH_BIN" erc20 send \
+  --data-dir "$ALPHA_DATA_DIR" \
+  --name "$LOCAL_ALPHA_NAME" \
   --token "$TOKEN_ADDR" \
   --to "$BETA_ADDR" \
   --amount "$TRANSFER_RAW" \
@@ -223,8 +184,8 @@ fi
 log "Tx hash: $TX_HASH"
 log "View on Etherscan: https://sepolia.etherscan.io/tx/$TX_HASH"
 
-# Step 8: Wait for receipt
-step 8 "Wait for tx to be mined (up to 60s)"
+# Step 6: Wait for receipt
+step 6 "Wait for tx to be mined (up to 60s)"
 mined=0
 for i in $(seq 1 12); do
   receipt=$(rpc "eth_getTransactionReceipt" "[\"$TX_HASH\"]")
@@ -241,8 +202,8 @@ if [[ "$mined" -ne 1 ]]; then
   exit 1
 fi
 
-# Step 9: Verify beta balance
-step 9 "Verify beta on-chain USDC balance"
+# Step 7: Verify beta balance (delta check: post - pre == 1 USDC)
+step 7 "Verify beta on-chain USDC balance (delta == $((TRANSFER_RAW / 1000000)) USDC)"
 padded=$(pad_address "$BETA_ADDR")
 calldata="0x70a08231${padded:2}"
 bal_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$calldata\"},\"latest\"]" | extract_result)
@@ -250,17 +211,51 @@ bal_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$calldata\"},\"lat
 bal_human=$(to_decimal "$bal_hex" 1000000)
 log "Beta USDC balance: $bal_human USDC"
 
-if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) == int(sys.argv[2]) else 1)" "$bal_hex" "$TRANSFER_RAW"; then
-  log "PASS: beta received exactly 100 USDC"
+# Delta = post - pre. Expect exactly TRANSFER_RAW.
+delta_hex=$(python3 -c "import sys; print(hex(int(sys.argv[1],16) - int(sys.argv[2],16)))" "$bal_hex" "$BETA_USDC_PRE_HEX")
+delta_human=$(to_decimal "$delta_hex" 1000000)
+log "Delta: $delta_human USDC (pre: $BETA_USDC_PRE_HUMAN -> post: $bal_human)"
+
+if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) == int(sys.argv[2]) else 1)" "$delta_hex" "$TRANSFER_RAW"; then
+  log "PASS: beta received exactly $((TRANSFER_RAW / 1000000)) USDC from alpha"
 else
-  log "FAIL: beta balance ($bal_human USDC) != 100 USDC"
+  log "FAIL: delta ($delta_human USDC) != $((TRANSFER_RAW / 1000000)) USDC"
   exit 1
 fi
 
-# Step 10: Cleanup
-step 10 "Cleanup"
-cleanup_tmp "$TMP_DATA"
-log "Temp ETH_DATA_DIR removed: $TMP_DATA"
+# Step 8: Final balance summary (post-transfer state on-chain)
+step 8 "Final balance summary (post-transfer)"
+log "Re-querying balances after tx mined..."
+
+# Alpha ETH
+alpha_eth_hex=$(rpc "eth_getBalance" "[\"$ALPHA_ADDR\",\"latest\"]" | extract_result)
+[[ -z "$alpha_eth_hex" || "$alpha_eth_hex" == "0x" ]] && alpha_eth_hex="0x0"
+alpha_eth_human=$(to_decimal "$alpha_eth_hex" 1000000000000000000)
+
+# Alpha USDC
+alpha_padded=$(pad_address "$ALPHA_ADDR")
+alpha_calldata="0x70a08231${alpha_padded:2}"
+alpha_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$alpha_calldata\"},\"latest\"]" | extract_result)
+[[ -z "$alpha_usdc_hex" || "$alpha_usdc_hex" == "0x" ]] && alpha_usdc_hex="0x0"
+alpha_usdc_human=$(to_decimal "$alpha_usdc_hex" 1000000)
+
+# Beta USDC (already computed as $bal_human above, but re-query for atomic snapshot)
+beta_padded=$(pad_address "$BETA_ADDR")
+beta_calldata="0x70a08231${beta_padded:2}"
+beta_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$beta_calldata\"},\"latest\"]" | extract_result)
+[[ -z "$beta_usdc_hex" || "$beta_usdc_hex" == "0x" ]] && beta_usdc_hex="0x0"
+beta_usdc_human=$(to_decimal "$beta_usdc_hex" 1000000)
+
+log ""
+log "  Alpha ETH:  $alpha_eth_human ETH"
+log "  Alpha USDC: $alpha_usdc_human USDC"
+log "  Beta USDC:  $beta_usdc_human USDC"
+log ""
+log "Expected: alpha USDC decreased by $((TRANSFER_RAW / 1000000)), beta USDC increased by $((TRANSFER_RAW / 1000000)), alpha ETH decreased by ~gas."
+
+# Step 9: Summary
+step 9 "Summary"
+log "Local-alpha wallet: $ALPHA_DATA_DIR (persistent across runs)"
 
 echo
 echo "=========================================="
@@ -270,6 +265,6 @@ echo "  Etherscan: https://sepolia.etherscan.io/tx/$TX_HASH"
 echo "=========================================="
 echo
 log "Next steps:"
-log "  1. Flip #352 acceptance box [ ]->[x] in GitHub issue"
-log "  2. Confirmation commit: chore(lessons): L29 Sepolia acceptance confirmed (PR #353)"
+log "  1. Flip #352 acceptance box [ ]->[x] in GitHub issue (L29 manual gate per memory rule)"
+log "  2. Confirmation commit: chore(lessons): L29 Sepolia acceptance confirmed (#355 / PR #353)"
 log "  3. Merge PR #353 if not already merged"
