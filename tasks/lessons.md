@@ -220,6 +220,10 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - L13 step 10 enforces this sequence; the L12 review-before-verify gate is the same one called out by the L34-trigger precedents (security + type-design + code-reviewer parallel).
 - Sub-agent lens coverage: `type-design-analyzer` (encapsulation, invariant expression, type-level soundness) + `code-reviewer` (correctness, security, convention). Run concurrently, both perspectives land at once.
 - For `critical` complexity tier (per L13), add `pr-review-toolkit:security-auditor` as a third sub-agent (max 3 skills per step under Q4 carve-out).
+- For `critical` complexity tier (per L13), also invoke `security-review` (standalone, after L12 review) as a separate gate. `security-review` is a comprehensive read-only pass (secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) — different lens from `pr-review-toolkit:security-auditor` which sits inside the L12 code-review pass.
+- Both fire on critical-tier tasks: `pr-review-toolkit:security-auditor` inside L12 review (code-review lens), then `security-review` standalone (security-review lens). Defense in depth.
+- `security-review` is read-only — produces findings; does not modify code. Apply findings via the same fix-loop as L12 review findings.
+- Q4 max-3 cap unaffected: `security-review` is a separate gate, not a sub-agent in the parallel cluster. Counts as 1 skill for the next pipeline step (e.g. step 11 verify).
 
 ---
 
@@ -399,6 +403,15 @@ Apply at every L13 step (pickup, plan, code, review, verify, commit). Distilled 
 | 8   | Review input: squash-candidate state (final commit on PR branch before merge) — not first commit, not uncommitted. For PRs that squash, reviewers see the combined final state. For PRs that merge commit-by-commit (rare), reviewers see the full history. (Re-grill 2026-08-15: corrected from "first commit" wording — Tasks 3-4 squash-merged multiple commits; reviewers read the combined state.)                                                                                                                                                  |
 | 9   | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry                                                                                                                                                         |
 | 10  | Complexity: self-detect + user confirm (hybrid of C + D)                                                                                                                                                                                     |
+
+### L13 amendment 2026-08-25 — `security-review` for critical tier
+
+User noticed L13 referenced `pr-review-toolkit:security-auditor` for critical tier but not `security-review` (standalone). Added per amendment:
+
+- L11 mapping table: new row for `security-review` (critical tier, after L12).
+- L13 step 10 Apply: `security-review` fires as separate gate after L12 review, in addition to the existing `pr-review-toolkit:security-auditor` sub-agent inside L12. Defense in depth.
+- Q4 max-3 cap unaffected (separate gate, not sub-agent).
+- Triggers forward-looking from next picked-up task on `rust-eth-core` (eth-wallet-core v0.2 critical-tier surfaces: key material, signing, encryption, network, persistence). In-flight eth-wallet-core tasks not retroactively re-reviewed; each task's L11 skill-tag includes `security-review` from next pickup.
 
 ## Flutter / Dart adaptation (wallet-desktop)
 
