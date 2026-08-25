@@ -194,7 +194,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | TDD red-green-refactor                       | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`)                                              |
 | Build/cargo error cascade                    | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)                                     |
 | Module interface design                      | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4)                                     |
-| Pre-PR review (security, tests, structure)   | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10) |
+| Pre-PR code review (comprehensive)          | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10). Scope: correctness, security, tests, structure. |
 | Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
 | Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
 | PR review feedback (L13 step 15, 3-round fix loop) | `superpowers:receiving-code-review` wrapped by `pr-review-toolkit:code-review` |
@@ -203,8 +203,8 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Document stage (per-task tech doc → PR body) | `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections) |
 | Before declaring done                        | `superpowers:verification-before-completion` (L11 recommends; L13 step 11 note says "User rejected adding to L13 spec" — invoke as L11-mapped wrapper, not L13-enforced gate) |
 | Commit + push + PR                           | `commit-commands:commit-push-pr`                                                                                                     |
-| Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
-| Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
+| Rust toolchain static analysis (one-shot verify) | `ecc:rust-build-resolver` (fmt + clippy + test + dedup + cargo audit in one invocation); slash command `/ecc:rust-build` |
+| Rust toolchain review (review-paired fmt check)  | `ecc:rust-reviewer` or `/ecc:rust-review`                                                              |
 
 > **Skill-pair wrappers (2026-08-11):** `pr-review-toolkit:code-review` is the
 > toolkit; the superpowers meta-skills wrap its invocation. Pre-PR (L13 step 10)
@@ -218,6 +218,8 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 > **Subagent-driven-development vs executing-plans** (rows for "Plan execution"): pick `subagent-driven-development` if subagents are available on the harness; fall back to `executing-plans` if not. Both are mutually exclusive per task — never run both.
 >
 > **`mattpocock-skills:domain-modeling` re-invoke** (rows for "Task pickup" and "Doc / threat-model review"): pickup = understand the domain; doc/threat-model = re-invoke as the same lens to author artifacts. Same skill, two phases of use.
+>
+> **Review agents NOT in L11** (alternative lenses, use only when explicitly needed): `compass:code-reviewer`, `ecc:code-reviewer` (general, not the Rust-specific variants in the rows above), `caveman:cavecrew-reviewer` (fast diff triage, severity-tagged, terse output), `compass:rust-engineer` / `voltagent-lang:rust-engineer` (apply Rust style on first pass, no discrete fmt-check step). L11 = canonical, not exclusive — use these when the canonical mapping doesn't fit.
 
 **Apply**:
 
@@ -242,6 +244,20 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - For `critical` complexity tier (per L13), add `pr-review-toolkit:security-auditor` as a third sub-agent (max 3 skills per step under Q4 carve-out).
 - For `critical` complexity tier (per L13), also invoke `security-review` (standalone, after L12 review) as a separate gate. `security-review` is a comprehensive read-only pass (secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) — different lens from `pr-review-toolkit:security-auditor` which sits inside the L12 code-review pass.
 - Both fire on critical-tier tasks: `pr-review-toolkit:security-auditor` inside L12 review (code-review lens), then `security-review` standalone (security-review lens). Defense in depth.
+- **Lens coverage**:
+
+  | Lens                                              | Plugin                                       | Position                                  |
+  | ------------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
+  | Type design (encapsulation, invariants)           | `pr-review-toolkit:type-design-analyzer`     | sub-agent, parallel                       |
+  | Code quality (correctness, security, convention)  | `pr-review-toolkit:code-reviewer`            | sub-agent, parallel                       |
+  | Security-audit (in L12 code-review lens)          | `pr-review-toolkit:security-auditor`         | sub-agent, critical tier only             |
+  | Comprehensive security (secrets, SSRF, authz, crypto) | `security-review`                         | standalone gate, critical tier only       |
+
+- **Order** (defense in depth):
+  1. L12 review (sub-agents: `type-design-analyzer` + `code-reviewer` [+ `security-auditor` if critical]) → fix loop on L12 findings
+  2. `security-review` standalone (critical tier only) → fix loop on security findings
+  3. Verify gate (cargo fmt + clippy + test per L13 step 11)
+  4. Commit PAUSE (L13 step 12)
 - `security-review` is read-only — produces findings; does not modify code. Apply findings via the same fix-loop as L12 review findings.
 - Q4 max-3 cap unaffected: `security-review` is a separate gate, not a sub-agent in the parallel cluster. Counts as 1 skill for the next pipeline step (e.g. step 11 verify).
 - The L11 mapping table's "Pre-PR review" row names `superpowers:requesting-code-review` as the entry point. The wrapper meta-skill orchestrates the toolkit sub-agents (`type-design-analyzer` + `code-reviewer`) below. Always invoke the superpowers wrapper, not the toolkit directly.
@@ -410,9 +426,9 @@ Apply at every L13 step (pickup, plan, code, review, verify, commit). Distilled 
 
 | Tier                                                                                         | Pipeline                                                                    |
 | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review. L49 (plugin-validator) + L51 (post-commit verification) + L52 (honest fix-up if discrepancy) ALWAYS apply when their triggers match — trivial doesn't exempt them. |
+| `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review. L49 (plugin-validator) + L51 (post-commit verification) + L52 (honest fix-up if discrepancy) ALWAYS apply when their triggers match — trivial doesn't exempt them. EXCEPTION: doc-only commits that change public-facing contracts (README examples, public API docs, CHANGELOG breaking-change notes) still get a doc-review pass via `compass:docs-writer` per L11 Document stage row. |
 | `normal` (typical feature)                                                                   | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
-| `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + extra skill (e.g., `pr-review-toolkit:security-auditor`)             |
+| `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + `pr-review-toolkit:security-auditor` inside L12 + `security-review` standalone (defense in depth per L13 step 10) |
 | `feature-dev path` (no prior plan / scope undecided)                                          | `feature-dev:feature-dev` phases 1-4 (discover → explore → clarify → architect) produce ad-hoc plan; then L13 steps 9-15d own TDD → review → verify → PAUSE → commit-push-pr → PR review → tech doc → ledger |
 
 **10 decisions (the grilling record)**:
@@ -438,6 +454,7 @@ User noticed L13 referenced `pr-review-toolkit:security-auditor` for critical ti
 - L13 step 10 Apply: `security-review` fires as separate gate after L12 review, in addition to the existing `pr-review-toolkit:security-auditor` sub-agent inside L12. Defense in depth.
 - Q4 max-3 cap unaffected (separate gate, not sub-agent).
 - Triggers forward-looking from next picked-up task on `rust-eth-core` (eth-wallet-core v0.2 critical-tier surfaces: key material, signing, encryption, network, persistence). In-flight eth-wallet-core tasks not retroactively re-reviewed; each task's L11 skill-tag includes `security-review` from next pickup.
+- **Status (2026-08-25):** trigger not yet honored — no sub-task PRs on `rust-eth-core` since amendment landed. Next critical-tier sub-task pickup MUST include `security-review` in L11 skill-tag.
 - **Fix-up (commit `74e2c88`):** original commit `dc5972c` claimed the L11 row was added but the actual diff only included 2 of 3 intended hunks. Follow-up commit added the missing L11 row with L9 honest disclosure. See L51 (post-commit verification) + L52 (honest fix-up pattern) for the discipline that prevents recurrence.
 
 ## Flutter / Dart adaptation (wallet-desktop)
