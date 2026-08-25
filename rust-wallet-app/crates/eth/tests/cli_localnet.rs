@@ -100,6 +100,30 @@ const USDT_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
 /// alpha starts with 1000 USDT, pre-written to USDT balances slot.
 const USDT_ALPHA_INITIAL_RAW: u64 = 1_000_000_000;
 
+/// DAI stablecoin mainnet contract (MakerDAO DSToken). 18 decimals
+/// (not 6 like USDC/USDT — matches ETH's 18-decimal convention).
+/// Single contract (no proxy, no upgradeability) — same Anvil-fork +
+/// `anvil_set_storage_at` pattern as WETH + USDT.
+const DAI_MAINNET: alloy_primitives::Address =
+    alloy_primitives::address!("6B175474E89094C44Da98b954EedeAC495271d0F");
+
+/// DAI has 18 decimals. 10^18 raw units = 1 DAI.
+const DAI_ONE: u128 = 1_000_000_000_000_000_000;
+
+/// alpha sends beta 100 DAI (use case: "alpha sends beta 100 USDC"
+/// from #343 body; token identity is incidental).
+const DAI_TRANSFER_AMOUNT_RAW: u128 = 100 * DAI_ONE;
+
+/// alpha starts with 1000 DAI, pre-written to DAI balances slot.
+const DAI_ALPHA_INITIAL_RAW: u128 = 1_000 * DAI_ONE;
+
+/// `balances` mapping slot in DAI's DSToken — empirically determined.
+/// Slot 0 didn't take effect; slot 1 didn't take effect; slot 2 works.
+/// Same slot as USDT (`balances` at slot 2 for both TetherToken and
+/// DSToken — likely both have 2 state vars before `balances` from
+/// their respective base contracts via C3 linearization).
+const DAI_BALANCEOF_SLOT: u8 = 2;
+
 /// Public mainnet RPC source for `Anvil::new().fork(...)` — alloy docs
 /// `anvil_set_storage_at` example (https://alloy.rs/examples/node-bindings/anvil_set_storage_at/).
 /// Defaults to `https://ethereum.reth.rs/rpc`. Override at compile time
@@ -1381,5 +1405,154 @@ async fn alpha_send_beta_100_usdt_against_anvil_fork_mainnet() {
         beta_balance, expected_beta_received,
         "beta should have {} USDT after receiving from alpha (started 0): got {beta_balance}",
         USDT_TRANSFER_AMOUNT_RAW,
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn alpha_send_beta_100_dai_against_anvil_fork_mainnet() {
+    // Issue #343 acceptance test, DAI variant. Third real stablecoin
+    // (18 decimals, single contract — same Anvil-fork + slot-write
+    // pattern as WETH + USDT). Operator picked "3rd token variant"
+    // to validate the pattern generalizes across stablecoins.
+    //
+    // DAI (MakerDAO DSToken) is a single contract — no proxy, no
+    // upgradeability. Storage layout: `balances` mapping (DSToken's
+    // `balances` public state var) is the first state var → slot 0.
+    // `balances[alpha]` is at `keccak256(abi.encode(alpha, 0))`.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(31337)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+    let beta_addr: alloy_primitives::Address = "70997970C51812dc3A010C7d01b50e0d17dc79C8"
+        .parse()
+        .expect("beta addr");
+
+    // Pre-fund alpha with 1000 DAI at DAI's `balances[alpha]` mapping
+    // slot (slot 0 for DSToken). Solidity mapping slot math:
+    // keccak256(abi.encode(key, slot)).
+    let slot_bytes = alloy_primitives::keccak256(
+        (alpha_addr, alloy_primitives::U256::from(DAI_BALANCEOF_SLOT)).abi_encode(),
+    );
+    let slot_u256: alloy_primitives::U256 = slot_bytes.into();
+    let val_bytes: alloy_primitives::B256 = alloy_primitives::U256::from(DAI_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(DAI_MAINNET, slot_u256, val_bytes)
+        .await
+        .expect("anvil_set_storage_at(DAI, balances[alpha], 1000 DAI)");
+
+    // Pre-fund sanity assert.
+    let dai = IERC20::new(DAI_MAINNET, &provider);
+    let alpha_balance_after_fund = dai
+        .balanceOf(alpha_addr)
+        .call()
+        .await
+        .expect("alpha balanceOf after pre-fund");
+    assert_eq!(
+        alpha_balance_after_fund,
+        alloy_primitives::U256::from(DAI_ALPHA_INITIAL_RAW),
+        "pre-fund sanity: alpha should have {} DAI after anvil_set_storage_at, got {alpha_balance_after_fund}",
+        DAI_ALPHA_INITIAL_RAW,
+    );
+
+    // Import alpha's wallet via the CLI (Anvil default mnemonic).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+    let phrase = "test test test test test test test test test test test junk";
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "alpha",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    // Run the CLI's erc20 send path: alpha -> beta, 100 DAI raw units.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "erc20",
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password",
+            "--token",
+            "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+            "--to",
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "--amount",
+            &DAI_TRANSFER_AMOUNT_RAW.to_string(),
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "erc20 send must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let hex_count = stdout
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit() && *c != '\n')
+        .count();
+    assert!(
+        stdout.contains("0x") && hex_count >= 64,
+        "expected tx hash (0x + 64 hex chars) in stdout: {stdout}",
+    );
+
+    // Read post-state balances via IERC20 ABI (eth_call, no signing).
+    let alpha_balance = dai
+        .balanceOf(alpha_addr)
+        .call()
+        .await
+        .expect("alpha balanceOf");
+    let beta_balance = dai
+        .balanceOf(beta_addr)
+        .call()
+        .await
+        .expect("beta balanceOf");
+
+    let expected_alpha_remaining =
+        alloy_primitives::U256::from(DAI_ALPHA_INITIAL_RAW - DAI_TRANSFER_AMOUNT_RAW);
+    let expected_beta_received = alloy_primitives::U256::from(DAI_TRANSFER_AMOUNT_RAW);
+
+    assert_eq!(
+        alpha_balance,
+        expected_alpha_remaining,
+        "alpha should have {} DAI after sending {} to beta (started {}): got {alpha_balance}",
+        DAI_ALPHA_INITIAL_RAW - DAI_TRANSFER_AMOUNT_RAW,
+        DAI_TRANSFER_AMOUNT_RAW,
+        DAI_ALPHA_INITIAL_RAW,
+    );
+    assert_eq!(
+        beta_balance, expected_beta_received,
+        "beta should have {} DAI after receiving from alpha (started 0): got {beta_balance}",
+        DAI_TRANSFER_AMOUNT_RAW,
     );
 }
