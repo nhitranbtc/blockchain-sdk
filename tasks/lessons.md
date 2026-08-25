@@ -178,19 +178,27 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Task step                                    | Skill to invoke first                                                                                                                |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Task pickup (understand + plan)              | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                      |
-| Task pickup (drift scan, per L30)            | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts. |
+| Task pickup (drift scan, per L13 step 4a)    | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts. |
 | Task pickup (new feature, no existing plan)  | `feature-dev:feature-dev` — 7-phase discovery → explore → clarify → architect → implement → review → summary. Use when feature unclear or scope undecided; phases 1-4 produce an ad-hoc plan that L13 then owns from step 9 onward. |
+| Brainstorming (pre-implementation design)    | `superpowers:brainstorming` (MUST before any creative work; gates L13 pre-pickup per L11 itself) |
+| Workspace isolation                         | `superpowers:using-git-worktrees` (after brainstorming, before plan execution; integration branch per L45) |
 | Plan authoring / plan review                 | `tasks/plan-lesson.md` (PL1, PL2, PL3, PL7–PL16) — drift scan, story trace, plugin stack, host-first SDK design, step-by-step workflow |
 | Code review / SDK quality                    | `tasks/review-lesson.md` (PL4, PL5, PL6, PL17) — flat re-exports, async mutex, stability policy, review plugins |
 | Deep search / content review / code-block    | `tasks/search-lesson.md` (PL18, PL19, PL20) — content review, code-block review, deep search + agent management |
+| Plan authoring (multi-step task)            | `superpowers:writing-plans` (after brainstorming approval, before L13 step 9 TDD) |
+| Plan execution (current session)            | `superpowers:subagent-driven-development` (default if subagents available; L13 step 5a branch) |
+| Plan execution (parallel session)           | `superpowers:executing-plans` (fallback if no subagents) |
 | TDD red-green-refactor                       | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`)                                              |
 | Build/cargo error cascade                    | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)                                     |
 | Module interface design                      | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4)                                     |
-| Pre-PR review (security, tests, structure)   | `pr-review-toolkit:code-review` (parallel sub-agents for Standards + Spec axes)                                                      |
+| Pre-PR review (security, tests, structure)   | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10) |
+| Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
+| Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
+| PR review feedback (L13 step 15, 3-round fix loop) | `superpowers:receiving-code-review` wrapped by `pr-review-toolkit:code-review` |
 | Test coverage gap analysis                   | `pr-review-toolkit:pr-test-analyzer`                                                                                                 |
 | Doc / threat-model review                    | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`)         |
 | Document stage (per-task tech doc → PR body) | `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections) |
-| Before declaring done                        | `superpowers:verification-before-completion`                                                                                         |
+| Before declaring done                        | `superpowers:verification-before-completion` (L11 recommends; L13 step 11 note says "User rejected adding to L13 spec" — invoke as L11-mapped wrapper, not L13-enforced gate) |
 | Commit + push + PR                           | `commit-commands:commit-push-pr`                                                                                                     |
 | Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
 | Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
@@ -201,6 +209,12 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 > (L13 step 15, the 3-round fix loop) pairs `superpowers:receiving-code-review`
 > with the toolkit. Treat the superpowers skill as the entry point; the toolkit
 > is the parallel-sub-agent driver inside it.
+>
+> **Project-local references** (rows for "Plan authoring", "Code review", "Deep search"): `tasks/plan-lesson.md` / `tasks/review-lesson.md` / `tasks/search-lesson.md` are project-local markdown (PL-prefixed lessons), not skills. They document blockchain-sdk-specific patterns superpowers doesn't cover. Skill format mismatch is intentional.
+>
+> **Subagent-driven-development vs executing-plans** (rows for "Plan execution"): pick `subagent-driven-development` if subagents are available on the harness; fall back to `executing-plans` if not. Both are mutually exclusive per task — never run both.
+>
+> **`mattpocock-skills:domain-modeling` re-invoke** (rows for "Task pickup" and "Doc / threat-model review"): pickup = understand the domain; doc/threat-model = re-invoke as the same lens to author artifacts. Same skill, two phases of use.
 
 **Apply**:
 
@@ -245,7 +259,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 3. Pick up issue. Read body. Check if large task or sub-task — see [Sub-task workflow for large tasks](#sub-task-workflow-for-large-tasks) below.
 4. karpathy-guidelines + branch checkout (from integration branch if sub-task per step 3)
     - **L46 — record expected branch:** note the branch name just checked out (e.g., scratch, ledger per L14). Every later L46 check reads from this record.
-4a. **Drift scan (per L30):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap.
+4a. **Drift scan (per L13 step 4a):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap.
 
 ## Per pipeline step
 5. Step: pick skill pair (max 2) from L11 map
