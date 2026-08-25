@@ -31,6 +31,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L46] Branch-identity gate: verify `git branch --show-current` matches expected before `git add`, `git commit`, and `commit-push-pr`
 - [L47] Drift-scan can refute issue premise — no-repro closure type
 - [L48] `git stash` can carry diagnostic residue into the next task
+- [L49] Plugin-structure changes require `plugin-dev:plugin-validator` pre-commit
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -191,6 +192,8 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Document stage (per-task tech doc → PR body) | `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections) |
 | Before declaring done                        | `superpowers:verification-before-completion`                                                                                         |
 | Commit + push + PR                           | `commit-commands:commit-push-pr`                                                                                                     |
+| Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
+| Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
 
 > **Skill-pair wrappers (2026-08-11):** `pr-review-toolkit:code-review` is the
 > toolkit; the superpowers meta-skills wrap its invocation. Pre-PR (L13 step 10)
@@ -282,6 +285,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full triple gate (`fmt` + `clippy --all-targets` + `test`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
     - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
+- If the commit touches any plugin-structure file (per L49 trigger), invoke `plugin-dev:plugin-validator` BEFORE the step 12 commit PAUSE. Read-only agent; findings feed the same fix loop as L12 review.
     - **Format-verification plugin** (2026-08-12 grill): the `cargo fmt --check` gate is the only Rust-quality check bundled into a dedicated plugin. Subagent `ecc:rust-build-resolver` runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` + `cargo tree --duplicates` (+ `cargo audit` if installed) in one invocation; slash command `/ecc:rust-build` wraps the same agent. `ecc:rust-reviewer` (or `/ecc:rust-review`) runs the same fmt check on modified `.rs` files after a code-review pass. Other Rust-engineer agents (`compass:rust-engineer`, `voltagent-lang:rust-engineer`) apply style by writing idiomatic code on first pass — they do NOT expose a discrete `cargo fmt --check` step. `caveman:cavecrew-reviewer` intentionally skips formatting nits unless they change meaning — wrong tool for rustfmt policing. Use `/ecc:rust-build` for one-shot verify; use `/ecc:rust-review` for fmt-check paired with review.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
     - **Fixable now**: fix in current commit, re-verify, continue
@@ -1022,4 +1026,47 @@ fi
 - Assuming `git stash list` is empty after a clean merge — stash entries persist across `gh pr merge --delete-branch` if the merge did not consume them.
 
 ---
+
+## L49 — Plugin-structure changes require `plugin-dev:plugin-validator` pre-commit
+
+**Trigger** (any one matches before commit):
+
+- Edit to `**/plugin.json` (`.claude-plugin/plugin.json` or `marketplace.json`)
+- Edit to `**/hooks/**` (any hooks file)
+- Edit to `**/skills/**/SKILL.md` YAML frontmatter (name + description only — content body edits outside trigger)
+- Edit to `**/.mcp/servers.json`
+- Edit to `**/settings.json` (when changes touch permissions/hooks/MCP)
+- Edit to `**/settings.local.json` (local override file — same validation need)
+- New plugin scaffold output (e.g. `plugin-dev:create-plugin`)
+
+**Rule**: Invoke `plugin-dev:plugin-validator` post-edit, BEFORE the L13 step 12 commit PAUSE. Read-only agent. Findings feed same fix loop as L12 review (max 3 rounds per L13 Q5 budget, shared budget).
+
+**Why**: Plugin structure bugs (broken manifest, wrong hook event, missing permission, malformed frontmatter) surface only at install/load time on user's machine. Late discovery = bad UX + hotfix cycle. Pre-commit validation = cheap insurance, single agent call.
+
+**Apply**:
+
+```bash
+# Quick trigger check before commit:
+git diff --cached --name-only | grep -E '(plugin\.json|hooks/.*\.(sh|js|ts|py)|skills/.*SKILL\.md|\.mcp/servers\.json|settings(\.local)?\.json)$' \
+  && echo "Plugin-structure change detected — run plugin-dev:plugin-validator before commit per L49"
+```
+
+- If no match → skip validator, proceed to commit PAUSE
+- If match → invoke `plugin-dev:plugin-validator` as `general-purpose` sub-agent (or direct call). Findings Critical/Important → fix loop. Findings Minor → defer to PR body.
+- Skip if change is docs-only within plugin dir (e.g. `README.md` inside `.claude-plugin/`). Validator scope = manifest/hooks/skills/permissions, not prose.
+
+**Where L49 fits in L13 workflow** (cross-reference, not amendment): conditional gate inside L13 step 11 cluster (verify), before step 12 commit PAUSE. See L13 step 11 Apply section for the inline bullet.
+
+**NOT changing**:
+
+- L13 step 10 — `plugin-dev:plugin-validator` is a different lens from `type-design-analyzer` + `code-reviewer`. L13 step 10 = source-code review. L49 = plugin-manifest review. Mutually exclusive by trigger, not by step.
+- L13 complexity tiers — L49 fires whenever trigger matches, regardless of trivial/normal/critical.
+
+**In-flight eth-wallet-core v0.2**: no trigger match. L49 dormant until first plugin-structure edit.
+
+**Anti-patterns**:
+
+- Skipping `plugin-dev:plugin-validator` because "manifest looks fine to me" — manual eyeball misses schema drift the validator catches.
+- Validating then ignoring Critical findings (commit anyway) — same as skipping validator, just slower.
+- Trigger check on `git status` (working tree) instead of `git diff --cached --name-only` (staged) — misses the actual commit contents per L42.
 
