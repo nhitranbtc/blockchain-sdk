@@ -532,6 +532,18 @@ fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
         Some(3),
         "erc20 send should reach send_raw_transaction and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
     );
+    // Bind the assertion to the impl path. Reviewer LOW #1: a stub
+    // regression returning Error::Rpc from handler entry with any text
+    // other than "PR-B follow-up" (e.g. "TBD", "TODO") would still pass
+    // exit-code + absence checks without exercising the impl. Asserting
+    // "error sending request" — reqwest's signature for an unreachable
+    // host, produced only by a real HTTP call — closes the gap. This
+    // signature is stable across which call in the chain fails first
+    // (get_chain_id, send_raw_transaction, etc.).
+    assert!(
+        stderr.contains("error sending request"),
+        "expected impl-path network error from real HTTP call:\nstdout: {stdout}\nstderr: {stderr}",
+    );
     assert!(
         !stderr.contains("PR-B follow-up"),
         "erc20 send still wired to PR-B stub:\nstdout: {stdout}\nstderr: {stderr}",

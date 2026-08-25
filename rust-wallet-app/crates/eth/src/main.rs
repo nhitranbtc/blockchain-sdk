@@ -42,8 +42,10 @@ struct Cli {
     command: Command,
 
     /// Default RPC URL (overrides per-subcommand). Precedence: explicit
-    /// `--rpc-url` flag > `ETH_RPC_URL` env > `.env` file > this default
-    /// (Anvil localhost, kept as a single centralised dev convenience).
+    /// `--rpc-url` flag > `ETH_RPC_URL` env (incl. values loaded from
+    /// `.env` via dotenvy at startup) > this centralised default
+    /// (Anvil localhost). Note: dotenvy does NOT overwrite existing
+    /// process env vars, so shell exports always win over `.env`.
     /// Per #297 M10 SPKI pin was deferred per #330 — `provider::new_http`
     /// (default rustls TLS + system CAs) handles all RPC traffic.
     #[arg(
