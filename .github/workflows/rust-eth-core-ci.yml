@@ -138,9 +138,12 @@ jobs:
   # controlled storage state (`anvil_set_storage_at`), so the flake +
   # CI-IP rate-limit risk L29 cites for live testnet doesn't apply. The
   # mainnet RPC is read-only here (Anvil fork only; no transaction
-  # broadcast to mainnet). The repo secret `MAINNET_RPC_URL` is
-  # operator-managed in GitHub Settings; job skips-with-warning when
-  # absent so the first rollout doesn't block unrelated PRs.
+  # broadcast to mainnet).
+  #
+  # Default RPC: Cloudflare's public Ethereum gateway (no signup). Operator
+  # can override by setting the `MAINNET_RPC_URL` repo secret (Settings →
+  # Secrets and variables → Actions) — paid/private infra (Alchemy,
+  # Infura) gives better CI reliability than the public endpoint.
   anvil-e2e:
     name: Anvil e2e (eth-cli)
     runs-on: ubuntu-latest
@@ -159,13 +162,11 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo build --workspace
       - name: Anvil-gated e2e tests
-        if: ${{ secrets.MAINNET_RPC_URL != '' }}
         working-directory: rust-wallet-app
         env:
           RUN_ANVIL_E2E: "1"
-          MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL }}
+          # Public fallback (Cloudflare) works without any secret; operator
+          # can set MAINNET_RPC_URL repo secret to override with paid /
+          # private infra for CI reliability.
+          MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://cloudflare-eth.com' }}
         run: cargo test -p eth --test cli_localnet -- --ignored --include-ignored
-      - name: skip (no MAINNET_RPC_URL secret)
-        if: ${{ secrets.MAINNET_RPC_URL == '' }}
-        run: |
-          echo "::warning::MAINNET_RPC_URL secret unset — Anvil-fork e2e skipped. Set the secret in repo Settings → Secrets and variables → Actions to enable this job."
