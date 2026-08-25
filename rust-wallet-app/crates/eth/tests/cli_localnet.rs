@@ -450,24 +450,51 @@ fn tx_list_command_against_unreachable_rpc_is_not_a_stub() {
 
 #[test]
 fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
-    // Per Issue #339 PR-B cycle 4: `eth erc20 send` is currently a stub
-    // returning `Error::Rpc("wallet send-erc20: wired in PR-B follow-up...")`.
-    // PR-B replaces the stub with sign + broadcast. RED: stub string
-    // leaks into stderr → assertion fails. GREEN: real impl returns
-    // network error (unreachable RPC) → assertion passes. No Anvil
-    // required (unreachable port = deterministic network failure).
-    // Mirrors `send_command_against_unreachable_rpc_is_not_a_stub` for
-    // the ERC-20 sibling.
+    // Lock-down for MINOR #5 (code-reviewer): the original weak version
+    // of this test omitted `--name` + `--password`, so the handler exited
+    // at `--name required` (InvalidInput, exit 2) before reaching the
+    // broadcast path. The assertion (`stderr does not contain
+    // "PR-B follow-up"`) passed trivially even if the impl regressed
+    // to the stub, because the stub error never had a chance to appear.
+    //
+    // RED: a stub regression at handler entry would never be caught by
+    // the old test — assertion fires after the wrong code path runs.
+    // GREEN: pre-create a wallet + pass --name / --password so the path
+    // reaches `wallet_send_erc20` → `send_raw_transaction`. Against an
+    // unreachable RPC, the real impl yields Error::Rpc from the network
+    // layer (exit 3); a stub regression yields Error::Rpc from handler
+    // entry with "wired in PR-B follow-up" text. Asserting both the
+    // exit code (3, not 2/4/5) and the absent stub string proves the
+    // network path was exercised.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
+
+    // Pre-create wallet so --name lookup + --password unlock both pass.
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "erc20-sender",
+            "--password",
+            "test-password",
+        ],
+    );
 
     let out = run_eth(
         &data_dir,
         &[
             "erc20",
             "send",
+            "--name",
+            "erc20-sender",
+            "--password",
+            "test-password",
             "--token",
-            "0x0000000000000000000000000000000000000000",
+            // Valid hex address; not a real ERC-20, but the RPC will fail
+            // before any contract call resolves anyway.
+            "0x0000000000000000000000000000000000000001",
             "--to",
             "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
             "--amount",
@@ -477,11 +504,37 @@ fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
         ],
     );
 
+    let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let code = out.status.code();
+
+    // Lock-down guard: must reach the network layer. Earlier exits prove
+    // the test never exercised the impl path it claims to verify.
+    assert_ne!(
+        code,
+        Some(2),
+        "lock-down failed: --name / --password / --token parsing rejected\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert_ne!(
+        code,
+        Some(4),
+        "lock-down failed: wallet lookup rejected — pre-create step did not run\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert_ne!(
+        code,
+        Some(5),
+        "lock-down failed: signer unlock rejected — wrong password or pre-create step did not run\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // Real impl against unreachable RPC: Error::Rpc from send_raw_transaction
+    // (exit 3). Stub regression also exits 3 but with different stderr.
+    assert_eq!(
+        code,
+        Some(3),
+        "erc20 send should reach send_raw_transaction and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
+    );
     assert!(
         !stderr.contains("PR-B follow-up"),
-        "erc20 send still wired to PR-B stub:\nstdout: {}\nstderr: {stderr}",
-        String::from_utf8_lossy(&out.stdout),
+        "erc20 send still wired to PR-B stub:\nstdout: {stdout}\nstderr: {stderr}",
     );
 }
 
