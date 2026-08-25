@@ -46,13 +46,18 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 alloy-node-bindings = { version = "=1.8.3" }
 tokio = { workspace = true }
-# Issue #343 stablecoin e2e (alpha sends beta 100 USDC on Anvil):
-# alloy-contract for Instance::deploy + call builders, alloy-sol-macro for
-# the `sol!` proc macro that defines MockUSDC inline in the test, and
-# alloy-sol-types for the type primitives the macro generates.
-# Pinned to =1.6.1 because alloy-sol-macro only publishes 1.6.1 on
-# crates.io (latest stable). The macro + alloy-contract must share the
-# same minor for the generated `MockUSDC::deploy` signature to type-check.
+# Issue #343 stablecoin e2e (alpha sends beta ERC-20 on Anvil fork).
+# Pinned to =1.6.1 because alloy-sol-macro + alloy-sol-types +
+# alloy-contract only publish 1.6.1 on crates.io. The `sol!` macro
+# generates code that references `alloy_contract` types, so all
+# three must share the same minor. ABI types from `sol!` (1.6.1)
+# interoperate with alloy-provider 1.8.x via shared alloy-primitives.
 alloy-contract = { version = "=1.6.1" }
 alloy-sol-macro = { version = "=1.6.1" }
 alloy-sol-types = { version = "=1.6.1" }
+# `anvil-api` feature unlocks `AnvilApi` trait methods on `Provider`
+# (anvil_deal_erc20, anvil_set_storage_at, etc.) needed by #343 test.
+# Permissive `^1.0` (not pinned) — must follow alloy-node-bindings
+# (also dev-only, =1.8.3) to avoid transitive reqwest version
+# mismatch (provider 1.6.1 + rpc-client 1.8.3 incompatibility).
+alloy-provider = { version = "^1.0", features = ["anvil-api"] }

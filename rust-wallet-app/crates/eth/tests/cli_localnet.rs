@@ -20,6 +20,11 @@ use std::process::Command;
 
 use tempfile::TempDir;
 
+// Pulls `provider.anvil_deal_erc20(...)` etc. methods into scope.
+use alloy_provider::ext::AnvilApi;
+// `(account, slot).abi_encode()` for storage-slot derivation.
+use alloy_sol_types::SolValue;
+
 /// Skip helper for Anvil-gated tests (L29): if `RUN_ANVIL_E2E` is unset,
 /// log and return early. Declared above the always-on tests so any
 /// `#[ignore]`-marked Anvil test in the file can use it regardless of
@@ -32,6 +37,55 @@ macro_rules! anvil_or_skip {
         }
     };
 }
+
+// #343 acceptance test fixtures.
+//
+// ABI-only IERC20 binding — we never deploy, only call balanceOf via
+// eth_call. Avoids the prior session's `MockUSDC::deploy` blocker
+// (alloy-sol-macro doesn't generate a deploy helper in 1.6.1).
+//
+// `#[sol(rpc)]` enables `IERC20::new(addr, provider)` + `.balanceOf(...).call()`.
+alloy_sol_macro::sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    contract IERC20 {
+        function balanceOf(address target) returns (uint256);
+    }
+}
+
+/// WETH9 mainnet contract. WETH is a simple wrapper (no proxy, no
+/// upgradeability) with well-documented storage layout: `balanceOf`
+/// is at slot 3 (after `name`/`symbol`/`decimals` at slots 0/1/2).
+/// Chosen over USDC because USDC is a TransparentUpgradeableProxy and
+/// its `_balances` storage lives at the impl's storage layout (via
+/// delegatecall) — too many moving parts for an Anvil-fork mock test.
+/// The use case (alpha sends beta 100 tokens, assert balances) is
+/// token-agnostic; WETH serves as the canonical ERC-20 stand-in.
+const WETH_MAINNET: alloy_primitives::Address =
+    alloy_primitives::address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
+
+/// `balanceOf` storage slot in WETH9 — after name/symbol/decimals.
+const WETH_BALANCEOF_SLOT: u8 = 3;
+
+/// WETH has 18 decimals (same as ETH). 10^18 raw units = 1 WETH.
+const WETH_ONE: u128 = 1_000_000_000_000_000_000;
+
+/// alpha sends beta 100 WETH (use case: "alpha sends beta 100 USDC"
+/// from #343 body; token identity is incidental).
+const WETH_TRANSFER_AMOUNT_RAW: u128 = 100 * WETH_ONE;
+
+/// alpha starts with 1000 WETH, pre-written to WETH balanceOf slot.
+const WETH_ALPHA_INITIAL_RAW: u128 = 1_000 * WETH_ONE;
+
+/// Public mainnet RPC source for `Anvil::new().fork(...)` — alloy docs
+/// `anvil_set_storage_at` example (https://alloy.rs/examples/node-bindings/anvil_set_storage_at/).
+/// Defaults to `https://ethereum.reth.rs/rpc`. Override at compile time
+/// with `MAINNET_RPC_URL=https://your-rpc.example cargo test` if the
+/// default flakes (rate limits, downtime, etc.).
+const MAINNET_RPC_URL: &str = match std::option_env!("MAINNET_RPC_URL") {
+    Some(url) => url,
+    None => "https://ethereum.reth.rs/rpc",
+};
 
 /// Resolve the path to the `eth` binary under test. Cargo provides this via
 /// the `CARGO_BIN_EXE_<name>` env var for integration tests.
@@ -971,5 +1025,181 @@ async fn tx_get_returns_not_found_for_unknown_hash() {
         "unknown tx hash must yield rpc-error exit code (3)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn alpha_send_beta_100_weth_against_anvil_fork_mainnet() {
+    // Issue #343 acceptance test: alpha sends beta 100 ERC-20 tokens
+    // (WETH stand-in for USDC, see #343 body "Implementation notes")
+    // against a local Anvil forked from Ethereum mainnet.
+    //
+    // Flow:
+    // 1. Fork Anvil from mainnet via `Anvil::new().fork(MAINNET_RPC_URL)
+    //    .chain_id(31337).spawn()` — loads WETH bytecode + storage.
+    // 2. Pre-fund alpha with 1000 WETH via `anvil_set_storage_at`:
+    //    slot = keccak256(abi.encode(alpha, 3)) (WETH's balanceOf is
+    //    at slot 3 after name/symbol/decimals), value = 1000 WETH.
+    //    Sidesteps the `anvil_deal_erc20` cheatcode (assumes non-proxy
+    //    mapping layout; defeated by USDC's proxy pattern) and the
+    //    `MockUSDC::deploy` blocker (alloy-sol-macro 1.6.1 doesn't
+    //    generate deploy helpers).
+    // 3. Import alpha's wallet via the CLI (Anvil default mnemonic).
+    // 4. Run `eth erc20 send --token WETH --amount 100 WETH --network
+    //    anvil` against alpha's wallet.
+    // 5. Assert exit 0 + tx hash + post-state balances via
+    //    `IERC20::balanceOf` eth_call (alpha 900 WETH, beta 100 WETH).
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(31337)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    // Anvil default accounts:
+    //   #0: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 (pre-funded 10000 ETH)
+    //   #1: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+    let beta_addr: alloy_primitives::Address = "70997970C51812dc3A010C7d01b50e0d17dc79C8"
+        .parse()
+        .expect("beta addr");
+
+    // Pre-deal 1000 WETH to alpha by writing directly to WETH's
+    // `balanceOf[alpha]` storage slot. WETH9 storage layout: `name`,
+    // `symbol`, `decimals` at slots 0/1/2, then `mapping(address =>
+    // uint256) balanceOf` at slot 3. Solidity mapping layout means the
+    // actual storage slot for `balanceOf[alpha]` is
+    // `keccak256(abi.encode(alpha, 3))`. Per alloy docs example
+    // (https://alloy.rs/examples/node-bindings/anvil_set_storage_at/).
+    let slot_bytes = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(WETH_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let slot_u256: alloy_primitives::U256 = slot_bytes.into();
+    let val_bytes: alloy_primitives::B256 = alloy_primitives::U256::from(WETH_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(WETH_MAINNET, slot_u256, val_bytes)
+        .await
+        .expect("anvil_set_storage_at(WETH, balanceOf[alpha], 1000 WETH)");
+
+    // Pre-fund sanity assert (reviewer LOW): a future slot-math regression
+    // (wrong slot index, swapped keccak arguments) would surface as a
+    // generic "erc20 send failed" inside the CLI rather than a pinpoint
+    // assertion near the slot-write. Catch it here so the failure message
+    // points at the pre-fund, not the transfer.
+    let weth = IERC20::new(WETH_MAINNET, &provider);
+    let alpha_balance_after_fund = weth
+        .balanceOf(alpha_addr)
+        .call()
+        .await
+        .expect("alpha balanceOf after pre-fund");
+    assert_eq!(
+        alpha_balance_after_fund,
+        alloy_primitives::U256::from(WETH_ALPHA_INITIAL_RAW),
+        "pre-fund sanity: alpha should have {} WETH after anvil_set_storage_at, got {alpha_balance_after_fund}",
+        WETH_ALPHA_INITIAL_RAW,
+    );
+
+    // Import alpha's wallet via the CLI (Anvil default mnemonic).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+    let phrase = "test test test test test test test test test test test junk";
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "alpha",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    // Run the CLI's erc20 send path: alpha -> beta, 100 WETH raw units.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "erc20",
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password",
+            "--token",
+            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+            "--to",
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "--amount",
+            &WETH_TRANSFER_AMOUNT_RAW.to_string(),
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "erc20 send must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // stdout should contain a tx hash (0x + 64 hex chars = 66 chars).
+    let hex_count = stdout
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit() && *c != '\n')
+        .count();
+    assert!(
+        stdout.contains("0x") && hex_count >= 64,
+        "expected tx hash (0x + 64 hex chars) in stdout: {stdout}",
+    );
+
+    // Read post-state balances via IERC20 ABI (eth_call, no signing).
+    let weth = IERC20::new(WETH_MAINNET, &provider);
+    let alpha_balance = weth
+        .balanceOf(alpha_addr)
+        .call()
+        .await
+        .expect("alpha balanceOf");
+    let beta_balance = weth
+        .balanceOf(beta_addr)
+        .call()
+        .await
+        .expect("beta balanceOf");
+
+    let expected_alpha_remaining =
+        alloy_primitives::U256::from(WETH_ALPHA_INITIAL_RAW - WETH_TRANSFER_AMOUNT_RAW);
+    let expected_beta_received = alloy_primitives::U256::from(WETH_TRANSFER_AMOUNT_RAW);
+
+    assert_eq!(
+        alpha_balance,
+        expected_alpha_remaining,
+        "alpha should have {} WETH after sending {} to beta (started {}): got {alpha_balance}",
+        WETH_ALPHA_INITIAL_RAW - WETH_TRANSFER_AMOUNT_RAW,
+        WETH_TRANSFER_AMOUNT_RAW,
+        WETH_ALPHA_INITIAL_RAW,
+    );
+    assert_eq!(
+        beta_balance, expected_beta_received,
+        "beta should have {} WETH after receiving from alpha (started 0): got {beta_balance}",
+        WETH_TRANSFER_AMOUNT_RAW,
     );
 }
