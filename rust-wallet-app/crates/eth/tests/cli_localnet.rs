@@ -527,6 +527,247 @@ fn erc20_send_command_without_token_yields_exit_2() {
 }
 
 #[test]
+fn wallet_balance_with_token_flag_is_accepted_by_clap() {
+    // Issue #356 — extend `wallet balance` with `--token <ADDR>` for ERC-20
+    // balance view. RED: clap rejects unknown `--token` flag (exit 2 + "Usage:"
+    // or "unexpected argument" leaks into stderr). GREEN: clap accepts the
+    // flag, handler reaches the RPC layer. Unreachable RPC → exit 3 with
+    // "error sending request" — same lock-down shape as
+    // `erc20_send_command_against_unreachable_rpc_is_not_a_stub`.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", // WETH mainnet
+            "--rpc-url",
+            "http://127.0.0.1:1", // unreachable
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let code = out.status.code();
+
+    // Lock-down: clap rejected the flag → must NOT be exit 2 from clap.
+    assert_ne!(
+        code,
+        Some(2),
+        "lock-down: --token flag was rejected by clap (exit 2); not yet wired\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        !stderr.contains("unexpected argument")
+            && !stderr.contains("Usage:")
+            && !stderr.contains("unrecognized"),
+        "stderr must not contain clap rejection markers:\nstderr: {stderr}",
+    );
+    // Real impl against unreachable RPC: Error::Rpc from provider.call
+    // (exit 3) — same shape as the erc20-send lock-down test.
+    assert_eq!(
+        code,
+        Some(3),
+        "wallet balance --token should reach eth_call and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // Lock-down against stub regression: the only path that emits
+    // `balanceOf` in stderr is `token_balance`'s `format!("eth_call balanceOf: ...")`
+    // prefix — a stub regression at handler entry returning Error::Rpc
+    // from arbitrary text would NOT match this substring.
+    assert!(
+        stderr.contains("balanceOf"),
+        "expected impl-path network error from real eth_call balanceOf:\nstdout: {stdout}\nstderr: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_balance_with_invalid_token_address_yields_exit_2() {
+    // L28 Gate C checklist (code-reviewer IMPORTANT): invalid --token
+    // branch was uncovered by #356 design sketch. RED: clap accepts garbage
+    // address, handler exits at provider.call with confusing RPC error.
+    // GREEN: rejected with InvalidInput (exit 2) at parse.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            "0xnot-an-address",
+        ],
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "invalid --token must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--token") || stderr.contains("token"),
+        "stderr should mention --token: {stderr}",
+    );
+}
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_token_weth_against_anvil_fork_mainnet() {
+    // Issue #356 acceptance test: `eth wallet balance --token WETH` reads
+    // the ERC-20 balance via eth_call against Anvil-fork-mainnet. Pre-fund
+    // alpha with 1000 WETH (same anvil_set_storage_at pattern as the send
+    // tests above). RED: --token flag absent, eth_call path unwired.
+    // GREEN: eth_call returns the pre-funded balance.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(31337)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+
+    // Pre-fund alpha with 1000 WETH (same slot math as the WETH send test).
+    let slot_bytes = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(WETH_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let slot_u256: alloy_primitives::U256 = slot_bytes.into();
+    let val_bytes: alloy_primitives::B256 = alloy_primitives::U256::from(WETH_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(WETH_MAINNET, slot_u256, val_bytes)
+        .await
+        .expect("anvil_set_storage_at(WETH, balanceOf[alpha], 1000 WETH)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // Read alpha's WETH balance via the CLI's new --token flag.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "balance --token WETH must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // WETH has 18 decimals. 1000 WETH = 1e21 raw. Output should include
+    // either "1000" or "1000.0..." plus a token symbol hint (default ETH
+    // formatter prints whole + fractional). Tolerant: any line with the
+    // pre-fund magnitude passes.
+    assert!(
+        stdout.contains("1000") || stdout.contains("1000.000000"),
+        "expected pre-funded WETH balance in stdout, got: {stdout}",
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_token_usdt_against_anvil_fork_mainnet() {
+    // Issue #356 acceptance test, USDT variant. Same pattern as WETH but
+    // with 6 decimals. RED: --token flag absent, --decimals override absent.
+    // GREEN: USDT balance reads back with auto-detected 6-decimal scale.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(31337)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+
+    // Pre-fund alpha with 1000 USDT at TetherToken's `balances[alpha]` slot.
+    let slot_bytes = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(USDT_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let slot_u256: alloy_primitives::U256 = slot_bytes.into();
+    let val_bytes: alloy_primitives::B256 = alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(USDT_MAINNET, slot_u256, val_bytes)
+        .await
+        .expect("anvil_set_storage_at(USDT, balances[alpha], 1000 USDT)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "balance --token USDT must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // USDT has 6 decimals. 1000 USDT = 1e9 raw. Output should print
+    // "1000.000000" if auto-detect works.
+    assert!(
+        stdout.contains("1000") || stdout.contains("1000.000000"),
+        "expected pre-funded USDT balance in stdout, got: {stdout}",
+    );
+}
+
+#[test]
 fn tx_list_command_against_unreachable_rpc_is_not_a_stub() {
     // Per Issue #339 PR-B cycle 5: `eth tx list` is currently a stub
     // returning `Error::Rpc("tx list: wired in PR-B follow-up...")`. PR-B

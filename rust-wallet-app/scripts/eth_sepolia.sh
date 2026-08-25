@@ -104,6 +104,44 @@ pad_address() {
   printf "0x%064s" "$stripped" | tr ' ' '0'
 }
 
+# Cross-check a USDC balance read: CLI `eth wallet balance --token` MUST
+# equal the direct `eth_call balanceOf` RPC. Failure means (a) CLI wired
+# to a different RPC, (b) ABI encoding regressed, or (c) Bash/Python/CLI
+# conversion drift.
+#
+# Args: <address> <label-for-log>
+# Side effects: logs; exits 1 on mismatch.
+# Globals consumed: $RPC, $TOKEN_ADDR, $ETH_BIN
+usdc_cross_check() {
+  local addr="$1" label="$2"
+  local padded calldata_hex cli_dec
+  padded=$(pad_address "$addr")
+  calldata_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"0x70a08231${padded:2}\"},\"latest\"]" | extract_result)
+  [[ -z "$calldata_hex" || "$calldata_hex" == "0x" ]] && calldata_hex="0x0"
+  # CLI output is already a decimal string (e.g. "15" or "15.000000") —
+  # do NOT pass through `to_decimal` (it would hex-parse "15" as 0x15 = 21).
+  cli_dec=$("$ETH_BIN" wallet balance \
+    --address "$addr" \
+    --token "$TOKEN_ADDR" \
+    --network sepolia \
+    --rpc-url "$RPC" 2>/dev/null | awk '{print $1}')
+  log "$label USDC CLI cross-check: $cli_dec USDC (raw: $calldata_hex)" >&2
+  if ! python3 -c "
+import sys
+from decimal import Decimal
+cli_int = int(Decimal(sys.argv[1]) * Decimal('1e6'))
+rpc_int = int(sys.argv[2], 16)
+sys.exit(0 if cli_int == rpc_int else 1)
+" "$cli_dec" "$calldata_hex"; then
+    log "ERROR: CLI ↔ RPC mismatch for $label USDC"
+    log "  CLI: $cli_dec USDC (raw $cli_dec * 1e6)"
+    log "  RPC: $calldata_hex raw"
+    exit 1
+  fi
+  # Print RPC-derived value as the authoritative answer for the caller
+  printf '%s' "$calldata_hex"
+}
+
 # Step 1: Pre-flight
 step 1 "Pre-flight checks"
 log "RPC:    ${RPC:0:60}..."
@@ -160,10 +198,7 @@ fi
 
 # Step 3: Read alpha USDC balance (read-only — assumes operator pre-funded)
 step 3 "Read alpha Circle USDC balance (assumes pre-funded)"
-alpha_padded=$(pad_address "$ALPHA_ADDR")
-alpha_calldata="0x70a08231${alpha_padded:2}"
-alpha_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$alpha_calldata\"},\"latest\"]" | extract_result)
-[[ -z "$alpha_usdc_hex" || "$alpha_usdc_hex" == "0x" ]] && alpha_usdc_hex="0x0"
+alpha_usdc_hex=$(usdc_cross_check "$ALPHA_ADDR" "Alpha")
 alpha_usdc_human=$(to_decimal "$alpha_usdc_hex" 1000000)
 log "Alpha USDC: $alpha_usdc_human USDC (raw: $alpha_usdc_hex)"
 if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) >= int(sys.argv[2]) else 1)" "$alpha_usdc_hex" "$TRANSFER_RAW"; then
@@ -176,13 +211,9 @@ fi
 # Step 4: Capture beta pre-transfer USDC balance (delta-check baseline)
 step 4 "Capture beta pre-transfer USDC balance"
 log "Beta recipient: $BETA_ADDR"
-beta_pre_padded=$(pad_address "$BETA_ADDR")
-beta_pre_calldata="0x70a08231${beta_pre_padded:2}"
-beta_pre_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$beta_pre_calldata\"},\"latest\"]" | extract_result)
-[[ -z "$beta_pre_hex" || "$beta_pre_hex" == "0x" ]] && beta_pre_hex="0x0"
-BETA_USDC_PRE_HEX="$beta_pre_hex"
-BETA_USDC_PRE_HUMAN=$(to_decimal "$beta_pre_hex" 1000000)
-log "Beta pre-transfer USDC: $BETA_USDC_PRE_HUMAN (raw: $beta_pre_hex)"
+BETA_USDC_PRE_HEX=$(usdc_cross_check "$BETA_ADDR" "Beta pre-transfer")
+BETA_USDC_PRE_HUMAN=$(to_decimal "$BETA_USDC_PRE_HEX" 1000000)
+log "Beta pre-transfer USDC: $BETA_USDC_PRE_HUMAN (raw: $BETA_USDC_PRE_HEX)"
 
 # Step 5: Broadcast
 step 5 "Broadcast: alpha -> beta, $TRANSFER_RAW raw ($((TRANSFER_RAW / 1000000)) USDC)"
@@ -225,10 +256,7 @@ fi
 
 # Step 7: Verify beta balance (delta check: post - pre == 1 USDC)
 step 7 "Verify beta on-chain USDC balance (delta == $((TRANSFER_RAW / 1000000)) USDC)"
-padded=$(pad_address "$BETA_ADDR")
-calldata="0x70a08231${padded:2}"
-bal_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$calldata\"},\"latest\"]" | extract_result)
-[[ -z "$bal_hex" || "$bal_hex" == "0x" ]] && bal_hex="0x0"
+bal_hex=$(usdc_cross_check "$BETA_ADDR" "Beta post-transfer")
 bal_human=$(to_decimal "$bal_hex" 1000000)
 log "Beta USDC balance: $bal_human USDC"
 
@@ -258,11 +286,8 @@ alpha_eth_human=$("$ETH_BIN" wallet balance \
   --network sepolia \
   --rpc-url "$RPC" 2>/dev/null | awk '{print $1}')
 
-# Alpha USDC (RPC — until #356 ships `wallet balance --token`)
-alpha_padded=$(pad_address "$ALPHA_ADDR")
-alpha_calldata="0x70a08231${alpha_padded:2}"
-alpha_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$alpha_calldata\"},\"latest\"]" | extract_result)
-[[ -z "$alpha_usdc_hex" || "$alpha_usdc_hex" == "0x" ]] && alpha_usdc_hex="0x0"
+# Alpha USDC — CLI ↔ RPC cross-check via #356 (`wallet balance --token`)
+alpha_usdc_hex=$(usdc_cross_check "$ALPHA_ADDR" "Alpha")
 alpha_usdc_human=$(to_decimal "$alpha_usdc_hex" 1000000)
 
 # Beta ETH (CLI via `eth wallet balance`)
@@ -271,11 +296,8 @@ beta_eth_human=$("$ETH_BIN" wallet balance \
   --network sepolia \
   --rpc-url "$RPC" 2>/dev/null | awk '{print $1}')
 
-# Beta USDC (RPC — until #356 ships)
-beta_padded=$(pad_address "$BETA_ADDR")
-beta_calldata="0x70a08231${beta_padded:2}"
-beta_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$beta_calldata\"},\"latest\"]" | extract_result)
-[[ -z "$beta_usdc_hex" || "$beta_usdc_hex" == "0x" ]] && beta_usdc_hex="0x0"
+# Beta USDC — CLI ↔ RPC cross-check via #356
+beta_usdc_hex=$(usdc_cross_check "$BETA_ADDR" "Beta")
 beta_usdc_human=$(to_decimal "$beta_usdc_hex" 1000000)
 
 log ""

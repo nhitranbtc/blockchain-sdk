@@ -263,27 +263,57 @@ pub fn wallet_delete(
 /// Print the ETH balance of `address` in the requested unit. Default unit
 /// is ETH (18 decimals). Caller provides the provider so PR-A can reuse
 /// this fn for both Anvil (dev) and Sepolia (testnet).
+///
+/// When `token` is `Some`, print the ERC-20 `balanceOf(address)` for the
+/// token contract instead — auto-detect decimals via
+/// `erc20::query_decimals` unless `decimals_override` is supplied (Issue #356).
 pub async fn wallet_balance(
     provider: &RootProvider<Ethereum>,
     address: &str,
     unit: Option<&str>,
+    token: Option<&str>,
+    decimals_override: Option<u8>,
 ) -> Result<()> {
-    let addr = Address::from_str(address)
+    let holder = Address::from_str(address)
         .map_err(|e| Error::InvalidInput(format!("invalid address: {e}")))?;
-    let balance_wei = provider
-        .get_balance(addr)
-        .await
-        .map_err(|e| Error::Rpc(format!("get_balance: {e}")))?;
-
-    let unit = unit.unwrap_or("eth");
-    let formatted = match unit.to_ascii_lowercase().as_str() {
-        "wei" => format!("{} wei", balance_wei),
-        "gwei" => format!("{} gwei", format_wei_as(balance_wei, 9)),
-        "eth" => format!("{} ETH", format_wei_as(balance_wei, 18)),
-        other => return Err(Error::InvalidInput(format!("unknown unit '{other}'"))),
-    };
-    println!("{formatted}");
-    Ok(())
+    match token {
+        None => {
+            let balance_wei = provider
+                .get_balance(holder)
+                .await
+                .map_err(|e| Error::Rpc(format!("get_balance: {e}")))?;
+            let unit = unit.unwrap_or("eth");
+            let formatted = match unit.to_ascii_lowercase().as_str() {
+                "wei" => format!("{} wei", balance_wei),
+                "gwei" => format!("{} gwei", format_wei_as(balance_wei, 9)),
+                "eth" => format!("{} ETH", format_wei_as(balance_wei, 18)),
+                other => return Err(Error::InvalidInput(format!("unknown unit '{other}'"))),
+            };
+            println!("{formatted}");
+            Ok(())
+        }
+        Some(token_str) => {
+            let token_addr = Address::from_str(token_str)
+                .map_err(|e| Error::InvalidInput(format!("invalid --token address: {e}")))?;
+            let raw = eth_wallet_core::erc20::token_balance(provider, token_addr, holder).await?;
+            let decimals = match decimals_override {
+                Some(d) => d,
+                None => eth_wallet_core::erc20::query_decimals(provider, token_addr)
+                    .await
+                    .map_err(|e| {
+                        Error::Rpc(format!(
+                            "decimals() query failed (use --decimals <N> to override): {e}"
+                        ))
+                    })?,
+            };
+            // Token balance prints raw + decimal-scaled only — adding a separate
+            // unit vocabulary (wei/gwei/eth) is out of scope for v0.2.
+            // The `--unit` flag is rejected by clap when `--token` is set
+            // (`conflicts_with`), so this branch never sees a `unit` hint.
+            println!("{} {}", format_wei_as(raw, decimals), token_addr);
+            Ok(())
+        }
+    }
 }
 
 /// Look up a transaction by hash. Returns `Error::Rpc("transaction not
@@ -350,11 +380,11 @@ fn redact_rpc_error(e: impl std::fmt::Display) -> String {
 /// Format a `U256` wei amount as `<whole>.<frac>` with `decimals` fractional
 /// digits (zero-padded). Returns just `<whole>` when the fractional part
 /// is zero.
-fn format_wei_as(wei: U256, decimals: u32) -> String {
+fn format_wei_as(wei: U256, decimals: u8) -> String {
     if decimals == 0 {
         return wei.to_string();
     }
-    let div = U256::from(10u128.pow(decimals));
+    let div = U256::from(10u128.pow(u32::from(decimals)));
     let whole = wei / div;
     let frac = wei % div;
     if frac.is_zero() {

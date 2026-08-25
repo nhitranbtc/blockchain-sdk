@@ -9,11 +9,16 @@
 //!   - `approve(address,uint256)`         — selector 0x095ea7b3
 //!
 //! All three return `alloy_primitives::Bytes` ready to attach to a
-//! `TransactionRequest.input` (or to feed to `provider.call(&req)` for
+//! `TransactionRequest.input` (or to feed to `provider.call(req)` for
 //! the view methods).
 
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_network::Ethereum;
+use alloy_primitives::{Address, Bytes, TxKind, U256};
+use alloy_provider::{Provider, RootProvider};
+use alloy_rpc_types::TransactionRequest;
 use alloy_sol_types::{sol, SolCall};
+
+use crate::error::{Error, Result};
 
 // Sol! macro for typed ERC-20 surface. Auto-generates `*Call` structs
 // with `abi_encode()` + `decode()` methods under the `SolCall` trait.
@@ -28,6 +33,11 @@ sol! {
     /// ERC-20 `balanceOf(address) view returns (uint256)` — selector
     /// 0x70a08231. Note `view` keyword in the type signature.
     function balanceOf(address account) external view returns (uint256);
+
+    /// ERC-20 `decimals() view returns (uint8)` — selector 0x313ce567.
+    /// `wallet balance --token` calls this via `query_decimals` to
+    /// auto-scale the raw `balanceOf` return value into human-readable units.
+    function decimals() external view returns (uint8);
 
     /// ERC-20 `approve(address spender, uint256 value)` — selector 0x095ea7b3.
     function approve(address spender, uint256 value) external returns (bool);
@@ -53,13 +63,65 @@ pub fn approve_calldata(spender: Address, value: U256) -> Bytes {
     approveCall { spender, value }.abi_encode().into()
 }
 
-/// ERC-20 function selector constants — exposed as `u32` for callers
+/// Build the calldata for `decimals()`. Returns the 4-byte selector
+/// 0x313ce567 with no arguments. Used by Issue #356 to auto-detect
+/// token decimal scale before formatting the raw `balanceOf` result.
+pub fn decimals_calldata() -> Bytes {
+    decimalsCall {}.abi_encode().into()
+}
+
+/// Read the raw ERC-20 `balanceOf(holder)` for `token` via `eth_call`.
+/// Returns the raw U256 base-unit balance; caller scales by the token's
+/// `decimals()` (Issue #356 auto-detects via [`query_decimals`] or
+/// accepts a `--decimals <N>` override).
+pub async fn token_balance(
+    provider: &RootProvider<Ethereum>,
+    token: Address,
+    holder: Address,
+) -> Result<U256> {
+    let calldata = balance_of_calldata(holder);
+    let req = TransactionRequest {
+        to: Some(TxKind::Call(token)),
+        input: calldata.into(),
+        ..Default::default()
+    };
+    let raw = provider
+        .call(req)
+        .await
+        .map_err(|e| Error::Rpc(format!("eth_call balanceOf: {e}")))?;
+    let balance: U256 = balanceOfCall::abi_decode_returns(&raw)
+        .map_err(|e| Error::Rpc(format!("decode balanceOf returns: {e}")))?;
+    Ok(balance)
+}
+
+/// Auto-detect an ERC-20 token's `decimals()` via `eth_call`. Returns
+/// `Err(Error::Rpc(...))` if the call reverts or the response can't be
+/// decoded. Pass `--decimals <N>` to the CLI to skip auto-detect.
+pub async fn query_decimals(provider: &RootProvider<Ethereum>, token: Address) -> Result<u8> {
+    let calldata = decimals_calldata();
+    let req = TransactionRequest {
+        to: Some(TxKind::Call(token)),
+        input: calldata.into(),
+        ..Default::default()
+    };
+    let raw = provider
+        .call(req)
+        .await
+        .map_err(|e| Error::Rpc(format!("eth_call decimals: {e}")))?;
+    let decimals: u8 = decimalsCall::abi_decode_returns(&raw)
+        .map_err(|e| Error::Rpc(format!("decode decimals returns: {e}")))?;
+    Ok(decimals)
+}
+
+/// ERC-20 function selector constants — exposed as `[u8; 4]` for callers
 /// that want to verify selector identity without recomputing keccak256.
 pub mod selectors {
     /// `keccak256("transfer(address,uint256)")[0..4]` — 0xa9059cbb.
     pub const TRANSFER: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
     /// `keccak256("balanceOf(address)")[0..4]` — 0x70a08231.
     pub const BALANCE_OF: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
+    /// `keccak256("decimals()")[0..4]` — 0x313ce567.
+    pub const DECIMALS: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
     /// `keccak256("approve(address,uint256)")[0..4]` — 0x095ea7b3.
     pub const APPROVE: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
 }

@@ -142,8 +142,20 @@ enum WalletAction {
         address: String,
         #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
-        #[arg(long)]
+        /// ETH unit hint (`wei|gwei|eth`); meaningless when `--token` is
+        /// set — clap rejects the combo at parse time.
+        #[arg(long, conflicts_with = "token")]
         unit: Option<String>,
+        /// ERC-20 token contract address. When set, prints the token balance
+        /// (auto-detects decimals via `decimals()` `eth_call` unless
+        /// `--decimals` is supplied) instead of the native ETH balance.
+        #[arg(long)]
+        token: Option<String>,
+        /// Override for the ERC-20 `decimals()` auto-detect. Useful when
+        /// the token contract doesn't implement standard `decimals()` or
+        /// the RPC can't reach the token. Must be 0..=255.
+        #[arg(long, requires = "token")]
+        decimals: Option<u8>,
     },
     /// Sync wallet with chain state (rebuild meta from on-chain). Deferred.
     Sync {
@@ -392,10 +404,19 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     address,
                     network: _,
                     unit,
+                    token,
+                    decimals,
                 } => {
                     let rpc = &cli.rpc_url;
                     let provider = open_provider(rpc)?;
-                    wallet_balance(&provider, &address, unit.as_deref()).await
+                    wallet_balance(
+                        &provider,
+                        &address,
+                        unit.as_deref(),
+                        token.as_deref(),
+                        decimals,
+                    )
+                    .await
                 }
                 WalletAction::Sync { .. } => Err(eth_wallet_core::Error::Rpc(
                     "wallet sync: deferred past #337 (follow-up)".into(),
