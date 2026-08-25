@@ -140,10 +140,15 @@ jobs:
   # mainnet RPC is read-only here (Anvil fork only; no transaction
   # broadcast to mainnet).
   #
-  # Default RPC: Cloudflare's public Ethereum gateway (no signup). Operator
-  # can override by setting the `MAINNET_RPC_URL` repo secret (Settings →
-  # Secrets and variables → Actions) — paid/private infra (Alchemy,
-  # Infura) gives better CI reliability than the public endpoint.
+  # Default RPC: PublicNode's public Ethereum gateway (no signup, supports
+  # archive-mode RPC methods Anvil fork needs — `eth_getBlockByNumber`
+  # for the fork block). Cloudflare's free gateway (`cloudflare-eth.com`)
+  # was tried first; it returns `error -32046: Cannot fulfill request`
+  # for the archive lookup Anvil fork performs (run `32811985548`,
+  # 2026-08-25). Operator can override by setting the `MAINNET_RPC_URL`
+  # repo secret (Settings → Secrets and variables → Actions) — paid /
+  # private infra (Alchemy, Infura) gives better CI reliability than the
+  # public endpoint.
   anvil-e2e:
     name: Anvil e2e (eth-cli)
     runs-on: ubuntu-latest
@@ -165,8 +170,8 @@ jobs:
         working-directory: rust-wallet-app
         env:
           RUN_ANVIL_E2E: "1"
-          # Public fallback (Cloudflare) works without any secret; operator
-          # can set MAINNET_RPC_URL repo secret to override with paid /
-          # private infra for CI reliability.
-          MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://cloudflare-eth.com' }}
+          # Public fallback (PublicNode — supports archive-mode RPC Anvil
+          # fork needs). Operator can set MAINNET_RPC_URL repo secret to
+          # override with paid / private infra for CI reliability.
+          MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://ethereum-rpc.publicnode.com' }}
         run: cargo test -p eth --test cli_localnet -- --ignored
