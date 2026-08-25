@@ -124,13 +124,34 @@ if [[ -z "$code" || "$code" == "0x" ]]; then
 fi
 log "Token contract bytecode OK ($((${#code} - 2)) hex chars)"
 
-# Step 2: Read alpha ETH balance (read-only — assumes operator pre-funded)
-step 2 "Read alpha Sepolia ETH balance (assumes pre-funded)"
+# Step 2: Read alpha ETH balance via eth CLI (`wallet balance`)
+# Per script goal: ensure eth CLI works end-to-end. Native ETH goes through
+# the CLI; ERC-20 (USDC) uses direct RPC until #356 ships (`wallet balance
+# --token` flag).
+# Cross-check: CLI output MUST match direct `eth_getBalance` RPC. Failure
+# here means CLI is using a different RPC or has a regression.
+step 2 "Read alpha Sepolia ETH balance (CLI + RPC cross-check)"
+alpha_eth_human=$("$ETH_BIN" wallet balance \
+  --address "$ALPHA_ADDR" \
+  --network sepolia \
+  --rpc-url "$RPC" 2>/dev/null | awk '{print $1}')
 alpha_eth_hex=$(rpc "eth_getBalance" "[\"$ALPHA_ADDR\",\"latest\"]" | extract_result)
 [[ -z "$alpha_eth_hex" || "$alpha_eth_hex" == "0x" ]] && alpha_eth_hex="0x0"
-alpha_eth_human=$(to_decimal "$alpha_eth_hex" 1000000000000000000)
-log "Alpha ETH: $alpha_eth_human ETH (raw: $alpha_eth_hex)"
-if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) >= int(sys.argv[2]) else 1)" "$alpha_eth_hex" "$MIN_GAS_WEI"; then
+log "Alpha ETH: $alpha_eth_human ETH (CLI) | $alpha_eth_hex wei (RPC)"
+if ! python3 -c "
+import sys
+from decimal import Decimal
+cli_eth = Decimal(sys.argv[1])
+cli_wei = int(cli_eth * Decimal('1e18'))
+rpc_wei = int(sys.argv[2], 16)
+sys.exit(0 if cli_wei == rpc_wei else 1)
+" "$alpha_eth_human" "$alpha_eth_hex"; then
+  log "ERROR: CLI ↔ RPC mismatch for alpha ETH"
+  log "  CLI: $alpha_eth_human ETH (wei $alpha_eth_human * 1e18)"
+  log "  RPC: $alpha_eth_hex wei"
+  exit 1
+fi
+if python3 -c "import sys; eth=float(sys.argv[1]); wei=int(eth*1e18); sys.exit(0 if wei >= int(sys.argv[2]) else 1)" "$alpha_eth_human" "$MIN_GAS_WEI"; then
   log "OK: alpha has ≥ $MIN_GAS_WEI wei Sepolia ETH for gas"
 else
   log "ERROR: alpha Sepolia ETH balance below $MIN_GAS_WEI wei threshold — fund alpha first via faucet"
@@ -218,8 +239,12 @@ log "Delta: $delta_human USDC (pre: $BETA_USDC_PRE_HUMAN -> post: $bal_human)"
 
 if python3 -c "import sys; sys.exit(0 if int(sys.argv[1],16) == int(sys.argv[2]) else 1)" "$delta_hex" "$TRANSFER_RAW"; then
   log "PASS: beta received exactly $((TRANSFER_RAW / 1000000)) USDC from alpha"
+  log "  Tx hash: $TX_HASH"
+  log "  Etherscan: https://sepolia.etherscan.io/tx/$TX_HASH"
 else
   log "FAIL: delta ($delta_human USDC) != $((TRANSFER_RAW / 1000000)) USDC"
+  log "  Tx hash (for diagnostics): $TX_HASH"
+  log "  Etherscan: https://sepolia.etherscan.io/tx/$TX_HASH"
   exit 1
 fi
 
@@ -227,19 +252,26 @@ fi
 step 8 "Final balance summary (post-transfer)"
 log "Re-querying balances after tx mined..."
 
-# Alpha ETH
-alpha_eth_hex=$(rpc "eth_getBalance" "[\"$ALPHA_ADDR\",\"latest\"]" | extract_result)
-[[ -z "$alpha_eth_hex" || "$alpha_eth_hex" == "0x" ]] && alpha_eth_hex="0x0"
-alpha_eth_human=$(to_decimal "$alpha_eth_hex" 1000000000000000000)
+# Alpha ETH (CLI via `eth wallet balance`)
+alpha_eth_human=$("$ETH_BIN" wallet balance \
+  --address "$ALPHA_ADDR" \
+  --network sepolia \
+  --rpc-url "$RPC" 2>/dev/null | awk '{print $1}')
 
-# Alpha USDC
+# Alpha USDC (RPC — until #356 ships `wallet balance --token`)
 alpha_padded=$(pad_address "$ALPHA_ADDR")
 alpha_calldata="0x70a08231${alpha_padded:2}"
 alpha_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$alpha_calldata\"},\"latest\"]" | extract_result)
 [[ -z "$alpha_usdc_hex" || "$alpha_usdc_hex" == "0x" ]] && alpha_usdc_hex="0x0"
 alpha_usdc_human=$(to_decimal "$alpha_usdc_hex" 1000000)
 
-# Beta USDC (already computed as $bal_human above, but re-query for atomic snapshot)
+# Beta ETH (CLI via `eth wallet balance`)
+beta_eth_human=$("$ETH_BIN" wallet balance \
+  --address "$BETA_ADDR" \
+  --network sepolia \
+  --rpc-url "$RPC" 2>/dev/null | awk '{print $1}')
+
+# Beta USDC (RPC — until #356 ships)
 beta_padded=$(pad_address "$BETA_ADDR")
 beta_calldata="0x70a08231${beta_padded:2}"
 beta_usdc_hex=$(rpc "eth_call" "[{\"to\":\"$TOKEN_ADDR\",\"data\":\"$beta_calldata\"},\"latest\"]" | extract_result)
@@ -249,6 +281,7 @@ beta_usdc_human=$(to_decimal "$beta_usdc_hex" 1000000)
 log ""
 log "  Alpha ETH:  $alpha_eth_human ETH"
 log "  Alpha USDC: $alpha_usdc_human USDC"
+log "  Beta ETH:   $beta_eth_human ETH"
 log "  Beta USDC:  $beta_usdc_human USDC"
 log ""
 log "Expected: alpha USDC decreased by $((TRANSFER_RAW / 1000000)), beta USDC increased by $((TRANSFER_RAW / 1000000)), alpha ETH decreased by ~gas."
