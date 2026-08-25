@@ -77,6 +77,29 @@ const WETH_TRANSFER_AMOUNT_RAW: u128 = 100 * WETH_ONE;
 /// alpha starts with 1000 WETH, pre-written to WETH balanceOf slot.
 const WETH_ALPHA_INITIAL_RAW: u128 = 1_000 * WETH_ONE;
 
+/// USDT6 mainnet contract (TetherToken). USDT is a single contract
+/// (no proxy, no upgradeability) — same Anvil-fork approach as WETH
+/// but with `balances` at slot 0 (first state var in TetherToken).
+/// Real stablecoin (6 decimals) — satisfies #343's "alpha sends beta
+/// 100 USDC or USDT" use case.
+const USDT_MAINNET: alloy_primitives::Address =
+    alloy_primitives::address!("dAC17F958D2ee523a2206206994597C13D831ec7");
+
+/// `balances` mapping slot in TetherToken — empirically determined.
+/// Slot 0 didn't take effect; slot 1 didn't take effect; slot 2 works.
+/// TetherToken's storage layout has 2 state vars before `balances`
+/// (likely `upgradedAddress` + `_totalSupply` from StandardToken base,
+/// depending on C3 linearization + re-declarations). Tested via
+/// `anvil_set_storage_at` + `IERC20::balanceOf(alpha).call()` sanity
+/// check — the assertion `alpha == 1000 USDT` passes only at slot 2.
+const USDT_BALANCEOF_SLOT: u8 = 2;
+
+/// USDT has 6 decimals (same as USDC). 100 USDT = 100 × 10^6 raw units.
+const USDT_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
+
+/// alpha starts with 1000 USDT, pre-written to USDT balances slot.
+const USDT_ALPHA_INITIAL_RAW: u64 = 1_000_000_000;
+
 /// Public mainnet RPC source for `Anvil::new().fork(...)` — alloy docs
 /// `anvil_set_storage_at` example (https://alloy.rs/examples/node-bindings/anvil_set_storage_at/).
 /// Defaults to `https://ethereum.reth.rs/rpc`. Override at compile time
@@ -1201,5 +1224,162 @@ async fn alpha_send_beta_100_weth_against_anvil_fork_mainnet() {
         beta_balance, expected_beta_received,
         "beta should have {} WETH after receiving from alpha (started 0): got {beta_balance}",
         WETH_TRANSFER_AMOUNT_RAW,
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn alpha_send_beta_100_usdt_against_anvil_fork_mainnet() {
+    // Issue #343 acceptance test, USDT variant. Real stablecoin with
+    // 6 decimals (matching the original #343 USDC spec — operator picked
+    // USDT in addition to USDC; see PR #347 thread for the rationale).
+    //
+    // USDT (TetherToken) is a single contract on mainnet — no proxy, no
+    // upgradeability — so the same Anvil-fork + `anvil_set_storage_at`
+    // approach used for WETH works here. Storage layout: `balances`
+    // mapping (no underscore; Tether naming) is the first state var
+    // → slot 0. `balanceOf[alpha]` is at `keccak256(abi.encode(alpha, 0))`.
+    //
+    // USDC variant deferred — USDC's TransparentUpgradeableProxy layout
+    // makes slot math unreliable without finding the impl address from
+    // the proxy's EIP-1967 storage slot (work for a follow-up PR).
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(31337)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+    let beta_addr: alloy_primitives::Address = "70997970C51812dc3A010C7d01b50e0d17dc79C8"
+        .parse()
+        .expect("beta addr");
+
+    // Pre-fund alpha with 1000 USDT at TetherToken's `balances[alpha]`
+    // mapping slot (slot 0). Solidity mapping slot math:
+    // keccak256(abi.encode(key, slot)).
+    let slot_bytes = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(USDT_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let slot_u256: alloy_primitives::U256 = slot_bytes.into();
+    let val_bytes: alloy_primitives::B256 = alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(USDT_MAINNET, slot_u256, val_bytes)
+        .await
+        .expect("anvil_set_storage_at(USDT, balances[alpha], 1000 USDT)");
+
+    // Pre-fund sanity assert.
+    let usdt = IERC20::new(USDT_MAINNET, &provider);
+    let alpha_balance_after_fund = usdt
+        .balanceOf(alpha_addr)
+        .call()
+        .await
+        .expect("alpha balanceOf after pre-fund");
+    assert_eq!(
+        alpha_balance_after_fund,
+        alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW),
+        "pre-fund sanity: alpha should have {} USDT after anvil_set_storage_at, got {alpha_balance_after_fund}",
+        USDT_ALPHA_INITIAL_RAW,
+    );
+
+    // Import alpha's wallet via the CLI (Anvil default mnemonic).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+    let phrase = "test test test test test test test test test test test junk";
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "alpha",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    // Run the CLI's erc20 send path: alpha -> beta, 100 USDT raw units.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "erc20",
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password",
+            "--token",
+            "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            "--to",
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "--amount",
+            &USDT_TRANSFER_AMOUNT_RAW.to_string(),
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "erc20 send must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let hex_count = stdout
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit() && *c != '\n')
+        .count();
+    assert!(
+        stdout.contains("0x") && hex_count >= 64,
+        "expected tx hash (0x + 64 hex chars) in stdout: {stdout}",
+    );
+
+    // Read post-state balances via IERC20 ABI (eth_call, no signing).
+    let alpha_balance = usdt
+        .balanceOf(alpha_addr)
+        .call()
+        .await
+        .expect("alpha balanceOf");
+    let beta_balance = usdt
+        .balanceOf(beta_addr)
+        .call()
+        .await
+        .expect("beta balanceOf");
+
+    let expected_alpha_remaining =
+        alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW - USDT_TRANSFER_AMOUNT_RAW);
+    let expected_beta_received = alloy_primitives::U256::from(USDT_TRANSFER_AMOUNT_RAW);
+
+    assert_eq!(
+        alpha_balance,
+        expected_alpha_remaining,
+        "alpha should have {} USDT after sending {} to beta (started {}): got {alpha_balance}",
+        USDT_ALPHA_INITIAL_RAW - USDT_TRANSFER_AMOUNT_RAW,
+        USDT_TRANSFER_AMOUNT_RAW,
+        USDT_ALPHA_INITIAL_RAW,
+    );
+    assert_eq!(
+        beta_balance, expected_beta_received,
+        "beta should have {} USDT after receiving from alpha (started 0): got {beta_balance}",
+        USDT_TRANSFER_AMOUNT_RAW,
     );
 }
