@@ -23,14 +23,17 @@
 mod handlers;
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
+use alloy_primitives::{Address, U256};
 use clap::{Parser, Subcommand};
 
 use crate::handlers::{
-    open_manager, open_provider, print_wallet_created, tx_get, tx_list_stub, wallet_balance,
-    wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20_stub,
-    wallet_send_native_stub, wallet_show,
+    config_show, open_manager, open_provider, print_wallet_created, tx_get, tx_list,
+    wallet_balance, wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20,
+    wallet_send_native, wallet_show,
 };
+use eth_wallet_core::{Error, Network, Result};
 
 #[derive(Parser, Debug)]
 #[command(name = "eth", version, about = "Ethereum wallet CLI (alloy v1.8.x)")]
@@ -38,11 +41,20 @@ struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Default RPC URL (overrides per-subcommand).
+    /// Default RPC URL (overrides per-subcommand). Precedence: explicit
+    /// `--rpc-url` flag > `ETH_RPC_URL` env (incl. values loaded from
+    /// `.env` via dotenvy at startup) > this centralised default
+    /// (Anvil localhost). Note: dotenvy does NOT overwrite existing
+    /// process env vars, so shell exports always win over `.env`.
     /// Per #297 M10 SPKI pin was deferred per #330 — `provider::new_http`
     /// (default rustls TLS + system CAs) handles all RPC traffic.
-    #[arg(long, global = true, env = "ETH_RPC_URL")]
-    rpc_url: Option<String>,
+    #[arg(
+        long,
+        global = true,
+        env = "ETH_RPC_URL",
+        default_value = "http://127.0.0.1:8545"
+    )]
+    rpc_url: String,
 
     /// Override the wallet-store base directory (default: XDG data dir).
     /// Tests + CI inject `ETH_DATA_DIR=<tempdir>` so wallet state stays
@@ -109,16 +121,16 @@ enum WalletAction {
         #[arg(long)]
         name: String,
         #[arg(long)]
-        password: String,
-        #[arg(long, default_value = "sepolia")]
+        password: Option<String>,
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
     },
     Import {
         #[arg(long)]
         name: String,
         #[arg(long)]
-        password: String,
-        #[arg(long, default_value = "sepolia")]
+        password: Option<String>,
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
         #[arg(long, conflicts_with = "private_key")]
         mnemonic: Option<String>,
@@ -128,14 +140,14 @@ enum WalletAction {
     Balance {
         #[arg(long)]
         address: String,
-        #[arg(long, default_value = "sepolia")]
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
         #[arg(long)]
         unit: Option<String>,
     },
     /// Sync wallet with chain state (rebuild meta from on-chain). Deferred.
     Sync {
-        #[arg(long, default_value = "sepolia")]
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
     },
     List,
@@ -144,7 +156,7 @@ enum WalletAction {
         name: Option<String>,
         #[arg(long)]
         id: Option<String>,
-        #[arg(long, default_value = "sepolia")]
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
     },
     Delete {
@@ -152,13 +164,17 @@ enum WalletAction {
         name: Option<String>,
         #[arg(long)]
         id: Option<String>,
-        #[arg(long, default_value = "sepolia")]
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
     },
 }
 
 #[derive(clap::Args, Debug)]
 struct SendArgs {
+    #[arg(long)]
+    name: Option<String>,
+    #[arg(long)]
+    password: Option<String>,
     #[arg(long)]
     to: Option<String>,
     #[arg(long, default_value = "0")]
@@ -225,6 +241,10 @@ enum Erc20Action {
     },
     Send {
         #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
         token: Option<String>,
         #[arg(long)]
         token_address: Option<String>,
@@ -234,6 +254,8 @@ enum Erc20Action {
         amount: String,
         #[arg(long)]
         gas_limit: Option<u64>,
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
+        network: String,
     },
     List {
         #[arg(long, default_value = "false")]
@@ -266,6 +288,20 @@ enum Erc20Action {
 }
 
 fn main() {
+    // Issue #341 — load .env from cwd before clap parses so ETH_NETWORK,
+    // ETH_RPC_URL, ETH_DATA_DIR etc. flow through `env = "..."` attrs.
+    // Missing file is silent (CI/clean checkouts stay green); a malformed
+    // `.env` is an operator mistake (typo, missing `=`) — surface as a hard
+    // error with exit 2 (bad input) per code-reviewer finding #6.
+    match dotenvy::dotenv() {
+        Ok(_) => {}
+        Err(dotenvy::Error::Io(ref io)) if io.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("error: .env parse failed: {e}");
+            std::process::exit(2);
+        }
+    }
+
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
@@ -277,6 +313,30 @@ fn main() {
         }
     };
     std::process::exit(exit_code);
+}
+
+/// Resolve the wallet password from one of two sources, in priority order:
+/// 1. `--password` argv (warns: shell history + process-list leak)
+/// 2. `ETH_PASSWORD` env var (preferred for CI / unattended runs)
+///
+/// Returns `Error::InvalidInput` (exit 2) when neither is set. Per L12
+/// review finding C-1: the argv path emits a stderr warning so operators
+/// see the risk even when the call succeeds. Full rpassword / TTY prompt
+/// replacement is a follow-up cycle (the argv path stays supported for
+/// backward compatibility + script-friendliness).
+fn resolve_password(cli_pw: Option<&str>) -> Result<String> {
+    match (cli_pw, std::env::var("ETH_PASSWORD").ok()) {
+        (Some(p), _) => {
+            eprintln!(
+                "warning: --password on command line is insecure (shell history, process list); use ETH_PASSWORD env var in CI"
+            );
+            Ok(p.to_string())
+        }
+        (None, Some(env_pw)) => Ok(env_pw),
+        (None, None) => Err(Error::InvalidInput(
+            "password required: pass --password or set ETH_PASSWORD env var".into(),
+        )),
+    }
 }
 
 fn run(cli: Cli) -> eth_wallet_core::Result<()> {
@@ -304,6 +364,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     password,
                     network,
                 } => {
+                    let password = resolve_password(password.as_deref())?;
                     let created = wallet_create(&mgr, &name, &password, &network)?;
                     print_wallet_created(&created);
                     Ok(())
@@ -315,6 +376,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     mnemonic,
                     private_key,
                 } => {
+                    let password = resolve_password(password.as_deref())?;
                     let created = wallet_import(
                         &mgr,
                         &name,
@@ -331,7 +393,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     network: _,
                     unit,
                 } => {
-                    let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");
+                    let rpc = &cli.rpc_url;
                     let provider = open_provider(rpc)?;
                     wallet_balance(&provider, &address, unit.as_deref()).await
                 }
@@ -346,25 +408,114 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     wallet_delete(&mgr, name.as_deref(), id.as_deref(), &network)
                 }
             },
-            Command::Send(_) => wallet_send_native_stub(),
+            Command::Send(args) => {
+                let rpc = &cli.rpc_url;
+                let provider = open_provider(rpc)?;
+                let to_str = args
+                    .to
+                    .as_deref()
+                    .ok_or_else(|| Error::InvalidInput("--to required".into()))?;
+                let to = Address::from_str(to_str)
+                    .map_err(|e| Error::InvalidInput(format!("invalid --to address: {e}")))?;
+                let amount_wei: U256 = args
+                    .amount
+                    .parse()
+                    .map_err(|e| Error::InvalidInput(format!("invalid --amount: {e}")))?;
+
+                let name = args
+                    .name
+                    .as_deref()
+                    .ok_or_else(|| Error::InvalidInput("--name required".into()))?;
+                let password = resolve_password(args.password.as_deref())?;
+                let net = Network::parse_cli(&args.network)
+                    .map_err(|e| Error::InvalidInput(e.to_string()))?;
+                let wallet_id = mgr
+                    .lookup_by_name(name, net)
+                    .map_err(crate::handlers::map_wallet_err)?;
+                let signer = mgr
+                    .unlock_signer(wallet_id, password.as_bytes())
+                    .map_err(crate::handlers::map_wallet_err)?;
+
+                wallet_send_native(&provider, &signer, net, to, amount_wei).await
+            }
             Command::Tx { action } => match action {
                 TxAction::Get { tx_hash } => {
-                    let rpc = cli.rpc_url.as_deref().unwrap_or("http://127.0.0.1:8545");
+                    let rpc = &cli.rpc_url;
                     let provider = open_provider(rpc)?;
                     tx_get(&provider, &tx_hash).await
                 }
-                TxAction::List { .. } => tx_list_stub().await,
+                TxAction::List { limit, .. } => {
+                    let rpc = &cli.rpc_url;
+                    let provider = open_provider(rpc)?;
+                    tx_list(&provider, limit).await
+                }
             },
             Command::Fee(_) => Err(eth_wallet_core::Error::Rpc(
                 "fee: deferred past #337 (follow-up)".into(),
             )),
-            Command::Config { .. } => Err(eth_wallet_core::Error::Rpc(
-                "config: deferred past #337 (follow-up)".into(),
-            )),
+            Command::Config { action } => match action {
+                ConfigAction::Show { json } => {
+                    config_show(&cli.rpc_url, cli.data_dir.as_ref(), json)
+                }
+            },
             Command::SignMessage { .. } | Command::SignTyped { .. } => Err(
                 eth_wallet_core::Error::Rpc("sign-message / sign-typed: deferred".into()),
             ),
-            Command::Erc20 { .. } => wallet_send_erc20_stub(),
+            Command::Erc20 { action } => match action {
+                Erc20Action::Send {
+                    name,
+                    password,
+                    token,
+                    token_address,
+                    to,
+                    amount,
+                    gas_limit,
+                    network,
+                } => {
+                    let rpc = &cli.rpc_url;
+                    let provider = open_provider(rpc)?;
+                    let to_str = to
+                        .as_deref()
+                        .ok_or_else(|| Error::InvalidInput("--to required".into()))?;
+                    let to_addr = Address::from_str(to_str)
+                        .map_err(|e| Error::InvalidInput(format!("invalid --to address: {e}")))?;
+                    let amount_wei: U256 = amount
+                        .parse()
+                        .map_err(|e| Error::InvalidInput(format!("invalid --amount: {e}")))?;
+                    let token_str =
+                        token
+                            .as_deref()
+                            .or(token_address.as_deref())
+                            .ok_or_else(|| {
+                                Error::InvalidInput("--token or --token-address required".into())
+                            })?;
+                    let token_addr = Address::from_str(token_str).map_err(|e| {
+                        Error::InvalidInput(format!("invalid --token address: {e}"))
+                    })?;
+                    let gas = gas_limit.unwrap_or(65_000);
+
+                    let n = name
+                        .as_deref()
+                        .ok_or_else(|| Error::InvalidInput("--name required".into()))?;
+                    let p = resolve_password(password.as_deref())?;
+                    let net = Network::parse_cli(&network)
+                        .map_err(|e| Error::InvalidInput(e.to_string()))?;
+                    let wallet_id = mgr
+                        .lookup_by_name(n, net)
+                        .map_err(crate::handlers::map_wallet_err)?;
+                    let signer = mgr
+                        .unlock_signer(wallet_id, p.as_bytes())
+                        .map_err(crate::handlers::map_wallet_err)?;
+
+                    wallet_send_erc20(
+                        &provider, &signer, net, token_addr, to_addr, amount_wei, gas,
+                    )
+                    .await
+                }
+                _ => Err(eth_wallet_core::Error::Rpc(
+                    "erc20 non-Send action deferred past #337".into(),
+                )),
+            },
         }
     })
 }

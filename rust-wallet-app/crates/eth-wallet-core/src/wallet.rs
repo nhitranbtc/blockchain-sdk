@@ -65,6 +65,17 @@ impl Network {
         }
     }
 
+    /// EIP-155 chain id for this network. Used by handlers to cross-
+    /// check the RPC-reported chain_id against the wallet's network
+    /// before signing (chain_id trust-boundary per L12 review).
+    pub fn chain_id(&self) -> u64 {
+        match self {
+            Network::Mainnet => 1,
+            Network::Sepolia => 11_155_111,
+            Network::Anvil => 31_337,
+        }
+    }
+
     /// Parse from CLI `--network` flag. Lowercase, tolerant of common
     /// aliases. Returns `Error::InvalidInput` on unknown values so the
     /// CLI surfaces exit code 2 (bad input) — not `WalletError::Path`
@@ -79,6 +90,19 @@ impl Network {
             other => Err(Error::InvalidInput(format!(
                 "unknown network '{other}' — expected mainnet|sepolia|anvil"
             ))),
+        }
+    }
+
+    /// Inverse of `chain_id()` — resolve a numeric EIP-155 chain id back
+    /// to a `Network`. Returns `None` for unknown chain ids. Single source
+    /// of truth for the network table; replaces ad-hoc hardcoded match
+    /// blocks in `eth config show` (Issue #341 type-design review finding).
+    pub fn from_chain_id(chain_id: u64) -> Option<Self> {
+        match chain_id {
+            1 => Some(Network::Mainnet),
+            11_155_111 => Some(Network::Sepolia),
+            31_337 => Some(Network::Anvil),
+            _ => None,
         }
     }
 }
