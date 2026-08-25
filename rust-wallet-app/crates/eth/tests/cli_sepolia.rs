@@ -74,7 +74,7 @@ const USDT_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
 /// deploy required (Tether does NOT deploy official testnet USDT, so
 /// USDC is the path of least resistance for L29 acceptance runs).
 const USDC_SEPOLIA: alloy_primitives::Address =
-    alloy_primitives::address!("1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287");
+    alloy_primitives::address!("1c7D4B196Cb0F7BB1d743Fbc6116a902379C7238");
 
 /// USDC also 6 decimals. 100 USDC = 100 × 10^6 raw units.
 const USDC_TRANSFER_AMOUNT_RAW: u64 = 100_000_000;
