@@ -92,6 +92,19 @@ impl Network {
             ))),
         }
     }
+
+    /// Inverse of `chain_id()` — resolve a numeric EIP-155 chain id back
+    /// to a `Network`. Returns `None` for unknown chain ids. Single source
+    /// of truth for the network table; replaces ad-hoc hardcoded match
+    /// blocks in `eth config show` (Issue #341 type-design review finding).
+    pub fn from_chain_id(chain_id: u64) -> Option<Self> {
+        match chain_id {
+            1 => Some(Network::Mainnet),
+            11_155_111 => Some(Network::Sepolia),
+            31_337 => Some(Network::Anvil),
+            _ => None,
+        }
+    }
 }
 
 /// Persisted encrypted blob on disk. Salt + nonce + ciphertext in a JSON file.

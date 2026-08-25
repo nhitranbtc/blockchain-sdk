@@ -123,6 +123,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "alloy-contract"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "668859fcdb42eee289de22a9d01758c910955bb6ecda675b97276f99ce2e16b0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-dyn-abi",
+ "alloy-json-abi",
+ "alloy-network",
+ "alloy-network-primitives",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-types-eth",
+ "alloy-sol-types",
+ "alloy-transport",
+ "futures",
+ "futures-util",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "alloy-dyn-abi"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a04eb4abc2b5074a18e687ee63918f407cc7990083cba9b999445f839796060"
+dependencies = [
+ "alloy-json-abi",
+ "alloy-primitives",
+ "alloy-sol-type-parser",
+ "alloy-sol-types",
+ "itoa",
+ "serde",
+ "serde_json",
+ "winnow 1.0.4",
+]
+
+[[package]]
 name = "alloy-eip2124"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2282,6 +2320,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dotenvy"
+version = "0.15.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2417,16 +2461,21 @@ dependencies = [
 name = "eth"
 version = "0.1.0"
 dependencies = [
+ "alloy-contract",
  "alloy-network",
  "alloy-node-bindings",
  "alloy-primitives",
  "alloy-provider",
  "alloy-rpc-types",
  "alloy-signer-local",
+ "alloy-sol-macro",
+ "alloy-sol-types",
  "alloy-transport-http",
  "clap",
+ "dotenvy",
  "eth-wallet-core",
  "hex",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",

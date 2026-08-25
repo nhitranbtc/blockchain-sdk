@@ -497,3 +497,66 @@ pub fn print_wallet_created(w: &WalletCreated) {
          # phrase written to your secret manager before closing this session."
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #341 — `eth config show` handler. Prints the effective resolved
+// configuration (network, chain_id, rpc_url, data_dir, gas_limit) so
+// operators can audit which env / .env / flag is active without reading
+// source. Resolution precedence per KTD1 (session-settled): explicit flag
+// > env var > .env file > centralised default. We read process env here;
+// clap has already populated it from `.env` via `dotenvy::dotenv()` at
+// `main()` startup.
+//
+// Lazy-validation posture per KTD2 (session-settled): we do NOT ping the
+// RPC. The handler prints whatever is in env. Errors surface at use-site
+// (the actual subcommand that needs the value).
+// ---------------------------------------------------------------------------
+
+pub fn config_show(rpc_url: &str, data_dir: Option<&PathBuf>, json: bool) -> Result<()> {
+    // Network: read ETH_NETWORK from env (clap populated from dotenvy at
+    // startup). When unset, print "(unset)" — do NOT silently default to
+    // "sepolia" (review finding #1: misconfig hides behind defaults).
+    let network_raw = std::env::var("ETH_NETWORK").ok();
+    let (network_str, chain_id_str) = match network_raw.as_deref() {
+        None => ("(unset)".to_string(), "(unset)".to_string()),
+        Some(s) => {
+            let net = Network::parse_cli(s).map_err(|e| {
+                Error::InvalidInput(format!("config-show: invalid ETH_NETWORK={s:?}: {e}"))
+            })?;
+            (
+                format!("{net:?}").to_lowercase(),
+                net.chain_id().to_string(),
+            )
+        }
+    };
+
+    // Gas limit: ETH_GAS_LIMIT env (diagnostic visibility; send
+    // subcommands have their own per-call default of 65000).
+    let gas_limit_str = std::env::var("ETH_GAS_LIMIT").unwrap_or_else(|_| "(unset)".into());
+
+    let data_dir_str = data_dir
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "(xdg default)".into());
+
+    if json {
+        let payload = serde_json::json!({
+            "network":   network_str,
+            "chain_id":  chain_id_str,
+            "rpc_url":   rpc_url,
+            "data_dir":  data_dir_str,
+            "gas_limit": gas_limit_str,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload)
+                .map_err(|e| Error::InvalidInput(format!("config-show json: {e}")))?
+        );
+    } else {
+        println!("network:    {network_str}");
+        println!("chain_id:   {chain_id_str}");
+        println!("rpc_url:    {rpc_url}");
+        println!("data_dir:   {data_dir_str}");
+        println!("gas_limit:  {gas_limit_str}");
+    }
+    Ok(())
+}
