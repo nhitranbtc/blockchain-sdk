@@ -169,4 +169,4 @@ jobs:
           # can set MAINNET_RPC_URL repo secret to override with paid /
           # private infra for CI reliability.
           MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://cloudflare-eth.com' }}
-        run: cargo test -p eth --test cli_localnet -- --ignored --include-ignored
+        run: cargo test -p eth --test cli_localnet -- --ignored
