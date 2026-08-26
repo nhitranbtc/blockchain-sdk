@@ -21,6 +21,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use alloy_consensus::EthereumTxEnvelope;
 use alloy_network::Ethereum;
 use alloy_primitives::{Address, B256, U256};
 use alloy_provider::{Provider, RootProvider};
@@ -718,6 +719,193 @@ pub async fn wallet_send_erc20(
     })?;
     println!("{}", pending.tx_hash());
     Ok(())
+}
+
+/// Speed up a pending native-ETH tx via EIP-1559 replace-by-fee (RBF).
+/// Issue #381: looks up the original tx by hash, validates nonce matches
+/// the wallet's current nonce + new fees exceed in-pool fees, then re-signs
+/// the same envelope (`from`/`to`/`value`/`nonce`) with higher fees and
+/// broadcasts via `provider.send_raw_transaction`. Returns the new tx hash.
+///
+/// ## Validation gates (per Issue #381 AC #3)
+///
+/// 1. **Fee ordering (pure, no RPC)**: `max_fee_per_gas > 0`,
+///    `max_priority_fee_per_gas > 0`, `priority <= max_fee`. Otherwise
+///    `Error::FeeTooLow` (exit 2). Mirrors `resolve_overrides` pattern in
+///    `wallet_send_native` / `wallet_send_erc20`.
+/// 2. **Chain-id trust-boundary check** (L12 security L-1 + L-4): the
+///    provider's `chain_id` must match the wallet's network. An
+///    attacker-controlled RPC must not return a pending-tx lookup we sign
+///    against a legitimate chain.
+/// 3. **Pending-tx existence**: `get_transaction_by_hash` returns Some.
+///    Otherwise `Error::InvalidInput` (exit 2).
+/// 4. **Pending-tx not mined**: `block_number` is None. A mined tx cannot
+///    be sped up. Otherwise `Error::InvalidInput` (exit 2).
+/// 5. **Pending-tx from == wallet**: wallet must own the pending tx.
+///    Otherwise `Error::NonceMismatch` (exit 2).
+/// 6. **Nonce drift check**: wallet's `get_transaction_count` must equal
+///    the pending tx's nonce. If wallet nonce has advanced, the pending
+///    tx was already replaced/abandoned. `Error::NonceMismatch` (exit 2).
+/// 7. **Fee-bumping invariant**: `new_max_fee_per_gas > pending.max_fee_per_gas`
+///    AND `new_max_priority_fee_per_gas >= pending.max_priority_fee_per_gas`.
+///    EIP-1559 invariant: lower-fee replacement is rejected at the RPC
+///    layer, so surface it client-side as `Error::FeeTooLow` (exit 2)
+///    before signing.
+#[allow(clippy::too_many_arguments)]
+pub async fn wallet_speedup(
+    provider: &RootProvider<Ethereum>,
+    signer: &PrivateKeySigner,
+    wallet_network: Network,
+    pending_tx_hash: B256,
+    new_max_fee_per_gas: u128,
+    new_max_priority_fee_per_gas: u128,
+) -> Result<B256> {
+    let from = signer.address();
+
+    // Gate 1: fee ordering (pure, no RPC).
+    if new_max_fee_per_gas == 0 || new_max_priority_fee_per_gas == 0 {
+        return Err(Error::FeeTooLow {
+            max_fee_per_gas: new_max_fee_per_gas,
+            min_required: 1,
+        });
+    }
+    if new_max_priority_fee_per_gas > new_max_fee_per_gas {
+        return Err(Error::InvalidInput(format!(
+            "max_priority_fee_per_gas ({new_max_priority_fee_per_gas}) must not exceed max_fee_per_gas ({new_max_fee_per_gas})"
+        )));
+    }
+
+    // Gate 2: chain-id trust-boundary check (L12 security L-1 + L-4).
+    let provider_chain_id = provider
+        .get_chain_id()
+        .await
+        .map_err(|e| Error::rpc(format!("get_chain_id: {}", redact_rpc_error(&e))))?;
+    let expected_chain_id = wallet_network.chain_id();
+    if provider_chain_id != expected_chain_id {
+        return Err(Error::InvalidInput(format!(
+            "rpc chain_id {provider_chain_id} does not match wallet network {wallet_network:?} (expected {expected_chain_id})"
+        )));
+    }
+
+    // Gate 3 + 4: lookup pending tx + ensure not mined.
+    let pending_tx = provider
+        .get_transaction_by_hash(pending_tx_hash)
+        .await
+        .map_err(|e| Error::rpc(format!("get_transaction_by_hash: {}", redact_rpc_error(&e))))?
+        .ok_or_else(|| Error::InvalidInput(format!("pending tx {pending_tx_hash:?} not found")))?;
+    if let Some(mined_block) = pending_tx.block_number {
+        return Err(Error::InvalidInput(format!(
+            "tx {pending_tx_hash:?} already mined at block {mined_block}; cannot speed up"
+        )));
+    }
+
+    // Gate 5: cryptographically verify the pending tx's signer matches
+    // the wallet. alloy's `Recovered::signer` is populated from the
+    // RPC's JSON `from` field via `Recovered::new_unchecked` (no
+    // signature verification — see alloy-consensus-1.8.3 recovered.rs
+    // + alloy-rpc-types-eth-1.8.3 transaction/mod.rs). A compromised
+    // RPC could fabricate a pending-tx response with `from = wallet`
+    // + `to = attacker` + `value = wallet_balance`, then this handler
+    // would sign + broadcast a fresh envelope redirecting funds. The
+    // cryptographic recovery via `TxEnvelope::recover_signer` binds
+    // the `to`/`value`/`gas` fields to a signature the user actually
+    // produced. If recovery fails OR the recovered address differs
+    // from the RPC-reported `from` OR either differs from the wallet
+    // address, reject. This closes the within-chain forgery vector
+    // (PR #384 round 1 review HIGH finding).
+    let pending_from = pending_tx.inner.signer();
+    // Cryptographic recovery per tx-type variant. Speedup is
+    // EIP-1559-only (Issue #381 scope); legacy / 2930 / 4844 are
+    // rejected explicitly so future re-scoping can extend rather than
+    // silently broaden the supported envelope types.
+    let pending_recovered: alloy_primitives::Address = match pending_tx.inner.inner() {
+        EthereumTxEnvelope::Eip1559(tx) => tx.recover_signer().map_err(|e| {
+            Error::InvalidInput(format!("pending tx signature recovery failed: {e}"))
+        })?,
+        EthereumTxEnvelope::Legacy(_)
+        | EthereumTxEnvelope::Eip2930(_)
+        | EthereumTxEnvelope::Eip4844(_)
+        | EthereumTxEnvelope::Eip7702(_) => {
+            return Err(Error::InvalidInput(
+                "speedup is EIP-1559-only; pending tx type not supported".into(),
+            ));
+        }
+    };
+    if pending_recovered != pending_from {
+        return Err(Error::InvalidInput(format!(
+            "pending tx signer mismatch: RPC-reported {pending_from:?} != signature-recovered {pending_recovered:?}"
+        )));
+    }
+    if pending_recovered != from {
+        return Err(Error::InvalidInput(format!(
+            "pending tx from {pending_from:?} != wallet address {from:?}"
+        )));
+    }
+
+    // Convert the inner envelope into a TransactionRequest for the
+    // remaining field accesses (nonce, to, value, gas, fees). alloy's
+    // `into_request` is the canonical conversion path; it consumes the
+    // `Transaction<TxEnvelope>` and returns a `TransactionRequest` with
+    // all tx-shape fields populated.
+    let pending_req: TransactionRequest = pending_tx.into_request();
+
+    // Gate 6: nonce drift check. `submitted` = the on-chain nonce the
+    // pending tx carries; `current` = the wallet's next nonce. If they
+    // diverge, the pending tx has been replaced or abandoned.
+    let pending_nonce = pending_req
+        .nonce
+        .ok_or_else(|| Error::InvalidInput("pending tx missing nonce".into()))?;
+    let wallet_nonce = provider
+        .get_transaction_count(from)
+        .await
+        .map_err(|e| Error::rpc(format!("get_transaction_count: {}", redact_rpc_error(&e))))?;
+    if wallet_nonce != pending_nonce {
+        return Err(Error::NonceMismatch {
+            submitted: pending_nonce,
+            current: wallet_nonce,
+        });
+    }
+
+    // Gate 7: fee-bumping invariant (must strictly exceed in-pool fees).
+    let pending_max_fee = pending_req
+        .max_fee_per_gas
+        .ok_or_else(|| Error::InvalidInput("pending tx missing max_fee_per_gas".into()))?;
+    let pending_max_priority = pending_req.max_priority_fee_per_gas.unwrap_or(0);
+    if new_max_fee_per_gas <= pending_max_fee {
+        return Err(Error::FeeTooLow {
+            max_fee_per_gas: new_max_fee_per_gas,
+            min_required: pending_max_fee + 1,
+        });
+    }
+    if new_max_priority_fee_per_gas < pending_max_priority {
+        return Err(Error::InvalidInput(format!(
+            "new max_priority_fee_per_gas ({new_max_priority_fee_per_gas}) must be >= pending max_priority_fee_per_gas ({pending_max_priority})"
+        )));
+    }
+
+    // Build new envelope: same from/to/value/nonce + new fees + chain_id
+    // + same gas limit (the pending tx's gas limit is appropriate for the
+    // replacement; re-estimating risks a different limit that reverts).
+    let tx_req = TransactionRequest {
+        from: Some(from),
+        to: pending_req.to,
+        value: pending_req.value,
+        chain_id: Some(provider_chain_id),
+        nonce: Some(pending_nonce),
+        gas: pending_req.gas,
+        max_fee_per_gas: Some(new_max_fee_per_gas),
+        max_priority_fee_per_gas: Some(new_max_priority_fee_per_gas),
+        ..Default::default()
+    };
+
+    let signed = eth_wallet_core::sign_native_eth_tx(signer, tx_req)
+        .map_err(|e| Error::rpc(format!("sign: {}", redact_rpc_error(&e))))?;
+    let bytes = eth_wallet_core::encoded_envelope(&signed);
+    let new_pending = provider
+        .send_raw_transaction(&bytes)
+        .await
+        .map_err(|e| Error::rpc(format!("send_raw_transaction: {}", redact_rpc_error(&e))))?;
+    Ok(*new_pending.tx_hash())
 }
 
 /// List recent transactions on the chain. Cycle 5 (#339 PR-B): minimal

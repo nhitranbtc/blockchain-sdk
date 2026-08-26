@@ -194,6 +194,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rlp",
  "borsh",
+ "k256",
  "serde",
  "thiserror 2.0.19",
 ]
@@ -2474,6 +2475,7 @@ dependencies = [
 name = "eth"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
  "alloy-contract",
  "alloy-network",
  "alloy-node-bindings",
