@@ -278,10 +278,12 @@ enum Erc20Action {
         gas_limit: Option<u64>,
         /// Override `max_fee_per_gas` (wei). Must be set together with
         /// `--max-priority-fee-per-gas`; both omitted → provider estimate.
+        /// Env var `ETH_MAX_FEE_PER_GAS` (PR #341 precedence pattern).
         #[arg(long, env = "ETH_MAX_FEE_PER_GAS")]
         max_fee_per_gas: Option<u128>,
         /// Override `max_priority_fee_per_gas` (wei). Must be set together
         /// with `--max-fee-per-gas`; both omitted → provider estimate.
+        /// Env var `ETH_MAX_PRIORITY_FEE_PER_GAS`.
         #[arg(long, env = "ETH_MAX_PRIORITY_FEE_PER_GAS")]
         max_priority_fee_per_gas: Option<u128>,
         #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
