@@ -4,6 +4,8 @@ members = [
     "crates/chain-traits",
     "crates/bitcoin-wallet-core",
     "crates/btc",
+    "crates/eth-wallet-core",
+    "crates/eth",
 ]
 
 [workspace.package]
@@ -71,6 +73,9 @@ cbindgen = "0.27"
 # Encoding (used by crypto::bip137 for base64-encoded message signatures)
 base64 = "0.22"
 
+# Hex (used by eth-wallet-core for SPKI pin decoding + token JSON serialization)
+hex = "0.4"
+
 # Wallet ID + filesystem layout (Task 54d / Issue #64, ADR 0001)
 uuid = { version = "1", features = ["v4", "serde"] }
 directories = "5"
@@ -90,3 +95,15 @@ x509-parser        = "0.16"  # SPKI DER extraction (Task 7 — F20 TLS pinning)
 # Serde (config + Error serialization)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Ethereum SDK — alloy v1.8.x (Issue #293 Q1 resolution: pin meta exact,
+# sub-crates use ^1.x for minor-float within unified semver). Features
+# grow incrementally per Task — Task 1 needs only signers + signer-local;
+# Tasks 5+ add providers/network/transport-http. Same shape as spike V1.
+alloy = { version = "=1.8.3", default-features = false, features = [
+    "std",
+    "signers",
+    "signer-local",
+] }
+alloy-primitives = { version = "^1.6", default-features = false, features = ["std"] }
+alloy-signer-local = { version = "^1.0", features = ["mnemonic"] }

@@ -1,0 +1,70 @@
+[package]
+name = "eth"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "MIT"
+description = "`eth` CLI for the eth-wallet-core v0.2.0 library"
+# Task 10 (Issue #309) — Phase 4 CLI scaffold. Mirrors BTC's
+# rust-wallet-app/crates/btc/ structure.
+# Issue #337 (Task 13 follow-up): wire LAYOUT stubs to Anvil-backed
+# implementations.
+publish = false
+
+[[bin]]
+name = "eth"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+eth-wallet-core = { path = "../eth-wallet-core" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+hex = { workspace = true }
+# alloy deps for handlers.rs (provider + RPC).
+alloy-primitives = { workspace = true }
+alloy-provider = { version = "^1.0" }
+alloy-network = { version = "^1.0" }
+alloy-transport-http = { version = "^1.0" }
+alloy-rpc-types = { version = "^1.0" }
+alloy-consensus = { version = "^1.0", features = ["k256"] }
+alloy-signer-local = { version = "^1.0", features = ["mnemonic"] }
+# uuid for wallet_id parsing in handlers + WalletNotFound construction;
+# tokio for the current-thread runtime that drives async handlers in
+# main(). Both are dev-only for eth-wallet-core but main + handlers are
+# production paths here.
+uuid = { workspace = true }
+tokio = { workspace = true }
+# Issue #341 — load .env from cwd so ETH_NETWORK/ETH_RPC_URL/etc. flow
+# into clap env attrs. `.ok()` swallows missing-file errors so CI/clean
+# checkouts still run.
+dotenvy = "0.15"
+# Issue #341 — `eth config show --json` serializer.
+serde_json = { workspace = true }
+# Issue #351 (cycle 8b, C-1 from #339) — TTY prompt as primary password
+# source. `rpassword::prompt_password` reads from /dev/tty with echo
+# disabled; cross-platform (Unix + Windows) without exposing input to
+# process list or terminal scrollback. argv/env stay as fallbacks for
+# scripting + CI per cycle 8 review.
+rpassword = { workspace = true }
+
+[dev-dependencies]
+# Binary integration tests in tests/cli_localnet.rs.
+tempfile = { workspace = true }
+alloy-node-bindings = { version = "=1.8.3" }
+tokio = { workspace = true }
+# Issue #343 stablecoin e2e (alpha sends beta ERC-20 on Anvil fork).
+# Pinned to =1.6.1 because alloy-sol-macro + alloy-sol-types +
+# alloy-contract only publish 1.6.1 on crates.io. The `sol!` macro
+# generates code that references `alloy_contract` types, so all
+# three must share the same minor. ABI types from `sol!` (1.6.1)
+# interoperate with alloy-provider 1.8.x via shared alloy-primitives.
+alloy-contract = { version = "=1.6.1" }
+alloy-sol-macro = { version = "=1.6.1" }
+alloy-sol-types = { version = "=1.6.1" }
+# `anvil-api` feature unlocks `AnvilApi` trait methods on `Provider`
+# (anvil_deal_erc20, anvil_set_storage_at, etc.) needed by #343 test.
+# Permissive `^1.0` (not pinned) — must follow alloy-node-bindings
+# (also dev-only, =1.8.3) to avoid transitive reqwest version
+# mismatch (provider 1.6.1 + rpc-client 1.8.3 incompatibility).
+alloy-provider = { version = "^1.0", features = ["anvil-api"] }
