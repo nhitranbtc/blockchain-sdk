@@ -116,7 +116,7 @@ async fn wallet_speedup_replaces_pending_tx_with_higher_fee_and_same_nonce() {
     // with strictly higher fees, assert new hash != old hash + same nonce.
     anvil_or_skip!();
 
-    let anvil = alloy_node_bindings::Anvil::new().spawn();
+    let anvil = alloy_node_bindings::Anvil::new().block_time(60).spawn();
     let endpoint = anvil.endpoint();
 
     let tmp = TempDir::new().expect("tempdir");
@@ -124,7 +124,7 @@ async fn wallet_speedup_replaces_pending_tx_with_higher_fee_and_same_nonce() {
 
     // Anvil dev mnemonic #0: pre-funded with 10000 ETH.
     let phrase = "test test test test test test test test test test test junk";
-    let _ = run_eth(
+    let import = run_eth(
         &data_dir,
         &[
             "wallet",
@@ -138,6 +138,13 @@ async fn wallet_speedup_replaces_pending_tx_with_higher_fee_and_same_nonce() {
             "--network",
             "anvil",
         ],
+    );
+    let import_stdout = String::from_utf8_lossy(&import.stdout);
+    let import_stderr = String::from_utf8_lossy(&import.stderr);
+    assert_eq!(
+        import.status.code(),
+        Some(0),
+        "wallet import must succeed (Anvil default mnemonic)\nstdout: {import_stdout}\nstderr: {import_stderr}",
     );
 
     // Step 1: send a low-fee tx (1 gwei max_fee, 1 wei priority) — will
@@ -237,14 +244,14 @@ async fn wallet_speedup_with_lower_max_fee_rejected_as_fee_too_low() {
     // `send_command_with_only_max_fee_per_gas_yields_exit_2` (cli_localnet.rs).
     anvil_or_skip!();
 
-    let anvil = alloy_node_bindings::Anvil::new().spawn();
+    let anvil = alloy_node_bindings::Anvil::new().block_time(60).spawn();
     let endpoint = anvil.endpoint();
 
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
     let phrase = "test test test test test test test test test test test junk";
-    let _ = run_eth(
+    let import = run_eth(
         &data_dir,
         &[
             "wallet",
@@ -258,6 +265,13 @@ async fn wallet_speedup_with_lower_max_fee_rejected_as_fee_too_low() {
             "--network",
             "anvil",
         ],
+    );
+    let import_stdout = String::from_utf8_lossy(&import.stdout);
+    let import_stderr = String::from_utf8_lossy(&import.stderr);
+    assert_eq!(
+        import.status.code(),
+        Some(0),
+        "wallet import must succeed (Anvil default mnemonic)\nstdout: {import_stdout}\nstderr: {import_stderr}",
     );
 
     // Send a tx at 2 gwei max_fee first.
@@ -341,14 +355,14 @@ async fn wallet_speedup_with_mismatched_nonce_rejected() {
     // to speedup the FIRST tx (now stale, wallet nonce has moved past it).
     anvil_or_skip!();
 
-    let anvil = alloy_node_bindings::Anvil::new().spawn();
+    let anvil = alloy_node_bindings::Anvil::new().block_time(60).spawn();
     let endpoint = anvil.endpoint();
 
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
     let phrase = "test test test test test test test test test test test junk";
-    let _ = run_eth(
+    let import = run_eth(
         &data_dir,
         &[
             "wallet",
@@ -362,6 +376,13 @@ async fn wallet_speedup_with_mismatched_nonce_rejected() {
             "--network",
             "anvil",
         ],
+    );
+    let import_stdout = String::from_utf8_lossy(&import.stdout);
+    let import_stderr = String::from_utf8_lossy(&import.stderr);
+    assert_eq!(
+        import.status.code(),
+        Some(0),
+        "wallet import must succeed (Anvil default mnemonic)\nstdout: {import_stdout}\nstderr: {import_stderr}",
     );
 
     // Send tx #1 (nonce 0).

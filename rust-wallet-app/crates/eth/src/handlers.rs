@@ -21,6 +21,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use alloy_consensus::EthereumTxEnvelope;
 use alloy_network::Ethereum;
 use alloy_primitives::{Address, B256, U256};
 use alloy_provider::{Provider, RootProvider};
@@ -769,10 +770,9 @@ pub async fn wallet_speedup(
         });
     }
     if new_max_priority_fee_per_gas > new_max_fee_per_gas {
-        return Err(Error::FeeTooLow {
-            max_fee_per_gas: new_max_fee_per_gas,
-            min_required: new_max_fee_per_gas,
-        });
+        return Err(Error::InvalidInput(format!(
+            "max_priority_fee_per_gas ({new_max_priority_fee_per_gas}) must not exceed max_fee_per_gas ({new_max_fee_per_gas})"
+        )));
     }
 
     // Gate 2: chain-id trust-boundary check (L12 security L-1 + L-4).
@@ -799,13 +799,44 @@ pub async fn wallet_speedup(
         )));
     }
 
-    // Gate 5: pending tx from == wallet address. alloy 1.8.3: the
-    // recovered signer lives at `pending_tx.inner.signer()` (the
-    // `Recovered<TxEnvelope>` wrapper holds it). Wrong-signer is
-    // `InvalidInput` (exit 2) — `NonceMismatch` carries numeric
-    // submitted/current fields and doesn't fit "from address mismatch".
+    // Gate 5: cryptographically verify the pending tx's signer matches
+    // the wallet. alloy's `Recovered::signer` is populated from the
+    // RPC's JSON `from` field via `Recovered::new_unchecked` (no
+    // signature verification — see alloy-consensus-1.8.3 recovered.rs
+    // + alloy-rpc-types-eth-1.8.3 transaction/mod.rs). A compromised
+    // RPC could fabricate a pending-tx response with `from = wallet`
+    // + `to = attacker` + `value = wallet_balance`, then this handler
+    // would sign + broadcast a fresh envelope redirecting funds. The
+    // cryptographic recovery via `TxEnvelope::recover_signer` binds
+    // the `to`/`value`/`gas` fields to a signature the user actually
+    // produced. If recovery fails OR the recovered address differs
+    // from the RPC-reported `from` OR either differs from the wallet
+    // address, reject. This closes the within-chain forgery vector
+    // (PR #384 round 1 review HIGH finding).
     let pending_from = pending_tx.inner.signer();
-    if pending_from != from {
+    // Cryptographic recovery per tx-type variant. Speedup is
+    // EIP-1559-only (Issue #381 scope); legacy / 2930 / 4844 are
+    // rejected explicitly so future re-scoping can extend rather than
+    // silently broaden the supported envelope types.
+    let pending_recovered: alloy_primitives::Address = match pending_tx.inner.inner() {
+        EthereumTxEnvelope::Eip1559(tx) => tx.recover_signer().map_err(|e| {
+            Error::InvalidInput(format!("pending tx signature recovery failed: {e}"))
+        })?,
+        EthereumTxEnvelope::Legacy(_)
+        | EthereumTxEnvelope::Eip2930(_)
+        | EthereumTxEnvelope::Eip4844(_)
+        | EthereumTxEnvelope::Eip7702(_) => {
+            return Err(Error::InvalidInput(
+                "speedup is EIP-1559-only; pending tx type not supported".into(),
+            ));
+        }
+    };
+    if pending_recovered != pending_from {
+        return Err(Error::InvalidInput(format!(
+            "pending tx signer mismatch: RPC-reported {pending_from:?} != signature-recovered {pending_recovered:?}"
+        )));
+    }
+    if pending_recovered != from {
         return Err(Error::InvalidInput(format!(
             "pending tx from {pending_from:?} != wallet address {from:?}"
         )));
@@ -847,10 +878,9 @@ pub async fn wallet_speedup(
         });
     }
     if new_max_priority_fee_per_gas < pending_max_priority {
-        return Err(Error::FeeTooLow {
-            max_fee_per_gas: new_max_fee_per_gas,
-            min_required: new_max_fee_per_gas,
-        });
+        return Err(Error::InvalidInput(format!(
+            "new max_priority_fee_per_gas ({new_max_priority_fee_per_gas}) must be >= pending max_priority_fee_per_gas ({pending_max_priority})"
+        )));
     }
 
     // Build new envelope: same from/to/value/nonce + new fees + chain_id
