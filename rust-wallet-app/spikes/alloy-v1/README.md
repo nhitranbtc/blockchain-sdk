@@ -64,7 +64,7 @@ Funds m/44'/60'/0'/0/0 of the phrase (Story 5 sender).
 ETH_E2E_TESTNET=1 \
   ETH_E2E_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com \
   ETH_E2E_MNEMONIC_FILE=$HOME/.sepolia-test-mnem.txt \
-  ETH_E2E_TOKEN_ADDRESS=0x1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287 \
+  ETH_E2E_TOKEN_ADDRESS=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238 \
   bash rust-wallet-app/scripts/eth-send-sepolia-e2e.sh
 ```
 

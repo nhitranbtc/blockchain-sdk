@@ -716,7 +716,7 @@ const SEPOLIA_RPC_URL: &str = match std::option_env!("SEPOLIA_RPC_URL") {
 /// Stable for the lifetime of Sepolia — pinned in the registry file
 /// (issue #360 AC #4).
 const USDC_SEPOLIA: alloy_primitives::Address =
-    alloy_primitives::address!("1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287");
+    alloy_primitives::address!("1c7D4B196Cb0C7B01d743Fbc6116a902379C7238");
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
@@ -789,7 +789,7 @@ async fn wallet_balance_token_usdc_on_sepolia_prints_symbol() {
     // that drops the label back to the address (pre-#360 behavior) would
     // surface here.
     assert!(
-        !stdout.contains("0x1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287"), // USDC_SEPOLIA
+        !stdout.contains("0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"), // USDC_SEPOLIA
         "output must NOT contain the USDC contract address when registry hits, got: {stdout}",
     );
     // Lock-down: must contain a numeric balance (whole or `whole.frac`).

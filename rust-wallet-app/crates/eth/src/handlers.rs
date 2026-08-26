@@ -296,27 +296,34 @@ pub async fn wallet_balance(
         Some(token_str) => {
             let token_addr = Address::from_str(token_str)
                 .map_err(|e| Error::InvalidInput(format!("invalid --token address: {e}")))?;
-            // Issue #366: fail-fast on non-ERC-20 tokens — query `decimals()` first
-            // when no override is supplied. The erc20 layer already returns
-            // `Error::AbiDecodeFailed` for decode failures (exit 2) and
-            // `Error::Rpc` for transport failures (exit 3) with their own
-            // contextual formatting; wrapping them here would swallow the
-            // AbiDecodeFailed variant and map it to exit 3, killing the
-            // lock-down tests added in PR #362 (Issue #366 acceptance
-            // criteria). Token balance follows.
-            let decimals = match decimals_override {
-                Some(d) => d,
-                None => eth_wallet_core::erc20::query_decimals(provider, token_addr).await?,
-            };
-            let raw = eth_wallet_core::erc20::token_balance(provider, token_addr, holder).await?;
-            // Issue #360: resolve the human-readable token symbol. Order:
-            //   1. bundled registry short-circuit (skip RPC for known tokens);
-            //   2. `erc20::query_symbol` RPC for unknown tokens;
-            //   3. fallback to lowercase contract address on RPC failure.
+            // Resolve human-readable label + cached decimals (Issue #360 +
+            // Issue #366). Order:
+            //   1. bundled registry short-circuit (skip RPC for both symbol
+            //      and decimals when the token is known);
+            //   2. otherwise: decimals via `query_decimals` RPC, symbol via
+            //      `query_symbol` RPC;
+            //   3. symbol fallback to lowercase address on RPC failure;
+            //      decimals error bubbles as `Error::AbiDecodeFailed` / `Rpc`
+            //      so the lock-down tests added in PR #362 (Issue #366)
+            //      still classify non-ERC-20 targets as exit 2 / 3.
+            //
             // The network string from `--network` drives registry lookup;
             // unknown networks → Anvil chain_id 31337, no registry entries,
-            // so query_symbol runs and the RPC answer wins.
-            let label = resolve_token_label(provider, network, token_addr).await;
+            // so both queries run and the RPC answer wins. The registry hit
+            // also short-circuits `query_decimals` — Sepolia USDC is a
+            // proxy whose `decimals()` reverts on the Anvil fork, so the
+            // bundled `decimals=6` is the only reliable answer.
+            let meta = resolve_token_metadata(provider, network, token_addr).await;
+            let label = meta.label;
+            // Precedence: explicit CLI `--decimals` > registry cache > RPC.
+            let decimals = match decimals_override {
+                Some(d) => d,
+                None => match meta.decimals {
+                    Some(d) => d,
+                    None => eth_wallet_core::erc20::query_decimals(provider, token_addr).await?,
+                },
+            };
+            let raw = eth_wallet_core::erc20::token_balance(provider, token_addr, holder).await?;
             // Token balance prints `<symbol> <scaled>` — `<symbol>` is the
             // human-readable label (or the lowercase address on fallback).
             // The `--unit` flag is rejected by clap when `--token` is set
@@ -327,18 +334,32 @@ pub async fn wallet_balance(
     }
 }
 
-/// Resolve the human-readable label for an ERC-20 token (Issue #360).
-/// Order: registry short-circuit → `query_symbol` RPC → fallback to
-/// lowercase address. `network` is the CLI `--network` string (matches
-/// `Network::parse_cli`). Any registry/RPC error downgrades to the
-/// address fallback — never propagates — so the balance line still
-/// prints even when the node is unreachable or the chain has no
-/// bundled registry.
-async fn resolve_token_label(
+/// Resolved ERC-20 metadata for `wallet balance --token` output (Issue #360 +
+/// Issue #366).
+///
+/// - `label`: human-readable symbol from registry short-circuit, RPC
+///   `query_symbol`, or lowercase address fallback (in that order). Any
+///   registry/RPC error downgrades silently to the address fallback so
+///   the balance line still prints.
+/// - `decimals`: registry-cached `Token.decimals` when the registry hits,
+///   otherwise `None` so the caller falls through to `query_decimals` RPC.
+struct TokenMetadata {
+    label: String,
+    decimals: Option<u8>,
+}
+
+/// Resolve the human-readable label + cached decimals for an ERC-20 token
+/// (Issue #360 + Issue #366). Order: registry short-circuit → `query_symbol`
+/// RPC → fallback to lowercase address. `network` is the CLI `--network`
+/// string (matches `Network::parse_cli`). Any registry/RPC error downgrades
+/// to the address fallback — never propagates — so the balance line still
+/// prints even when the node is unreachable or the chain has no bundled
+/// registry.
+async fn resolve_token_metadata(
     provider: &RootProvider<Ethereum>,
     network: &str,
     token_addr: Address,
-) -> String {
+) -> TokenMetadata {
     let chain_id = match eth_wallet_core::Network::parse_cli(network) {
         Ok(n) => n.chain_id(),
         // Unknown CLI network (e.g. local Anvil) → chain_id 31337. The
@@ -347,14 +368,21 @@ async fn resolve_token_label(
         Err(_) => 31337,
     };
     if let Ok(Some(t)) = eth_wallet_core::lookup_by_address(chain_id, token_addr) {
-        return t.symbol;
+        return TokenMetadata {
+            label: t.symbol,
+            decimals: Some(t.decimals),
+        };
     }
-    match eth_wallet_core::erc20::query_symbol(provider, token_addr).await {
+    let label = match eth_wallet_core::erc20::query_symbol(provider, token_addr).await {
         Ok(sym) => sym,
         // RPC unreachable, contract reverts, or non-ERC-20 target. Honest
         // fallback: print the lowercase address so the operator still has
         // a usable line.
         Err(_) => format!("{token_addr:#x}"),
+    };
+    TokenMetadata {
+        label,
+        decimals: None,
     }
 }
 
