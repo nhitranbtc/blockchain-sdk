@@ -263,6 +263,84 @@ Then build a `TransactionRequest` with `to = Address(token_contract)`, `value = 
 8. **Anvil for smoke tests.** `alloy-node-bindings` ships Anvil + Geth + Reth node spawners. Add as `[dev-dependencies]` to run regtest-style smoke (mirrors Bitcoin's Docker regtest setup).
 9. **Stablecoin source of truth.** Circle publishes `developers.circle.com/stablecoins/usdc-contract-addresses` as the canonical source. Tether does not maintain an equivalent page. **Risk:** Tether could deploy a new USDT contract and we'd ship stale data. **Mitigation:** version the registry + a `--update-tokens` CLI command that fetches the Circle list at runtime.
 
+## Network + TLS pinning research (added 2026-08-26)
+
+### Local node — Anvil wins
+
+For CI + local development, Anvil (`alloy_node_bindings::AnvilInstance`) is the only viable pick. Decision matrix:
+
+| Option | Pros | Cons | Decision |
+|---|---|---|---|
+| **Anvil** (foundry-rs/foundry) | Already `[dev-dependencies]`. Fastest startup (~50 ms). Chain-id 31337. 10 prefunded deterministic accounts. Real Revm under the hood — same EVM as Reth/Geth. | Requires Foundry install (`curl -L https://foundry.paradigm.xyz \| bash`). | **Pick.** |
+| Hardhat Node | TS ecosystem friendly. Solidity-native testing. | Requires Node toolchain + npm install. Slower cold start. Two EVM impls (Hardhat's modified EVM ≠ mainnet). | Reject. |
+| Ganache | Mature, GUI available. | Legacy (Truffle suite deprecated). No `alloy-node-bindings` integration. | Reject. |
+| Geth dev mode | Real Geth. | ~3 GB binary download. Slow startup (~5 s). Heavy for CI. | Reject. |
+| Reth dev mode | Real Reth. | Same as Geth — too heavy. | Reject. |
+
+Anvil integration: `AnvilInstance::new().spawn()` returns a running node + `instance.endpoint()` (URL) + `instance.keys()` (prefunded private keys). Drop-in for `new_http(endpoint)`. Mirrors Bitcoin regtest (Docker bitcoin-core).
+
+### Testnet — Sepolia
+
+Sepolia (chain-id 11155111) is the only testnet pick. Justification:
+
+- **Ecosystem share:** default testnet for MetaMask, Etherscan, Alchemy, Infura, Tether docs. Wallets that don't default to Sepolia default to Goerli (deprecated 2024-Q1).
+- **Tooling:** `sepoliafaucet.com`, Google Cloud Web3 faucet, Alchemy/Infura faucets — all live and stable.
+- **Code precedent:** already integrated in `rust-wallet-app/scripts/eth-send-sepolia-e2e.sh` (PR #299), `tests/cli_sepolia.rs`, `tests/wallet_send_native.rs` (Sepolia variants).
+
+Rejected: **Holesky** (chain-id 17000) — deprecated for staking 2025-Q4, faucet reliability degraded (multiple outages). **Hoodi** (chain-id 560048) — newest, less tooling support, fewer faucet options.
+
+### SPKI pinning scenarios (research + design, not implementation)
+
+**Two scenarios, two paths.** Wallet must support both because users have different threat models:
+
+#### Scenario A: Pin the RPC endpoint (defense against MITM)
+
+User runs `eth` from a hostile network (airport WiFi, hotel, conference). Wants assurance the JSON-RPC responses come from the real RPC server, not a TLS-terminating proxy. Solution: SPKI pin.
+
+**Design:**
+
+1. CLI URL scheme extension: `pinned://<spki-sha256-hex>@host[:port]`. Parsed by `parse_rpc_url()` in `handlers.rs`. SPKI hex = 64 chars (32-byte SHA-256), no `0x` prefix.
+2. Library function (issue #393): `pub fn new_http_pinned(url: &str, spki: &[u8; 32]) -> Result<RootProvider, Error>`. Implementation: build raw `reqwest::Client` with a custom `rustls::ServerCertVerifier` that, after standard chain validation, computes SHA-256 of the leaf's `SubjectPublicKeyInfo` (DER-encoded) and compares to the pinned bytes. **Fail closed** — mismatch = connection refused.
+3. Bitcoin precedent: `bitcoin-wallet-core/src/chain/spki.rs` (F20 finding) — same pattern, same `rustls` version (`rustls = "0.23"`).
+
+**Test vectors:**
+
+- Wrong pin against real endpoint → `Error::SpkiPinMismatch { expected: [u8; 32], actual: [u8; 32] }`.
+- Correct pin against real endpoint → request succeeds (or returns transport-level error).
+- Pin against self-signed Anvil HTTPS server (test fixture) → both rejection and acceptance paths.
+
+**Tradeoff:** pin rotation = operator pain. Mitigation: support comma-separated pin list (`pinned://<pin1>,<pin2>@host`) for rotation windows. Out of scope for v0.3.x.
+
+#### Scenario B: No pin (system trust store + localhost)
+
+User runs `eth` from a trusted network or against a local node. Wants the boring path to work: system CAs validate, no pin ceremony.
+
+**Design:**
+
+1. `new_http(url)` (existing) — `RootProvider::new_http(rpc_url)`. Default rustls + `webpki-roots` for HTTPS. Plain HTTP for localhost.
+2. Localhost chain-id guard: `provider.get_chain_id() == 31337` when `--network anvil` (existing at `handlers.rs:650-659`). Catches mis-configured `--rpc-url` pointing at the wrong local node.
+3. Test pattern: `tests/erc20_anvil.rs` (Story 26). Anvil instance + `new_http(endpoint)` + `get_chain_id()` assertion.
+
+**When this is acceptable:**
+
+- Localhost / LAN RPC nodes (no TLS, no pin relevant).
+- Trusted-network deployments (home, office VPN) where the OS trust store is sufficient.
+- CI runners (ephemeral, no long-term cert validity).
+
+**When this is NOT acceptable:** public WiFi, hostile network, production wallets handling real value. Use Scenario A.
+
+### Decision matrix — which scenario when
+
+| Use case | Network | Pin? | Why |
+|---|---|---|---|
+| Local dev (developer laptop) | Anvil HTTP | No (Scenario B) | TLS N/A. |
+| CI smoke test | Anvil HTTP | No (Scenario B) | Ephemeral. |
+| Testnet smoke (Sepolia) | Sepolia HTTPS | Optional (Scenario A recommended) | Public WiFi in dev environments. |
+| Testnet smoke (dev machine, LAN) | Sepolia HTTPS | No (Scenario B acceptable) | Trusted network. |
+| Production wallet, real value | Mainnet HTTPS | **Yes (Scenario A required)** | Adversarial network. |
+
+Default CLI behavior: **Scenario B** (no pin). Operator opts into Scenario A via `pinned://` URL scheme. `--allow-insecure-tls` (debug) bypasses Scenario A pin for development.
+
 ## Verification
 
 No implementation work in this session. The next-session spike (if implementation is approved) should validate:
