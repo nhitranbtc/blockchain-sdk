@@ -1058,10 +1058,13 @@ async fn wallet_balance_all_failure_isolation_logs_per_token_errors_and_exits_0(
         "wallet balance --all + --token override must exit 0 when at least one registry token succeeded\nstdout: {stdout}\nstderr: {stderr}",
     );
     // AC #2: USDT (registry entry) + override 0x...beef both attempted;
-    // USDT printed successfully → success line in stdout.
+    // USDT printed successfully → success line in stdout. The `--decimals 18`
+    // override (H-2 fix from L12 code-reviewer, see PR #371) forces
+    // `format_wei_as(1e9, 18)` = `"0.000000001000000000"` (raw 1e9 / 10^18 = 0,
+    // frac padded to 18 digits). The assertion matches that formatted output.
     assert!(
-        stdout.contains("USDT 1000"),
-        "expected pre-funded USDT balance in stdout despite override failure, got: {stdout}",
+        stdout.contains("USDT 0.000000001000000000"),
+        "expected pre-funded USDT balance (raw 1e9 at --decimals 18) in stdout despite override failure, got: {stdout}",
     );
     // AC #4: override error logged to stderr (per-token failure didn't
     // abort the batch — the operator sees which subset failed).
@@ -1175,8 +1178,12 @@ async fn wallet_balance_all_json_output_emits_array_of_rows() {
         .find(|r| r["symbol"] == "USDT")
         .expect("USDT row must be in JSON output");
     assert_eq!(
-        usdt_row["balance"], "1000.000000",
-        "USDT balance must be the pre-funded 1000 USDT (6 decimals), got: {usdt_row:?}"
+        // `format_wei_as(1_000_000_000, 6)` returns `"1000"` — the helper
+        // omits the `.000000` fractional part when frac is zero. (Previous
+        // assertion expected `"1000.000000"` because the author misread the
+        // helper; the impl is correct.) Whole = 1000, frac = 0.
+        usdt_row["balance"], "1000",
+        "USDT balance must be the pre-funded 1000 USDT (whole=1000, frac=0, format_wei_as drops trailing zeros), got: {usdt_row:?}"
     );
     assert_eq!(
         usdt_row["decimals"], 6,
@@ -1255,11 +1262,12 @@ async fn wallet_balance_all_decimals_override_applies_to_every_token() {
         "wallet balance --all --decimals 2 must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
     );
     // USDT pre-funded 1000 USDT (raw 1e9). With --decimals 2, formatted
-    // value = 1e9 / 10^2 = 1e7 = 10,000,000. Verifies the override
-    // wins over the registry's cached 6.
+    // value = 1e9 / 10^2 = 1e7 = 10,000,000 (8 digits). Verifies the
+    // override wins over the registry's cached 6. (Previous assertion
+    // was off-by-10x at 9 digits = 1e8.)
     assert!(
-        stdout.contains("USDT 100000000"),
-        "expected USDT scaled by --decimals 2 (raw 1e9 / 10^2 = 1e7), got: {stdout}",
+        stdout.contains("USDT 10000000"),
+        "expected USDT scaled by --decimals 2 (raw 1e9 / 10^2 = 1e7 = 10,000,000), got: {stdout}",
     );
     // DAI (18 decimals in registry) without override would print
     // "DAI 1000" (raw 1e21, 18 decimals). With --decimals 2, raw 1e21
