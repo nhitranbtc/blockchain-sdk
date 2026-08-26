@@ -162,30 +162,34 @@ jobs:
   # per-PR check. A future author that reverts to the leaky `format!`
   # pattern would leak RPC URL secrets via `Display` and the gate above
   # would not catch it. This job turns the audit into a permanent
-  # regression block. Mirrored at `eth-wallet-core/src/error.rs:162`
-  # doc-comment. Pattern matches `Error::Rpc(format!`; any non-zero exit
-  # fails the workflow on PR + push to `rust-eth-core`.
+  # regression block. Mirrored at `eth-wallet-core/src/error.rs` (the
+  # `pub fn rpc` doc-comment block). Pattern matches `Rpc(\s*format!`
+  # (extended regex) — catches both `Error::Rpc(format!(...))` and the
+  # equally leaky `Self::Rpc(format!(...))` + tolerates whitespace after
+  # the open paren. Any non-zero exit fails the workflow on PR + push to
+  # `rust-eth-core`.
   rust-error-grep:
-    name: Rust Error::Rpc(format audit
+    name: Rust Error::Rpc(format!) audit
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4  # v4
         with:
           persist-credentials: false
-      - name: grep -rn 'Error::Rpc(format' must return 0 matches
+      - name: grep -rnE 'Rpc\(\s*format!' must return 0 code matches
         run: |
-          # AC #5 audit (Issue #382): the leaky `Error::Rpc(format!...)`
-          # pattern bypasses the centralised redaction in
-          # `Error::rpc(impl Display)` and may leak RPC URL secrets via
-          # `Display`. The doc-comment at `eth-wallet-core/src/error.rs:162`
-          # references the gate by literal substring; filter Rust doc-comment
-          # lines (`///`) so the gate does not self-flag on its own pointer.
-          if grep -rn 'Error::Rpc(format' \
+          # AC #5 audit (Issue #382): the leaky `Rpc(format!...)` pattern
+          # (any path: `Error::Rpc`, `Self::Rpc`, etc.) bypasses the
+          # centralised redaction in `Error::rpc(impl Display)` and may leak
+          # RPC URL secrets via `Display`. The doc-comment at
+          # `eth-wallet-core/src/error.rs` above `pub fn rpc` references
+          # the gate by literal substring; filter Rust doc-comment lines
+          # (`///`) so the gate does not self-flag on its own pointer.
+          if grep -rnE 'Rpc\(\s*format!' \
               rust-wallet-app/crates/eth \
               rust-wallet-app/crates/eth-wallet-core \
               | grep -v '///'; then
-            echo "::error::Error::Rpc(format!...) bypasses the centralised" \
+            echo "::error::Rpc(format!...) bypasses the centralised" \
               "redaction in Error::rpc(impl Display) and may leak RPC URL" \
               "secrets via Display. Use Error::rpc(e) instead."
             exit 1
