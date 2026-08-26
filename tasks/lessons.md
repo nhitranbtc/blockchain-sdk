@@ -182,7 +182,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Task pickup (understand + plan)              | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                      |
 | Task pickup (drift scan, per L13 step 4a)    | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts. |
-| Task pickup (new feature, no existing plan)  | `feature-dev:feature-dev` — 7-phase discovery → explore → clarify → architect → implement → review → summary. Use when feature unclear or scope undecided; phases 1-4 produce an ad-hoc plan that L13 then owns from step 9 onward. |
+| Task pickup (new feature, no existing plan)  | `feature-dev:feature-dev` — 4-phase (discover → explore → clarify → architect) producing ad-hoc plan. Use when feature unclear or scope undecided; phases 1-4 → ad-hoc plan, then L13 owns from step 9 onward (implement/review/summary re-absorbed into L13). |
 | Brainstorming (pre-implementation design)    | `superpowers:brainstorming` (MUST before any creative work; gates L13 pre-pickup per L11 itself) |
 | Workspace isolation                         | `superpowers:using-git-worktrees` (after brainstorming, before plan execution; integration branch per L45) |
 | Plan authoring / plan review                 | `tasks/plan-lesson.md` (PL1, PL2, PL3, PL7–PL16) — drift scan, story trace, plugin stack, host-first SDK design, step-by-step workflow |
@@ -194,6 +194,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | TDD red-green-refactor                       | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`)                                              |
 | Build/cargo error cascade                    | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)                                     |
 | Module interface design                      | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4)                                     |
+| Behavioral discipline (every L13 step)       | `andrej-karpathy-skills:karpathy-guidelines` — wrapper at step 4 (branch checkout) + step 15c (broad L13 audit). Per L13 behavioral discipline section (4 principles: think-first, simplicity, surgical, goal-driven). |
 | Pre-PR code review (comprehensive)          | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10). Scope: correctness, security, tests, structure. |
 | Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
 | Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
@@ -291,12 +292,23 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ## Per task
 9. TDD red-green cycle (superpowers:test-driven-development)
+9a. **Module interface design (before TDD when new module/struct):** invoke `mattpocock-skills:codebase-design` to author the module's public surface (struct fields, trait bounds, error type, async signature) BEFORE writing the failing test. Pairs with `pr-review-toolkit:type-design-analyzer` (which fires later in step 10 L12 review). Skip for trivial edits to existing modules; mandatory for new public types per L12 module-interface row.
 10. L12: pre-PR code review FIRST — `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`
-    - Parallel sub-agents: type-design-analyzer + code-reviewer
-    - Run on first commit on branch
-11. Verify (triple gate): `cargo fmt --check` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace`
-    - Run AFTER each fix commit AND at task-end (before final commit-push-pr).
-    - All three must pass before the task-end commit. A single failing gate = task is not done.
+    - Parallel sub-agents: `type-design-analyzer` (encapsulation, invariants) + `code-reviewer` (correctness, security, tests, structure per L11 row scope)
+    - **Critical tier** (per Q4 carve-out): add `pr-review-toolkit:security-auditor` as 3rd concurrent sub-agent (max 3 sub-agents per step). triggers for key material / signing / encryption / network / persistence surfaces.
+    - **Trivial tier** (per L13 amendment note 2026-08-25): SKIP this step entirely — pre-PR code review not required for doc-only commits. L49 + L51 + L52 + L24 still apply.
+    - Run on squash-candidate state (final commit on PR branch before merge), not first commit and not uncommitted. Per Q8 (re-grill 2026-08-15: corrected from "first commit" wording — Tasks 3-4 squash-merged multiple commits; reviewers read the combined state).
+    - **Q4 budget**: max 2 sub-agents normal tier; max 3 critical tier (carve-out for L12 cluster). Standalone gates (10a, 10b) don't compound with the cluster cap.
+    - **Review-paired fmt re-check** (after L12 review, pre-step 11): invoke `/ecc:rust-review` slash command (or `ecc:rust-reviewer` agent) on modified `.rs` files to catch rustfmt drift the L12 sub-agents missed. Different lens from the cargo quad gate (which runs pre-commit) — this runs post-L12. L11 row "Rust toolchain review" consumer. Skipped for trivial + doc-only edits.
+10a. **Test coverage gap analysis (separate gate after L12, all tiers):** invoke `pr-review-toolkit:pr-test-analyzer` on the same squash-candidate state. Distinct lens from `code-reviewer` (which checks existing tests for correctness); `pr-test-analyzer` checks for missing coverage on the changed behavior. Findings drive a follow-up commit before step 11 verify. Not concurrent with L12 sub-agents (separate gate) — Q4 cap preserved.
+10b. **Pre-PR security review (critical tier only, standalone):** after step 10a (test coverage), invoke `security-review` (comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy). Distinct lens from `pr-review-toolkit:security-auditor` (which sits inside L12 code-review lens). Q4 cap unaffected (separate gate, not sub-agent). Findings drive a follow-up commit before step 11 verify. Skipped for normal + trivial tiers.
+11. Verify (quad gate, optional 5th): `cargo fmt --check --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace --all-targets` + `cargo tree --workspace --duplicates` (+ `cargo audit` if installed, per L11 row)
+    - Run BEFORE every commit (initial + fix + task-end) — earlier "AFTER each fix commit" wording replaced for consistency with clippy sub-bullet below.
+    - All four (or five with audit) gates must pass before the task-end commit. A single failing gate = task is not done; on failure → step 11a (triage) or step 11b (debug fallback) BEFORE re-running.
+    - **One-shot path**: prefer `/ecc:rust-build` slash command (wraps the quad gate in one invocation per L11 row). Use bare cargo commands when the slash command is unavailable or for finer-grained debugging.
+    - **Flaky-test retry**: if `cargo test` fails on a single test that previously passed (no code change in that test path), re-run once with `cargo test -- --test-threads=1`. Persistent failure = step 11b.
+    - **Trivial tier** (per L13 amendment note 2026-08-25): cargo quad gate N/A for doc-only commits. L49 + L51 + L52 + L24 still apply.
+    - **Q4 budget**: N/A (no skill invoked; cargo commands only).
     - **`cargo fmt --check` is a blocking gate**, not a convenience. Run it BEFORE every commit; CI's `Format check` job fails the PR if any line exceeds rustfmt's max-width.
     - **rustfmt version drift (PR #137, 2026-08-14) — local pass ≠ CI pass.**
         - Local `cargo fmt --check` is necessary but not sufficient. CI's pre-installed rustfmt may differ from the project's `rust-toolchain.toml` channel (e.g. CI installs rustfmt from `dtolnay/rust-toolchain@stable` while project pins `1.94`).
@@ -317,11 +329,9 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
             Verify after change: PR's Format check log should show `rustfmt <version>` matching local.
         - **Workaround when workflow isn't yet pinned:** if CI fails Format check despite local pass, run `cargo fmt --all` and commit the diff — that's the format CI is asking for.
     - **Post-bulk-edit caveat (PR #85):** the Edit-tool hook auto-formats on save, but bulk-script edits (Python `cat <<EOF` / `sed` / `git checkout --`) bypass the hook. After ANY non-Edit-tool change to a `.rs` file, run `cargo fmt -p <crate>` explicitly before the verify gate. The hook is a safety net, not a guarantee.
-    - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full triple gate (`fmt` + `clippy --all-targets` + `test`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
+    - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full quad gate (`fmt` + `clippy --all-targets` + `test` + `tree --duplicates`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
     - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
-- If the commit touches any plugin-structure file (per L49 trigger), invoke `plugin-dev:plugin-validator` BEFORE the step 12 commit PAUSE. Read-only agent; findings feed the same fix loop as L12 review.
-    - **Format-verification plugin** (2026-08-12 grill): the `cargo fmt --check` gate is the only Rust-quality check bundled into a dedicated plugin. Subagent `ecc:rust-build-resolver` runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` + `cargo tree --duplicates` (+ `cargo audit` if installed) in one invocation; slash command `/ecc:rust-build` wraps the same agent. `ecc:rust-reviewer` (or `/ecc:rust-review`) runs the same fmt check on modified `.rs` files after a code-review pass. Other Rust-engineer agents (`compass:rust-engineer`, `voltagent-lang:rust-engineer`) apply style by writing idiomatic code on first pass — they do NOT expose a discrete `cargo fmt --check` step. `caveman:cavecrew-reviewer` intentionally skips formatting nits unless they change meaning — wrong tool for rustfmt policing. Use `/ecc:rust-build` for one-shot verify; use `/ecc:rust-review` for fmt-check paired with review.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
     - **Fixable now**: fix in current commit, re-verify, continue
     - **Small deferred** (cosmetic, follow-up): log in current session's backlogs list
@@ -329,6 +339,10 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **Future milestone** (v0.1.1, v0.2): log in current session's backlogs list with priority tag
     - GitHub issue format: title `Backlog: <short description>`, body = acceptance criteria + priority + parent task ref, labels = `backlog` + `priority/p0|p1|p2|p3` + `week/N` (if applicable), milestone = parent task's milestone
     - When in doubt: write the issue. Forgetting backlogs costs more than the 30-60s to file one.
+11b. **L24 cascade on local branch (pre-commit):** before step 12 PAUSE, confirm L24 doc updates have landed in the commits traveling with the feature PR — CHANGELOG `[Unreleased]` bullet cites the PR number; User Stories table checkbox flipped if a story completes; "Try it" command column populated. Per L24, these live WITH the feature commit (not a separate process branch) so squash-merge carries them. If step 15a (tech doc) lands AFTER this check, re-run L24 cross-check before merge.
+11c. **Systematic-debugging fallback (when verify fails non-obviously):** if `cargo test` or `cargo clippy` surfaces a failure whose root cause isn't immediate from the error message, invoke `superpowers:systematic-debugging` BEFORE proposing a fix. Forms hypothesis, proves it, then minimal root-cause change + regression test. Avoid the "guess + cargo test loop" anti-pattern. Conditional — not a per-step add (Q4 cap preserved).
+11d. **Plugin-structure validation (when trigger matches per L49):** if the commit touches any plugin-structure file, invoke `plugin-dev:plugin-validator` BEFORE the step 12 commit PAUSE. Read-only agent; findings feed the same fix loop as L12 review.
+    - **Format-verification plugin** (2026-08-12 grill): the `cargo fmt --check` gate is the only Rust-quality check bundled into a dedicated plugin. Subagent `ecc:rust-build-resolver` runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` + `cargo tree --duplicates` (+ `cargo audit` if installed) in one invocation; slash command `/ecc:rust-build` wraps the same agent. `ecc:rust-reviewer` (or `/ecc:rust-review`) runs the same fmt check on modified `.rs` files after a code-review pass. Other Rust-engineer agents (`compass:rust-engineer`, `voltagent-lang:rust-engineer`) apply style by writing idiomatic code on first pass — they do NOT expose a discrete `cargo fmt --check` step. `caveman:cavecrew-reviewer` intentionally skips formatting nits unless they change meaning — wrong tool for rustfmt policing. Use `/ecc:rust-build` for one-shot verify; use `/ecc:rust-review` for fmt-check paired with review.
 12. PAUSE for commit approval
     - Max 3 fix rounds; round = one review + one fix commit pair
     - **L46 — pre-pause destination check:** run `git branch --show-current` and confirm it equals the branch recorded at step 4. If mismatch → `git checkout <expected>`, re-verify, then proceed. The branch name MUST appear verbatim in the approval prompt per L6 ("Show branch name in the approval prompt").
@@ -361,21 +375,28 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **Walk each L13 step 1 through 15b** and confirm artifact exists before merging:
         - Step 1 (L11 skill tag — recorded in branch commits or PR body)
         - Step 2 (complexity tier self-detected + user-confirmed)
-        - Steps 3-4 (issue picked up, branch checked out)
-        - Steps 5-8 (skill pair invoked per L11 map, domain-tag wins on conflict)
+        - Steps 3-4 (issue picked up, branch checked out; karpathy-guidelines wrapper applied — 4 principles visible in commit history)
+        - Steps 5-8 (skill pair invoked per L11 map, domain-tag wins on conflict; Q4 cap honored)
         - Step 9 (TDD red-green cycle: failing test first, then GREEN pass)
-        - Step 10 (L12 pre-PR review findings applied — commit references each fix)
-        - Step 11 (verify gate clean: `cargo fmt --check` + `clippy -- -D warnings` + `cargo test` output captured)
+        - Step 9a (module interface design: codebase-design invoked for new public types)
+        - Step 10 (L12 pre-PR review findings applied — commit references each fix; critical-tier 3rd sub-agent security-auditor if applicable; trivial-tier skipped per amendment)
+        - Step 10a (test coverage gap analysis: pr-test-analyzer applied; follow-up commit if gaps)
+        - Step 10b (security-review applied for critical tier; findings follow-up committed before step 11)
+        - Step 11 (verify quad gate clean: `cargo fmt --check` + `clippy --all-targets -- -D warnings` + `cargo test` + `cargo tree --duplicates` output captured)
         - Step 11a (backlog triage done; follow-up issues filed for any deferred work)
-        - Step 11b (L24 cascade on local branch BEFORE merge — CHANGELOG + Story flip in commits that travel with the feature PR)
+        - Step 11b (L24 cascade on local branch — CHANGELOG + Story flip + "Try it" column in commits traveling with feature PR)
+        - Step 11c (systematic-debugging applied on non-obvious verify failures; hypothesis + regression test landed)
+        - Step 11d (plugin-structure validation per L49 trigger)
         - Step 12 (commit approval PAUSE honored — user said "approved" or "commit" before each `git commit`)
         - Step 13 (commit-push-pr executed — branch pushed + PR opened)
-        - Step 14 (issue checkboxes flipped with artifact evidence per L13 step 14 rules)
+        - Step 14 (issue checkboxes flipped with artifact evidence per L13 step 14 rules — file:line, test name, commit SHA, PR number per step 14 evidence format)
         - Step 15 (PR review by parallel sub-agents per L13 step 15)
         - Step 15a (10-section tech doc appended to PR body — Goal, Drift, API surface, Threat-model, Implementation, Tests, L12 review, Lessons, Backlog, Migration)
         - Step 15b (L24 cascade verified in merged code path)
+        - **Critical-tier check (if applicable)**: 5-skill bundle present — type-design-analyzer + code-reviewer + security-auditor (L12 cluster) + security-review (standalone) + plugin-validator (L49 trigger). Q4 carve-out honored.
+        - **Trivial-tier shortcut (if applicable)**: per L13 amendment note2026-08-25, skip pre-PR code review but L49 + L51 + L52 + L24 still apply. Cargo quad gate N/A for doc-only commits.
     - **Why a separate gate**: 15d's PR-body checklist is narrow (boxes in PR body only). 15c widens to all L13 steps — catches gaps in TDD evidence, L12 review, verify gate, L24 cascade, skill-tag pair, etc. that the PR body doesn't necessarily surface.
-    - **Output**: either (a) all steps verified → proceed to 15d merge gate, or (b) gaps found → fix (commit amend, follow-up issue, or PR body update) before merge.
+    - **Output**: either (a) all steps verified → proceed to 15d merge gate, or (b) gaps found → fix (commit amend, follow-up issue, or PR body update) before merge; re-run step 11 quad gate after any fix commit.
     - **Anti-patterns**:
         - Skipping the walk because "I did it all" — the walk is what proves you did it all. This is the documented gap from #64/#66/#68 PRs (unchecked boxes in merged PRs without deferral notes).
         - Speculatively flipping boxes "to clean up the body" — L28 honesty violation.
