@@ -1247,18 +1247,17 @@ mod tests {
             )
         };
         assert_eq!(rc, FfiError::Ok);
-        let id_str = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
-            .to_str()
-            .unwrap()
-            .to_string()
-            .clone();
         unsafe { phrase_view_free(phrase_handle) };
 
         let rc = unsafe {
             wallet_delete(
                 NETWORK_TESTNET,
                 base.as_ptr(),
-                id_str.as_ptr() as *const c_char,
+                // Pass the NUL-terminated buffer wallet_create wrote,
+                // NOT id_str.as_ptr(): a Rust String carries no NUL
+                // terminator, so CStr::from_ptr reads past the
+                // allocation (UB) and the id fails to parse.
+                id_buf.as_ptr() as *const c_char,
             )
         };
         assert_eq!(rc, FfiError::Ok);
@@ -1336,7 +1335,11 @@ mod tests {
             wallet_show(
                 NETWORK_TESTNET,
                 base.as_ptr(),
-                id_str.as_ptr() as *const c_char,
+                // Pass the NUL-terminated buffer wallet_create wrote,
+                // NOT id_str.as_ptr(): a Rust String carries no NUL
+                // terminator, so CStr::from_ptr reads past the
+                // allocation (UB) and the id fails to parse.
+                id_buf.as_ptr() as *const c_char,
                 pw.as_ptr(),
                 pw_len,
                 // Skip sync in the unit test (no Esplora endpoint
@@ -1428,10 +1431,6 @@ mod tests {
             )
         };
         assert_eq!(rc, FfiError::Ok);
-        let id_str = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
-            .to_str()
-            .unwrap()
-            .to_string();
         unsafe { phrase_view_free(phrase_handle) };
 
         let mut show_id = [0i8; 37];
@@ -1446,7 +1445,11 @@ mod tests {
             wallet_show(
                 NETWORK_TESTNET,
                 base.as_ptr(),
-                id_str.as_ptr() as *const c_char,
+                // Pass the NUL-terminated buffer wallet_create wrote,
+                // NOT id_str.as_ptr(): a Rust String carries no NUL
+                // terminator, so CStr::from_ptr reads past the
+                // allocation (UB) and the id fails to parse.
+                id_buf.as_ptr() as *const c_char,
                 pw.as_ptr(),
                 pw_len,
                 bad_url.as_ptr(),
@@ -1504,10 +1507,6 @@ mod tests {
             )
         };
         assert_eq!(rc, FfiError::Ok);
-        let id_str = unsafe { CStr::from_ptr(id_buf.as_ptr()) }
-            .to_str()
-            .unwrap()
-            .to_string();
         unsafe { phrase_view_free(phrase_handle) };
 
         let (wrong_pw, wrong_pw_len) = pw_bytes("wrong");
@@ -1521,7 +1520,11 @@ mod tests {
             wallet_show(
                 NETWORK_TESTNET,
                 base.as_ptr(),
-                id_str.as_ptr() as *const c_char,
+                // Pass the NUL-terminated buffer wallet_create wrote,
+                // NOT id_str.as_ptr(): a Rust String carries no NUL
+                // terminator, so CStr::from_ptr reads past the
+                // allocation (UB) and the id fails to parse.
+                id_buf.as_ptr() as *const c_char,
                 wrong_pw.as_ptr(),
                 wrong_pw_len,
                 c"".as_ptr(),
