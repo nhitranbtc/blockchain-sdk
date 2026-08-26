@@ -17,3 +17,10 @@ tangem-app-ios/
 **/*.env
 
 .local/
+
+# Python bytecode (leak from e2e test scripts)
+**/__pycache__/
+*.pyc
+
+# Playwright MCP server cache
+.playwright-mcp/
