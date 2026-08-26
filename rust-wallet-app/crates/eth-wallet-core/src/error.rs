@@ -159,6 +159,11 @@ impl Error {
     /// Backward-compatible: old call sites using `Error::rpc(format!(...))`
     /// still compile, but their redaction responsibility is now on the
     /// author. New code should always use this constructor.
+    ///
+    /// Enforced by CI audit-gate `rust-error-grep` job in
+    /// `.github/workflows/rust-eth-core-ci.yml` — any `Error::Rpc(format`
+    /// match in `eth/` or `eth-wallet-core/` fails the workflow. See
+    /// Issue #382 for the rationale.
     pub fn rpc(e: impl std::fmt::Display) -> Self {
         Error::Rpc(crate::redact_rpc_url(e))
     }
