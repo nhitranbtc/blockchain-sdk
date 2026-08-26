@@ -574,13 +574,20 @@ fn wallet_balance_with_token_flag_is_accepted_by_clap() {
         Some(3),
         "wallet balance --token should reach eth_call and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
     );
-    // Lock-down against stub regression: the only path that emits
-    // `balanceOf` in stderr is `token_balance`'s `format!("eth_call balanceOf: ...")`
-    // prefix — a stub regression at handler entry returning Error::Rpc
-    // from arbitrary text would NOT match this substring.
+    // Lock-down against stub regression: the real impl emits either
+    // `eth_call balanceOf` (token_balance) or `eth_call decimals`
+    // (query_decimals) in stderr — whichever eth_call fails first
+    // against the unreachable RPC. A stub regression at handler entry
+    // returning Error::Rpc from arbitrary text would NOT contain either
+    // function name, since erc20::* are the only sites that format the
+    // function selector into the error context.
+    // Issue #366 swapped the call order so query_decimals runs first
+    // when decimals_override is None; "decimals" is now the canonical
+    // substring for the non-override path. "balanceOf" remains valid
+    // evidence for the override path / sibling tests.
     assert!(
-        stderr.contains("balanceOf"),
-        "expected impl-path network error from real eth_call balanceOf:\nstdout: {stdout}\nstderr: {stderr}",
+        stderr.contains("balanceOf") || stderr.contains("decimals"),
+        "expected impl-path network error from real eth_call (balanceOf or decimals):\nstdout: {stdout}\nstderr: {stderr}",
     );
 }
 

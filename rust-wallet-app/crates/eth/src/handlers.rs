@@ -295,18 +295,19 @@ pub async fn wallet_balance(
         Some(token_str) => {
             let token_addr = Address::from_str(token_str)
                 .map_err(|e| Error::InvalidInput(format!("invalid --token address: {e}")))?;
-            let raw = eth_wallet_core::erc20::token_balance(provider, token_addr, holder).await?;
+            // Issue #366: fail-fast on non-ERC-20 tokens — query `decimals()` first
+            // when no override is supplied. The erc20 layer already returns
+            // `Error::AbiDecodeFailed` for decode failures (exit 2) and
+            // `Error::Rpc` for transport failures (exit 3) with their own
+            // contextual formatting; wrapping them here would swallow the
+            // AbiDecodeFailed variant and map it to exit 3, killing the
+            // lock-down tests added in PR #362 (Issue #366 acceptance
+            // criteria). Token balance follows.
             let decimals = match decimals_override {
                 Some(d) => d,
-                None => eth_wallet_core::erc20::query_decimals(provider, token_addr)
-                    .await
-                    .map_err(|e| {
-                        Error::Rpc(format!(
-                            "decimals() query failed (use --decimals <N> to override): {}",
-                            redact_rpc_error(&e)
-                        ))
-                    })?,
+                None => eth_wallet_core::erc20::query_decimals(provider, token_addr).await?,
             };
+            let raw = eth_wallet_core::erc20::token_balance(provider, token_addr, holder).await?;
             // Token balance prints raw + decimal-scaled only — adding a separate
             // unit vocabulary (wei/gwei/eth) is out of scope for v0.2.
             // The `--unit` flag is rejected by clap when `--token` is set
