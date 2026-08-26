@@ -25,7 +25,14 @@ concurrency:
 jobs:
   btc-cli-demo:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Bumped 15m → 40m after run 32979306608 (PR #385 head 76f0c9d) hit the
+    # 15-min cap during `cargo test -p btc` while `encrypt_decrypt_roundtrip
+    # _recovers_phrase` was mid-run. Mirrors the rust-eth-core rust-test
+    # timeout bump from #370 (rust-eth-core-ci.yml line 73). Long-running
+    # scrypt-derived-encryption tests under `cargo test` are the worst
+    # offender; quickstart + networks + import + balance demo scripts are
+    # <60s each but ship in the same job.
+    timeout-minutes: 40
     steps:
       # Pin actions to full commit SHAs per security guidance.
       # Dependabot config at .github/dependabot.yml will auto-bump.
