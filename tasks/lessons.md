@@ -302,9 +302,10 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **Review-paired fmt re-check** (after L12 review, pre-step 11): invoke `/ecc:rust-review` slash command (or `ecc:rust-reviewer` agent) on modified `.rs` files to catch rustfmt drift the L12 sub-agents missed. Different lens from the cargo quad gate (which runs pre-commit) — this runs post-L12. L11 row "Rust toolchain review" consumer. Skipped for trivial + doc-only edits.
 10a. **Test coverage gap analysis (separate gate after L12, all tiers):** invoke `pr-review-toolkit:pr-test-analyzer` on the same squash-candidate state. Distinct lens from `code-reviewer` (which checks existing tests for correctness); `pr-test-analyzer` checks for missing coverage on the changed behavior. Findings drive a follow-up commit before step 11 verify. Not concurrent with L12 sub-agents (separate gate) — Q4 cap preserved.
 10b. **Pre-PR security review (critical tier only, standalone):** after step 10a (test coverage), invoke `security-review` (comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy). Distinct lens from `pr-review-toolkit:security-auditor` (which sits inside L12 code-review lens). Q4 cap unaffected (separate gate, not sub-agent). Findings drive a follow-up commit before step 11 verify. Skipped for normal + trivial tiers.
-11. Verify (quad gate, optional 5th): `cargo fmt --check --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace --all-targets` + `cargo tree --workspace --duplicates` (+ `cargo audit` if installed, per L11 row)
+11. Verify (triple gate local + CI dedup): `cargo fmt --check --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace --all-targets` (+ `cargo audit` if installed, per L11 row)
     - Run BEFORE every commit (initial + fix + task-end) — earlier "AFTER each fix commit" wording replaced for consistency with clippy sub-bullet below.
-    - All four (or five with audit) gates must pass before the task-end commit. A single failing gate = task is not done; on failure → step 11a (triage) or step 11b (debug fallback) BEFORE re-running.
+    - All three local gates (+ audit if installed) must pass before the task-end commit. A single failing gate = task is not done; on failure → step 11a (triage) or step 11b (debug fallback) BEFORE re-running.
+    - **CI 4th gate (`cargo tree --workspace --duplicates`)**: runs in `.github/workflows/<file>` (rust-eth-core-ci.yml per L45 integration-branch routing), NOT in the local per-commit loop. Dedup is cheap but workspace-wide tree walks slow on large workspaces; CI cadence is the right place. Local step 11 = triple gate only. Step 11 snapshot row covers CI dedup status separately.
     - **One-shot path**: prefer `/ecc:rust-build` slash command (wraps the quad gate in one invocation per L11 row). Use bare cargo commands when the slash command is unavailable or for finer-grained debugging.
     - **Flaky-test retry**: if `cargo test` fails on a single test that previously passed (no code change in that test path), re-run once with `cargo test -- --test-threads=1`. Persistent failure = step 11b.
     - **Trivial tier** (per L13 amendment note 2026-08-25): cargo quad gate N/A for doc-only commits. L49 + L51 + L52 + L24 still apply.
@@ -329,15 +330,44 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
             Verify after change: PR's Format check log should show `rustfmt <version>` matching local.
         - **Workaround when workflow isn't yet pinned:** if CI fails Format check despite local pass, run `cargo fmt --all` and commit the diff — that's the format CI is asking for.
     - **Post-bulk-edit caveat (PR #85):** the Edit-tool hook auto-formats on save, but bulk-script edits (Python `cat <<EOF` / `sed` / `git checkout --`) bypass the hook. After ANY non-Edit-tool change to a `.rs` file, run `cargo fmt -p <crate>` explicitly before the verify gate. The hook is a safety net, not a guarantee.
-    - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full quad gate (`fmt` + `clippy --all-targets` + `test` + `tree --duplicates`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
+    - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full triple gate (`fmt` + `clippy --all-targets` + `test`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
     - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
-11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
-    - **Fixable now**: fix in current commit, re-verify, continue
-    - **Small deferred** (cosmetic, follow-up): log in current session's backlogs list
-    - **Big task** (multi-PR, multi-week): create GitHub issue, label `backlog`, link to parent task
-    - **Future milestone** (v0.1.1, v0.2): log in current session's backlogs list with priority tag
-    - GitHub issue format: title `Backlog: <short description>`, body = acceptance criteria + priority + parent task ref, labels = `backlog` + `priority/p0|p1|p2|p3` + `week/N` (if applicable), milestone = parent task's milestone
+11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task). Sequence: step 11c (systematic-debugging) → step 11a (triage decision) → either fix-and-rerun-11 OR create-backlog-item.
+    - **Triage classes** (6, with deterministic decision criteria):
+        - **Fixable now**: ≤10 min + in scope + no new test required → fix in current commit, re-verify, continue
+        - **In-PR follow-up**: >10 min OR scope-creep risk → commit in current PR (before merge), not main yet; lands via the feature PR's pipeline
+        - **Small deferred** (cosmetic, follow-up): touches adjacent code OR needs new test but doesn't block → log in current session's backlogs list + L14 progress.md events
+        - **Big task** (multi-PR, multi-week): own PR OR multi-week OR cross-crate → create GitHub issue, label `backlog`, link to parent task
+        - **Future milestone** (v0.1.1, v0.2): doesn't ship before parent task's release → log with `priority/p2|p3` tag
+        - **External gate** (operator-driven, L29 manual smoke / L28 Gate B): can't run in CI → mark `[ ]` in PR body with `<!-- TODO: <operator-action> -->` deferral note (per step 14 external-gate discipline)
+    - **Decision criteria** (deterministic, not vibes):
+        - ≤10 min + in scope + no new test → fixable now
+        - >10 min OR scope-creep → in-PR follow-up
+        - needs new test OR adjacent code → small deferred
+        - multi-week OR cross-crate → big task
+        - doesn't ship before parent release → future milestone
+        - operator-driven (L29 / L28 Gate B) → external gate
+    - **GitHub issue format**:
+        - Title: `Backlog: <short description>`
+        - Body: acceptance criteria + priority + parent task ref + L14 progress.md link
+        - Labels: `backlog` + `priority/p0|p1|p2|p3` + `week/N` (current sprint) — canonical reference `docs/agents/triage-labels.md`
+        - Milestone: parent task's milestone
+    - **Priority decision tree**:
+        - `priority/p0`: blocks release (ship-stopper)
+        - `priority/p1`: blocks merge (must-fix before parent task closes)
+        - `priority/p2`: current milestone (ships before next minor release)
+        - `priority/p3`: future (v0.1.1, v0.2 backlog)
+    - **`parent task ref`**: per plan-based work = `#<plan-task-N>` (e.g., #17 for eth-wallet-core task 17); per issue-based work = `#<original-issue>`. State which in the body.
+    - **`week/N`**: current sprint number. If sprint unknown, omit label.
+    - **L14 ledger cross-ref**: append backlog events to `progress.md` (L14) — `id, decision, class, parent_task_ref, deferred_from_step`. Ephemeral session backlogs list = index; L14 progress.md = durable record.
+    - **Backlog size signal**: >10 open `backlog` issues = tech-debt alert (per L14 progress metrics). Surface at session start: `gh issue list --label backlog --state open | wc -l`.
+    - **L21 bulk-creation**: when multiple related backlogs surface (e.g., per L29 smoke for each crate), dispatch L21 sub-agent to batch-create per L21 sub-section prompt template. Reduces per-issue ceremony from 30-60s to 5-10s per item.
+    - **Anti-patterns**:
+        - **Scope creep**: pulling unrelated fixes into "fixable now" — violates L13 karpathy-guidelines principle 3 (surgical changes)
+        - **Issue spam**: one big task → many tiny issues — audit-trail noise
+        - **Orphan link**: backlog issue without `parent task ref` — drift on follow-up
+        - **Eternal defer**: same item in backlog across >3 sessions — either ship or escalate to `priority/p0`
     - When in doubt: write the issue. Forgetting backlogs costs more than the 30-60s to file one.
 11b. **L24 cascade on local branch (pre-commit):** before step 12 PAUSE, confirm L24 doc updates have landed in the commits traveling with the feature PR — CHANGELOG `[Unreleased]` bullet cites the PR number; User Stories table checkbox flipped if a story completes; "Try it" command column populated. Per L24, these live WITH the feature commit (not a separate process branch) so squash-merge carries them. If step 15a (tech doc) lands AFTER this check, re-run L24 cross-check before merge.
 11c. **Systematic-debugging fallback (when verify fails non-obviously):** if `cargo test` or `cargo clippy` surfaces a failure whose root cause isn't immediate from the error message, invoke `superpowers:systematic-debugging` BEFORE proposing a fix. Forms hypothesis, proves it, then minimal root-cause change + regression test. Avoid the "guess + cargo test loop" anti-pattern. Conditional — not a per-step add (Q4 cap preserved).
@@ -380,7 +410,8 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         | 10 L12 review | `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review` | `pr-review-toolkit` (`type-design-analyzer` + `code-reviewer`; critical: +`security-auditor`); `/ecc:rust-review` review-paired fmt re-check (`ecc`) | ☐ |
         | 10a test coverage | `pr-review-toolkit:pr-test-analyzer` (separate gate) | `pr-review-toolkit` | ☐ |
         | 10b security-review | `security-review` (critical tier only, standalone) | `security` | ☐ |
-        | 11 quad gate | prefer `/ecc:rust-build`; bare cargo `fmt --check --workspace` + `clippy --workspace --all-targets -- -D warnings` + `test --workspace --all-targets` + `tree --workspace --duplicates` (+ `cargo audit` if installed) | `ecc:rust-build-resolver` | ☐ |
+        | 11 triple gate (local) | prefer `/ecc:rust-build`; bare cargo `fmt --check --workspace` + `clippy --workspace --all-targets -- -D warnings` + `test --workspace --all-targets` (+ `cargo audit` if installed) | `ecc:rust-build-resolver` | ☐ |
+        | 11-ci dedup | `cargo tree --workspace --duplicates` runs in `.github/workflows/rust-eth-core-ci.yml` (CI only, per L45) | — | ☐ |
         | 11a backlog triage | `gh issue create` (multi-PR deferred) or in-session backlogs list | — | ☐ |
         | 11b L24 cascade local | CHANGELOG `[Unreleased]` + User Stories flip + "Try it" column (project convention, not skill) | — | ☐ |
         | 11c systematic-debugging | `superpowers:systematic-debugging` (conditional on verify failure) | `superpowers` | ☐ |
@@ -433,7 +464,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - **Critical-tier check (if applicable)**: 5-skill bundle present — type-design-analyzer + code-reviewer + security-auditor (L12 cluster) + security-review (standalone) + plugin-validator (L49 trigger). Q4 carve-out honored.
         - **Trivial-tier shortcut (if applicable)**: per L13 amendment note2026-08-25, skip pre-PR code review but L49 + L51 + L52 + L24 still apply. Cargo quad gate N/A for doc-only commits.
     - **Why a separate gate**: 15d's PR-body checklist is narrow (boxes in PR body only). 15c widens to all L13 steps — catches gaps in TDD evidence, L12 review, verify gate, L24 cascade, skill-tag pair, etc. that the PR body doesn't necessarily surface.
-    - **Output**: either (a) all steps verified → proceed to 15d merge gate, or (b) gaps found → fix (commit amend, follow-up issue, or PR body update) before merge; re-run step 11 quad gate after any fix commit.
+    - **Output**: either (a) all steps verified → proceed to 15d merge gate, or (b) gaps found → fix (commit amend, follow-up issue, or PR body update) before merge; re-run step 11 triple gate (local) + step 11-ci dedup status after any fix commit.
     - **Anti-patterns**:
         - Skipping the walk because "I did it all" — the walk is what proves you did it all. This is the documented gap from #64/#66/#68 PRs (unchecked boxes in merged PRs without deferral notes).
         - Speculatively flipping boxes "to clean up the body" — L28 honesty violation.
