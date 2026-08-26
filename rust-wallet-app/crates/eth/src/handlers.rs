@@ -354,7 +354,7 @@ pub async fn wallet_balance_all(
     provider: &RootProvider<Ethereum>,
     address: &str,
     network: &str,
-    token_overrides: &[String],
+    token_overrides: &[Address],
     decimals_override: Option<u8>,
     json: bool,
 ) -> Result<()> {
@@ -389,16 +389,18 @@ pub async fn wallet_balance_all(
     // AC #2: user-supplied --token overrides appended AFTER the registry
     // entries, in CLI order. Same address may appear twice (dedup is the
     // caller's responsibility; we iterate as-supplied to preserve order).
-    for addr_str in token_overrides {
-        let addr = Address::from_str(addr_str)
-            .map_err(|e| Error::InvalidInput(format!("invalid --token address: {e}")))?;
-        let (label, cached) = match eth_wallet_core::lookup_by_address(chain_id, addr) {
+    //
+    // Issue #379: `token_overrides` is now `&[Address]` (clap parsed via
+    // `value_parser = parse_address`); bad addresses rejected at parse
+    // time, so no `Address::from_str(...).map_err(...)` here.
+    for addr in token_overrides {
+        let (label, cached) = match eth_wallet_core::lookup_by_address(chain_id, *addr) {
             Ok(Some(t)) => (t.symbol, Some(t.decimals)),
             _ => (format!("{addr:#x}"), None),
         };
         entries.push(Entry {
             label,
-            addr,
+            addr: *addr,
             registry_decimals: cached,
         });
     }

@@ -36,6 +36,15 @@ use crate::handlers::{
 };
 use eth_wallet_core::{Error, Network, Result};
 
+/// Issue #379 — clap `value_parser` for `Address`-typed `--token` overrides
+/// in `wallet balance --all`. Bad addresses are rejected at parse time with
+/// `error: invalid value '...' for '--token <TOKEN>'` instead of bubbling
+/// through the handler as `Error::InvalidInput`. Mirrors how `--address`
+/// parses (clap `value_parser` returns Address directly).
+fn parse_address(s: &str) -> std::result::Result<Address, String> {
+    Address::from_str(s).map_err(|e| format!("invalid address: {e}"))
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "eth", version, about = "Ethereum wallet CLI (alloy v1.8.x)")]
 struct Cli {
@@ -152,8 +161,12 @@ enum WalletAction {
         /// `--decimals` is supplied) instead of the native ETH balance.
         /// Repeated for `--all` mode: each `--token` is appended to the
         /// registry iteration in CLI order (Issue #358 AC #2).
-        #[arg(long)]
-        token: Vec<String>,
+        ///
+        /// Issue #379: parsed by clap via `value_parser = parse_address`,
+        /// so bad addresses are rejected at parse time (exit 2, clap
+        /// `invalid value` error) instead of inside the handler.
+        #[arg(long, value_parser = parse_address)]
+        token: Vec<Address>,
         /// Iterate the bundled token registry + any `--token` overrides,
         /// one line per token (Issue #358).
         #[arg(long)]
@@ -545,12 +558,17 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                             .await
                     } else {
                         // Single-token mode: take the first --token if any.
-                        let single_token = token.first().map(String::as_str);
+                        // Issue #379: token is now `Vec<Address>` (parsed by
+                        // clap); re-stringify the first entry as lowercase
+                        // hex so `wallet_balance` can parse it via its existing
+                        // `Address::from_str` path. Slight alloc overhead but
+                        // keeps the single-token API unchanged.
+                        let single_token = token.first().map(|a| format!("{:#x}", a));
                         wallet_balance(
                             &provider,
                             &address,
                             unit.as_deref(),
-                            single_token,
+                            single_token.as_deref(),
                             decimals,
                             &network,
                         )

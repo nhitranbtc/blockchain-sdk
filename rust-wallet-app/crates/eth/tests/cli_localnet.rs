@@ -899,11 +899,14 @@ fn wallet_balance_all_with_anvil_network_and_no_token_overrides_yields_exit_2() 
 
 #[test]
 fn wallet_balance_all_with_invalid_token_override_yields_exit_2() {
-    // L12 coverage G4 — `--all --token 0xnot-an-address` exercises the
-    // `Address::from_str(...).map_err(...)` parse line inside
-    // `wallet_balance_all`. Without a lock-down test, a refactor that
-    // drops override validation from the batch path would silently
-    // let garbage addresses through.
+    // L12 coverage G4 + Issue #379 — `--all --token 0xnot-an-address`
+    // exercises the clap-level address validation. After #379 the
+    // `--token` field is parsed by clap's `value_parser = parse_address`,
+    // so bad addresses are rejected at parse time with clap's
+    // `invalid value '...' for '--token ...'` format. Locks that
+    // (a) the handler-level `Address::from_str(...).map_err(...)` path
+    // is gone (handler never runs), and (b) the rejection echoes the
+    // invalid value back to the operator.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -932,6 +935,15 @@ fn wallet_balance_all_with_invalid_token_override_yields_exit_2() {
     assert!(
         stderr.contains("--token"),
         "stderr should mention --token:\nstderr: {stderr}",
+    );
+    // clap-level rejection (Issue #379): `invalid value '0xnot-an-address'
+    // for '--token <TOKEN>'`. The phrase `invalid value` is clap-specific
+    // — handler-level rejection would say `Invalid input:` instead. A
+    // regression that drops the value_parser and falls back to handler
+    // parsing would fail this assertion.
+    assert!(
+        stderr.contains("invalid value") && stderr.contains("0xnot-an-address"),
+        "stderr should contain clap's `invalid value` marker + the bad value (locks value_parser path):\nstderr: {stderr}",
     );
 }
 
