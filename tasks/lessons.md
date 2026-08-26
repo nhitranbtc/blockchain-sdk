@@ -273,26 +273,27 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ```text
 ## Pre-pickup
-1. L11: enumerate loaded skills; tag 3-5 relevant to active task
-2. (Self-detect complexity) → propose "trivial / normal / critical" → user confirms
+1. **Invoke `mattpocock-skills:ask-matt` to route which skill fits the situation**, then L11: enumerate loaded skills; tag 3-5 relevant to active task. ask-matt output + L11 map = candidate set for step 5.
+2. (Self-detect complexity) → propose "trivial / normal / critical" → user confirms. **For huge work** (multi-session, multi-PR, cross-crate scope beyond single-session hold), invoke `mattpocock-skills:wayfinder` to plan as a shared map of decision tickets on the issue tracker, then resolve one at a time until the destination is clear. Skip wayfinder for normal / trivial / critical tiers.
 
 ## Per task
-3. Pick up issue. Read body. Check if large task or sub-task — see [Sub-task workflow for large tasks](#sub-task-workflow-for-large-tasks) below.
+3. Pick up issue. **Invoke `mattpocock-skills:triage` to categorise, verify, grill if needed, produce agent-ready brief**, then read body. Check if large task or sub-task — see [Sub-task workflow for large tasks](#sub-task-workflow-for-large-tasks) below. **If large task per L25**, invoke `mattpocock-skills:to-tickets` to decompose into tracer-bullet tickets (edges as text per ticket locally, or native blocking links on the configured tracker). **If issue body asks for design sanity-check or throwaway prototype**, invoke `mattpocock-skills:prototype` first — sanity-check state model, logic, or UI feel in a scratch branch before committing to interface design.
+3a. **Spec synthesis (when no spec/plan exists for the picked-up issue):** invoke `mattpocock-skills:to-spec` — no interview, just synthesis of what has already been discussed in the conversation or issue body, published to the configured tracker. Output = spec file or issue. Resume L13 at step 4 once the spec lands. Pairs with step 5a's existing "no-plan branch" carve-out.
 4. karpathy-guidelines + branch checkout (from integration branch if sub-task per step 3)
     - **L46 — record expected branch:** note the branch name just checked out (e.g., scratch, ledger per L14). Every later L46 check reads from this record.
     - **L45 — integration-branch routing:** for issues labeled `rust-eth-core` (or any future integration-branch label), fork from the integration branch (`rust-eth-core`), NOT main. PR base = integration branch. Sub-task branches name `task/<plan-slug>/<n>-<slug>`. L46's branch record + L45's routing are the two-branch gates.
 4a. **Drift scan (per L13 step 4a):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap.
 
 ## Per pipeline step
-5. Step: pick skill pair (max 2) from L11 map
+5. Step: invoke `mattpocock-skills:ask-matt` to narrow the L11-tagged candidates, then pick skill pair (max 2) from L11 map
 5a. **No-plan branch:** if no plan/spec exists for the picked-up issue, defer to `feature-dev:feature-dev` instead of L13's TDD→review→verify chain. Output of feature-dev phases 1-4 = ad-hoc plan; resume L13 at step 9 (TDD) once the plan lands.
 6. Skill #1: invoke
 7. Skill #2: invoke (if applicable)
 8. Domain-tag wins on conflict: security > correctness > simplicity
 
 ## Per task
-9. TDD red-green cycle (superpowers:test-driven-development)
-9a. **Module interface design (before TDD when new module/struct):** invoke `mattpocock-skills:codebase-design` to author the module's public surface (struct fields, trait bounds, error type, async signature) BEFORE writing the failing test. Pairs with `pr-review-toolkit:type-design-analyzer` (which fires later in step 10 L12 review). Skip for trivial edits to existing modules; mandatory for new public types per L12 module-interface row.
+9. TDD red-green cycle. **When spec/tickets already exist** (paired with step 3 triage + step 3 to-tickets, or step 3a to-spec), invoke `mattpocock-skills:implement` as the high-level orchestrator — wraps the red-green cycle around the spec/ticket acceptance criteria. **`superpowers:test-driven-development` stays as the lower-level driver** (failing test first, then GREEN, then refactor). `implement` does NOT replace TDD; it scopes which failing tests matter per ticket.
+9a. **Module interface design (before TDD when new module/struct):** invoke `mattpocock-skills:codebase-design` to author the module's public surface (struct fields, trait bounds, error type, async signature) BEFORE writing the failing test. **If the interface decision warrants durable record** (new error type, breaking public API, cross-crate contract), also invoke `mattpocock-skills:grill-with-docs` — the grill interview sharpens the design while emitting an ADR + glossary entry as byproducts. **Pair with `mattpocock-skills:domain-modeling`** when introducing new domain terms or editing CONTEXT.md/ADR — glossary entries land at first use, preventing naming drift. Pairs with `pr-review-toolkit:type-design-analyzer` (which fires later in step 10 L12 review). Skip for trivial edits to existing modules; mandatory for new public types per L12 module-interface row.
 10. L12: pre-PR code review FIRST — `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`
     - Parallel sub-agents: `type-design-analyzer` (encapsulation, invariants) + `code-reviewer` (correctness, security, tests, structure per L11 row scope)
     - **Critical tier** (per Q4 carve-out): add `pr-review-toolkit:security-auditor` as 3rd concurrent sub-agent (max 3 sub-agents per step). triggers for key material / signing / encryption / network / persistence surfaces.
@@ -302,6 +303,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **Review-paired fmt re-check** (after L12 review, pre-step 11): invoke `/ecc:rust-review` slash command (or `ecc:rust-reviewer` agent) on modified `.rs` files to catch rustfmt drift the L12 sub-agents missed. Different lens from the cargo quad gate (which runs pre-commit) — this runs post-L12. L11 row "Rust toolchain review" consumer. Skipped for trivial + doc-only edits.
 10a. **Test coverage gap analysis (separate gate after L12, all tiers):** invoke `pr-review-toolkit:pr-test-analyzer` on the same squash-candidate state. Distinct lens from `code-reviewer` (which checks existing tests for correctness); `pr-test-analyzer` checks for missing coverage on the changed behavior. Findings drive a follow-up commit before step 11 verify. Not concurrent with L12 sub-agents (separate gate) — Q4 cap preserved.
 10b. **Pre-PR security review (critical tier only, standalone):** after step 10a (test coverage), invoke `security-review` (comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy). Distinct lens from `pr-review-toolkit:security-auditor` (which sits inside L12 code-review lens). Q4 cap unaffected (separate gate, not sub-agent). Findings drive a follow-up commit before step 11 verify. Skipped for normal + trivial tiers.
+10c. **Standards + Spec review (separate gate after step 10b):** invoke `mattpocock-skills:code-review` on the same squash-candidate state. Distinct lens from pr-review-toolkit (which checks correctness/security/tests/structure) and from security-review (which checks secrets/SSRF/authz/crypto). Standards axis = repo coding conventions (formatting, naming, error patterns). Spec axis = does the code match the originating issue. Parallel sub-agents per the skill's design. Findings drive a follow-up commit before step 11 verify. Q4 cap unaffected (separate gate, not sub-agent). Skipped for trivial tier.
 11. Verify (triple gate local + CI dedup): `cargo fmt --check --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --workspace --all-targets` (+ `cargo audit` if installed, per L11 row)
     - Run BEFORE every commit (initial + fix + task-end) — earlier "AFTER each fix commit" wording replaced for consistency with clippy sub-bullet below.
     - All three local gates (+ audit if installed) must pass before the task-end commit. A single failing gate = task is not done; on failure → step 11a (triage) or step 11b (debug fallback) BEFORE re-running.
@@ -370,7 +372,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - **Eternal defer**: same item in backlog across >3 sessions — either ship or escalate to `priority/p0`
     - When in doubt: write the issue. Forgetting backlogs costs more than the 30-60s to file one.
 11b. **L24 cascade on local branch (pre-commit):** before step 12 PAUSE, confirm L24 doc updates have landed in the commits traveling with the feature PR — CHANGELOG `[Unreleased]` bullet cites the PR number; User Stories table checkbox flipped if a story completes; "Try it" command column populated. Per L24, these live WITH the feature commit (not a separate process branch) so squash-merge carries them. If step 15a (tech doc) lands AFTER this check, re-run L24 cross-check before merge.
-11c. **Systematic-debugging fallback (when verify fails non-obviously):** if `cargo test` or `cargo clippy` surfaces a failure whose root cause isn't immediate from the error message, invoke `superpowers:systematic-debugging` BEFORE proposing a fix. Forms hypothesis, proves it, then minimal root-cause change + regression test. Avoid the "guess + cargo test loop" anti-pattern. Conditional — not a per-step add (Q4 cap preserved).
+11c. **Systematic-debugging fallback (when verify fails non-obviously):** if `cargo test` or `cargo clippy` surfaces a failure whose root cause isn't immediate from the error message, invoke `superpowers:systematic-debugging` BEFORE proposing a fix. Forms hypothesis, proves it, then minimal root-cause change + regression test. Avoid the "guess + cargo test loop" anti-pattern. Conditional — not a per-step add (Q4 cap preserved). **Performance-regression shape** (slow build, OOM, latency spike, throughput cliff): prefer `mattpocock-skills:diagnosing-bugs` as the primary fallback. **Unknown-root-cause needing primary-source facts** (upstream crate bug, framework behavior, protocol interpretation): invoke `mattpocock-skills:research` first to gather authoritative docs before systematic-debugging forms a hypothesis. Q4 cap preserved (each skill is a separate invocation, not a sub-agent in the step-10 cluster).
 11d. **Plugin-structure validation (when trigger matches per L49):** if the commit touches any plugin-structure file, invoke `plugin-dev:plugin-validator` BEFORE the step 12 commit PAUSE. Read-only agent; findings feed the same fix loop as L12 review.
     - **Format-verification plugin** (2026-08-12 grill): the `cargo fmt --check` gate is the only Rust-quality check bundled into a dedicated plugin. Subagent `ecc:rust-build-resolver` runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test` + `cargo tree --duplicates` (+ `cargo audit` if installed) in one invocation; slash command `/ecc:rust-build` wraps the same agent. `ecc:rust-reviewer` (or `/ecc:rust-review`) runs the same fmt check on modified `.rs` files after a code-review pass. Other Rust-engineer agents (`compass:rust-engineer`, `voltagent-lang:rust-engineer`) apply style by writing idiomatic code on first pass — they do NOT expose a discrete `cargo fmt --check` step. `caveman:cavecrew-reviewer` intentionally skips formatting nits unless they change meaning — wrong tool for rustfmt policing. Use `/ecc:rust-build` for one-shot verify; use `/ecc:rust-review` for fmt-check paired with review.
 12. PAUSE for commit approval
@@ -378,6 +380,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **L46 — pre-pause destination check:** run `git branch --show-current` and confirm it equals the branch recorded at step 4. If mismatch → `git checkout <expected>`, re-verify, then proceed. The branch name MUST appear verbatim in the approval prompt per L6 ("Show branch name in the approval prompt").
 13. commit-commands:commit-push-pr
     - **L46 — pre-execute destination re-check:** run `git branch --show-current` again immediately before invoking `commit-push-pr`. Even if step 12's check passed, HEAD may have moved (post-merge housekeeping, `git checkout -`, IDE tab switch). Mismatch → STOP, re-checkout expected branch, then proceed. Pair with L42 (`git diff --cached --stat`): L42 audits content, L46 audits destination, both at the same gate.
+    - **L51 — resolve merge conflict:** if `git push` (or the step-4 rebase from integration branch) fails with conflicts, STOP commit-push-pr; invoke `mattpocock-skills:resolving-merge-conflicts` (canonical flow: read markers, decide ours/theirs/combine, re-run step 11 triple gate after resolution, resume push). Do NOT manually hand-edit conflict markers without the skill — skipping the flow risks silent content loss and missing test regressions.
 14. **Flip issue checkboxes [ ]→[x] — only after verifying each box is actually completed** (before PR open, after commit-push-pr):
     - **Walk the issue body before flipping** — for every `[ ]` box, confirm the acceptance criterion is actually met in the committed code (test passes, doc landed, dependency merged, etc.). Per L28 (verify-before-claim) + L24 anti-pattern "Flipping the box speculatively before the merge" — every flip must be backed by a verifiable artifact, not intent.
     - **One-by-one audit** — read each checkbox, name the artifact that satisfies it (test name, file:line, commit SHA, PR number), then flip. Bulk-flipping without per-box evidence is the failure mode.
@@ -399,28 +402,30 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
         | Step | Skill invoked | Plugin / Tool | Status |
         |---|---|---|---|
-        | 1 L11 enumerate | L11 skill→step mapping table | — | ☐ |
-        | 2 complexity tier | self-detect (trivial / normal / critical) + user confirm | — | ☐ |
-        | 3 issue pickup | `gh issue view` + checklist parse | — | ☐ |
+        | 1 L11 enumerate | `mattpocock-skills:ask-matt` (router) + L11 skill→step mapping table | `mattpocock-skills` | ☐ |
+        | 2 complexity tier | self-detect (trivial / normal / critical) + user confirm; `mattpocock-skills:wayfinder` if huge-work (multi-session, multi-PR) | `mattpocock-skills` | ☐ |
+        | 3 issue pickup | `mattpocock-skills:triage` (categorise → verify → grill → brief) + `gh issue view` + checklist parse; `mattpocock-skills:to-tickets` if large task per L25; `mattpocock-skills:prototype` if issue asks for design sanity-check / throwaway prototype | `mattpocock-skills` | ☐ |
+        | 3a spec synthesis | `mattpocock-skills:to-spec` (no interview; synthesis → publish to tracker) when no spec/plan exists | `mattpocock-skills` | ☐ |
         | 4 branch checkout | `superpowers:using-git-worktrees`; `andrej-karpathy-skills:karpathy-guidelines` wrapper | — | ☐ |
         | 4a drift scan | `git log --all -- <path>` (per L13 step 4a) | — | ☐ |
-        | 5-8 skill pair | per L11 row + Q4 cap (max 2 normal, max 3 critical L12 cluster) | — | ☐ |
-        | 9 TDD red-green | `superpowers:test-driven-development` | `superpowers` | ☐ |
-        | 9a module interface | `mattpocock-skills:codebase-design` (new public types only) | `mattpocock-skills` | ☐ |
+        | 5-8 skill pair | `mattpocock-skills:ask-matt` (narrow candidates) + per L11 row + Q4 cap (max 2 normal, max 3 critical L12 cluster) | `mattpocock-skills` | ☐ |
+        | 9 TDD red-green | `mattpocock-skills:implement` (high-level orchestrator when spec/tickets exist) wrapping `superpowers:test-driven-development` (lower-level driver) | `mattpocock-skills` + `superpowers` | ☐ |
+        | 9a module interface | `mattpocock-skills:codebase-design` (new public types only); `mattpocock-skills:grill-with-docs` if interface decision warrants ADR (new error type, breaking API, cross-crate contract); `mattpocock-skills:domain-modeling` if new domain terms / CONTEXT.md / ADR edits | `mattpocock-skills` | ☐ |
         | 10 L12 review | `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review` | `pr-review-toolkit` (`type-design-analyzer` + `code-reviewer`; critical: +`security-auditor`); `/ecc:rust-review` review-paired fmt re-check (`ecc`) | ☐ |
         | 10a test coverage | `pr-review-toolkit:pr-test-analyzer` (separate gate) | `pr-review-toolkit` | ☐ |
         | 10b security-review | `security-review` (critical tier only, standalone) | `security` | ☐ |
+        | 10c standards + spec | `mattpocock-skills:code-review` (separate gate; Standards + Spec axes) | `mattpocock-skills` | ☐ |
         | 11 triple gate (local) | prefer `/ecc:rust-build`; bare cargo `fmt --check --workspace` + `clippy --workspace --all-targets -- -D warnings` + `test --workspace --all-targets` (+ `cargo audit` if installed) | `ecc:rust-build-resolver` | ☐ |
         | 11-ci dedup | `cargo tree --workspace --duplicates` runs in `.github/workflows/rust-eth-core-ci.yml` (CI only, per L45) | — | ☐ |
         | 11a backlog triage | `gh issue create` (multi-PR deferred) or in-session backlogs list | — | ☐ |
         | 11b L24 cascade local | CHANGELOG `[Unreleased]` + User Stories flip + "Try it" column (project convention, not skill) | — | ☐ |
-        | 11c systematic-debugging | `superpowers:systematic-debugging` (conditional on verify failure) | `superpowers` | ☐ |
+        | 11c systematic-debugging | `superpowers:systematic-debugging` (conditional on verify failure); `mattpocock-skills:diagnosing-bugs` for perf-regression shape; `mattpocock-skills:research` for unknown-root-cause needing primary-source facts | `superpowers` + `mattpocock-skills` | ☐ |
         | 11d plugin structure | `plugin-dev:plugin-validator` (per L49 trigger match) | `plugin-dev` | ☐ |
         | 12 PAUSE | manual gate per L6 + workflow-approval-required memory | — | ☐ |
-        | 13 commit-push-pr | `commit-commands:commit-push-pr` | `commit-commands` | ☐ |
+        | 13 commit-push-pr | `commit-commands:commit-push-pr`; `mattpocock-skills:resolving-merge-conflicts` if push fails with conflict (L51) | `commit-commands` + `mattpocock-skills` | ☐ |
         | 14 flip checkboxes | `gh issue edit N --body "<full body with [x] marks>"` (per step 14 evidence format: file:line, test name, commit SHA, PR number) | — | ☐ |
         | 15 PR review | `superpowers:receiving-code-review` wrapping `pr-review-toolkit:code-review` | `superpowers` + `pr-review-toolkit` | ☐ |
-        | 15a tech doc | `compass:docs-writer` (primary, 10-section doc) + `compass:api-designer` (secondary, API surface + Drift sections) | `compass` | ☐ |
+        | 15a tech doc | `mattpocock-skills:grill-with-docs` (Goal/Drift/Tradeoff sharpening + ADR emission) + `compass:docs-writer` (primary, 10-section doc) + `compass:api-designer` (secondary, API surface + Drift sections); `mattpocock-skills:domain-modeling` for glossary emission during tech-doc write | `mattpocock-skills` + `compass` | ☐ |
         | 15b L24 verify merged | (project convention, not skill) | — | ☐ |
 
     - **Snapshot discipline**: render table at PR review start. Fill ☐ → ✓ as evidence lands (file:line, test name, commit SHA, PR number per step 14 format). Gate decision = all ✓ (proceed to 15c walk → 15d merge); any ☐ = fix + re-run. Per L28 (verify-before-claim).
@@ -434,32 +439,35 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - Step 11c conditional on non-obvious verify failure only (not per-step add).
         - Step 11d conditional on L49 trigger match (plugin-structure file touched).
 15a. **Write technical document → enrich PR body** (before merge):
+    - **Invoke `mattpocock-skills:grill-with-docs` to sharpen the Goal/Drift/Tradeoff sections + emit any decision-bearing ADRs as byproducts**, then write the 10-section doc
     - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
-    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
+    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections), with `mattpocock-skills:grill-with-docs` as ADR-emission shim
 15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
 15c. **Review all L13 steps 1-15b completed** (broader pre-merge gate — widens 15d's PR-body checklist to all L13 steps):
     - **Walk each L13 step 1 through 15b** and confirm artifact exists before merging:
         - Step 1 (L11 skill tag — recorded in branch commits or PR body)
-        - Step 2 (complexity tier self-detected + user-confirmed)
-        - Steps 3-4 (issue picked up, branch checked out; karpathy-guidelines wrapper applied — 4 principles visible in commit history)
+        - Step 2 (complexity tier self-detected + user-confirmed; wayfinder invoked if huge-work)
+        - Steps 3-4 (issue picked up via triage (agent-ready brief) + to-tickets for large tasks; prototype if design sanity-check; branch checked out; karpathy-guidelines wrapper applied — 4 principles visible in commit history)
         - Steps 5-8 (skill pair invoked per L11 map, domain-tag wins on conflict; Q4 cap honored)
-        - Step 9 (TDD red-green cycle: failing test first, then GREEN pass)
-        - Step 9a (module interface design: codebase-design invoked for new public types)
+        - Step 9 (TDD red-green cycle: failing test first, then GREEN pass; `implement` orchestrator wraps TDD when spec/tickets exist; `implement` does NOT replace TDD)
+        - Step 9a (module interface design: codebase-design invoked for new public types; grill-with-docs invoked if interface decision warrants ADR; domain-modeling invoked if new domain terms / CONTEXT.md / ADR edits)
         - Step 10 (L12 pre-PR review findings applied — commit references each fix; critical-tier 3rd sub-agent security-auditor if applicable; trivial-tier skipped per amendment)
         - Step 10a (test coverage gap analysis: pr-test-analyzer applied; follow-up commit if gaps)
         - Step 10b (security-review applied for critical tier; findings follow-up committed before step 11)
+        - Step 10c (standards + spec review: mattpocock-skills:code-review applied — Standards + Spec axes; follow-up commit if drift found)
         - Step 11 (verify quad gate clean: `cargo fmt --check` + `clippy --all-targets -- -D warnings` + `cargo test` + `cargo tree --duplicates` output captured)
         - Step 11a (backlog triage done; follow-up issues filed for any deferred work)
         - Step 11b (L24 cascade on local branch — CHANGELOG + Story flip + "Try it" column in commits traveling with feature PR)
-        - Step 11c (systematic-debugging applied on non-obvious verify failures; hypothesis + regression test landed)
+        - Step 3a (spec synthesis: to-spec invoked when no plan existed for picked-up issue; spec landed before step 4)
+        - Step 11c (systematic-debugging applied on non-obvious verify failures; hypothesis + regression test landed; diagnosing-bugs for perf-regression shape; research for unknown-root-cause needing primary-source facts)
         - Step 11d (plugin-structure validation per L49 trigger)
         - Step 12 (commit approval PAUSE honored — user said "approved" or "commit" before each `git commit`)
-        - Step 13 (commit-push-pr executed — branch pushed + PR opened)
+        - Step 13 (commit-push-pr executed — branch pushed + PR opened; L51 resolving-merge-conflicts invoked if conflict surfaced during push or step-4 rebase)
         - Step 14 (issue checkboxes flipped with artifact evidence per L13 step 14 rules — file:line, test name, commit SHA, PR number per step 14 evidence format)
         - Step 15 (PR review by parallel sub-agents per L13 step 15)
-        - Step 15a (10-section tech doc appended to PR body — Goal, Drift, API surface, Threat-model, Implementation, Tests, L12 review, Lessons, Backlog, Migration)
+        - Step 15a (10-section tech doc appended to PR body — Goal, Drift, API surface, Threat-model, Implementation, Tests, L12 review, Lessons, Backlog, Migration; grill-with-docs sharpening + ADR emission as shim; domain-modeling for glossary emission)
         - Step 15b (L24 cascade verified in merged code path)
         - **Critical-tier check (if applicable)**: 5-skill bundle present — type-design-analyzer + code-reviewer + security-auditor (L12 cluster) + security-review (standalone) + plugin-validator (L49 trigger). Q4 carve-out honored.
         - **Trivial-tier shortcut (if applicable)**: per L13 amendment note2026-08-25, skip pre-PR code review but L49 + L51 + L52 + L24 still apply. Cargo quad gate N/A for doc-only commits.
@@ -489,7 +497,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 
 ## Per session
-16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
+16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. **When re-grilling, invoke `mattpocock-skills:improve-codebase-architecture`** to scan for deepening opportunities (HTML report) → grill one. Becomes the actionable vehicle for the re-grill. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
 18. Add new lessons if user corrections or novel patterns (L9 schema) — **PAUSE first**: surface candidate + rationale, await explicit user approval before writing to lessons.md
 19. Apply L21 — dispatch the L21 sub-agent cascade (see L21 sub-section "Sub-agent dispatch at L13 step 19" for the agent prompt template). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow.
