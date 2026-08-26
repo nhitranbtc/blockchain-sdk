@@ -16,7 +16,7 @@ use aes_gcm::{
 use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Argon2id memory cost in KiB (256 MiB). Per F5.
 pub const ARGON2_M_COST_KIB: u32 = {
@@ -123,14 +123,22 @@ pub fn encrypt(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], plaintext: &[u8]) -
         .map_err(|e| CryptoError::AesGcm(format!("encrypt: {e}")))
 }
 
-/// Decrypt `ciphertext` under `key` with `nonce`. Returns the original
-/// plaintext; caller's responsibility to wrap in Zeroizing on use.
-pub fn decrypt(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], ciphertext: &[u8]) -> Result<Vec<u8>> {
+/// Decrypt `ciphertext` under `key` with `nonce`. Returns the plaintext
+/// wrapped in `Zeroizing<Vec<u8>>` so the decrypted bytes are overwritten
+/// on drop — closes a plaintext-leak window that `unlock()` +
+/// `unlock_signer()` callers previously had to opt into via a separate
+/// `Zeroizing::new(...)` wrap.
+pub fn decrypt(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; NONCE_LEN],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| CryptoError::AesGcm(format!("init: {e}")))?;
     let nonce_arr = Nonce::from_slice(nonce);
     cipher
         .decrypt(nonce_arr, ciphertext)
+        .map(Zeroizing::new)
         .map_err(|e| CryptoError::AesGcm(format!("decrypt: {e}")))
 }
 
@@ -201,7 +209,9 @@ mod tests {
         let ct = encrypt(&key_arr, &nonce, plaintext).expect("encrypt");
         assert_ne!(&ct[..], &plaintext[..]);
         let pt = decrypt(&key_arr, &nonce, &ct).expect("decrypt");
-        assert_eq!(pt, plaintext);
+        // Deref through Zeroizing<Vec<u8>> to compare bytes; the wrapper
+        // itself doesn't impl PartialEq with [u8; N].
+        assert_eq!(&*pt, &plaintext[..]);
     }
 
     #[test]

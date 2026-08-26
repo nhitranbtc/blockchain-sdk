@@ -596,7 +596,11 @@ impl WalletManager {
         let nonce = parse_blob_nonce(blob)?;
         let ciphertext = blob.ciphertext.as_slice();
         let key = crypto::derive_key(password, &salt)?;
-        let key_arr: [u8; KEY_LEN] = key.as_slice()[..KEY_LEN].try_into().expect("KEY_LEN");
+        // Wrap the AES-GCM key in Zeroizing so the stack-resident copy
+        // is overwritten on drop — defense-in-depth for the decryption
+        // key itself (mirrors `unlock_signer`).
+        let mut key_arr = Zeroizing::new([0u8; KEY_LEN]);
+        key_arr.copy_from_slice(&key.as_slice()[..KEY_LEN]);
         let plaintext = crypto::decrypt(&key_arr, &nonce, ciphertext)?;
 
         let s = std::str::from_utf8(&plaintext).map_err(|e| WalletError::Corrupt {
@@ -622,10 +626,26 @@ impl WalletManager {
     /// `sign_native_eth_tx` / `sign_erc20_tx_bytes` (Task 3). Handles
     /// both mnemonic-derived and private-key-imported wallets:
     ///
-    /// - Mnemonic blob → re-derive `PrivateKeySigner` from m/44'/60'/0'/0/0.
-    /// - Private-key blob → parse hex bytes into `PrivateKeySigner`.
+    /// - Mnemonic blob → re-derive signer at m/44'/60'/0'/0/0, extract
+    ///   the 32-byte secret scalar.
+    /// - Private-key blob → parse hex bytes into a 32-byte secret scalar.
     /// - Wrong password → `WalletError::Crypto` (AES-GCM auth tag).
-    pub fn unlock_signer(&self, wallet_id: Uuid, password: &[u8]) -> Result<PrivateKeySigner> {
+    ///
+    /// Returns `Zeroizing<[u8; 32]>` so the unlocked secret scalar is
+    /// overwritten on drop. alloy's `PrivateKeySigner` (= `LocalSigner`)
+    /// does NOT implement `Zeroize` (the bound `Zeroizing<T>` requires for
+    /// its `Drop` impl), so we wrap the raw 32-byte secret scalar
+    /// instead — mirrors the Bitcoin sibling pattern at
+    /// `bitcoin-wallet-core/src/keys/signer.rs:46` (`Secret<Vec<u8>>`).
+    /// Callers construct a `PrivateKeySigner::from_slice(&bytes)` at use
+    /// site, scoping the signer's lifetime to the smallest possible block.
+    ///
+    /// **Known limitation (acknowledged, follow-up):** alloy's `LocalSigner`
+    /// and k256's `SigningKey` hold non-zeroized copies of the secret
+    /// scalar for the lifetime of the signing call. Defense-in-depth
+    /// only — primary defense is shorter signer scope + future OS-keyring
+    /// integration.
+    pub fn unlock_signer(&self, wallet_id: Uuid, password: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
         let wallets = self
             .wallets
             .read()
@@ -638,20 +658,44 @@ impl WalletManager {
         let nonce = parse_blob_nonce(blob)?;
         let ciphertext = blob.ciphertext.as_slice();
         let key = crypto::derive_key(password, &salt)?;
-        let key_arr: [u8; KEY_LEN] = key.as_slice()[..KEY_LEN].try_into().expect("KEY_LEN");
+        // Wrap the AES-GCM key in Zeroizing so the stack-resident copy
+        // (and the heap copy after Drop) is overwritten — defense-in-depth
+        // for the decryption key itself.
+        let mut key_arr = Zeroizing::new([0u8; KEY_LEN]);
+        key_arr.copy_from_slice(&key.as_slice()[..KEY_LEN]);
         let plaintext = crypto::decrypt(&key_arr, &nonce, ciphertext)?;
 
-        let s = std::str::from_utf8(&plaintext).map_err(|e| WalletError::Corrupt {
+        Self::decode_signer_bytes(&plaintext)
+    }
+
+    /// Decode an unlocked plaintext blob into a 32-byte secret scalar,
+    /// wrapped in `Zeroizing`. Pure helper (no filesystem or manager
+    /// state) so tests can exercise the length-check + UTF-8 branches
+    /// directly without encryption fixtures.
+    fn decode_signer_bytes(plaintext: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+        let s = std::str::from_utf8(plaintext).map_err(|e| WalletError::Corrupt {
             reason: format!("utf8: {e}"),
         })?;
         if let Some(hex_str) = s.strip_prefix("0x") {
-            // Private-key blob — parse hex bytes into a signer.
-            let key_bytes =
-                hex::decode(hex_str).map_err(|e| WalletError::PrivateKey(format!("hex: {e}")))?;
-            PrivateKeySigner::from_slice(&key_bytes)
-                .map_err(|e| WalletError::PrivateKey(format!("from_slice: {e}")))
+            // Private-key blob — parse hex bytes into a 32-byte secret.
+            // Wrap the decoded vector in Zeroizing so the intermediate
+            // heap allocation gets overwritten on drop (before the
+            // Vec<u8> allocator reuse window).
+            let key_bytes: Zeroizing<Vec<u8>> = Zeroizing::new(
+                hex::decode(hex_str).map_err(|e| WalletError::PrivateKey(format!("hex: {e}")))?,
+            );
+            if key_bytes.len() != 32 {
+                return Err(WalletError::PrivateKey(format!(
+                    "expected 32 bytes, got {}",
+                    key_bytes.len()
+                )));
+            }
+            let mut secret = [0u8; 32];
+            secret.copy_from_slice(&key_bytes);
+            Ok(Zeroizing::new(secret))
         } else {
-            // Mnemonic blob — derive signer at m/44'/60'/0'/0/0.
+            // Mnemonic blob — derive signer at m/44'/60'/0'/0/0, then
+            // extract the 32-byte secret scalar.
             let parsed =
                 Mnemonic::parse_in(Language::English, s).map_err(|e| WalletError::Corrupt {
                     reason: format!("mnemonic parse: {e}"),
@@ -663,7 +707,9 @@ impl WalletManager {
                 .expect("valid index")
                 .build()
                 .expect("mnemonic build");
-            Ok(signer)
+            // `to_bytes()` returns B256; `.0` is the inner [u8; 32].
+            let secret: [u8; 32] = signer.to_bytes().0;
+            Ok(Zeroizing::new(secret))
         }
     }
 
@@ -864,7 +910,9 @@ mod tests {
         let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
         let w = mgr.create_wallet("signer-test", &password()).unwrap();
 
-        let signer = mgr.unlock_signer(w.wallet_id, &password()).unwrap();
+        let secret = mgr.unlock_signer(w.wallet_id, &password()).unwrap();
+        let signer =
+            PrivateKeySigner::from_slice(secret.as_ref()).expect("unlock_signer returns 32 bytes");
         assert_eq!(signer.address(), w.address);
     }
 
@@ -877,11 +925,40 @@ mod tests {
             .import_private_key("pk-signer-test", pk, &password())
             .unwrap();
 
-        let signer = mgr.unlock_signer(w.wallet_id, &password()).unwrap();
+        let secret = mgr.unlock_signer(w.wallet_id, &password()).unwrap();
         let expected: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
             .parse()
             .unwrap();
+        let signer =
+            PrivateKeySigner::from_slice(secret.as_ref()).expect("unlock_signer returns 32 bytes");
         assert_eq!(signer.address(), expected);
+    }
+
+    #[test]
+    fn unlock_signer_returns_zeroizing_wrapper() {
+        // RED for H-2 (Issue #350): assert `unlock_signer()` returns
+        // `Zeroizing<[u8; 32]>` raw secret bytes so the unlocked key
+        // material is overwritten on drop. alloy's `PrivateKeySigner` (=
+        // `LocalSigner`) does NOT satisfy `DefaultIsZeroes` (required by
+        // `Zeroizing<T>`), so we wrap the raw 32-byte secret scalar
+        // instead — mirrors Bitcoin sibling pattern at
+        // `bitcoin-wallet-core/src/keys/signer.rs:46` (`Secret<Vec<u8>>`).
+        // Callers construct `PrivateKeySigner::from_slice(&bytes)` at use
+        // site, scoping signer lifetime to the smallest possible block.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let w = mgr
+            .create_wallet("zeroizing-wrapper-test", &password())
+            .unwrap();
+
+        // Type assertion: must bind to `Zeroizing<[u8; 32]>`.
+        let secret: Zeroizing<[u8; 32]> = mgr.unlock_signer(w.wallet_id, &password()).unwrap();
+        // Round-trip: construct PrivateKeySigner at use site; assert the
+        // address matches the wallet's stored address (proves bytes are
+        // the real secret key, not garbage).
+        let signer = PrivateKeySigner::from_slice(secret.as_ref())
+            .expect("unlock_signer must yield a valid 32-byte secret");
+        assert_eq!(signer.address(), w.address);
     }
 
     #[test]
@@ -929,5 +1006,53 @@ mod tests {
             .join("anvil")
             .join(format!("{}.meta.json", created.wallet_id))
             .exists());
+    }
+
+    #[test]
+    fn decode_signer_bytes_rejects_wrong_length_hex() {
+        // CRITICAL coverage gap closed (pr-test-analyzer #1): the explicit
+        // length-check on the private-key path was the only thing
+        // standing between a malformed/legacy `.enc` blob and
+        // `copy_from_slice` panicking.
+        // Odd-length hex (31 bytes) — must hit the length-check branch.
+        let err = WalletManager::decode_signer_bytes(
+            b"0xabababababababababababababababababababababababababababababab",
+        )
+        .expect_err("odd-length hex payload must fail length check");
+        assert!(matches!(err, WalletError::PrivateKey(_)), "got: {err:?}");
+        // Don't pin the byte count — assert the error shape instead.
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("private key: expected 32 bytes, got "),
+            "error msg should mention expected + actual length: {msg}"
+        );
+        assert!(
+            !msg.ends_with("got 32"),
+            "wrong-length payload must not claim 32 bytes: {msg}"
+        );
+
+        // Even-length-but-wrong hex (33 bytes) — must also fail.
+        let err = WalletManager::decode_signer_bytes(
+            b"0xababababababababababababababababababababababababababababababababab",
+        )
+        .expect_err("33-byte payload must fail length check");
+        assert!(matches!(err, WalletError::PrivateKey(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn decode_signer_bytes_accepts_valid_64char_hex() {
+        // Companion to the wrong-length test: a well-formed 64-char hex
+        // payload (32 bytes after decode) round-trips through to the
+        // private-key Anvil account #0.
+        let secret = WalletManager::decode_signer_bytes(
+            b"0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+        )
+        .expect("valid 32-byte secret");
+        let signer =
+            PrivateKeySigner::from_slice(secret.as_ref()).expect("unlock_signer returns 32 bytes");
+        let expected: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+            .parse()
+            .unwrap();
+        assert_eq!(signer.address(), expected);
     }
 }
