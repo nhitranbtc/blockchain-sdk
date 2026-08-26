@@ -137,6 +137,48 @@ fn wrong_password_fails_to_unlock() {
 }
 
 #[test]
+fn wrong_password_fails_to_unlock_signer() {
+    // HIGH coverage gap closed (pr-test-analyzer #2): the existing
+    // wrong_password_fails_to_unlock covers `unlock()`; this covers the
+    // separate `unlock_signer()` path with its Zeroizing-wrapped
+    // `key_arr` + `Zeroizing<Vec<u8>>` `key_bytes` + decrypted
+    // `Zeroizing<[u8; 32]>`.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let mgr = WalletManager::open_at(tmp.path().to_path_buf()).expect("open");
+    let w = mgr
+        .create_wallet("wrong-pw-signer-test", TEST_PASSWORD)
+        .expect("create");
+
+    let err = mgr
+        .unlock_signer(w.wallet_id, b"definitely-the-wrong-password")
+        .expect_err("wrong password must fail");
+    assert!(
+        matches!(err, WalletError::Crypto(_)),
+        "wrong password must surface Crypto error, got: {err:?}"
+    );
+}
+
+#[test]
+fn unknown_wallet_id_fails_unlock_signer() {
+    // HIGH coverage gap closed (pr-test-analyzer #3): regression test
+    // for the `wallets.get(&wallet_id)?.ok_or(NotFound)` lookup. A
+    // regression that drops the lookup would silently return `Crypto(_)`
+    // from the subsequent `parse_blob_salt(blob)?` on an empty map —
+    // wrong error class, hard to debug.
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let mgr = WalletManager::open_at(tmp.path().to_path_buf()).expect("open");
+    let random_id = uuid::Uuid::new_v4();
+
+    let err = mgr
+        .unlock_signer(random_id, TEST_PASSWORD)
+        .expect_err("unknown wallet id must fail");
+    assert!(
+        matches!(err, WalletError::NotFound { wallet_id } if wallet_id == random_id),
+        "unknown wallet id must surface NotFound, got: {err:?}"
+    );
+}
+
+#[test]
 fn delete_wallet_removes_disk_file() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let mgr = WalletManager::open_at(tmp.path().to_path_buf()).expect("open");

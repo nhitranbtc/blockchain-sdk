@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use alloy_primitives::{Address, U256};
+use alloy_signer_local::PrivateKeySigner;
 use clap::{Parser, Subcommand};
 
 use crate::handlers::{
@@ -526,9 +527,14 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                 let wallet_id = mgr
                     .lookup_by_name(name, net)
                     .map_err(crate::handlers::map_wallet_err)?;
-                let signer = mgr
+                // Issue #350 (H-2): unlock_signer now returns raw
+                // Zeroizing<[u8; 32]> (heap-cleanup on drop); build the
+                // alloy signer at use site, scoped to this command.
+                let secret = mgr
                     .unlock_signer(wallet_id, password.as_bytes())
                     .map_err(crate::handlers::map_wallet_err)?;
+                let signer = PrivateKeySigner::from_slice(secret.as_ref())
+                    .map_err(|e| Error::InvalidPrivateKey(format!("from_slice: {e}")))?;
 
                 wallet_send_native(
                     &provider,
@@ -608,9 +614,13 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     let wallet_id = mgr
                         .lookup_by_name(n, net)
                         .map_err(crate::handlers::map_wallet_err)?;
-                    let signer = mgr
+                    // Issue #350 (H-2): unlock_signer returns raw
+                    // Zeroizing<[u8; 32]>; build alloy signer at use site.
+                    let secret = mgr
                         .unlock_signer(wallet_id, p.as_bytes())
                         .map_err(crate::handlers::map_wallet_err)?;
+                    let signer = PrivateKeySigner::from_slice(secret.as_ref())
+                        .map_err(|e| Error::InvalidPrivateKey(format!("from_slice: {e}")))?;
 
                     wallet_send_erc20(
                         &provider,
