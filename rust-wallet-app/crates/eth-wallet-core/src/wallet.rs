@@ -633,18 +633,22 @@ impl WalletManager {
     ///
     /// Returns `Zeroizing<[u8; 32]>` so the unlocked secret scalar is
     /// overwritten on drop. alloy's `PrivateKeySigner` (= `LocalSigner`)
-    /// does NOT implement `Zeroize` (the bound `Zeroizing<T>` requires for
-    /// its `Drop` impl), so we wrap the raw 32-byte secret scalar
-    /// instead — mirrors the Bitcoin sibling pattern at
+    /// does not implement `Zeroize` (the bound `Zeroizing<T>` requires for
+    /// its `Drop` impl), and the alloy newtype doesn't satisfy
+    /// `DefaultIsZeroes` (the marker that auto-impls `Zeroize` for
+    /// all-zero `Default` types), so we wrap the raw 32-byte secret
+    /// scalar instead — mirrors the Bitcoin sibling pattern at
     /// `bitcoin-wallet-core/src/keys/signer.rs:46` (`Secret<Vec<u8>>`).
     /// Callers construct a `PrivateKeySigner::from_slice(&bytes)` at use
     /// site, scoping the signer's lifetime to the smallest possible block.
     ///
     /// **Known limitation (acknowledged, follow-up):** alloy's `LocalSigner`
-    /// and k256's `SigningKey` hold non-zeroized copies of the secret
-    /// scalar for the lifetime of the signing call. Defense-in-depth
-    /// only — primary defense is shorter signer scope + future OS-keyring
-    /// integration.
+    /// and k256's `SigningKey` may hold ephemeral non-zeroized copies of
+    /// the secret scalar for the lifetime of the signing call (k256's
+    /// `SigningKey` derives `ZeroizeOnDrop` per Cargo.lock pin, but its
+    /// internal `FieldElement` drop behavior is implementation-defined).
+    /// Defense-in-depth only — primary defense is shorter signer scope +
+    /// future OS-keyring integration.
     pub fn unlock_signer(&self, wallet_id: Uuid, password: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
         let wallets = self
             .wallets
@@ -695,11 +699,19 @@ impl WalletManager {
             Ok(Zeroizing::new(secret))
         } else {
             // Mnemonic blob — derive signer at m/44'/60'/0'/0/0, then
-            // extract the 32-byte secret scalar.
+            // extract the 32-byte secret scalar. Wrap `parsed` (heap
+            // entropy) in Zeroizing so it zeroes on drop — defense-in-
+            // depth parity with `unlock()`. bip39 2.2 enables the
+            // `zeroize` feature workspace-wide (`Cargo.toml:44`), so
+            // `Mnemonic` impls `Zeroize`+`ZeroizeOnDrop`. The
+            // `phrase: String` intermediate (bip39 has no `&str` accessor
+            // without `to_string()`) is sub-millisecond and explicitly
+            // documented as out-of-scope per PR body.
             let parsed =
                 Mnemonic::parse_in(Language::English, s).map_err(|e| WalletError::Corrupt {
                     reason: format!("mnemonic parse: {e}"),
                 })?;
+            let parsed = Zeroizing::new(parsed);
             let phrase = parsed.to_string();
             let signer = MnemonicBuilder::english()
                 .phrase(phrase.as_str())
@@ -707,7 +719,8 @@ impl WalletManager {
                 .expect("valid index")
                 .build()
                 .expect("mnemonic build");
-            // `to_bytes()` returns B256; `.0` is the inner [u8; 32].
+            // `to_bytes()` returns B256; `.0` is the inner FixedBytes<32>,
+            // which coerces to [u8; 32] via the `From` impl.
             let secret: [u8; 32] = signer.to_bytes().0;
             Ok(Zeroizing::new(secret))
         }
