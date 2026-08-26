@@ -1971,3 +1971,221 @@ async fn wallet_balance_token_non_erc20_auto_detect_yields_exit_2() {
         "stderr must not contain Error::Rpc prefix:\nstderr: {stderr}",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #354 — dynamic gas estimation (M-3 from #352 code-review).
+//
+// Override precedence: CLI flag / env var > provider.estimate_eip1559_fees().
+// Partial override (only one of max-fee / max-prio set) → exit 2 (InvalidInput)
+// per #297 M11. Invalid wei value (not parseable as u128) → exit 2 (clap parse
+// error). The override path must wire through to the signed envelope — Anvil
+// test queries the broadcast tx back via alloy and asserts max_fee_per_gas
+// matches the CLI override.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn send_command_with_invalid_max_fee_wei_yields_exit_2() {
+    // L28 Gate C: invalid override rejected at clap parse (exit 2).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let import = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "alpha",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password-1",
+            "--network",
+            "anvil",
+        ],
+    );
+    assert_success(&import, "alpha");
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password-1",
+            "--network",
+            "anvil",
+            "--to",
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "--amount",
+            "1",
+            "--max-fee-per-gas",
+            "not-a-wei-value",
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "invalid --max-fee-per-gas value must yield exit 2\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("invalid") || stderr.contains("parse"),
+        "stderr should mention invalid/parse error from clap u128 parse:\nstderr: {stderr}"
+    );
+}
+
+#[test]
+fn send_command_with_only_max_fee_per_gas_yields_exit_2() {
+    // L28 Gate C: partial override (one of two) rejected as InvalidInput (exit 2).
+    // EIP-1559 requires BOTH max-fee-per-gas + max-priority-fee-per-gas OR NEITHER.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let import = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "alpha",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password-1",
+            "--network",
+            "anvil",
+        ],
+    );
+    assert_success(&import, "alpha");
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "send",
+            "--name",
+            "alpha",
+            "--password",
+            "test-password-1",
+            "--network",
+            "anvil",
+            "--to",
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "--amount",
+            "1",
+            "--max-fee-per-gas",
+            "99000000000",
+            // Missing --max-priority-fee-per-gas — must be rejected as InvalidInput.
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "partial override (only --max-fee-per-gas) must yield exit 2\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("either set both --max-fee-per-gas and --max-priority-fee-per-gas")
+            || stderr.contains("omit both to use the network fee estimate"),
+        "stderr should mention the InvalidInput override-precedence message:\nstderr: {stderr}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn send_command_with_max_fee_overrides_uses_overridden_gas() {
+    // Proves the CLI override path wires through to the signed envelope:
+    // broadcast with --max-fee-per-gas 99000000000 + --max-priority-fee-per-gas
+    // 2000000000, query the tx back via alloy, assert the gas fields match.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new().spawn();
+    let endpoint = anvil.endpoint();
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let phrase = "test test test test test test test test test test test junk";
+    let _ = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "anvil-acct",
+            "--mnemonic",
+            phrase,
+            "--password",
+            "test-password",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "send",
+            "--name",
+            "anvil-acct",
+            "--password",
+            "test-password",
+            "--network",
+            "anvil",
+            "--to",
+            "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+            "--amount",
+            "1",
+            "--max-fee-per-gas",
+            "99000000000",
+            "--max-priority-fee-per-gas",
+            "2000000000",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "send with overrides must succeed against Anvil\nstdout: {stdout}\nstderr: {stderr}"
+    );
+
+    // Pull tx hash from stdout (handler prints the hash as the last token).
+    let tx_hash_str = stdout
+        .split_whitespace()
+        .find(|tok| tok.starts_with("0x") && tok.len() == 66)
+        .unwrap_or_else(|| panic!("no tx hash in stdout: {stdout}"));
+
+    // Query the broadcast tx back via alloy to confirm override wired through.
+    use alloy_provider::Provider;
+    let provider = eth_wallet_core::new_http(endpoint.parse().expect("parse anvil endpoint url"))
+        .expect("provider");
+    let tx_hash: alloy_primitives::B256 = tx_hash_str.parse().expect("parse tx hash");
+    let tx = provider
+        .get_transaction_by_hash(tx_hash)
+        .await
+        .expect("get tx")
+        .expect("tx must exist");
+
+    let eip1559 = tx
+        .inner
+        .as_eip1559()
+        .expect("tx must be EIP-1559 (sent via sign_native_eth_tx)");
+    assert_eq!(
+        eip1559.tx().max_fee_per_gas,
+        99_000_000_000u128,
+        "override max_fee_per_gas must reach the signed envelope"
+    );
+    assert_eq!(
+        eip1559.tx().max_priority_fee_per_gas,
+        2_000_000_000u128,
+        "override max_priority_fee_per_gas must reach the signed envelope"
+    );
+}

@@ -203,6 +203,16 @@ struct SendArgs {
     nonce: Option<u64>,
     #[arg(long)]
     gas_limit: Option<u64>,
+    /// Override `max_fee_per_gas` (wei). Must be set together with
+    /// `--max-priority-fee-per-gas`; both omitted → provider estimate.
+    /// Env var `ETH_MAX_FEE_PER_GAS` (PR #341 precedence pattern).
+    #[arg(long, env = "ETH_MAX_FEE_PER_GAS")]
+    max_fee_per_gas: Option<u128>,
+    /// Override `max_priority_fee_per_gas` (wei). Must be set together with
+    /// `--max-fee-per-gas`; both omitted → provider estimate.
+    /// Env var `ETH_MAX_PRIORITY_FEE_PER_GAS`.
+    #[arg(long, env = "ETH_MAX_PRIORITY_FEE_PER_GAS")]
+    max_priority_fee_per_gas: Option<u128>,
     #[arg(long, default_value = "false")]
     dry_run: bool,
     #[arg(long, default_value = "false")]
@@ -266,6 +276,14 @@ enum Erc20Action {
         amount: String,
         #[arg(long)]
         gas_limit: Option<u64>,
+        /// Override `max_fee_per_gas` (wei). Must be set together with
+        /// `--max-priority-fee-per-gas`; both omitted → provider estimate.
+        #[arg(long, env = "ETH_MAX_FEE_PER_GAS")]
+        max_fee_per_gas: Option<u128>,
+        /// Override `max_priority_fee_per_gas` (wei). Must be set together
+        /// with `--max-fee-per-gas`; both omitted → provider estimate.
+        #[arg(long, env = "ETH_MAX_PRIORITY_FEE_PER_GAS")]
+        max_priority_fee_per_gas: Option<u128>,
         #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
     },
@@ -457,7 +475,16 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     .unlock_signer(wallet_id, password.as_bytes())
                     .map_err(crate::handlers::map_wallet_err)?;
 
-                wallet_send_native(&provider, &signer, net, to, amount_wei).await
+                wallet_send_native(
+                    &provider,
+                    &signer,
+                    net,
+                    to,
+                    amount_wei,
+                    args.max_fee_per_gas,
+                    args.max_priority_fee_per_gas,
+                )
+                .await
             }
             Command::Tx { action } => match action {
                 TxAction::Get { tx_hash } => {
@@ -491,6 +518,8 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     to,
                     amount,
                     gas_limit,
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
                     network,
                 } => {
                     let rpc = &cli.rpc_url;
@@ -529,7 +558,15 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                         .map_err(crate::handlers::map_wallet_err)?;
 
                     wallet_send_erc20(
-                        &provider, &signer, net, token_addr, to_addr, amount_wei, gas,
+                        &provider,
+                        &signer,
+                        net,
+                        token_addr,
+                        to_addr,
+                        amount_wei,
+                        gas,
+                        max_fee_per_gas,
+                        max_priority_fee_per_gas,
                     )
                     .await
                 }

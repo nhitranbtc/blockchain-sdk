@@ -375,17 +375,27 @@ fn format_wei_as(wei: U256, decimals: u8) -> String {
 // ---------------------------------------------------------------------------
 
 /// Send a native ETH transaction. Cycle 3 (#339 PR-B): sign EIP-1559
-/// envelope locally, then broadcast via `send_raw_transaction`. Anvil
-/// gas price hardcoded at 1 gwei; cycle 4+ replaces with dynamic fee
-/// estimation + receipt/wait handling.
+/// envelope locally, then broadcast via `send_raw_transaction`. Cycle 16
+/// (#354): gas resolved via `resolve_gas` — explicit CLI/env overrides win
+/// over `provider.estimate_eip1559_fees()` (default for live testnets).
 pub async fn wallet_send_native(
     provider: &RootProvider<Ethereum>,
     signer: &PrivateKeySigner,
     wallet_network: eth_wallet_core::Network,
     to: Address,
     amount_wei: U256,
+    max_fee_per_gas: Option<u128>,
+    max_priority_fee_per_gas: Option<u128>,
 ) -> Result<()> {
     let from = signer.address();
+    // Step 1: validate overrides (pure, no RPC) — fail fast on partial
+    // override OR fee-ordering violation BEFORE any network call. This
+    // preserves the L28 Gate C "partial override → exit 2 without RPC"
+    // contract that the prior round-1 reorder broke.
+    let overrides = resolve_overrides(max_fee_per_gas, max_priority_fee_per_gas)?;
+    // Step 2: chain_id trust-boundary check (per L12 security L-1 + L-4):
+    // an attacker-controlled RPC must not return gas values we sign
+    // against a legitimate chain.
     let provider_chain_id = provider
         .get_chain_id()
         .await
@@ -396,6 +406,8 @@ pub async fn wallet_send_native(
             "rpc chain_id {provider_chain_id} does not match wallet network {wallet_network:?} (expected {expected_chain_id})"
         )));
     }
+    // Step 3: resolve gas (estimate only if overrides were None).
+    let resolved = resolve_gas(provider, overrides).await?;
     let nonce_val = provider
         .get_transaction_count(from)
         .await
@@ -408,8 +420,8 @@ pub async fn wallet_send_native(
         chain_id: Some(provider_chain_id),
         nonce: Some(nonce_val),
         gas: Some(21000u64),
-        max_fee_per_gas: Some(1_000_000_000u128), // 1 gwei — Anvil default
-        max_priority_fee_per_gas: Some(1_000_000_000u128),
+        max_fee_per_gas: Some(resolved.max_fee_per_gas),
+        max_priority_fee_per_gas: Some(resolved.max_priority_fee_per_gas),
         ..Default::default()
     };
 
@@ -425,8 +437,13 @@ pub async fn wallet_send_native(
 }
 
 /// Send an ERC-20 transfer. Cycle 4 (#339 PR-B): sign + broadcast via
-/// `send_raw_transaction`. Token resolution (symbol vs address) and
-/// dynamic decimals land in cycle 5+ alongside gas estimation.
+/// `send_raw_transaction`. Cycle 16 (#354): gas resolved via `resolve_gas`
+/// — same override/estimate precedence as native send.
+///
+/// `#[allow(clippy::too_many_arguments)]`: EIP-1559 + ERC-20 + network +
+/// signer naturally need 9 args; grouping into structs adds noise without
+/// value (the call site is single-thread dispatch from main.rs).
+#[allow(clippy::too_many_arguments)]
 pub async fn wallet_send_erc20(
     provider: &RootProvider<Ethereum>,
     signer: &PrivateKeySigner,
@@ -435,8 +452,13 @@ pub async fn wallet_send_erc20(
     to: Address,
     amount_wei: U256,
     gas_limit: u64,
+    max_fee_per_gas: Option<u128>,
+    max_priority_fee_per_gas: Option<u128>,
 ) -> Result<()> {
     let from = signer.address();
+    // Step 1: validate overrides (pure, no RPC).
+    let overrides = resolve_overrides(max_fee_per_gas, max_priority_fee_per_gas)?;
+    // Step 2: chain_id trust-boundary check (per L12 security L-1 + L-4).
     let provider_chain_id = provider
         .get_chain_id()
         .await
@@ -447,6 +469,8 @@ pub async fn wallet_send_erc20(
             "rpc chain_id {provider_chain_id} does not match wallet network {wallet_network:?} (expected {expected_chain_id})"
         )));
     }
+    // Step 3: resolve gas (estimate only if overrides were None).
+    let resolved = resolve_gas(provider, overrides).await?;
     let nonce_val = provider
         .get_transaction_count(from)
         .await
@@ -460,8 +484,8 @@ pub async fn wallet_send_erc20(
         U256::ZERO, // ERC-20 transfer sends 0 native ETH
         nonce_val,
         provider_chain_id,
-        1_000_000_000u128, // max_fee_per_gas — 1 gwei Anvil default
-        1_000_000_000u128, // max_priority_fee_per_gas
+        resolved.max_fee_per_gas,
+        resolved.max_priority_fee_per_gas,
         gas_limit,
     )
     .map_err(|e| Error::Rpc(format!("sign-erc20: {}", redact_rpc_error(&e))))?;
@@ -564,4 +588,136 @@ pub fn config_show(rpc_url: &str, data_dir: Option<&PathBuf>, json: bool) -> Res
         println!("gas_limit:  {gas_limit_str}");
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Gas override resolution (Issue #354, M-3 from #352 code-review)
+//
+// Precedence: explicit CLI/env overrides > provider.estimate_eip1559_fees().
+// A partial override (only one of max_fee / max_prio set) is a user error:
+// EIP-1559 requires BOTH or NEITHER; otherwise the tx envelope is malformed.
+// Returning `Err(InvalidInput)` here maps to exit 2 per #297 M11, matching
+// the "missing required argument" exit-code contract.
+// ---------------------------------------------------------------------------
+
+/// Resolve the gas-override precedence for an outgoing transaction.
+///
+/// - `(Some(f), Some(p))` → `Ok(Some((f, p)))` — caller uses these verbatim.
+/// - `(None, None)` → `Ok(None)` — caller falls through to `provider.estimate_eip1559_fees()`.
+/// - partial override (only one set) → `Err(InvalidInput)` — exit 2 per #297 M11.
+fn resolve_overrides(
+    max_fee_per_gas: Option<u128>,
+    max_priority_fee_per_gas: Option<u128>,
+) -> Result<Option<(u128, u128)>> {
+    match (max_fee_per_gas, max_priority_fee_per_gas) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(Error::InvalidInput(
+            "either set both --max-fee-per-gas and --max-priority-fee-per-gas, \
+             or omit both to use the network fee estimate"
+                .into(),
+        )),
+        (Some(0), Some(p)) => Err(Error::FeeTooLow {
+            max_fee_per_gas: 0,
+            min_required: p,
+        }),
+        (Some(f), Some(p)) if p > f => Err(Error::FeeTooLow {
+            max_fee_per_gas: f,
+            min_required: p,
+        }),
+        (Some(f), Some(p)) => Ok(Some((f, p))),
+    }
+}
+
+/// Resolve `(max_fee_per_gas, max_priority_fee_per_gas)` for an outgoing tx.
+/// Precedence: explicit CLI/env overrides > `provider.estimate_eip1559_fees()`.
+/// The estimate RPC error is redacted via the lib-level helper to avoid
+/// embedding the RPC URL in `Error::Rpc` (per L12 H-6 → Issue #356 fix).
+/// Resolved EIP-1559 gas parameters — named struct eliminates positional-tuple
+/// swap risk at call sites (`wallet_send_erc20` consumes these positionally
+/// in `sign_erc20_tx_bytes`, so a swap would silently produce a malformed
+/// envelope; L12 type-design finding P1).
+struct ResolvedGas {
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+}
+
+/// Resolve gas parameters for an outgoing tx given pre-validated overrides.
+/// If overrides present → use verbatim. Else → call `provider.estimate_eip1559_fees()`.
+/// Estimate RPC errors map to `Error::GasEstimateFailed` (L12 code-review HIGH #2),
+/// with RPC URLs redacted via the local helper (L12 H-6 → Issue #356 fix).
+///
+/// Callers MUST pre-validate overrides via `resolve_overrides` and run the
+/// chain_id trust-boundary check before calling this — the order matters
+/// for fail-fast behavior on partial override (L28 Gate C test #2) and
+/// defense against wrong-chain RPC gas values (L12 security L-1).
+async fn resolve_gas(
+    provider: &RootProvider<Ethereum>,
+    overrides: Option<(u128, u128)>,
+) -> Result<ResolvedGas> {
+    if let Some((f, p)) = overrides {
+        return Ok(ResolvedGas {
+            max_fee_per_gas: f,
+            max_priority_fee_per_gas: p,
+        });
+    }
+    let estimate = provider.estimate_eip1559_fees().await.map_err(|e| {
+        Error::GasEstimateFailed(format!("estimate_eip1559_fees: {}", redact_rpc_error(&e)))
+    })?;
+    Ok(ResolvedGas {
+        max_fee_per_gas: estimate.max_fee_per_gas,
+        max_priority_fee_per_gas: estimate.max_priority_fee_per_gas,
+    })
+}
+
+#[cfg(test)]
+mod gas_overrides_tests {
+    use super::*;
+
+    #[test]
+    fn both_overrides_some_returns_resolved_pair() {
+        let r = resolve_overrides(Some(7_000_000_000), Some(1_000_000_000));
+        assert_eq!(r.unwrap(), Some((7_000_000_000u128, 1_000_000_000u128)));
+    }
+
+    #[test]
+    fn both_overrides_none_returns_none() {
+        let r = resolve_overrides(None, None);
+        assert_eq!(r.unwrap(), None);
+    }
+
+    #[test]
+    fn only_max_fee_set_returns_invalid_input() {
+        let r = resolve_overrides(Some(7_000_000_000), None);
+        assert!(matches!(r, Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn only_max_priority_fee_set_returns_invalid_input() {
+        let r = resolve_overrides(None, Some(1_000_000_000));
+        assert!(matches!(r, Err(Error::InvalidInput(_))));
+    }
+
+    #[test]
+    fn max_fee_zero_with_priority_set_returns_fee_too_low() {
+        let r = resolve_overrides(Some(0), Some(1_000_000_000));
+        assert!(
+            matches!(r, Err(Error::FeeTooLow { max_fee_per_gas: 0, min_required: 1_000_000_000 })),
+            "max_fee_per_gas=0 must yield FeeTooLow (per L12 code-review HIGH #1 + security M-1): got {r:?}",
+        );
+    }
+
+    #[test]
+    fn priority_exceeds_max_fee_returns_fee_too_low() {
+        let r = resolve_overrides(Some(5_000_000_000), Some(10_000_000_000));
+        assert!(
+            matches!(
+                r,
+                Err(Error::FeeTooLow {
+                    max_fee_per_gas: 5_000_000_000,
+                    min_required: 10_000_000_000
+                })
+            ),
+            "priority > max_fee must yield FeeTooLow (EIP-1559 invariant): got {r:?}",
+        );
+    }
 }
