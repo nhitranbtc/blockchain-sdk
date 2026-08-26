@@ -549,6 +549,66 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 ---
 
+## Story 28 — Connect to RPC endpoint with SPKI pin (Alice, Bob) **[v0.3.x — issue #393]**
+
+> As Alice, I want to pin the SPKI hash of my RPC endpoint so I detect MITM certificate swaps, so I can transact against `https://cloudflare-eth.com` or other public RPCs from a hostile network without trusting the system CA store.
+
+**Acceptance criteria:**
+
+- `eth --rpc-url pinned://<spki-hex>@ethereum-rpc.publicnode.com config show` parses the `pinned://` scheme + extracts the SPKI pin (32-byte SHA-256 hex) from the URL.
+- `provider.new_http_pinned(url, &spki_bytes)` ([`provider.rs`](../../rust-wallet-app/crates/eth-wallet-core/src/provider.rs)) builds a `RootProvider` over a raw `reqwest::Client` whose `rustls::ServerCertVerifier` rejects any cert whose SubjectPublicKeyInfo SHA-256 ≠ the pinned hash.
+- **Library test:** `tests/spki_pin_localnet.rs::spki_pinned_endpoint_rejects_wrong_pin` connects to a known HTTPS endpoint with a wrong pin (all-zero bytes) and asserts the error class is `Error::SpkiPinMismatch { expected, actual }` (or equivalent).
+- **Library test:** same file `spki_pinned_endpoint_accepts_correct_pin` connects to a real public RPC with the cert's actual SPKI pinned and asserts the JSON-RPC call returns successfully (or returns the expected transport-level error, not pin-mismatch).
+- **Anvil gateway:** `spki_pinned_localhost_anvil_succeeds` — pin match path works against a locally-spawned HTTPS Anvil with a known self-signed cert (chain-id 31337 still matches `--network anvil` assertion).
+- F20 SPKI pin finding closed when these tests land.
+- `--allow-insecure-tls` (debug only) bypasses the pin verifier with a `tracing::warn!`.
+
+---
+
+## Story 29 — Connect to RPC endpoint without SPKI pin (system CAs only) (Alice) **[v0.3 — current default]**
+
+> As Alice, I want to opt out of SPKI pinning for local development or trusted-network use, so I can point `eth` at a local Anvil or LAN RPC node without pinning ceremony.
+
+**Acceptance criteria:**
+
+- `eth --rpc-url http://127.0.0.1:8545 ...` uses `provider.new_http(url)` ([`provider.rs`](../../rust-wallet-app/crates/eth-wallet-core/src/provider.rs)) — system trust store + `webpki-roots`. **No pinning. Validates the trust-on-first-use contract for localhost + LAN nodes.**
+- `eth --rpc-url https://cloudflare-eth.com ...` (without `pinned://`) uses the same `new_http` path — system CAs validate Cloudflare's cert. Convenient but accepts any cert the OS trusts (no MITM detection).
+- **Library test:** `tests/spki_pin_localnet.rs::no_pin_localhost_anvil_succeeds` spawns Anvil via `alloy_node_bindings::AnvilInstance`, connects via `new_http("http://127.0.0.1:<port>")`, asserts `provider.get_chain_id() == 31337`.
+- **Library test:** same file `no_pin_localhost_anvil_rejects_wrong_chain_id` asserts the chain-id trust-boundary guard (`handlers.rs:650-659`) fires when Anvil reports a non-31337 chain id — failure surface is `Error::ChainIdMismatch { expected: 31337, actual: <N> }`.
+- Test pattern matches the existing `tests/erc20_anvil.rs` suite (Story 26 already shipped this path).
+
+---
+
+## Network research — local + testnet picks (added 2026-08-26, session verification)
+
+**Local node:** **Anvil** (`alloy_node_bindings::AnvilInstance`, foundry-rs/foundry). Reasons:
+
+- Already in `[dev-dependencies]` of both `eth-wallet-core` and `eth` crates (`Cargo.toml:60` + `eth/Cargo.toml:54`).
+- Fastest startup (~50 ms), zero-config chain-id 31337, prefunded deterministic accounts (`0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` is account #0, 10000 ETH).
+- Matches existing `tests/erc20_anvil.rs` pattern (Story 26 already shipped).
+- Alternatives rejected: Hardhat Node (requires npm toolchain + `npx hardhat node`, slower cold start), Ganache (legacy, deprecated, no `alloy-node-bindings` integration).
+
+**Testnet:** **Sepolia** (chain-id 11155111). Reasons:
+
+- Most-used L1 testnet across the ecosystem (all major wallets, Etherscan, Alchemy, Infura default to Sepolia).
+- Already integrated in `rust-wallet-app` (`scripts/eth-send-sepolia-e2e.sh`, `scripts/eth_sepolia.sh`, `tests/cli_sepolia.rs`).
+- USDC Sepolia contract published by Circle (`0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`).
+- Alternatives rejected: Holesky (deprecated for staking 2025-Q4, faucet reliability degraded), Hoodi (newest replacement for Holesky but tooling support thin).
+
+**Test matrix — Stories 28 + 29:**
+
+| Scenario | Network | SPKI pin | Test name | Status |
+|---|---|---|---|---|
+| Local dev, no pin | Anvil (31337) | None | `no_pin_localhost_anvil_succeeds` | ready to implement (this PR) |
+| Local dev, pin mismatch | HTTPS Anvil (self-signed cert) | Wrong pin | `spki_pinned_endpoint_rejects_wrong_pin` | blocks on issue #393 `new_http_pinned` impl |
+| Local dev, pin match | HTTPS Anvil (self-signed cert) | Correct pin (cert's actual SPKI) | `spki_pinned_localhost_anvil_succeeds` | blocks on issue #393 |
+| Testnet, no pin | Sepolia (11155111) | None | `no_pin_sepolia_get_chain_id` (L29-gated) | ready (extend existing `cli_sepolia.rs`) |
+| Testnet, pin match | Sepolia (11155111) | Public RPC SPKI | `spki_pinned_sepolia_succeeds` | blocks on issue #393 |
+
+Implementation order: Story 29 first (no-SPKI Anvil test, ships in this PR as the canonical "setup + write test on local testnet" deliverable), then Story 28 once issue #393 lands `new_http_pinned`.
+
+---
+
 ## Cross-cutting acceptance criteria (apply to all stories)
 
 - **Help text:** every command accepts `--help` and prints a clear, multi-line description with examples.
