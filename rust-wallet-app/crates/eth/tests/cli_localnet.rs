@@ -625,6 +625,652 @@ fn wallet_balance_with_invalid_token_address_yields_exit_2() {
         "stderr should mention --token: {stderr}",
     );
 }
+
+#[test]
+fn wallet_balance_all_flag_against_unreachable_rpc_exits_3_with_balanceof() {
+    // Issue #358 — `eth wallet balance --all` iterates the bundled token
+    // registry + any --token overrides, printing one line per token. AC #7
+    // requires a lock-down always-on test: --all against an unreachable
+    // RPC must reach the per-token balanceOf call (exit 3, stderr carries
+    // the `balanceOf` substring from `erc20::token_balance`).
+    //
+    // RED: --all flag absent → clap rejects → exit 2 + "unexpected
+    // argument" / "Usage:" leaks to stderr.
+    // GREEN: clap accepts the flag, handler reaches `erc20::token_balance`,
+    // unreachable RPC yields `Error::Rpc("eth_call balanceOf: ...")` →
+    // exit 3 + stderr contains `balanceOf` (proves the per-token iteration
+    // fired; a stub regression returning Error::Rpc from handler entry
+    // would not contain the function selector substring).
+    //
+    // Failure isolation (AC #4) is exercised separately by the L29
+    // operator-smoke test below — the unreachable-RPC case dominates with
+    // the first RPC error per AC #7's exit-3 contract.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--network",
+            "sepolia", // sepolia.json has USDC entry → at least one token to iterate
+            "--rpc-url",
+            "http://127.0.0.1:1", // unreachable
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let code = out.status.code();
+
+    // Lock-down: clap rejected --all → must NOT be exit 2.
+    assert_ne!(
+        code,
+        Some(2),
+        "lock-down: --all flag was rejected by clap (exit 2); not yet wired\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        !stderr.contains("unexpected argument")
+            && !stderr.contains("Usage:")
+            && !stderr.contains("unrecognized"),
+        "stderr must not contain clap rejection markers:\nstderr: {stderr}",
+    );
+    // Real impl against unreachable RPC: Error::Rpc from the first
+    // per-token `eth_call balanceOf` (exit 3).
+    assert_eq!(
+        code,
+        Some(3),
+        "wallet balance --all should reach per-token balanceOf and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // Lock-down against stub regression: the real impl emits
+    // `eth_call balanceOf: ...` in stderr from `erc20::token_balance`
+    // (which prefixes the call context in its Error::Rpc mapping —
+    // see `src/erc20.rs:118`). A stub regression at handler entry would
+    // not contain this substring.
+    assert!(
+        stderr.contains("balanceOf"),
+        "expected per-token balanceOf call to fire — stderr must contain `balanceOf` from `erc20::token_balance`:\nstdout: {stdout}\nstderr: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_balance_all_with_anvil_network_and_no_token_overrides_yields_exit_2() {
+    // L12 coverage G1 — `--network anvil --all` with no `--token`
+    // override finds zero entries (Anvil registry is the empty v0.2
+    // stub per `load_anvil_returns_empty_list_for_v0_2_stub`). The
+    // handler must surface the `entries.is_empty()` guard as
+    // `InvalidInput` (exit 2) before any RPC call — proves the empty-
+    // registry branch is wired (currently silent dead code).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--network",
+            "anvil",
+            // RPC URL omitted — guard fires before any RPC call.
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "empty-registry --all must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("chain_id=31337"),
+        "stderr should name the empty registry's chain_id so operators understand why --all found nothing:\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("--all requires at least one bundled entry or --token"),
+        "stderr should hint at the --token override escape hatch:\nstderr: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_balance_all_with_invalid_token_override_yields_exit_2() {
+    // L12 coverage G4 — `--all --token 0xnot-an-address` exercises the
+    // `Address::from_str(...).map_err(...)` parse line inside
+    // `wallet_balance_all`. Without a lock-down test, a refactor that
+    // drops override validation from the batch path would silently
+    // let garbage addresses through.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--token",
+            "0xnot-an-address",
+            "--network",
+            "sepolia",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "invalid --token inside --all must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("--token"),
+        "stderr should mention --token:\nstderr: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_balance_with_decimals_without_token_or_all_yields_exit_2() {
+    // L12 coverage G5 — manual `--decimals` validation in `main.rs`
+    // replaces the removed `requires = "token"` (clap has no OR).
+    // Without --token or --all the override is meaningless.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--decimals",
+            "6",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "--decimals alone (no --token / --all) must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("--decimals requires --token or --all"),
+        "stderr should name the rejection:\nstderr: {stderr}",
+    );
+}
+
+#[test]
+fn wallet_balance_with_multiple_token_without_all_yields_exit_2() {
+    // L12 coverage G6 — multi-`--token` without `--all` would silently
+    // drop all but the first token (L12 review H-3). The guard
+    // surfaces as `InvalidInput` so the operator adds `--all` (or
+    // drops the extras) — never silently loses intent.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", // USDC
+            "--token",
+            "0xdAC17F958D2ee523a2206206994597C13D831ec7", // USDT
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "multiple --token without --all must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("multiple --token values require --all"),
+        "stderr should name the rejection:\nstderr: {stderr}",
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_all_batch_mainnet_prints_one_line_per_token() {
+    // Issue #358 AC #1, #3 — `eth wallet balance --all --network mainnet`
+    // against a forked Anvil iterates the bundled mainnet registry
+    // (USDC, USDT, DAI) and prints one line per token in
+    // `<symbol> <scaled_balance> <token-addr>` format. We pre-fund USDT
+    // + DAI (slot 2 each — both single contracts, no proxy) and leave
+    // USDC at 0 (TransparentUpgradeableProxy returns 0 for un-funded
+    // holders without any pre-fund; balanceOf roundtrip still works).
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(1)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+
+    // Pre-fund USDT at slot 2 (TetherToken's `balances` mapping).
+    let usdt_slot = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(USDT_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let usdt_slot_u: alloy_primitives::U256 = usdt_slot.into();
+    let usdt_val: alloy_primitives::B256 = alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(USDT_MAINNET, usdt_slot_u, usdt_val)
+        .await
+        .expect("anvil_set_storage_at(USDT, balances[alpha], 1000 USDT)");
+
+    // Pre-fund DAI at slot 2 (DSToken's `balances` mapping — same slot
+    // math as USDT; both contracts have 2 state vars before balances).
+    let dai_slot = alloy_primitives::keccak256(
+        (alpha_addr, alloy_primitives::U256::from(DAI_BALANCEOF_SLOT)).abi_encode(),
+    );
+    let dai_slot_u: alloy_primitives::U256 = dai_slot.into();
+    let dai_val: alloy_primitives::B256 = alloy_primitives::U256::from(DAI_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(DAI_MAINNET, dai_slot_u, dai_val)
+        .await
+        .expect("anvil_set_storage_at(DAI, balances[alpha], 1000 DAI)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--network",
+            "mainnet",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "wallet balance --all mainnet must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // AC #1: one line per registered token — USDC + USDT + DAI.
+    // USDC line: balance 0 (no pre-fund); USDT line: 1000.000000;
+    // DAI line: 1000 (18 decimals, no fractional digits).
+    assert!(
+        stdout.contains("USDC 0"),
+        "expected USDC line in stdout (proxy returns 0 for un-funded), got: {stdout}",
+    );
+    assert!(
+        stdout.contains("USDT 1000"),
+        "expected pre-funded USDT balance in stdout, got: {stdout}",
+    );
+    assert!(
+        stdout.contains("DAI 1000"),
+        "expected pre-funded DAI balance in stdout, got: {stdout}",
+    );
+    // Each line carries the contract address (EIP-55 mixed-case form
+    // after `{:#x}` — alloy 1.8 `Address` Display produces the checksum)
+    // so the operator can verify which entry printed.
+    assert!(
+        stdout.contains("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
+        "expected USDC contract address (EIP-55) in stdout, got: {stdout}",
+    );
+    assert!(
+        stdout.contains("0xdAC17F958D2ee523a2206206994597C13D831ec7"),
+        "expected USDT contract address (EIP-55) in stdout, got: {stdout}",
+    );
+    assert!(
+        stdout.contains("0x6B175474E89094C44Da98b954EedeAC495271d0F"),
+        "expected DAI contract address (EIP-55) in stdout, got: {stdout}",
+    );
+    // Three distinct lines = three registry entries iterated (no
+    // duplicates from the registry + a spurious override).
+    let token_lines = stdout
+        .lines()
+        .filter(|l| l.starts_with("USDC ") || l.starts_with("USDT ") || l.starts_with("DAI "))
+        .count();
+    assert_eq!(
+        token_lines, 3,
+        "expected exactly 3 token lines (USDC + USDT + DAI), got {token_lines}:\nstdout: {stdout}",
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_all_failure_isolation_logs_per_token_errors_and_exits_0() {
+    // Issue #358 AC #2, #4 — `--all` + `--token <STOP-only-bytecode-addr>`
+    // exercises both ad-hoc-override (AC #2) and failure isolation (AC
+    // #4). The override target returns empty bytes from `eth_call` →
+    // `AbiDecodeFailed` (exit 2) per-token. Pre-funded USDT/DAI registry
+    // entries still succeed, so the batch exits 0 with the override
+    // error logged to stderr.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(1)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    // Install STOP-only bytecode at `NOT_ERC20_ADDR` so the override
+    // target's `balanceOf` returns empty bytes → decode-fail path.
+    provider
+        .anvil_set_code(
+            NOT_ERC20_ADDR,
+            alloy_primitives::Bytes::from_static(STOP_BYTECODE),
+        )
+        .await
+        .expect("anvil_set_code(STOP-only bytecode at 0x...beef)");
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+
+    // Pre-fund USDT at slot 2 so the registry USDT entry succeeds.
+    let usdt_slot = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(USDT_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let usdt_slot_u: alloy_primitives::U256 = usdt_slot.into();
+    let usdt_val: alloy_primitives::B256 = alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(USDT_MAINNET, usdt_slot_u, usdt_val)
+        .await
+        .expect("anvil_set_storage_at(USDT, balances[alpha], 1000 USDT)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // --token override = STOP-only address → decode-fail path. AC #2
+    // says overrides append AFTER registry entries; AC #4 says per-token
+    // failure doesn't abort the batch. Both exercised by this single run.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--token",
+            &format!("{NOT_ERC20_ADDR:#x}"),
+            // --decimals 18 forces `token_balance` to fire (skipping the
+            // `query_decimals` auto-detect, which would otherwise hit the
+            // STOP-only bytecode first and fail with the `"decimals"`
+            // context — not what the assertion expects).
+            "--decimals",
+            "18",
+            "--network",
+            "mainnet",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // AC #4: at least one registry token succeeded → exit 0.
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "wallet balance --all + --token override must exit 0 when at least one registry token succeeded\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // AC #2: USDT (registry entry) + override 0x...beef both attempted;
+    // USDT printed successfully → success line in stdout.
+    assert!(
+        stdout.contains("USDT 1000"),
+        "expected pre-funded USDT balance in stdout despite override failure, got: {stdout}",
+    );
+    // AC #4: override error logged to stderr (per-token failure didn't
+    // abort the batch — the operator sees which subset failed).
+    assert!(
+        stderr.contains(&*format!("{NOT_ERC20_ADDR:#x}")),
+        "expected override address in stderr failure log, got: {stderr}",
+    );
+    assert!(
+        stderr.contains("balanceOf"),
+        "expected balanceOf context in override failure stderr, got: {stderr}",
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_all_json_output_emits_array_of_rows() {
+    // Issue #358 AC #5 — `--json` flag emits an array of
+    // `{symbol, address, balance, decimals}` rows instead of the
+    // line-per-token text format. Verify JSON shape + per-row fields.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(1)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+
+    // Pre-fund USDT so the JSON output has a non-trivial balance row.
+    let usdt_slot = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(USDT_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let usdt_slot_u: alloy_primitives::U256 = usdt_slot.into();
+    let usdt_val: alloy_primitives::B256 = alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(USDT_MAINNET, usdt_slot_u, usdt_val)
+        .await
+        .expect("anvil_set_storage_at(USDT, balances[alpha], 1000 USDT)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--json",
+            "--network",
+            "mainnet",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "wallet balance --all --json must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // Parse stdout as JSON. The array may include USDC (balance 0),
+    // USDT (balance 1000.000000), DAI (balance 0) — at least USDT must
+    // appear with the expected balance. Failed tokens are NOT in JSON
+    // output (operator parses `decimals` field instead of inspecting
+    // the output array — same shape as `erc20 register --list`).
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|e| panic!("stdout is not valid JSON: {e}\nstdout: {stdout}"));
+    let rows = parsed.as_array().expect("top-level must be a JSON array");
+    assert!(
+        !rows.is_empty(),
+        "JSON array must contain at least one row, got: {rows:?}"
+    );
+    // Every row must have the four required keys (AC #5).
+    for (i, row) in rows.iter().enumerate() {
+        let obj = row
+            .as_object()
+            .unwrap_or_else(|| panic!("row {i} not an object: {row:?}"));
+        for key in ["symbol", "address", "balance", "decimals"] {
+            assert!(
+                obj.contains_key(key),
+                "row {i} missing key {key:?}: {row:?}"
+            );
+        }
+        // `decimals` must be a JSON number.
+        assert!(
+            obj["decimals"].is_number(),
+            "row {i} decimals must be a number, got {:?}: {row:?}",
+            obj["decimals"],
+        );
+    }
+    // At least one row must be USDT with the pre-funded balance.
+    let usdt_row = rows
+        .iter()
+        .find(|r| r["symbol"] == "USDT")
+        .expect("USDT row must be in JSON output");
+    assert_eq!(
+        usdt_row["balance"], "1000.000000",
+        "USDT balance must be the pre-funded 1000 USDT (6 decimals), got: {usdt_row:?}"
+    );
+    assert_eq!(
+        usdt_row["decimals"], 6,
+        "USDT decimals must be 6 from the registry, got: {usdt_row:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_all_decimals_override_applies_to_every_token() {
+    // Issue #358 AC #6 — `--decimals <N>` overrides the per-token
+    // `decimals()` auto-detect and applies to EVERY token in the batch.
+    // We pre-fund USDT (6 decimals in registry) and assert that running
+    // `--all --decimals 2` formats USDT at 2-decimal scale (1e9 raw
+    // becomes 100,000,000) — proving the override wins over the
+    // registry cache. If the override propagated to only one token,
+    // other tokens in the registry would print at their cached scale
+    // and the test would fail.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(1)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+
+    // Pre-fund USDT at slot 2 with 1000 USDT (raw 1e9).
+    let usdt_slot = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(USDT_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let usdt_slot_u: alloy_primitives::U256 = usdt_slot.into();
+    let usdt_val: alloy_primitives::B256 = alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(USDT_MAINNET, usdt_slot_u, usdt_val)
+        .await
+        .expect("anvil_set_storage_at(USDT, balances[alpha], 1000 USDT)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--decimals",
+            "2", // forces 2-decimal scale across the whole batch
+            "--network",
+            "mainnet",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "wallet balance --all --decimals 2 must succeed against forked Anvil\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // USDT pre-funded 1000 USDT (raw 1e9). With --decimals 2, formatted
+    // value = 1e9 / 10^2 = 1e7 = 10,000,000. Verifies the override
+    // wins over the registry's cached 6.
+    assert!(
+        stdout.contains("USDT 100000000"),
+        "expected USDT scaled by --decimals 2 (raw 1e9 / 10^2 = 1e7), got: {stdout}",
+    );
+    // DAI (18 decimals in registry) without override would print
+    // "DAI 1000" (raw 1e21, 18 decimals). With --decimals 2, raw 1e21
+    // / 10^2 = 1e19, formatted = "10000000000000000000" (19 zeros).
+    // DAI has no pre-fund so balance = 0; assert it printed (proves
+    // the override propagated to DAI's row, not just USDT).
+    assert!(
+        stdout.contains("DAI "),
+        "expected DAI line in stdout (override must propagate to every registry token), got: {stdout}",
+    );
+}
 #[tokio::test]
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
 async fn wallet_balance_token_weth_against_anvil_fork_mainnet() {

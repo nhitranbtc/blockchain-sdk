@@ -31,8 +31,8 @@ use clap::{Parser, Subcommand};
 
 use crate::handlers::{
     config_show, open_manager, open_provider, print_wallet_created, tx_get, tx_list,
-    wallet_balance, wallet_create, wallet_delete, wallet_import, wallet_list, wallet_send_erc20,
-    wallet_send_native, wallet_show,
+    wallet_balance, wallet_balance_all, wallet_create, wallet_delete, wallet_import, wallet_list,
+    wallet_send_erc20, wallet_send_native, wallet_show,
 };
 use eth_wallet_core::{Error, Network, Result};
 
@@ -143,20 +143,33 @@ enum WalletAction {
         address: String,
         #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
-        /// ETH unit hint (`wei|gwei|eth`); meaningless when `--token` is
-        /// set — clap rejects the combo at parse time.
-        #[arg(long, conflicts_with = "token")]
+        /// ETH unit hint (`wei|gwei|eth`); meaningless when `--token` or
+        /// `--all` is set — clap rejects the combos at parse time.
+        #[arg(long, conflicts_with_all = ["token", "all"])]
         unit: Option<String>,
         /// ERC-20 token contract address. When set, prints the token balance
         /// (auto-detects decimals via `decimals()` `eth_call` unless
         /// `--decimals` is supplied) instead of the native ETH balance.
+        /// Repeated for `--all` mode: each `--token` is appended to the
+        /// registry iteration in CLI order (Issue #358 AC #2).
         #[arg(long)]
-        token: Option<String>,
+        token: Vec<String>,
+        /// Iterate the bundled token registry + any `--token` overrides,
+        /// one line per token (Issue #358).
+        #[arg(long)]
+        all: bool,
         /// Override for the ERC-20 `decimals()` auto-detect. Useful when
         /// the token contract doesn't implement standard `decimals()` or
-        /// the RPC can't reach the token. Must be 0..=255.
-        #[arg(long, requires = "token")]
+        /// the RPC can't reach the token. Must be 0..=255. Allowed with
+        /// either `--token` (per-token mode) or `--all` (applies to every
+        /// token in the batch — Issue #358 AC #6).
+        #[arg(long)]
         decimals: Option<u8>,
+        /// Emit a JSON array of `{symbol, address, balance, decimals}`
+        /// rows for `--all` mode instead of the line-per-token text
+        /// format (Issue #358 AC #5).
+        #[arg(long)]
+        json: bool,
     },
     /// Sync wallet with chain state (rebuild meta from on-chain). Deferred.
     Sync {
@@ -479,19 +492,45 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     network,
                     unit,
                     token,
+                    all,
                     decimals,
+                    json,
                 } => {
                     let rpc = &cli.rpc_url;
                     let provider = open_provider(rpc)?;
-                    wallet_balance(
-                        &provider,
-                        &address,
-                        unit.as_deref(),
-                        token.as_deref(),
-                        decimals,
-                        &network,
-                    )
-                    .await
+                    // Validate `--decimals` requires either `--token` or `--all`.
+                    // Manual validation (vs clap `requires`) because clap has no
+                    // built-in OR — `--decimals` accepts both flag forms.
+                    if decimals.is_some() && token.is_empty() && !all {
+                        return Err(Error::InvalidInput(
+                            "--decimals requires --token or --all".into(),
+                        ));
+                    }
+                    // Multiple `--token` flags without `--all` would silently
+                    // drop all but the first (L12 review H-3). Surface as
+                    // bad input so the operator adds `--all` (or drops the
+                    // extras) — never silently lose intent.
+                    if !all && token.len() > 1 {
+                        return Err(Error::InvalidInput(
+                            "multiple --token values require --all (use --all to iterate the registry + overrides)".into(),
+                        ));
+                    }
+                    if all {
+                        wallet_balance_all(&provider, &address, &network, &token, decimals, json)
+                            .await
+                    } else {
+                        // Single-token mode: take the first --token if any.
+                        let single_token = token.first().map(String::as_str);
+                        wallet_balance(
+                            &provider,
+                            &address,
+                            unit.as_deref(),
+                            single_token,
+                            decimals,
+                            &network,
+                        )
+                        .await
+                    }
                 }
                 WalletAction::Sync { .. } => Err(eth_wallet_core::Error::Rpc(
                     "wallet sync: deferred past #337 (follow-up)".into(),
