@@ -1391,3 +1391,26 @@ The Mutex is necessary because `cargo test` runs tests in parallel by default; w
 - If PR diff touches more than 2 crates, add each as a `-p` flag.
 - L13 step 11 header line updated to reference L55 + show the scoped-cargo-test command.
 
+## L56 — Permanent regression block via CI audit-grep (Issue #382)
+
+**Trigger**: Session 2026-08-26, Issue #382 (follow-up to PR #374 / Issue #365). PR #374 landed the `Error::rpc(impl Display)` constructor + bulk-replaced 23 leaky `Error::Rpc(format!("...{e}"))` sites + closed AC #5 via a one-shot per-PR `grep` audit. The audit was one-shot — a future author reverting to the leaky pattern would bypass the redaction contract and CI would not catch it. The constructor's doc-comment cited "L18 PAUSE-before-write rule" (L18 retired per the lessons audit) but the enforcement was a PR-time check, not a permanent gate.
+
+**Rule**: For security-critical code paths (RPC redaction, secret handling, key material, signing surfaces), one-shot PR-time audits are insufficient. Convert the audit into a CI job that fails on regression. Pair the job with a doc-comment at the constructor's site so the enforcement mechanism is visible to future authors.
+
+**Apply**:
+
+- When landing a redaction / secret-handling fix that ships an AC audit (`grep -rn '<bad-pattern>'` returns 0), immediately add a CI job running the same grep with exit-on-match.
+- The job must run on every PR + push to the protected branch. No `--ignored` skip, no `if: success()` guard. Lightweight (just `actions/checkout` + bash, no rust toolchain needed).
+- Reference the job from a doc-comment at the constructor's site so future authors see the enforcement mechanism (e.g. `/// Enforced by CI audit-gate \`rust-error-grep\` job in ... — see Issue #N.`).
+- Document the rule in `tasks/lessons.md` per L24 cascade — link the parent issue + the audit grep pattern + the enforcement job path.
+- Use a clear error message in the CI step (`echo "::error::<why-this-pattern-bad>"`) so a future author who triggers the gate gets actionable guidance, not just a failing exit code.
+- **Drift caveat**: the parent issue body for #382 cited "L18 PAUSE-before-write rule" — L18 was retired per the lessons audit. The rule (PAUSE-before-write + enforcement gate) now lives at L13 step 12 (commit approval) + this lesson. When citing retired lesson numbers in issue bodies, surface the drift in the PR body Drift section.
+
+**Anti-patterns**:
+
+- One-shot audit only — silent regression possible the moment the audit author moves on.
+- Doc-comment without CI gate — describes the rule but does not enforce it.
+- CI gate without doc-comment — enforcement works but the rationale is invisible to readers of the source.
+- Job scoped to `--ignored` / `if: success()` — defeats the permanent-block intent.
+- Generic `grep` for `format!` or `Rpc` — too broad, causes false positives in unrelated code. Anchor on the specific leaky pattern (`Error::Rpc(format`).
+
