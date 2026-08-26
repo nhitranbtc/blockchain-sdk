@@ -143,6 +143,28 @@ pub enum Error {
 }
 
 impl Error {
+    /// Construct an `Error::Rpc` from any `Display` impl, routing the
+    /// formatted string through `redact_rpc_url` so upstream RPC URLs
+    /// (paths, query strings) never leak into operator-visible error
+    /// messages. Issue #365 AC #1 — centralizes the redaction
+    /// discipline that previously required every call site to remember
+    /// `redact_rpc_url(&e)` (and which the security-guidance post-push
+    /// sweep found 4+ sites still forgetting).
+    ///
+    /// Use this constructor for any error that flows from an RPC call
+    /// (provider, transport, reqwest, alloy transport). For non-RPC
+    /// errors (parse, validation), prefer the existing `Error::Rpc(s)`
+    /// variant directly when redaction is irrelevant.
+    ///
+    /// Backward-compatible: old call sites using `Error::rpc(format!(...))`
+    /// still compile, but their redaction responsibility is now on the
+    /// author. New code should always use this constructor.
+    pub fn rpc(e: impl std::fmt::Display) -> Self {
+        Error::Rpc(crate::redact_rpc_url(e))
+    }
+}
+
+impl Error {
     /// Stable exit-code mapping per #297 M11.
     ///
     /// | Variant                            | Exit |
@@ -194,7 +216,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
-        Error::Rpc(format!("io: {e}"))
+        Error::rpc(format!("io: {e}"))
     }
 }
 
@@ -215,13 +237,13 @@ impl From<bip39::Error> for Error {
 
 impl From<alloy_transport::TransportError> for Error {
     fn from(e: alloy_transport::TransportError) -> Self {
-        Error::Rpc(format!("alloy transport: {e}"))
+        Error::rpc(format!("alloy transport: {e}"))
     }
 }
 
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
-        Error::Rpc(format!("reqwest: {e}"))
+        Error::rpc(format!("reqwest: {e}"))
     }
 }
 
@@ -233,6 +255,36 @@ mod tests {
     fn rpc_variants_map_to_exit_3() {
         assert_eq!(Error::Rpc("x".into()).exit_code(), 3);
         assert_eq!(Error::GasEstimateFailed("x".into()).exit_code(), 3);
+    }
+
+    // Issue #365 AC #1 — `Error::rpc(impl Display)` constructor centralizes
+    // redaction. Without it, `Error::rpc(format!("...{url}..."))` would
+    // embed the RPC URL in the error string. This test fails to compile
+    // until the constructor lands.
+    #[test]
+    fn error_rpc_constructor_redacts_rpc_url_from_display_impl() {
+        use std::fmt;
+        struct FakeError(&'static str);
+        impl fmt::Display for FakeError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        let secret_url = "https://rpc.example.com/secret-api-key-abcdef12345?token=x";
+        let err = Error::rpc(FakeError(secret_url));
+        let s = format!("{err}");
+        assert!(
+            !s.contains("secret-api-key"),
+            "Error::rpc must redact RPC URL secrets via Display impl, got: {s}"
+        );
+        assert!(
+            !s.contains("token=x"),
+            "Error::rpc must redact URL query strings, got: {s}"
+        );
+        assert!(
+            s.contains("rpc:") && s.contains("<rpc-url-redacted>"),
+            "expected `rpc:` format prefix + `<rpc-url-redacted>` marker, got: {s}"
+        );
     }
 
     #[test]

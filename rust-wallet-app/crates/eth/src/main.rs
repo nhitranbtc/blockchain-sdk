@@ -449,7 +449,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| eth_wallet_core::Error::Rpc(format!("tokio: {e}")))?;
+        .map_err(|e| eth_wallet_core::Error::rpc(format!("tokio: {e}")))?;
 
     rt.block_on(async {
         match cli.command {

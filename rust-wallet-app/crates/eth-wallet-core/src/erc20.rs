@@ -115,7 +115,7 @@ pub async fn token_balance(
     let raw = provider
         .call(req)
         .await
-        .map_err(|e| Error::Rpc(format!("eth_call balanceOf: {}", redact_rpc_url(&e))))?;
+        .map_err(|e| Error::rpc(format!("eth_call balanceOf: {}", redact_rpc_url(&e))))?;
     let balance: U256 =
         balanceOfCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
             context: "balanceOf".into(),
@@ -137,7 +137,7 @@ pub async fn query_decimals(provider: &RootProvider<Ethereum>, token: Address) -
     let raw = provider
         .call(req)
         .await
-        .map_err(|e| Error::Rpc(format!("eth_call decimals: {}", redact_rpc_url(&e))))?;
+        .map_err(|e| Error::rpc(format!("eth_call decimals: {}", redact_rpc_url(&e))))?;
     let decimals: u8 =
         decimalsCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
             context: "decimals".into(),
@@ -171,7 +171,7 @@ pub async fn query_symbol(provider: &RootProvider<Ethereum>, token: Address) -> 
     let raw = provider
         .call(req)
         .await
-        .map_err(|e| Error::Rpc(format!("eth_call symbol: {}", redact_rpc_url(&e))))?;
+        .map_err(|e| Error::rpc(format!("eth_call symbol: {}", redact_rpc_url(&e))))?;
     symbolCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
         context: "symbol".into(),
         reason: e.to_string(),
@@ -193,7 +193,7 @@ pub async fn query_name(provider: &RootProvider<Ethereum>, token: Address) -> Re
     let raw = provider
         .call(req)
         .await
-        .map_err(|e| Error::Rpc(format!("eth_call name: {}", redact_rpc_url(&e))))?;
+        .map_err(|e| Error::rpc(format!("eth_call name: {}", redact_rpc_url(&e))))?;
     nameCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
         context: "name".into(),
         reason: e.to_string(),

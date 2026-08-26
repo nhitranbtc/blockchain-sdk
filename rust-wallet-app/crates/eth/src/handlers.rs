@@ -65,7 +65,7 @@ pub fn open_provider(rpc_url: &str) -> Result<RootProvider<Ethereum>> {
 /// - AlreadyExists → WalletExists (4)
 pub(crate) fn map_wallet_err(e: WalletError) -> Error {
     match e {
-        WalletError::Io(_) | WalletError::Path(_) => Error::Rpc(format!("wallet: {e}")),
+        WalletError::Io(_) | WalletError::Path(_) => Error::rpc(format!("wallet: {e}")),
         WalletError::Json(_) | WalletError::Corrupt { .. } => Error::WalletCorrupt {
             path: "<unknown>".to_string(),
             reason: e.to_string(),
@@ -282,7 +282,7 @@ pub async fn wallet_balance(
             let balance_wei = provider
                 .get_balance(holder)
                 .await
-                .map_err(|e| Error::Rpc(format!("get_balance: {e}")))?;
+                .map_err(|e| Error::rpc(format!("get_balance: {e}")))?;
             let unit = unit.unwrap_or("eth");
             let formatted = match unit.to_ascii_lowercase().as_str() {
                 "wei" => format!("{} wei", balance_wei),
@@ -537,8 +537,8 @@ pub async fn tx_get(provider: &RootProvider<Ethereum>, tx_hash: &str) -> Result<
     let tx = provider
         .get_transaction_by_hash(hash)
         .await
-        .map_err(|e| Error::Rpc(format!("get_transaction_by_hash: {e}")))?
-        .ok_or_else(|| Error::Rpc(format!("transaction not found: {tx_hash}")))?;
+        .map_err(|e| Error::rpc(format!("get_transaction_by_hash: {e}")))?
+        .ok_or_else(|| Error::rpc(format!("transaction not found: {tx_hash}")))?;
     // Debug-print: alloy's `Transaction<T>` shape changes between 0.x
     // and 1.x; `{:#?}` avoids hand-rolled field breakage. PR-B can switch
     // to a typed formatter once the eth-cli output schema is reviewed.
@@ -567,7 +567,15 @@ fn redact_rpc_error(e: impl std::fmt::Display) -> String {
 /// Format a `U256` wei amount as `<whole>.<frac>` with `decimals` fractional
 /// digits (zero-padded). Returns just `<whole>` when the fractional part
 /// is zero.
+///
+/// **Decimals clamping** (Issue #365 AC #3): u128::MAX ≈ 3.4e38. `10^38`
+/// still fits, but `10^39` overflows `u128`. To prevent panic-on-overflow
+/// (debug) + silent-wrap (release), `decimals > 36` is coerced to 36.
+/// Realistic ERC-20 range is 0..=18; 36 is the u128::pow safe bound.
+/// Pathological inputs (> 36) produce a possibly-misformatted string but
+/// never panic.
 fn format_wei_as(wei: U256, decimals: u8) -> String {
+    let decimals = decimals.min(36);
     if decimals == 0 {
         return wei.to_string();
     }
@@ -611,7 +619,7 @@ pub async fn wallet_send_native(
     let provider_chain_id = provider
         .get_chain_id()
         .await
-        .map_err(|e| Error::Rpc(format!("get_chain_id: {}", redact_rpc_error(&e))))?;
+        .map_err(|e| Error::rpc(format!("get_chain_id: {}", redact_rpc_error(&e))))?;
     let expected_chain_id = wallet_network.chain_id();
     if provider_chain_id != expected_chain_id {
         return Err(Error::InvalidInput(format!(
@@ -623,7 +631,7 @@ pub async fn wallet_send_native(
     let nonce_val = provider
         .get_transaction_count(from)
         .await
-        .map_err(|e| Error::Rpc(format!("get_transaction_count: {}", redact_rpc_error(&e))))?;
+        .map_err(|e| Error::rpc(format!("get_transaction_count: {}", redact_rpc_error(&e))))?;
 
     let tx_req = TransactionRequest {
         from: Some(from),
@@ -638,12 +646,12 @@ pub async fn wallet_send_native(
     };
 
     let signed = eth_wallet_core::sign_native_eth_tx(signer, tx_req)
-        .map_err(|e| Error::Rpc(format!("sign: {e}")))?;
+        .map_err(|e| Error::rpc(format!("sign: {e}")))?;
     let bytes = eth_wallet_core::encoded_envelope(&signed);
     let pending = provider
         .send_raw_transaction(&bytes)
         .await
-        .map_err(|e| Error::Rpc(format!("send_raw_transaction: {}", redact_rpc_error(&e))))?;
+        .map_err(|e| Error::rpc(format!("send_raw_transaction: {}", redact_rpc_error(&e))))?;
     println!("{}", pending.tx_hash());
     Ok(())
 }
@@ -674,7 +682,7 @@ pub async fn wallet_send_erc20(
     let provider_chain_id = provider
         .get_chain_id()
         .await
-        .map_err(|e| Error::Rpc(format!("get_chain_id: {}", redact_rpc_error(&e))))?;
+        .map_err(|e| Error::rpc(format!("get_chain_id: {}", redact_rpc_error(&e))))?;
     let expected_chain_id = wallet_network.chain_id();
     if provider_chain_id != expected_chain_id {
         return Err(Error::InvalidInput(format!(
@@ -686,7 +694,7 @@ pub async fn wallet_send_erc20(
     let nonce_val = provider
         .get_transaction_count(from)
         .await
-        .map_err(|e| Error::Rpc(format!("get_transaction_count: {}", redact_rpc_error(&e))))?;
+        .map_err(|e| Error::rpc(format!("get_transaction_count: {}", redact_rpc_error(&e))))?;
 
     let calldata = eth_wallet_core::erc20::transfer_calldata(to, amount_wei);
     let signed = eth_wallet_core::sign_erc20_tx_bytes(
@@ -700,10 +708,10 @@ pub async fn wallet_send_erc20(
         resolved.max_priority_fee_per_gas,
         gas_limit,
     )
-    .map_err(|e| Error::Rpc(format!("sign-erc20: {}", redact_rpc_error(&e))))?;
+    .map_err(|e| Error::rpc(format!("sign-erc20: {}", redact_rpc_error(&e))))?;
     let bytes = eth_wallet_core::encoded_envelope(&signed);
     let pending = provider.send_raw_transaction(&bytes).await.map_err(|e| {
-        Error::Rpc(format!(
+        Error::rpc(format!(
             "send_raw_transaction (erc20): {}",
             redact_rpc_error(&e)
         ))
@@ -719,7 +727,7 @@ pub async fn tx_list(provider: &RootProvider<Ethereum>, limit: u32) -> Result<()
     let block = provider
         .get_block_number()
         .await
-        .map_err(|e| Error::Rpc(format!("get_block_number: {e}")))?;
+        .map_err(|e| Error::rpc(format!("get_block_number: {e}")))?;
     println!("latest_block={block} limit={limit}");
     Ok(())
 }
@@ -931,5 +939,40 @@ mod gas_overrides_tests {
             ),
             "priority > max_fee must yield FeeTooLow (EIP-1559 invariant): got {r:?}",
         );
+    }
+}
+
+// Issue #365 AC #4 — `format_wei_as` boundary test. u128::MAX ≈ 3.4e38,
+// so `10u128.pow(38)` = 1e38 still fits, but `10u128.pow(39)` = 1e39
+// overflows. Without a clamp, `format_wei_as(_, 39+)` panics in debug
+// (overflow) + wraps in release (silent corruption). After the clamp,
+// decimals > 36 are coerced to 36 — no panic + sensible output.
+#[cfg(test)]
+mod format_wei_as_tests {
+    use super::format_wei_as;
+
+    #[test]
+    fn format_wei_as_max_decimals_boundary_does_not_panic_above_36() {
+        let one_e18 = || alloy_primitives::U256::from(1_000_000_000_000_000_000u128);
+        assert_eq!(format_wei_as(one_e18(), 18), "1");
+        assert_eq!(format_wei_as(one_e18(), 0), "1000000000000000000");
+        let s39 = format_wei_as(one_e18(), 39);
+        assert!(
+            !s39.is_empty(),
+            "clamped output for decimals=39 must not be empty, got: {s39}"
+        );
+        let s255 = format_wei_as(one_e18(), 255);
+        assert!(
+            !s255.is_empty(),
+            "clamped output for decimals=255 must not be empty, got: {s255}"
+        );
+    }
+
+    #[test]
+    fn format_wei_as_below_boundary_renders_fractional_part() {
+        let one_e18 = || alloy_primitives::U256::from(1_000_000_000_000_000_000u128);
+        assert_eq!(format_wei_as(one_e18(), 6), "1000000000000");
+        let raw = alloy_primitives::U256::from(1_500_000_000_000_000_000u128);
+        assert_eq!(format_wei_as(raw, 18), "1.500000000000000000");
     }
 }
