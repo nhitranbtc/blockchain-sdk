@@ -333,12 +333,41 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full triple gate (`fmt` + `clippy --all-targets` + `test`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
     - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
-11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task):
-    - **Fixable now**: fix in current commit, re-verify, continue
-    - **Small deferred** (cosmetic, follow-up): log in current session's backlogs list
-    - **Big task** (multi-PR, multi-week): create GitHub issue, label `backlog`, link to parent task
-    - **Future milestone** (v0.1.1, v0.2): log in current session's backlogs list with priority tag
-    - GitHub issue format: title `Backlog: <short description>`, body = acceptance criteria + priority + parent task ref, labels = `backlog` + `priority/p0|p1|p2|p3` + `week/N` (if applicable), milestone = parent task's milestone
+11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task). Sequence: step 11c (systematic-debugging) → step 11a (triage decision) → either fix-and-rerun-11 OR create-backlog-item.
+    - **Triage classes** (6, with deterministic decision criteria):
+        - **Fixable now**: ≤10 min + in scope + no new test required → fix in current commit, re-verify, continue
+        - **In-PR follow-up**: >10 min OR scope-creep risk → commit in current PR (before merge), not main yet; lands via the feature PR's pipeline
+        - **Small deferred** (cosmetic, follow-up): touches adjacent code OR needs new test but doesn't block → log in current session's backlogs list + L14 progress.md events
+        - **Big task** (multi-PR, multi-week): own PR OR multi-week OR cross-crate → create GitHub issue, label `backlog`, link to parent task
+        - **Future milestone** (v0.1.1, v0.2): doesn't ship before parent task's release → log with `priority/p2|p3` tag
+        - **External gate** (operator-driven, L29 manual smoke / L28 Gate B): can't run in CI → mark `[ ]` in PR body with `<!-- TODO: <operator-action> -->` deferral note (per step 14 external-gate discipline)
+    - **Decision criteria** (deterministic, not vibes):
+        - ≤10 min + in scope + no new test → fixable now
+        - >10 min OR scope-creep → in-PR follow-up
+        - needs new test OR adjacent code → small deferred
+        - multi-week OR cross-crate → big task
+        - doesn't ship before parent release → future milestone
+        - operator-driven (L29 / L28 Gate B) → external gate
+    - **GitHub issue format**:
+        - Title: `Backlog: <short description>`
+        - Body: acceptance criteria + priority + parent task ref + L14 progress.md link
+        - Labels: `backlog` + `priority/p0|p1|p2|p3` + `week/N` (current sprint) — canonical reference `docs/agents/triage-labels.md`
+        - Milestone: parent task's milestone
+    - **Priority decision tree**:
+        - `priority/p0`: blocks release (ship-stopper)
+        - `priority/p1`: blocks merge (must-fix before parent task closes)
+        - `priority/p2`: current milestone (ships before next minor release)
+        - `priority/p3`: future (v0.1.1, v0.2 backlog)
+    - **`parent task ref`**: per plan-based work = `#<plan-task-N>` (e.g., #17 for eth-wallet-core task 17); per issue-based work = `#<original-issue>`. State which in the body.
+    - **`week/N`**: current sprint number. If sprint unknown, omit label.
+    - **L14 ledger cross-ref**: append backlog events to `progress.md` (L14) — `id, decision, class, parent_task_ref, deferred_from_step`. Ephemeral session backlogs list = index; L14 progress.md = durable record.
+    - **Backlog size signal**: >10 open `backlog` issues = tech-debt alert (per L14 progress metrics). Surface at session start: `gh issue list --label backlog --state open | wc -l`.
+    - **L21 bulk-creation**: when multiple related backlogs surface (e.g., per L29 smoke for each crate), dispatch L21 sub-agent to batch-create per L21 sub-section prompt template. Reduces per-issue ceremony from 30-60s to 5-10s per item.
+    - **Anti-patterns**:
+        - **Scope creep**: pulling unrelated fixes into "fixable now" — violates L13 karpathy-guidelines principle 3 (surgical changes)
+        - **Issue spam**: one big task → many tiny issues — audit-trail noise
+        - **Orphan link**: backlog issue without `parent task ref` — drift on follow-up
+        - **Eternal defer**: same item in backlog across >3 sessions — either ship or escalate to `priority/p0`
     - When in doubt: write the issue. Forgetting backlogs costs more than the 30-60s to file one.
 11b. **L24 cascade on local branch (pre-commit):** before step 12 PAUSE, confirm L24 doc updates have landed in the commits traveling with the feature PR — CHANGELOG `[Unreleased]` bullet cites the PR number; User Stories table checkbox flipped if a story completes; "Try it" command column populated. Per L24, these live WITH the feature commit (not a separate process branch) so squash-merge carries them. If step 15a (tech doc) lands AFTER this check, re-run L24 cross-check before merge.
 11c. **Systematic-debugging fallback (when verify fails non-obviously):** if `cargo test` or `cargo clippy` surfaces a failure whose root cause isn't immediate from the error message, invoke `superpowers:systematic-debugging` BEFORE proposing a fix. Forms hypothesis, proves it, then minimal root-cause change + regression test. Avoid the "guess + cargo test loop" anti-pattern. Conditional — not a per-step add (Q4 cap preserved).
