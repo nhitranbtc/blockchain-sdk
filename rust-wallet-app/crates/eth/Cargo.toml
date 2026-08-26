@@ -40,6 +40,12 @@ tokio = { workspace = true }
 dotenvy = "0.15"
 # Issue #341 — `eth config show --json` serializer.
 serde_json = { workspace = true }
+# Issue #351 (cycle 8b, C-1 from #339) — TTY prompt as primary password
+# source. `rpassword::prompt_password` reads from /dev/tty with echo
+# disabled; cross-platform (Unix + Windows) without exposing input to
+# process list or terminal scrollback. argv/env stay as fallbacks for
+# scripting + CI per cycle 8 review.
+rpassword = { workspace = true }
 
 [dev-dependencies]
 # Binary integration tests in tests/cli_localnet.rs.
