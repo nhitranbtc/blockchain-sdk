@@ -2488,6 +2488,7 @@ dependencies = [
  "dotenvy",
  "eth-wallet-core",
  "hex",
+ "rpassword",
  "serde_json",
  "tempfile",
  "tokio",
