@@ -425,7 +425,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         | 13 commit-push-pr | `commit-commands:commit-push-pr`; `mattpocock-skills:resolving-merge-conflicts` if push fails with conflict (L51) | `commit-commands` + `mattpocock-skills` | ☐ |
         | 14 flip checkboxes | `gh issue edit N --body "<full body with [x] marks>"` (per step 14 evidence format: file:line, test name, commit SHA, PR number) | — | ☐ |
         | 15 PR review | `superpowers:receiving-code-review` wrapping `pr-review-toolkit:code-review` | `superpowers` + `pr-review-toolkit` | ☐ |
-        | 15a tech doc | `mattpocock-skills:grill-with-docs` (Goal/Drift/Tradeoff sharpening + ADR emission) + `compass:docs-writer` (primary, 10-section doc) + `compass:api-designer` (secondary, API surface + Drift sections); `mattpocock-skills:domain-modeling` for glossary emission during tech-doc write | `mattpocock-skills` + `compass` | ☐ |
+        | 15a tech doc | `mattpocock-skills:grill-with-docs` (Goal/Drift/Tradeoff sharpening + ADR emission) + `compass:docs-writer` (primary, 10-section doc) + `compass:api-designer` (secondary, API surface + Drift sections); `mattpocock-skills:domain-modeling` for glossary emission during tech-doc write; `anthropics/skills:frontend-design` if wallet-desktop files in PR diff (structural UI lens) | `mattpocock-skills` + `compass` + `anthropics` | ☐ |
         | 15b L24 verify merged | (project convention, not skill) | — | ☐ |
 
     - **Snapshot discipline**: render table at PR review start. Fill ☐ → ✓ as evidence lands (file:line, test name, commit SHA, PR number per step 14 format). Gate decision = all ✓ (proceed to 15c walk → 15d merge); any ☐ = fix + re-run. Per L28 (verify-before-claim).
@@ -443,7 +443,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
-    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections), with `mattpocock-skills:grill-with-docs` as ADR-emission shim
+    - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections), with `mattpocock-skills:grill-with-docs` as ADR-emission shim. **For wallet-desktop PRs** (files in `wallet-desktop/web/` or `wallet-desktop/native/`), also invoke `anthropics/skills:frontend-design` (structural UI patterns lens, sister to taste-skill's `design-taste-frontend`).
 15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
 15c. **Review all L13 steps 1-15b completed** (broader pre-merge gate — widens 15d's PR-body checklist to all L13 steps):
     - **Walk each L13 step 1 through 15b** and confirm artifact exists before merging:
@@ -467,7 +467,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - Step 13 (commit-push-pr executed — branch pushed + PR opened; L51 resolving-merge-conflicts invoked if conflict surfaced during push or step-4 rebase)
         - Step 14 (issue checkboxes flipped with artifact evidence per L13 step 14 rules — file:line, test name, commit SHA, PR number per step 14 evidence format)
         - Step 15 (PR review by parallel sub-agents per L13 step 15)
-        - Step 15a (10-section tech doc appended to PR body — Goal, Drift, API surface, Threat-model, Implementation, Tests, L12 review, Lessons, Backlog, Migration; grill-with-docs sharpening + ADR emission as shim; domain-modeling for glossary emission)
+        - Step 15a (10-section tech doc appended to PR body — Goal, Drift, API surface, Threat-model, Implementation, Tests, L12 review, Lessons, Backlog, Migration; grill-with-docs sharpening + ADR emission as shim; domain-modeling for glossary emission; frontend-design if wallet-desktop files in PR diff)
         - Step 15b (L24 cascade verified in merged code path)
         - **Critical-tier check (if applicable)**: 5-skill bundle present — type-design-analyzer + code-reviewer + security-auditor (L12 cluster) + security-review (standalone) + plugin-validator (L49 trigger). Q4 carve-out honored.
         - **Trivial-tier shortcut (if applicable)**: per L13 amendment note2026-08-25, skip pre-PR code review but L49 + L51 + L52 + L24 still apply. Cargo quad gate N/A for doc-only commits.
@@ -497,7 +497,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)
 
 ## Per session
-16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. **When re-grilling, invoke `mattpocock-skills:improve-codebase-architecture`** to scan for deepening opportunities (HTML report) → grill one. Becomes the actionable vehicle for the re-grill. **For the analysis itself, invoke `context-engineering-kit:kaizen:analyse`** — auto-selects best Kaizen method (Gemba Walk / Value Stream / Muda) per target. Track grill count in the ledger (per L14) — counter resets after a grill event.
+16. At session start: enumerate skills (L11); re-grill pipeline if 5+ tasks since last grill. **When re-grilling, invoke `mattpocock-skills:improve-codebase-architecture`** to scan for deepening opportunities (HTML report) → grill one. Becomes the actionable vehicle for the re-grill. **For the analysis itself, invoke `context-engineering-kit:kaizen:analyse`** — auto-selects best Kaizen method (Gemba Walk / Value Stream / Muda) per target. **For new-skill candidates surfaced during re-grill, invoke `anthropics/skills:skill-creator`** — guides creation of new L13 skill bindings or replacement skills. Track grill count in the ledger (per L14) — counter resets after a grill event.
 17. Update ledger after merge
 18. Add new lessons if user corrections or novel patterns (L9 schema) — **PAUSE first**: surface candidate + rationale, await explicit user approval before writing to lessons.md
 19. Apply L21 — dispatch the L21 sub-agent cascade (see L21 sub-section "Sub-agent dispatch at L13 step 19" for the agent prompt template). Sub-agent isolates the mechanical ledger cascade from the main user-facing flow.
