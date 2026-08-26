@@ -80,10 +80,11 @@ jobs:
         run: cargo build --workspace
       - name: cargo test
         working-directory: rust-wallet-app
-        run: cargo test --workspace
+        run: cargo test --workspace --all-targets
 
   # CI 4th gate per L13 step 11: cargo tree --workspace --duplicates. Local
-  # step 11 is triple gate only (fmt + clippy + test); dedup moves to CI
+  # step 11 is double gate only (fmt + clippy); `cargo test --workspace
+  # --all-targets` lives in CI (rust-test job above). Dedup moves to CI
   # cadence because workspace-wide tree walks are slow on large workspaces.
   # Local invocation deferred — see lessons.md L13 step 11 sub-bullet.
   rust-dedup:
