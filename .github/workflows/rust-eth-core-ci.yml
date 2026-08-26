@@ -82,6 +82,26 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo test --workspace
 
+  # CI 4th gate per L13 step 11: cargo tree --workspace --duplicates. Local
+  # step 11 is triple gate only (fmt + clippy + test); dedup moves to CI
+  # cadence because workspace-wide tree walks are slow on large workspaces.
+  # Local invocation deferred — see lessons.md L13 step 11 sub-bullet.
+  rust-dedup:
+    name: Rust dep dedup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo tree --duplicates
+        working-directory: rust-wallet-app
+        run: cargo tree --workspace --duplicates
+
   # Per L29, the eth-wallet-core e2e Sepolia tests are #[ignore] + opt-in
   # env var. CI must never run them — public-RPC flake + rate-limit risk.
   # Explicit skip per L29 enforced below (no `cargo test -- --ignored`).
