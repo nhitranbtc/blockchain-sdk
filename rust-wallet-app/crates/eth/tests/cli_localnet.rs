@@ -1497,18 +1497,22 @@ async fn wallet_balance_all_json_failure_channel_emits_mixed_rows() {
         "override failure row context must be `balance` (token_balance call fired): {fail_row:?}"
     );
     // Version-tolerant: `format!("{e}")` for Error::AbiDecodeFailed renders
-    // a `"ABI decode failed for <context>: <reason>"` message, but the
-    // exact prefix may evolve. The contract we lock here is: (1) non-empty,
-    // (2) the operator can correlate the failure to the address that
-    // surfaced it. Avoids over-coupling to internal error wording.
+    // `"ABI decode failed for <context>: <reason>"` where `<context>` is the
+    // call selector (`balanceOf`, `decimals`, etc). We assert the
+    // case-insensitive `balanceof` substring so the lock survives wording
+    // changes in the prefix/reason fields — proves `token_balance` (not
+    // `query_decimals`) fired. We deliberately do NOT assert the contract
+    // address appears: the error context is the function selector, not the
+    // callee, so the address is in the row's `address` field, not the
+    // `error` field.
     let err = fail_obj["error"].as_str().expect("error must be a string");
     assert!(
         !err.is_empty(),
         "override failure row error must be non-empty: {fail_row:?}"
     );
     assert!(
-        err.to_ascii_lowercase().contains(&format!("{NOT_ERC20_ADDR:#x}")),
-        "override failure row error should mention the address that failed ({NOT_ERC20_ADDR:#x}), got: {err:?}"
+        err.to_ascii_lowercase().contains("balanceof"),
+        "override failure row error should mention the failed selector (balanceOf), got: {err:?}"
     );
 }
 
