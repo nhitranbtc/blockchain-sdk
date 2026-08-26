@@ -33,7 +33,7 @@ pub use signer::{
     encoded_envelope, sign_erc20_tx_bytes, sign_message, sign_native_eth_tx, sign_typed_data,
     SignError, SignedEip1559,
 };
-pub use tokens::{load_chain, lookup_by_symbol, Token};
+pub use tokens::{load_chain, lookup_by_address, lookup_by_symbol, Token};
 pub use wallet::{
     EncryptedBlob, Network, Result as WalletResult, WalletCreated, WalletError, WalletInfo,
     WalletManager, WalletMeta,

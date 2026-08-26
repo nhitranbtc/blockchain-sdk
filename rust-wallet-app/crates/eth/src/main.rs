@@ -476,7 +476,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                 }
                 WalletAction::Balance {
                     address,
-                    network: _,
+                    network,
                     unit,
                     token,
                     decimals,
@@ -489,6 +489,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                         unit.as_deref(),
                         token.as_deref(),
                         decimals,
+                        &network,
                     )
                     .await
                 }

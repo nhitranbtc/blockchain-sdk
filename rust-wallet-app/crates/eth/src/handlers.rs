@@ -273,6 +273,7 @@ pub async fn wallet_balance(
     unit: Option<&str>,
     token: Option<&str>,
     decimals_override: Option<u8>,
+    network: &str,
 ) -> Result<()> {
     let holder = Address::from_str(address)
         .map_err(|e| Error::InvalidInput(format!("invalid address: {e}")))?;
@@ -308,13 +309,52 @@ pub async fn wallet_balance(
                 None => eth_wallet_core::erc20::query_decimals(provider, token_addr).await?,
             };
             let raw = eth_wallet_core::erc20::token_balance(provider, token_addr, holder).await?;
-            // Token balance prints raw + decimal-scaled only — adding a separate
-            // unit vocabulary (wei/gwei/eth) is out of scope for v0.2.
+            // Issue #360: resolve the human-readable token symbol. Order:
+            //   1. bundled registry short-circuit (skip RPC for known tokens);
+            //   2. `erc20::query_symbol` RPC for unknown tokens;
+            //   3. fallback to lowercase contract address on RPC failure.
+            // The network string from `--network` drives registry lookup;
+            // unknown networks → Anvil chain_id 31337, no registry entries,
+            // so query_symbol runs and the RPC answer wins.
+            let label = resolve_token_label(provider, network, token_addr).await;
+            // Token balance prints `<symbol> <scaled>` — `<symbol>` is the
+            // human-readable label (or the lowercase address on fallback).
             // The `--unit` flag is rejected by clap when `--token` is set
             // (`conflicts_with`), so this branch never sees a `unit` hint.
-            println!("{} {}", format_wei_as(raw, decimals), token_addr);
+            println!("{} {}", label, format_wei_as(raw, decimals));
             Ok(())
         }
+    }
+}
+
+/// Resolve the human-readable label for an ERC-20 token (Issue #360).
+/// Order: registry short-circuit → `query_symbol` RPC → fallback to
+/// lowercase address. `network` is the CLI `--network` string (matches
+/// `Network::parse_cli`). Any registry/RPC error downgrades to the
+/// address fallback — never propagates — so the balance line still
+/// prints even when the node is unreachable or the chain has no
+/// bundled registry.
+async fn resolve_token_label(
+    provider: &RootProvider<Ethereum>,
+    network: &str,
+    token_addr: Address,
+) -> String {
+    let chain_id = match eth_wallet_core::Network::parse_cli(network) {
+        Ok(n) => n.chain_id(),
+        // Unknown CLI network (e.g. local Anvil) → chain_id 31337. The
+        // Anvil registry is the empty stub, so lookup misses, and the
+        // call falls through to the RPC path.
+        Err(_) => 31337,
+    };
+    if let Ok(Some(t)) = eth_wallet_core::lookup_by_address(chain_id, token_addr) {
+        return t.symbol;
+    }
+    match eth_wallet_core::erc20::query_symbol(provider, token_addr).await {
+        Ok(sym) => sym,
+        // RPC unreachable, contract reverts, or non-ERC-20 target. Honest
+        // fallback: print the lowercase address so the operator still has
+        // a usable line.
+        Err(_) => format!("{token_addr:#x}"),
     }
 }
 

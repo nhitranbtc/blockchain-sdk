@@ -82,6 +82,25 @@ pub fn lookup_by_symbol(chain_id: u64, symbol: &str) -> Result<Option<Token>> {
         .find(|t| t.symbol.eq_ignore_ascii_case(symbol)))
 }
 
+/// Look up a single token by (chain_id, contract address). Walks the
+/// bundled registry only — same scope as [`lookup_by_symbol`].
+///
+/// Issue #360: `eth wallet balance --token <ADDR>` short-circuits to this
+/// before calling `erc20::query_symbol`, saving an `eth_call` roundtrip
+/// for well-known tokens (USDC, USDT, DAI on mainnet; USDC on Sepolia).
+///
+/// Comparison is case-insensitive on the EIP-55 mixed-case form. `alloy`'s
+/// `Address` `Display` impl lowercases, so we normalize both sides via
+/// `format!("{:#x}", addr)` for the comparison — keeps the function pure
+/// (no `Display` formatting tricks, no global state).
+pub fn lookup_by_address(chain_id: u64, addr: alloy_primitives::Address) -> Result<Option<Token>> {
+    let needle = format!("{addr:#x}");
+    Ok(load_chain(chain_id)?.into_iter().find(|t| {
+        let hay = format!("{:#x}", t.address);
+        hay.eq_ignore_ascii_case(&needle)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +135,44 @@ mod tests {
         assert!(found.is_some(), "lowercase 'usdc' must match USDC entry");
         let missing = lookup_by_symbol(1, "DOGE").expect("lookup");
         assert!(missing.is_none(), "unknown symbol must return None");
+    }
+
+    #[test]
+    fn lookup_by_address_matches_mainnet_usdc_eip55_and_lowercase() {
+        // Issue #360 registry short-circuit — the registry stores EIP-55
+        // mixed-case (e.g. 0xA0b8…6eB48) but operators pass lowercase from
+        // the CLI. Both must hit.
+        let mixed: alloy_primitives::Address = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+            .parse()
+            .expect("mainnet USDC mixed-case");
+        let lower: alloy_primitives::Address = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+            .parse()
+            .expect("mainnet USDC lowercase");
+        let got_mixed = lookup_by_address(1, mixed).expect("lookup mixed");
+        let got_lower = lookup_by_address(1, lower).expect("lookup lower");
+        assert!(got_mixed.is_some(), "EIP-55 mainnet USDC must match");
+        assert!(got_lower.is_some(), "lowercase mainnet USDC must match");
+        assert_eq!(got_mixed.unwrap().symbol, "USDC");
+        assert_eq!(got_lower.unwrap().symbol, "USDC");
+    }
+
+    #[test]
+    fn lookup_by_address_returns_none_for_unknown_or_wrong_chain() {
+        let unknown: alloy_primitives::Address = "0x000000000000000000000000000000000000beef"
+            .parse()
+            .expect("beef");
+        let got = lookup_by_address(1, unknown).expect("lookup");
+        assert!(got.is_none(), "non-registry address must miss");
+
+        // USDC mainnet address on Sepolia → no match (registry is per-chain).
+        let mainnet_usdc: alloy_primitives::Address = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+            .parse()
+            .expect("USDC mainnet");
+        let got_wrong_chain = lookup_by_address(11155111, mainnet_usdc).expect("lookup");
+        assert!(
+            got_wrong_chain.is_none(),
+            "mainnet USDC must not match Sepolia registry"
+        );
     }
 
     #[test]

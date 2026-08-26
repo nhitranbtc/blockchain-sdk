@@ -702,6 +702,105 @@ async fn wallet_balance_token_weth_against_anvil_fork_mainnet() {
     );
 }
 
+/// Public Sepolia RPC source for `Anvil::new().fork(...)` — used by the
+/// Issue #360 L29 USDC test. Defaults to a fork-capable public gateway.
+/// Override at compile time with `SEPOLIA_RPC_URL=https://...` if the
+/// default flakes. Same env-fallback convention as `MAINNET_RPC_URL`
+/// above (so local `cargo test` and CI use the same gateway).
+const SEPOLIA_RPC_URL: &str = match std::option_env!("SEPOLIA_RPC_URL") {
+    Some(url) => url,
+    None => "https://ethereum-sepolia-rpc.publicnode.com",
+};
+
+/// Sepolia Circle USDC contract (matches `tokens/sepolia.json`).
+/// Stable for the lifetime of Sepolia — pinned in the registry file
+/// (issue #360 AC #4).
+const USDC_SEPOLIA: alloy_primitives::Address =
+    alloy_primitives::address!("1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287");
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_token_usdc_on_sepolia_prints_symbol() {
+    // Issue #360 acceptance bullet 5: against live Sepolia, `eth wallet
+    // balance --token <USDC_SEPOLIA> --network sepolia` prints the
+    // human-readable symbol instead of the contract address.
+    //
+    // RED (pre-#360): stderr path prints `<scaled> <token-addr>`; the
+    // output line contains the address, NOT the symbol. GREEN: registry
+    // short-circuit hits on sepolia.json → output line begins with `USDC `
+    // and never contains the contract address.
+    //
+    // We fork Sepolia via Anvil rather than hit Sepolia directly so the
+    // test stays deterministic and CI-friendly (matches the L29 pattern
+    // for the mainnet-fork tests above). The registry short-circuit is
+    // chain_id-driven, so a fork at chain_id 11155111 still hits the
+    // Sepolia bundle.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(SEPOLIA_RPC_URL)
+        .chain_id(11155111)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // Use Anvil dev account #0 as the holder — even a 0-balance address
+    // exercises the registry short-circuit + format path. The point is
+    // the LABEL, not the magnitude (issue #360 AC #5 confirms the
+    // expected output shape, not a specific pre-fund amount).
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            // `USDC_SEPOLIA` is the canonical Sepolia USDC address — also
+            // pinned in `tokens/sepolia.json`. Using the constant here
+            // makes drift between the registry and the test impossible.
+            &format!("{USDC_SEPOLIA:#x}"),
+            "--network",
+            "sepolia",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "balance --token USDC must succeed against forked Sepolia\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // Issue #360 AC #3: `eth wallet balance --token <ADDR>` output
+    // becomes `<symbol> <scaled>` (e.g. `USDC 15.000000`). The
+    // registry short-circuit ensures the symbol is `USDC`, not the
+    // raw address.
+    assert!(
+        stdout.starts_with("USDC ") || stdout.contains(" USDC "),
+        "expected output to begin with the USDC symbol, got: {stdout}",
+    );
+    // Lock-down: the contract address must NOT appear in the output
+    // line. The registry short-circuit is the whole point — a regression
+    // that drops the label back to the address (pre-#360 behavior) would
+    // surface here.
+    assert!(
+        !stdout.contains("0x1c7D4B196Cb0F7BB1D82a98fE3bfD0BfE4aEb287"), // USDC_SEPOLIA
+        "output must NOT contain the USDC contract address when registry hits, got: {stdout}",
+    );
+    // Lock-down: must contain a numeric balance (whole or `whole.frac`).
+    // Tolerant of zero balance — the format is the contract, not the
+    // magnitude.
+    assert!(
+        stdout.contains('0') || stdout.contains('1') || stdout.contains('2'),
+        "expected numeric balance in stdout, got: {stdout}",
+    );
+}
+
 #[tokio::test]
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
 async fn wallet_balance_token_usdt_against_anvil_fork_mainnet() {

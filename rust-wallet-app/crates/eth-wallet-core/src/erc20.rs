@@ -42,6 +42,17 @@ sol! {
 
     /// ERC-20 `approve(address spender, uint256 value)` — selector 0x095ea7b3.
     function approve(address spender, uint256 value) external returns (bool);
+
+    /// ERC-20 `symbol() view returns (string)` — selector 0x95d89b41. Used by
+    /// Issue #360 to resolve the human-readable token symbol so `wallet balance
+    /// --token <ADDR>` can print `USDC 15.000000` instead of `15.000000 0x1c7D…`.
+    /// `string` (dynamic) — `abi_decode_returns` returns `String`.
+    function symbol() external view returns (string);
+
+    /// ERC-20 `name() view returns (string)` — selector 0x06fdde03. Reserved
+    /// for Issue #360 acceptance bullet 2 (`query_name` async fn) — paired
+    /// with `query_symbol` so callers can surface either identifier.
+    function name() external view returns (string);
 }
 
 /// Build the calldata for `transfer(to, value)`. Returns the 4-byte
@@ -69,6 +80,21 @@ pub fn approve_calldata(spender: Address, value: U256) -> Bytes {
 /// token decimal scale before formatting the raw `balanceOf` result.
 pub fn decimals_calldata() -> Bytes {
     decimalsCall {}.abi_encode().into()
+}
+
+/// Build the calldata for `symbol()`. Returns the 4-byte selector
+/// 0x95d89b41 with no arguments. Used by Issue #360 to resolve the
+/// human-readable token symbol via `eth_call`. Pairs with
+/// [`query_symbol`] for the decode side.
+pub fn symbol_calldata() -> Bytes {
+    symbolCall {}.abi_encode().into()
+}
+
+/// Build the calldata for `name()`. Returns the 4-byte selector
+/// 0x06fdde03 with no arguments. Pairs with [`query_name`] for the
+/// decode side. Reserved by Issue #360 (parallel to `query_symbol`).
+pub fn name_calldata() -> Bytes {
+    nameCall {}.abi_encode().into()
 }
 
 /// Read the raw ERC-20 `balanceOf(holder)` for `token` via `eth_call`.
@@ -120,6 +146,60 @@ pub async fn query_decimals(provider: &RootProvider<Ethereum>, token: Address) -
     Ok(decimals)
 }
 
+/// Resolve an ERC-20 token's `symbol()` via `eth_call`. Returns the
+/// human-readable symbol (e.g., `"USDC"`). Issues #360:
+///
+/// - Selector `0x95d89b41`, no arguments, returns a dynamic `string`.
+/// - RPC errors are redacted via [`crate::redact_rpc_url`] (H-6 finding
+///   from the L12 security review — see `token_balance` for the same
+///   pattern).
+/// - Decode failures (contract doesn't actually expose `symbol()` or
+///   returns non-UTF-8 bytes) bubble as `Error::AbiDecodeFailed { context:
+///   "symbol", reason }` — the caller can fall back to printing the
+///   contract address instead.
+///
+/// Callers SHOULD short-circuit via the bundled token registry first
+/// (see [`crate::tokens::lookup_by_address`]) to skip the RPC roundtrip
+/// for known tokens.
+pub async fn query_symbol(provider: &RootProvider<Ethereum>, token: Address) -> Result<String> {
+    let calldata = symbol_calldata();
+    let req = TransactionRequest {
+        to: Some(TxKind::Call(token)),
+        input: calldata.into(),
+        ..Default::default()
+    };
+    let raw = provider
+        .call(req)
+        .await
+        .map_err(|e| Error::Rpc(format!("eth_call symbol: {}", redact_rpc_url(&e))))?;
+    symbolCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
+        context: "symbol".into(),
+        reason: e.to_string(),
+    })
+}
+
+/// Resolve an ERC-20 token's `name()` via `eth_call`. Returns the
+/// human-readable name (e.g., `"USD Coin"`). Parallel to [`query_symbol`]
+/// per Issue #360 acceptance bullet 2. Same error model: `Error::Rpc`
+/// (transport, redacted) or `Error::AbiDecodeFailed { context: "name" }`
+/// (decode).
+pub async fn query_name(provider: &RootProvider<Ethereum>, token: Address) -> Result<String> {
+    let calldata = name_calldata();
+    let req = TransactionRequest {
+        to: Some(TxKind::Call(token)),
+        input: calldata.into(),
+        ..Default::default()
+    };
+    let raw = provider
+        .call(req)
+        .await
+        .map_err(|e| Error::Rpc(format!("eth_call name: {}", redact_rpc_url(&e))))?;
+    nameCall::abi_decode_returns(&raw).map_err(|e| Error::AbiDecodeFailed {
+        context: "name".into(),
+        reason: e.to_string(),
+    })
+}
+
 /// ERC-20 function selector constants — exposed as `[u8; 4]` for callers
 /// that want to verify selector identity without recomputing keccak256.
 pub mod selectors {
@@ -131,6 +211,10 @@ pub mod selectors {
     pub const DECIMALS: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
     /// `keccak256("approve(address,uint256)")[0..4]` — 0x095ea7b3.
     pub const APPROVE: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
+    /// `keccak256("symbol()")[0..4]` — 0x95d89b41. Issue #360.
+    pub const SYMBOL: [u8; 4] = [0x95, 0xd8, 0x9b, 0x41];
+    /// `keccak256("name()")[0..4]` — 0x06fdde03. Issue #360.
+    pub const NAME: [u8; 4] = [0x06, 0xfd, 0xde, 0x03];
 }
 
 #[cfg(test)]
@@ -210,5 +294,31 @@ mod tests {
         let decoded = approveCall::abi_decode(&calldata).expect("decode");
         assert_eq!(decoded.spender, spender_addr());
         assert_eq!(decoded.value, value);
+    }
+
+    // ---- Issue #360 — symbol() / name() bindings ---------------------
+
+    #[test]
+    fn symbol_selector_is_0x95d89b41() {
+        // Issue #360 AC #1: `sol! { function symbol() external view returns (string); }`
+        // produces a selector 0x95d89b41 per keccak256("symbol()")[0..4]. No
+        // arguments → calldata is exactly the 4-byte selector.
+        let calldata = symbol_calldata();
+        assert_eq!(
+            calldata.len(),
+            4,
+            "symbol() takes no args → 4-byte calldata"
+        );
+        assert_eq!(&calldata[..4], &selectors::SYMBOL);
+        assert_eq!(&calldata[..4], &[0x95, 0xd8, 0x9b, 0x41]);
+    }
+
+    #[test]
+    fn name_selector_is_0x06fdde03() {
+        // Parallel test for `name()`. No arguments → 4-byte calldata.
+        let calldata = name_calldata();
+        assert_eq!(calldata.len(), 4, "name() takes no args → 4-byte calldata");
+        assert_eq!(&calldata[..4], &selectors::NAME);
+        assert_eq!(&calldata[..4], &[0x06, 0xfd, 0xde, 0x03]);
     }
 }
