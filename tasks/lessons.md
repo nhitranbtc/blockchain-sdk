@@ -365,6 +365,43 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - Editing the issue body incrementally via partial updates — risks body drift vs commit reality.
 15. PR review (parallel sub-agents) — `superpowers:receiving-code-review` wrapping the toolkit
     - If stuck 3 rounds: PAUSE then revert-to-last-green + follow-up issue + ledger entry
+    - **Pipeline status snapshot** (render before PR review starts; mirrors L13 steps 1-15b with skill + plugin + status; gate decision = snapshot completeness):
+
+        | Step | Skill invoked | Plugin / Tool | Status |
+        |---|---|---|---|
+        | 1 L11 enumerate | L11 skill→step mapping table | — | ☐ |
+        | 2 complexity tier | self-detect (trivial / normal / critical) + user confirm | — | ☐ |
+        | 3 issue pickup | `gh issue view` + checklist parse | — | ☐ |
+        | 4 branch checkout | `superpowers:using-git-worktrees`; `andrej-karpathy-skills:karpathy-guidelines` wrapper | — | ☐ |
+        | 4a drift scan | `git log --all -- <path>` (per L13 step 4a) | — | ☐ |
+        | 5-8 skill pair | per L11 row + Q4 cap (max 2 normal, max 3 critical L12 cluster) | — | ☐ |
+        | 9 TDD red-green | `superpowers:test-driven-development` | `superpowers` | ☐ |
+        | 9a module interface | `mattpocock-skills:codebase-design` (new public types only) | `mattpocock-skills` | ☐ |
+        | 10 L12 review | `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review` | `pr-review-toolkit` (`type-design-analyzer` + `code-reviewer`; critical: +`security-auditor`); `/ecc:rust-review` review-paired fmt re-check (`ecc`) | ☐ |
+        | 10a test coverage | `pr-review-toolkit:pr-test-analyzer` (separate gate) | `pr-review-toolkit` | ☐ |
+        | 10b security-review | `security-review` (critical tier only, standalone) | `security` | ☐ |
+        | 11 quad gate | prefer `/ecc:rust-build`; bare cargo `fmt --check --workspace` + `clippy --workspace --all-targets -- -D warnings` + `test --workspace --all-targets` + `tree --workspace --duplicates` (+ `cargo audit` if installed) | `ecc:rust-build-resolver` | ☐ |
+        | 11a backlog triage | `gh issue create` (multi-PR deferred) or in-session backlogs list | — | ☐ |
+        | 11b L24 cascade local | CHANGELOG `[Unreleased]` + User Stories flip + "Try it" column (project convention, not skill) | — | ☐ |
+        | 11c systematic-debugging | `superpowers:systematic-debugging` (conditional on verify failure) | `superpowers` | ☐ |
+        | 11d plugin structure | `plugin-dev:plugin-validator` (per L49 trigger match) | `plugin-dev` | ☐ |
+        | 12 PAUSE | manual gate per L6 + workflow-approval-required memory | — | ☐ |
+        | 13 commit-push-pr | `commit-commands:commit-push-pr` | `commit-commands` | ☐ |
+        | 14 flip checkboxes | `gh issue edit N --body "<full body with [x] marks>"` (per step 14 evidence format: file:line, test name, commit SHA, PR number) | — | ☐ |
+        | 15 PR review | `superpowers:receiving-code-review` wrapping `pr-review-toolkit:code-review` | `superpowers` + `pr-review-toolkit` | ☐ |
+        | 15a tech doc | `compass:docs-writer` (primary, 10-section doc) + `compass:api-designer` (secondary, API surface + Drift sections) | `compass` | ☐ |
+        | 15b L24 verify merged | (project convention, not skill) | — | ☐ |
+
+    - **Snapshot discipline**: render table at PR review start. Fill ☐ → ✓ as evidence lands (file:line, test name, commit SHA, PR number per step 14 format). Gate decision = all ✓ (proceed to 15c walk → 15d merge); any ☐ = fix + re-run. Per L28 (verify-before-claim).
+    - **Triggers / skips** (apply when matching):
+        - Step 4 wrapper `karpathy-guidelines`: invoked at every L13 step (L13 behavioral discipline); 4 principles visible in commit history.
+        - Step 9a skipped for trivial edits to existing modules; mandatory for new public types.
+        - Step 10 critical tier: +`security-auditor` sub-agent (Q4 carve-out, max 3 L12 cluster). Triggers for key material / signing / encryption / network / persistence.
+        - Step 10 trivial tier: SKIP entire step 10 cluster (per L13 amendment note 2026-08-25).
+        - Step 10b critical tier only.
+        - Step 11 trivial tier: cargo quad gate N/A (doc-only commits); L49 + L51 + L52 + L24 still apply.
+        - Step 11c conditional on non-obvious verify failure only (not per-step add).
+        - Step 11d conditional on L49 trigger match (plugin-structure file touched).
 15a. **Write technical document → enrich PR body** (before merge):
     - 10 sections: Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons captured, Backlog (links to `backlog` issues), Migration notes
     - Append/replace existing PR body with the full doc
