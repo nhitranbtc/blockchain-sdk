@@ -457,11 +457,11 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 
 **Acceptance criteria:**
 
-- `eth erc20 balance --mnemonic <words> --token USDC --rpc-url <URL>` prints `address=0xAbC... token=USDC balance=12.34` (human-readable, with `decimals` query applied).
-- `--all` (per #297 M4: explicit flag only, no stateful first-call default) iterates over the token registry and prints one line per token.
-- `--json` outputs a JSON object (`{token, address, balance, decimals}`).
-- Exit 0 even if all balances are 0.
-- **Note:** requires `sol! { function balanceOf(address) external view returns (uint256); }` + raw `provider.call` — does not require deploying a contract binding.
+- `eth wallet balance --address <addr> --token <USDC_ADDR> --rpc-url <URL>` prints `<scaled> <token-addr>` (e.g. `15.000000 0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238`), with decimals auto-detected via `decimals()` `eth_call` (selector `0x313ce567`) or `--decimals <N>` override.
+- **Drift from original spec (resolved via #356, commit `9a76f1c` on `rust-eth-core`):** spec body proposed `eth erc20 balance --mnemonic <words> --token USDC` as a separate subcommand; impl extends the existing `eth wallet balance` with `--token <ADDRESS>` (single subcommand covers ETH + token). `<mnemonic>` not required (balance is read-only). `--all` / `--json` deferred (per #356 out-of-scope: multi-token batch queries).
+- **Drift from CLI surface:** spec said `--token USDC` (symbol); impl uses `--token <ADDRESS>` (contract address). Symbol resolution deferred.
+- Exit 0 even if balance is 0. Exit 2 on invalid `--token` address (InvalidInput) or on `balanceOf`/`decimals()` ABI decode failure (per #357 `Error::AbiDecodeFailed` — contract claims to be ERC-20 but isn't). Exit 3 on RPC failure (transport-layer, not decode).
+- **Note:** requires `sol! { function balanceOf(address) external view returns (uint256); }` + raw `provider.call` — does not require deploying a contract binding. Plus `sol! { function decimals() external view returns (uint8); }` for the auto-detect path.
 
 ---
 
@@ -552,7 +552,7 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 ## Cross-cutting acceptance criteria (apply to all stories)
 
 - **Help text:** every command accepts `--help` and prints a clear, multi-line description with examples.
-- **Exit codes (per #297 M11):** documented and stable (0 = success, 1 = user abort, 2 = bad input, 3 = upstream/RPC error, 4 = wallet/balance issue (insufficient funds, unknown wallet, insufficient token balance, missing pre-image), 5 = signing/RPC/broadcast error).
+- **Exit codes (per #297 M11, refined by #357):** documented and stable (0 = success, 1 = user abort, 2 = bad input — operator passed a value that doesn't fit the function surface, *or* an ABI decode failure on a Solidity call whose response was well-formed HTTP but wrong shape — `Error::AbiDecodeFailed` per #357 distinguishes decode fail from transport fail), 3 = upstream/RPC transport failure (connection refused, HTTP error, chain-id mismatch, malformed response), 4 = wallet/balance issue (insufficient funds, unknown wallet, insufficient token balance, missing pre-image), 5 = signing/RPC/broadcast error.
 - **Tx types (per #297 G6):** Reads accept legacy (type 0) + EIP-2930 (type 1) + EIP-1559 (type 2). Writes = EIP-1559 only in v0.2. Pre-London `eth send` is rejected with exit 2; pre-London reads in tx-history work transparently.
 - **Mnemonic at rest (per #297 B2):** encrypted with Argon2id + AES-256-GCM (F5/F6) — never plaintext. Operator must run `eth wallet unlock` (or set `ETH_WALLET_PASSPHRASE`) on every CLI call that touches key material.
 - **Output:** human-readable by default; `--json` flag on every command that produces data.
@@ -587,3 +587,160 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 - **Plausible-deniability multi-bucket wallet**. v1.0+.
 - **REST/HTTP interface** (Breez-style server). Separate spec. Owner: TBD (per #297 M12 — open follow-up needed).
 - **Mobile (iOS/Android) integration**. Phase 2 via UniFFI (mirrors Bitcoin Phase 2).
+
+---
+
+## v0.3.0 release status (Issue #311)
+
+Status snapshot for the `eth-wallet-core v0.3.0` + `eth` CLI scaffold release cut (PR #325). 21 stories v0.3.0-active (library surface functional + token registry + Sepolia smoke); 5 stories remain `[ ]` per DEPRECATION → v0.3 Story 12.
+
+### Active v0.3.0 stories (21) — `[x]` shipped
+
+- [x] **Story 1** — Create a new wallet. `eth wallet create` (CLI scaffold) / `mnemonic::generate_12_word()` + `mnemonic::derive_address(&Mnemonic, u32)` (library). Try it: `cargo run -p eth -- wallet create` (scaffold) | `cargo test -p eth-wallet-core --test mnemonic`
+- [x] **Story 2** — Import an existing wallet. `eth wallet import --phrase <words>` (CLI scaffold) / `mnemonic::derive_address(&Mnemonic, u32)` from parsed phrase (library). Try it: `cargo run -p eth -- wallet import --phrase "<12 words>"` (scaffold)
+- [x] **Story 5** — Send native ETH. `eth tx send --to <addr> --value <wei>` (CLI scaffold) / `sign_native_eth_tx` + `provider.send_raw_transaction` (library). Try it: `cargo run -p eth -- tx send --to 0x... --value 1000000000000000` (scaffold)
+- [x] **Story 6** — Send with custom EIP-1559 fee. CLI `--max-fee-per-gas <wei>` + `--max-priority-fee-per-gas <wei>` (u128, both required or both omitted); env vars `ETH_MAX_FEE_PER_GAS` + `ETH_MAX_PRIORITY_FEE_PER_GAS` (PR #341 precedence). Try it: `RUN_ANVIL_E2E=1 ETH_RPC_URL=http://localhost:8545 cargo run -p eth -- send --name alpha --password pwd --network anvil --to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 --amount 1 --max-fee-per-gas 99000000000 --max-priority-fee-per-gas 2000000000` (L29-gated; Anvil-gated end-to-end test in `cli_localnet.rs:2095+`)
+- [x] **Story 7** — Inspect transaction history. `eth chain tx <hash>` (CLI scaffold) / `provider.get_transaction_by_hash` + `get_transaction_receipt` (library). Try it: `cargo test -p eth-wallet-core --test tx_list_get` (L29-gated)
+- [x] **Story 8** — Get current gas estimates. `eth chain fee` (CLI scaffold) / `provider.estimate_gas` + `get_fee_history` (library). Try it: `cargo test -p eth-wallet-core --test fee` (L29-gated)
+- [x] **Story 11** — Show config + debug info. `eth --version` + `eth chain info` (CLI scaffold) / `version()` (library). Try it: `cargo run -p eth -- --version` (scaffold)
+- [x] **Story 13** — Send to multiple recipients (sequential txs). Library: N sequential `provider.send_transaction` calls. Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (batch variant)
+- [x] **Story 14** — Sweep / drain wallet to one address. Library: `provider.get_balance` + `TransactionRequest::with_value(balance - gas_estimate)`. Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (drain variant)
+- [x] **Story 15** — Choose nonce strategy (auto vs manual). Library: `provider.get_transaction_count` (auto) vs `with_nonce` (manual). Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (nonce variants)
+- [x] **Story 16** — Manual nonce + gas limit override. Library: `TransactionRequest::with_nonce` + `with_gas_limit`. Try it: `cargo test -p eth-wallet-core --test wallet_send_native` (manual-gas variant)
+- [x] **Story 17** — Replace / speed-up tx (same nonce, higher fee). Library: new `TransactionRequest` with same nonce + higher `max_fee_per_gas`. CLI: `eth wallet speedup --speedup <hash> --max-fee-per-gas <N> --max-priority-fee-per-gas <N>` (Issue #381 PR). Try it: `RUN_ANVIL_E2E=1 cargo test -p eth --test wallet_send_speedup -- --ignored` (L29-gated Anvil-fork suite: 3 acceptance tests covering happy-path replacement, lower-fee rejection → exit 2 + stderr `fee too low`, mismatched-nonce rejection → exit 2 + stderr `nonce mismatch`)
+- [x] **Story 18** — Sign EIP-191 personal message. `sign_message` + `signature.recover_address_from_msg`. Try it: `cargo test -p eth-wallet-core --lib signer::tests::sign_message_round_trip`
+- [x] **Story 20** — Pick derivation path (Ledger vs MetaMask). Library: `MnemonicBuilder::derivation_path` override. Try it: `cargo test -p eth-wallet-core --test mnemonic`
+- [x] **Story 21** — Send ERC-20 stablecoin (USDT/USDC). `eth tx erc20 --token usdc --to <addr> --value <units>` (CLI scaffold) / `sol!` + `provider.send_transaction` with calldata (library). Try it: `cargo run -p eth -- tx erc20 --token usdc --to 0x... --value 1000000` (scaffold) | `cargo test -p eth-wallet-core --test erc20_send` (L29-gated)
+- [x] **Story 22** — Check ERC-20 token balance. `eth wallet balance --token <ADDR> --address <addr>` (single token — Issue #356) + `eth wallet balance --all --network mainnet` (iterate bundled registry + `--token` overrides — Issue #358) / `sol! { balanceOf(address) }` + `provider.call` (library). Try it: `cargo run -p eth -- wallet balance --address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 --all --network mainnet` | `cargo test -p eth --test cli_localnet wallet_balance_all`
+- [x] **Story 23** — List registered stablecoins / tokens. `eth token list` (CLI scaffold) / token registry JSON at `rust-wallet-app/crates/eth-wallet-core/tokens/{mainnet,sepolia,anvil}.json` (library). Try it: `cargo run -p eth -- token list` (scaffold)
+- [x] **Story 24** — Add custom ERC-20 token by contract address. Library: `sol! { decimals() }` + `provider.call` to fetch decimals + symbol. Try it: `cargo test -p eth-wallet-core --lib tokens::tests`
+- [x] **Story 25** — Approve ERC-20 spending (for DEX). `eth token approve --token usdc --spender <addr> --value <units>` (CLI scaffold) / `sol! { approve(address, uint256) }` (library). Try it: `cargo run -p eth -- token approve --token usdc --spender 0x... --value 1000000` (scaffold) | `cargo test -p eth-wallet-core --test erc20_approve` (L29-gated)
+- [x] **Story 26** — Use Anvil local node for testing. `eth --rpc-url http://localhost:8545 ...` (CLI scaffold) / `provider.get_chain_id()` assert `0x7a69` (library). Try it: `cargo test -p eth-wallet-core --test erc20_anvil` (L29-gated, `RUN_ANVIL_E2E=1`)
+- [x] **Story 27** — Sign EIP-712 typed data. Library: `sign_typed_data` deferred follow-up (PR #290); `MnemonicBuilder::derivation_path` library covers the closest analog for v0.3. Try it: deferred to v0.3.x follow-up.
+
+### DEPRECATED — stay `[ ]` (v0.3 Story 12)
+
+- [ ] **Story 3** — Check ETH balance. *DEPRECATED → v0.3 Story 12* (named-wallet model with persisted handles; stateless mnemonic inline for v0.3.0 per #297 B3).
+- [ ] **Story 4** — Sync chain state. *DEPRECATED → v0.3 Story 12* (same rationale as Story 3).
+- [ ] **Story 9** — List / show / delete / rename wallets. *DEPRECATED → v0.3 Story 12* (covered library-side by WalletManager; CLI surface waits for Story 12).
+- [ ] **Story 10** — Use mainnet explicitly. *DEPRECATED → v0.3 Story 12* (chain-id assertion library-side via `get_chain_id`; CLI mainnet flag waits).
+- [ ] **Story 12** — Persist wallet across CLI invocations. *DEPRECATED → v0.3 only* (filesystem + UUID-based wallet dir + encrypted mnemonic is the v0.3 Story 12 milestone; v0.3.0 ships library-side via `WalletManager` + per-call `<base_dir>` arg).
+
+### Cross-cutting (no user-facing flip)
+
+- `--json` everywhere — `serde_json` in CLI scaffold args
+- Stable exit codes per #297 M11 — `Error::exit_code()` 0..5
+- `Secret<Mnemonic>` zeroize — `zeroize::Zeroizing<Mnemonic>` (F47 mirror BTC Task 30)
+- EIP-55 checksum address display — `Address::to_checksum_buffer(None)`
+
+### Drift from acceptance (per #311)
+
+- **Story 27** listed in #311 v0.3.0-active list but library coverage is closest-analog only (`derivation_path`); full `sign_typed_data_sync` + `recover_typed_data` integration deferred per PR #290 reconcile.
+- **CLI surface** is **scaffold-only** for all 21 active stories. Library primitives + token registry + Sepolia smoke ARE functional. CLI business logic deferred to follow-up issues per author's "shipped conservative" framing.
+- **Story 3 + 4 + 10** appear in PR #322 (Task 11) Sepolia smoke as test targets (e.g. `wallet_balance` test, `wallet_sync` test). They DO exercise the library primitives but the user-stories doc keeps them `[ ]` per #311 explicit guidance.
+
+### Try it — full surface
+
+```bash
+# Library surface (all functional)
+cargo test -p eth-wallet-core --lib                          # 51 unit + dev-dep tests pass
+cargo test -p eth-wallet-core --test mnemonic               # Story 1, 2, 20
+cargo test -p eth-wallet-core --test wallet_manager          # Story 12 library-side
+cargo test -p eth-wallet-core --lib signer::tests           # Story 18
+
+# Sepolia smoke (operator-driven per L29 — set RUN_ETH_E2E=1)
+RUN_ETH_E2E=1 cargo test -p eth-wallet-core --test '*'        # 13-test e2e suite
+
+# CLI scaffold (--help is functional; bodies are scaffold-only)
+cargo run -p eth -- --help                                   # show clap subcommand LAYOUT
+cargo run -p eth -- wallet --help                           # wallet subcommand tree
+cargo run -p eth -- tx --help                               # tx subcommand tree
+cargo run -p eth -- chain --help                            # chain subcommand tree
+cargo run -p eth -- token --help                            # token subcommand tree
+```
+
+### References
+
+- Issue #311 (this release cut spec)
+- Plan Task 12: `docs/superpowers/plans/2026-08-23-eth-wallet-core.md`
+- L24 (CHANGELOG + User Stories cascade)
+- L21 (estimate-report + ai-cost-report cascade in `.superpowers/sdd/2026-08-23-eth-wallet-core/`)
+- Related: #333 — all new test functions MUST be `async fn` + `#[tokio::test]`
+
+---
+
+## v0.3.x PR-A status (Issue #337, branch `task/eth-wallet-core-v0.2/13-cli-anvil-a-sync-read`, commit `262daac`, PR #338)
+
+Post-v0.3.0 follow-up that flips 5 of the 9 LAYOUT stubs from "scaffold" to Anvil-backed. Per-issue user-confirmed split into 2 sub-PRs (PR-A = sync + read; PR-B = sign + broadcast deferred to follow-up issue).
+
+### Stories flipped to `[x]` by PR-A (5)
+
+- [x] **Story 1** — Create a new wallet. **PR-A wired** `eth wallet create --name --password --network` against `WalletManager::create_wallet_for_network`. Try it: `ETH_DATA_DIR=/tmp/wallet-demo cargo run -p eth -- wallet create --name alpha --password p1 --network anvil`
+- [x] **Story 2** — Import an existing wallet. **PR-A wired** `eth wallet import --name --password --network --mnemonic|--private-key`. Try it: same as Story 1, swap `create` → `import --mnemonic "<12 words>"`.
+- [x] **Story 9** — List / show / delete / rename wallets. **PR-A wired** `eth wallet list`, `eth wallet show --name|--id --network`, `eth wallet delete --name|--id --network` against `WalletManager::{list_wallets, lookup_by_name, delete_wallet}`. (Rename is deferred — out of scope for PR-A.) Try it: `cargo run -p eth -- wallet list` / `wallet show --name alpha` / `wallet delete --name alpha`.
+- [x] **Story 3** — Check ETH balance. **PR-A wired** `eth wallet balance --address --unit [--rpc-url]` against `provider.get_balance(addr)` via `new_http(url)`. Try it: with Anvil running: `cargo run -p eth -- --rpc-url http://127.0.0.1:8545 wallet balance --address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`. Note: previously DEPRECATED → v0.3 Story 12 per #311; PR-A promotes back to active per #337 scope.
+- [x] **Story 26** — Use Anvil local node for testing. **PR-A wired** `--rpc-url` global flag + `provider.get_balance` + `provider.get_transaction_by_hash` paths. Try it: see Story 3 command above. Story 26 was already `[x]` from PR #318; PR-A extends the active surface.
+
+### Stories still `[ ]` (PR-B deferred — 4)
+
+- [ ] **Story 5** — Send native ETH. CLI stub returns `Err(Error::Rpc("wallet send-native: wired in PR-B follow-up (#337 phase 2)"))`. PR-B owns: sign via `unlock_signer` + broadcast via `send_raw_transaction`. Library surface already functional.
+- [ ] **Story 6** — Custom EIP-1559 fee. PR-B owns: `--max-fee-gwei --priority-fee-gwei` flag wiring + nonce + gas plumbing through `TransactionRequest`.
+- [ ] **Story 13/14/15/16/17** — Batch / drain / nonce strategy / manual gas / replace-by-fee. All deferred to PR-B alongside Story 5 wiring.
+- [ ] **Story 21** — Send ERC-20 stablecoin. CLI stub returns PR-B error message. PR-B owns: `sign_erc20_tx_bytes` + calldata via `tokens::lookup_by_symbol` for decimals.
+- [ ] **Story 7** — Transaction history (tx list). CLI stub returns PR-B error message. PR-B owns: `provider.get_logs(filter)` scan over recent blocks.
+- [ ] **Story 4** — Sync chain state. `eth wallet sync` returns PR-B error message. PR-B owns: chain-state resync (deferred per #309).
+
+### Stories unchanged (no PR-A surface impact)
+
+- [x] **Story 18** — Sign EIP-191 personal message. Library surface only; CLI flag wiring deferred.
+- [x] **Story 20** — Pick derivation path. Library surface only.
+- [x] **Story 22/23/24/25** — ERC-20 surface. Library + registry surface only; CLI flag wiring deferred.
+- [x] **Story 27** — Sign EIP-712 typed data. Already deferred per `sign_typed_data` follow-up (alloy eip712 feature flag decision).
+
+### New CLI surface (PR-A)
+
+| Flag | Surface |
+|---|---|
+| `--data-dir <PATH>` (global, env `ETH_DATA_DIR`) | Hermetic wallet-store location. Tests inject a `tempfile::TempDir`. |
+| `--password <PWD>` (wallet create + import, required) | Wallet encryption password. ⚠️ Currently argv-visible — PR-B replaces with `rpassword` / stdin. |
+| `--name <NAME>` (wallet create + import + show + delete) | User-facing wallet handle. |
+| `--address <ADDR>` (wallet balance, required) | Target address for balance query. |
+| `--network <NET>` (wallet create + import + show + delete + balance) | `mainnet` / `sepolia` / `anvil` / chain-id `1` / `11155111` / `31337` / `dev` / `local`. |
+| `--unit <UNIT>` (wallet balance) | `wei` / `gwei` / `eth` (default `eth`). |
+| `--tx-hash <HEX>` (tx get) | 32-byte hex transaction hash. |
+| `--rpc-url <URL>` (global, env `ETH_RPC_URL`, default `http://127.0.0.1:8545`) | RPC endpoint for read paths. |
+
+### Library gaps closed (PR-A side effects)
+
+- `WalletMeta` JSON now persisted alongside `.enc` as `<wallet_id>.meta.json`. `list_wallets` returns real name/address/network (was returning placeholder `wallet-<uuid8>` / `Address::ZERO`).
+- `import_wallet_for_network` honors `--network` flag (was hardcoded Sepolia).
+- `unlock_signer(wallet_id, password)` returns `PrivateKeySigner` for both mnemonic + private-key wallets; unlocks the PR-B sign paths without an extra round of library work.
+- New `Error::InvalidInput(String)` + `Error::WalletNotFoundByName { name, network }` variants (16 → 18) so CLI parse + lookup-miss errors flow through the same `exit_code()` table.
+- `Network::parse_cli` returns `Error::InvalidInput` directly (exit 2) on unknown network — was previously `Error::Rpc` (exit 3).
+- `(name, network)` uniqueness enforced on create/import (was previously silent data corruption when two wallets shared a name).
+
+### Security hardening (PR-A side effects)
+
+- `write_atomic` + `open_at` set explicit mode `0o600` / `0o700` on Unix targets. Default umask 0022 would have left encrypted blobs world-readable.
+- `map_wallet_err` splits `WalletError::Crypto` (AEAD auth-tag mismatch — wrong password OR tamper) → `Error::DecryptionFailed` (exit 5); was previously mapped to `Error::InvalidMnemonic` (exit 2) — misleading for tamper detection.
+- `tracing::warn!` in `wallet_create` flags `--password` on argv as insecure (shell history + process list). PR-B replaces with `rpassword`.
+
+### Try it (PR-A additions)
+
+```bash
+# PR-A wired CLI surface (sync + read paths against Anvil)
+ETH_DATA_DIR=/tmp/wallet-demo cargo run -p eth -- wallet create --name alpha --password p1 --network anvil
+cargo run -p eth -- wallet list
+cargo run -p eth -- wallet show --name alpha --network anvil
+cargo run -p eth -- wallet delete --name alpha --network anvil
+cargo run -p eth -- --rpc-url http://127.0.0.1:8545 wallet balance --address 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+cargo run -p eth -- --rpc-url http://127.0.0.1:8545 tx get --tx-hash 0x000...000
+
+# Binary integration tests (5 always-on + 2 Anvil-gated)
+cargo test -p eth --test cli_localnet                 # always-on sync tests pass
+RUN_ANVIL_E2E=1 cargo test -p eth --test cli_localnet -- --ignored   # full e2e
+```
+
+### Status
+
+PR-A body-flipped #337; issue stays OPEN until PR #338 merges to `rust-eth-core`. PR-B (sign + broadcast) tracked in follow-up issue (pending file) per L13 round budget.

@@ -1,0 +1,241 @@
+name: rust-eth-core
+
+# CI for the `rust-eth-core` integration branch.
+#
+# Scope: any PR that targets `rust-eth-core` (NOT main). Each issue labeled
+# `rust-eth-core` (#295, #301-#311) feeds work via a sub-task branch that
+# PRs into this branch. At v0.2 completion, a final cut PR merges
+# `rust-eth-core` -> main (per L25).
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the umbrella
+# ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain@stable`,
+# `Swatinem/rust-cache@v2`). No SHA pins available yet; tag-based reference
+# acceptable per L37 rule 2 (verified-cached SHAs land in a follow-up commit
+# after the first successful CI run captures the resolved SHAs).
+
+on:
+  push:
+    branches: [rust-eth-core]
+  pull_request:
+    branches: [rust-eth-core]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-fmt:
+    name: Rust fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo clippy
+        working-directory: rust-wallet-app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rust-test:
+    name: Rust test
+    runs-on: ubuntu-latest
+    # Bumped from 30m → 40m after #370 added lookup_by_address / symbol()
+    # bindings + L29 Sepolia fork test to the workspace test set; the
+    # cold-cache run on the GH-hosted runner now exceeds 30 minutes
+    # intermittently. CI run 32947203908 hit the prior 30-min cap.
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo build
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test
+        working-directory: rust-wallet-app
+        run: cargo test --workspace --all-targets
+
+  # CI 4th gate per L13 step 11: cargo tree --workspace --duplicates. Local
+  # step 11 is double gate only (fmt + clippy); `cargo test --workspace
+  # --all-targets` lives in CI (rust-test job above). Dedup moves to CI
+  # cadence because workspace-wide tree walks are slow on large workspaces.
+  # Local invocation deferred — see lessons.md L13 step 11 sub-bullet.
+  rust-dedup:
+    name: Rust dep dedup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo tree --duplicates
+        working-directory: rust-wallet-app
+        run: cargo tree --workspace --duplicates
+
+  # Per L29, the eth-wallet-core e2e Sepolia tests are #[ignore] + opt-in
+  # env var. CI must never run them — public-RPC flake + rate-limit risk.
+  # Explicit skip per L29 enforced below (no `cargo test -- --ignored`).
+  rust-audit:
+    name: Rust audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        # SECURITY (per automated review 2026-08-23): the 4 `--ignore` flags
+        # below mirror the umbrella `ci.yml` rationale — transitive dev-deps
+        # without upstream fixes yet. See `rust-wallet-app/deny.toml` for
+        # the canonical list. Add inline justification per advisory:
+        #   RUSTSEC-2026-0098: transitive via rust-bitcoin regtest deps; no fix upstream
+        #   RUSTSEC-2026-0099: same transitive chain (testcontainers-tokio-tar)
+        #   RUSTSEC-2026-0104: same transitive chain
+        #   RUSTSEC-2025-0111: pre-existing umbrella allowance (see ci.yml history)
+        working-directory: rust-wallet-app
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
+
+  # Split from the old combined lint-audit job so deny runs in parallel with
+  # audit — same per-concern shape as umbrella `ci.yml`. Both gates are
+  # independently enforced.
+  rust-deny:
+    name: Rust deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny
+        working-directory: rust-wallet-app
+        run: cargo deny check
+
+  # AC #5 audit-gate per Issue #382. PR #374 (Issue #365) centralised RPC
+  # redaction in `Error::rpc(impl Display)` + bulk-replaced 23 call sites,
+  # but AC #5 ("`grep Error::Rpc(format` returns 0 matches") was a one-shot
+  # per-PR check. A future author that reverts to the leaky `format!`
+  # pattern would leak RPC URL secrets via `Display` and the gate above
+  # would not catch it. This job turns the audit into a permanent
+  # regression block. Mirrored at `eth-wallet-core/src/error.rs` (the
+  # `pub fn rpc` doc-comment block). Pattern matches `Rpc(\s*format!`
+  # (extended regex) — catches both `Error::Rpc(format!(...))` and the
+  # equally leaky `Self::Rpc(format!(...))` + tolerates whitespace after
+  # the open paren. Any non-zero exit fails the workflow on PR + push to
+  # `rust-eth-core`.
+  rust-error-grep:
+    name: Rust Error::Rpc(format!) audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - name: grep -rnE 'Rpc\(\s*format!' must return 0 code matches
+        run: |
+          # AC #5 audit (Issue #382): the leaky `Rpc(format!...)` pattern
+          # (any path: `Error::Rpc`, `Self::Rpc`, etc.) bypasses the
+          # centralised redaction in `Error::rpc(impl Display)` and may leak
+          # RPC URL secrets via `Display`. The doc-comment at
+          # `eth-wallet-core/src/error.rs` above `pub fn rpc` references
+          # the gate by literal substring; filter Rust doc-comment lines
+          # (`///`) so the gate does not self-flag on its own pointer.
+          if grep -rnE 'Rpc\(\s*format!' \
+              rust-wallet-app/crates/eth \
+              rust-wallet-app/crates/eth-wallet-core \
+              | grep -v '///'; then
+            echo "::error::Rpc(format!...) bypasses the centralised" \
+              "redaction in Error::rpc(impl Display) and may leak RPC URL" \
+              "secrets via Display. Use Error::rpc(e) instead."
+            exit 1
+          fi
+
+  # Anvil-fork e2e suite for `eth` CLI (Issue #343 acceptance tests +
+  # related `#[ignore]` Anvil tests in `cli_localnet.rs`). NOT live
+  # testnet smoke — L29 carve-out documented: tests fork mainnet into a
+  # local Anvil node via `Anvil::new().fork(MAINNET_RPC_URL)` then write
+  # controlled storage state (`anvil_set_storage_at`), so the flake +
+  # CI-IP rate-limit risk L29 cites for live testnet doesn't apply. The
+  # mainnet RPC is read-only here (Anvil fork only; no transaction
+  # broadcast to mainnet).
+  #
+  # Default RPC: PublicNode's public Ethereum gateway (no signup, supports
+  # archive-mode RPC methods Anvil fork needs — `eth_getBlockByNumber`
+  # for the fork block). Cloudflare's free gateway (`cloudflare-eth.com`)
+  # was tried first; it returns `error -32046: Cannot fulfill request`
+  # for the archive lookup Anvil fork performs (run `32811985548`,
+  # 2026-08-25). Operator can override by setting the `MAINNET_RPC_URL`
+  # repo secret (Settings → Secrets and variables → Actions) — paid /
+  # private infra (Alchemy, Infura) gives better CI reliability than the
+  # public endpoint.
+  anvil-e2e:
+    name: Anvil e2e (eth-cli)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install Foundry (anvil)
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Anvil-gated e2e tests
+        working-directory: rust-wallet-app
+        env:
+          RUN_ANVIL_E2E: "1"
+          # Public fallback (PublicNode — supports archive-mode RPC Anvil
+          # fork needs). Operator can set MAINNET_RPC_URL repo secret to
+          # override with paid / private infra for CI reliability.
+          MAINNET_RPC_URL: ${{ secrets.MAINNET_RPC_URL || 'https://ethereum-rpc.publicnode.com' }}
+        run: cargo test -p eth --test cli_localnet -- --ignored

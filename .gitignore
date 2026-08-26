@@ -15,3 +15,5 @@ tangem-app-ios/
 **/.env
 *.env
 **/*.env
+
+.local/
