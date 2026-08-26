@@ -25,14 +25,14 @@ mod handlers;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use alloy_signer_local::PrivateKeySigner;
 use clap::{Parser, Subcommand};
 
 use crate::handlers::{
     config_show, open_manager, open_provider, print_wallet_created, tx_get, tx_list,
     wallet_balance, wallet_balance_all, wallet_create, wallet_delete, wallet_import, wallet_list,
-    wallet_send_erc20, wallet_send_native, wallet_show,
+    wallet_send_erc20, wallet_send_native, wallet_show, wallet_speedup,
 };
 use eth_wallet_core::{Error, Network, Result};
 
@@ -190,6 +190,31 @@ enum WalletAction {
         name: Option<String>,
         #[arg(long)]
         id: Option<String>,
+        #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
+        network: String,
+    },
+    /// Speed up a pending native-ETH tx (EIP-1559 replace-by-fee). Looks
+    /// up the original tx by hash, validates nonce matches the wallet's
+    /// current nonce + new fees exceed in-pool fees, then re-signs the
+    /// same envelope (same `from`/`to`/`value`/`nonce`) with higher fees
+    /// and broadcasts via `provider.send_raw_transaction`. Issue #381.
+    Speedup {
+        /// Hash of the pending tx to speed up (0x-prefixed hex, 32 bytes).
+        #[arg(long)]
+        speedup: String,
+        /// New `max_fee_per_gas` (wei) — must exceed in-pool
+        /// `max_fee_per_gas` (else `Error::FeeTooLow`, exit 2).
+        #[arg(long)]
+        max_fee_per_gas: u128,
+        /// New `max_priority_fee_per_gas` (wei) — must satisfy
+        /// `priority <= max_fee` AND `priority >= in_pool_priority`
+        /// (else `Error::FeeTooLow`, exit 2).
+        #[arg(long)]
+        max_priority_fee_per_gas: u128,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        password: Option<String>,
         #[arg(long, env = "ETH_NETWORK", default_value = "sepolia")]
         network: String,
     },
@@ -541,6 +566,45 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                 }
                 WalletAction::Delete { name, id, network } => {
                     wallet_delete(&mgr, name.as_deref(), id.as_deref(), &network)
+                }
+                WalletAction::Speedup {
+                    speedup,
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                    name,
+                    password,
+                    network,
+                } => {
+                    let rpc = &cli.rpc_url;
+                    let provider = open_provider(rpc)?;
+                    let speedup_hash = B256::from_str(&speedup).map_err(|e| {
+                        Error::InvalidInput(format!("invalid --speedup tx hash: {e}"))
+                    })?;
+                    let password = resolve_password(password.as_deref())?;
+                    let net = Network::parse_cli(&network)
+                        .map_err(|e| Error::InvalidInput(e.to_string()))?;
+                    let wallet_id = mgr
+                        .lookup_by_name(&name, net)
+                        .map_err(crate::handlers::map_wallet_err)?;
+                    // Issue #350 (H-2): unlock_signer returns raw
+                    // Zeroizing<[u8; 32]>; build alloy signer at use site,
+                    // scoped to this command.
+                    let secret = mgr
+                        .unlock_signer(wallet_id, password.as_bytes())
+                        .map_err(crate::handlers::map_wallet_err)?;
+                    let signer = PrivateKeySigner::from_slice(secret.as_ref())
+                        .map_err(|e| Error::InvalidPrivateKey(format!("from_slice: {e}")))?;
+                    let new_hash = wallet_speedup(
+                        &provider,
+                        &signer,
+                        net,
+                        speedup_hash,
+                        max_fee_per_gas,
+                        max_priority_fee_per_gas,
+                    )
+                    .await?;
+                    println!("{new_hash}");
+                    Ok(())
                 }
             },
             Command::Send(args) => {
