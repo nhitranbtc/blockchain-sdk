@@ -35,6 +35,9 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L50] Harness-style work: `metaharness_oia_audit` weekly or pre-release
 - [L51] Verify post-commit contents — Edit tool can report success without applying
 - [L52] Honest follow-up commit when prior commit message diverges from actual diff
+- [L53] Critical-tier L12 cluster (3 sub-agents + security-review standalone) catches bugs TDD alone misses on key-encryption surfaces
+- [L54] Defense-in-depth for env-var secrets: read + immediate `std::env::remove_var()` + Mutex-serialized test
+- [L55] Step 11 verify gate: scope `cargo test -p <crate>`>` — never `--workspace` (bitcoin-wallet-core FFI tests dominate)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -282,7 +285,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 4. karpathy-guidelines + branch checkout (from integration branch if sub-task per step 3)
     - **L46 — record expected branch:** note the branch name just checked out (e.g., scratch, ledger per L14). Every later L46 check reads from this record.
     - **L45 — integration-branch routing:** for issues labeled `rust-eth-core` (or any future integration-branch label), fork from the integration branch (`rust-eth-core`), NOT main. PR base = integration branch. Sub-task branches name `task/<plan-slug>/<n>-<slug>`. L46's branch record + L45's routing are the two-branch gates.
-4a. **Drift scan (per L13 step 4a):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap.
+4a. **Drift scan (per L13 step 4a):** before starting feature work, verify every plan/spec/SHA citation referenced by the picked-up issue. For each cited `<path>`, run `git log --all -- <path>`. Empty result = drift (artifact never committed or SHA never existed); resolve by committing the artifact or filing a follow-up issue before feature work begins. Drift is silent — cargo fmt/clippy/test don't catch it; only `git log` reveals the gap. **Extended drift check (added 2026-08-26 per L53)**: for CLI work in a multi-CLI workspace (e.g. `eth/` + `btc/` under `rust-wallet-app/crates/`), diff the equivalent helper in the sibling CLIs at pickup. Example: when adding `eth`'s `resolve_password()`, read `btc/src/handlers.rs:81-89` `password_or_prompt()` and compare argument-handling. Any divergence (empty-flag-falls-through vs silent-accept, env-var name, warning text) goes in the PR body Drift section. Cross-crate pattern divergence is invisible to TDD — only a reviewer comparing to the sibling CLI surfaces it.
 
 ## Per pipeline step
 5. Step: invoke `mattpocock-skills:ask-matt` to narrow the L11-tagged candidates, then pick skill pair (max 2) from L11 map
@@ -297,14 +300,16 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 10. L12: pre-PR code review FIRST — `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`
     - Parallel sub-agents: `type-design-analyzer` (encapsulation, invariants) + `code-reviewer` (correctness, security, tests, structure per L11 row scope)
     - **Critical tier** (per Q4 carve-out): add `pr-review-toolkit:security-auditor` as 3rd concurrent sub-agent (max 3 sub-agents per step). triggers for key material / signing / encryption / network / persistence surfaces.
+    - **Fallback when named skill is unavailable in active harness** (added 2026-08-26 per L53): if `pr-review-toolkit:security-auditor` (or `type-design-analyzer`, `code-reviewer`) is not in the active harness's agent registry, substitute the closest equivalent — `compass:security-auditor` for the security lens, `ecc:security-reviewer` or `ecc:type-design-analyzer` as alternates. Document the fallback in the PR body + `lessons.md` deviation note. Do NOT skip the lens entirely — fall back, don't skip.
     - **Trivial tier** (per L13 amendment note 2026-08-25): SKIP this step entirely — pre-PR code review not required for doc-only commits. L49 + L51 + L52 + L24 still apply.
+    - **Convergent-finding rule** (added 2026-08-26 per L53): when 2+ L12 sub-agents surface the same finding with different lenses (e.g. type-design-analyzer + code-reviewer both flag the same `map_err(|_|)` anti-pattern), fix in ONE pass before the verify gate — don't split fixes across multiple Q5 rounds. Convergent findings are high-confidence real bugs; a single fix addresses both lenses.
     - Run on squash-candidate state (final commit on PR branch before merge), not first commit and not uncommitted. Per Q8 (re-grill 2026-08-15: corrected from "first commit" wording — Tasks 3-4 squash-merged multiple commits; reviewers read the combined state).
     - **Q4 budget**: max 2 sub-agents normal tier; max 3 critical tier (carve-out for L12 cluster). Standalone gates (10a, 10b) don't compound with the cluster cap.
     - **Review-paired fmt re-check** (after L12 review, pre-step 11): invoke `/ecc:rust-review` slash command (or `ecc:rust-reviewer` agent) on modified `.rs` files to catch rustfmt drift the L12 sub-agents missed. Different lens from the cargo quad gate (which runs pre-commit) — this runs post-L12. L11 row "Rust toolchain review" consumer. Skipped for trivial + doc-only edits.
 10a. **Test coverage gap analysis (separate gate after L12, all tiers):** invoke `pr-review-toolkit:pr-test-analyzer` on the same squash-candidate state. Distinct lens from `code-reviewer` (which checks existing tests for correctness); `pr-test-analyzer` checks for missing coverage on the changed behavior. Findings drive a follow-up commit before step 11 verify. Not concurrent with L12 sub-agents (separate gate) — Q4 cap preserved.
 10b. **Pre-PR security review (critical tier only, standalone):** after step 10a (test coverage), invoke `security-review` (comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy). Distinct lens from `pr-review-toolkit:security-auditor` (which sits inside L12 code-review lens). Q4 cap unaffected (separate gate, not sub-agent). Findings drive a follow-up commit before step 11 verify. Skipped for normal + trivial tiers.
 10c. **Standards + Spec review (separate gate after step 10b):** invoke `mattpocock-skills:code-review` on the same squash-candidate state. Distinct lens from pr-review-toolkit (which checks correctness/security/tests/structure) and from security-review (which checks secrets/SSRF/authz/crypto). Standards axis = repo coding conventions (formatting, naming, error patterns). Spec axis = does the code match the originating issue. Parallel sub-agents per the skill's design. Findings drive a follow-up commit before step 11 verify. Q4 cap unaffected (separate gate, not sub-agent). Skipped for trivial tier.
-11. Verify (double gate local + CI dedup): `cargo fmt --check --workspace` + `cargo clippy --workspace --all-targets -- -D warnings` (+ `cargo audit` if installed, per L11 row). Skip `cargo test --workspace --all-targets` here.
+11. Verify (double gate local + CI dedup): `cargo fmt --all -- --check` + `cargo clippy --workspace --all-targets -- -D warnings` (+ `cargo audit` if installed, per L11 row). Skip `cargo test --workspace --all-targets` here — run `cargo test -p <touched-crate> [-p <touched-crate> ...]` instead (L55).
     - Run BEFORE every commit (initial + fix + task-end) — earlier "AFTER each fix commit" wording replaced for consistency with clippy sub-bullet below.
     - All local gates (+ audit if installed) must pass before the task-end commit. A single failing gate = task is not done; on failure → step 11a (triage) or step 11b (debug fallback) BEFORE re-running.
     - **CI 4th gate (`cargo tree --workspace --duplicates`)**: runs in `.github/workflows/<file>` (rust-eth-core-ci.yml per L45 integration-branch routing), NOT in the local per-commit loop. Dedup is cheap but workspace-wide tree walks slow on large workspaces; CI cadence is the right place. Local step 11 = double gate only. Step 11 snapshot row covers CI dedup status separately.
@@ -551,7 +556,7 @@ User noticed L13 referenced `pr-review-toolkit:security-auditor` for critical ti
 - L13 step 10 Apply: `security-review` fires as separate gate after L12 review, in addition to the existing `pr-review-toolkit:security-auditor` sub-agent inside L12. Defense in depth.
 - Q4 max-3 cap unaffected (separate gate, not sub-agent).
 - Triggers forward-looking from next picked-up task on `rust-eth-core` (eth-wallet-core v0.2 critical-tier surfaces: key material, signing, encryption, network, persistence). In-flight eth-wallet-core tasks not retroactively re-reviewed; each task's L11 skill-tag includes `security-review` from next pickup.
-- **Status (2026-08-25):** trigger not yet honored — no sub-task PRs on `rust-eth-core` since amendment landed. Next critical-tier sub-task pickup MUST include `security-review` in L11 skill-tag.
+- **Status (2026-08-25 → 2026-08-26):** trigger not yet honored (no sub-task PRs since amendment landed). **FIRST HONORED 2026-08-26** — Issue #351 PR #368 (cycle 8b / C-1 from #339, critical-tier key-encryption material). See L53 for the post-mortem: L12 critical-tier cluster (3 sub-agents + standalone `security-review` + `pr-test-analyzer`) caught 2 real bugs TDD alone missed — empty `--password ""` accepted (would brick wallets, diverges from `btc/src/handlers.rs:86`) + `map_err(|_|)` discarded IO error context — plus a defense-in-depth gap the kernel-level reviewers couldn't see (ETH_PASSWORD env var lingering in process env post-read → future subprocess inheritance risk).
 - **Fix-up (commit `74e2c88`):** original commit `dc5972c` claimed the L11 row was added but the actual diff only included 2 of 3 intended hunks. Follow-up commit added the missing L11 row with L9 honest disclosure. See L51 (post-commit verification) + L52 (honest fix-up pattern) for the discipline that prevents recurrence.
 
 ## Flutter / Dart adaptation (wallet-desktop)
@@ -723,12 +728,15 @@ Agent(subagent_type: "general-purpose", prompt: "
   - Task title: <short>
   - Tier: trivial | normal | critical
   - Cost estimate (USD): ~$<amount>
+  - Diff scope: \`git show --stat <sha>\` (or \`git diff <prev>..<sha>\`) — list of files changed
 
   Files:
   1. .superpowers/sdd/<plan-slug>/estimate-report.md — append row to Plan-progress table; update Progress line; update Cost-to-date; update Last-merge footer with new SHA + PR + date.
   2. .superpowers/sdd/<plan-slug>/ai-cost-report.md — append row to Tasks table (1-3 sentence summary, merge SHA in Notes); match existing pipe style with trailing pipe (MD055).
 
   Both gitignored per L18 — save only, no commit.
+
+  CONSTRAINT (added 2026-08-26 per L53 sub-agent inaccuracy): the Notes column MUST reference ONLY symbols (function names, env var names, flag names, variant names) that appear in the diff scope listed above. Do NOT invent function names, env var names, or flag names that are absent from the diff. If no new public symbols were added, write 'no new public symbols'. Example: Issue #351's actual fallbacks were \`--password\` argv + \`ETH_PASSWORD\` env — the L21 sub-agent's first draft invented \`--password-file\` / \`--password-stdin\` / \`ETH_WALLET_PASSWORD\`, none of which exist; L52 honest fix-up corrected the row.
 
   Report: confirmation + line counts + any gate denials.
 ")
@@ -1311,4 +1319,75 @@ the fix in the audit trail.
 - Rewriting history with `git rebase -i` to "clean up" the inaccurate message
 - Apologizing in the new commit message (L9: state the fact, move on)
 - Skipping the fix because "the change is in the file now" — the audit trail matters more than the line content
+
+## L53 — Critical-tier L12 cluster (3 sub-agents + security-review standalone) catches bugs TDD alone misses on key-encryption surfaces
+
+**Trigger**: Session 2026-08-26, Issue #351 (cycle 8b / C-1 from #339 — rpassword TTY prompt as primary password source). 5-file / +264/-16 PR on `rust-eth-core`. TDD wrote 4 unit tests + 2 rpassword test-seam integration tests, all GREEN. L12 critical-tier cluster (3 sub-agents: `pr-review-toolkit:type-design-analyzer` + `pr-review-toolkit:code-reviewer` + `compass:security-auditor` because the pr-review-toolkit variant isn't registered in this harness) caught **2 real bugs TDD missed**:
+
+1. **HIGH** — empty `--password ""` accepted as the wallet password (would brick the wallet, since a keystore encrypted with an empty password is unrecoverable). Code-reviewer flagged divergence from `btc/src/handlers.rs:86` which makes `Some(p) if !p.is_empty() => Ok(p)` so empty flag falls through to prompt. Fix: `if !p.is_empty()` guard in the eth kernel + empty-argv-falls-through to env then prompt. Two new unit tests pin both branches.
+2. **HIGH** — `map_err(|_| Error::InvalidInput("password required: ..."))` discarded the underlying `io::Error` from `rpassword::prompt_password`. Operator on a CI runner without `/dev/tty` saw the generic "password required" message — same as someone who forgot to supply a password — masking the real diagnostic. Fix: drop the re-wrap so `prompt_password`'s own `Error::InvalidInput(format!("password prompt failed: {e}; ..."))` propagates with full io::Error context.
+
+Plus `compass:security-auditor` M-2 caught a third defense-in-depth gap the kernel-level reviewers couldn't see: `ETH_PASSWORD` env var lingers in process env after read, so any future subprocess spawned by the eth CLI (or by alloy / tokio deps) would silently inherit the cleartext password. Fix: `std::env::remove_var("ETH_PASSWORD")` immediately after read; `ENV_LOCK: Mutex<()>` test serializes the env-mutation check for parallel-safe cargo test runs.
+
+**Rule**: Critical-tier L13 review pays for itself on key-encryption / signing / encryption / network / persistence surfaces. Do not skip the L12 sub-agent cluster or the standalone `security-review` gate even when TDD is thorough. The 5 sub-agent cost (3 L12 + security-review + pr-test-analyzer) is small relative to the cost of a bricked-wallet bug or a leaked env-var secret shipped to production.
+
+**Why**: TDD covers happy paths + boundary cases the author can imagine. Critical-tier review covers:
+
+- **Cross-crate convention divergence** (eth-vs-btc on `--password ""` handling) — only visible when comparing to a sibling CLI's existing pattern.
+- **Error-message context preservation** (the `map_err(|_|...)` anti-pattern — invisible from inside the chain; needs a reviewer's eye for "what does the operator actually see at the leaf").
+- **Defense-in-depth gaps for future code paths** (subprocess inheritance — no subprocess exists today, so TDD can't write a test for "no future subprocess can inherit the var"). Only a security lens catches "what COULD be inherited by code that doesn't exist yet".
+
+**Apply**:
+
+- For any critical-tier PR per L13 (key material / signing / encryption / network / persistence surfaces), run the full L12 cluster + standalone security-review + pr-test-analyzer. Budget the sub-agent cost upfront.
+- When the cluster catches divergent findings across reviewers (same bug surfaced by 2+ sub-agents with different lenses = high-confidence real bug), fix in one pass before verify gate — don't split fixes across multiple rounds.
+- After the fix loop, do the quad verify gate (`cargo fmt` + `cargo clippy --all-targets -- -D warnings` + `cargo test` + `cargo audit`) BEFORE the commit PAUSE — per L13 step 11, the verify gate runs on the final fix, not the first pre-review pass.
+- For env-var + subprocess concerns, the security-auditor's "no subprocess spawning in current crate" verification is necessary but NOT sufficient — the fix must remove the var from process env post-read as defense-in-depth for code that doesn't exist yet.
+
+**Pair with L13 amendment 2026-08-25**: the `security-review` standalone gate (added to L13 step 10b) is what catches the defense-in-depth gaps like M-2 — `pr-review-toolkit:security-auditor` (L12 cluster) and `security-review` (standalone) are defense in depth, not redundant. The cluster catches code-level issues; the standalone catches "what could go wrong in code that doesn't exist yet".
+
+## L54 — Defense-in-depth for env-var secrets: read + immediate `std::env::remove_var()` + Mutex-serialized test
+
+**Trigger**: Session 2026-08-26, Issue #351 cycle 8b. `compass:security-auditor` M-2 finding: `ETH_PASSWORD` env var lingered in process env after `resolve_password()` read it. Today no subprocess is spawned from the `eth` CLI (no `tokio::process::Command` / `std::process::Command`), so the inheritance risk is zero. But `Cargo.lock` already pins `alloy-node-bindings::Anvil` for dev tests + any future spawn work (PR-B sign + broadcast already wires RPC) would silently inherit the cleartext password.
+
+**Rule**: When reading any env-var secret (password, token, signing key, API key), capture the value then **immediately** `std::env::remove_var("NAME")` after the read. Treat the var as single-use for this invocation; reading it twice would be a security regression. Verify the removal with a `Mutex`-serialized test:
+
+```rust
+#[test]
+fn reads_and_removes_env_var() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    std::env::set_var("THE_SECRET", "value");
+    let result = read_secret();
+    std::env::remove_var("THE_SECRET"); // cleanup before assertions
+    assert_eq!(result.unwrap(), "value");
+    assert!(std::env::var("THE_SECRET").is_err());
+}
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+```
+
+**Why**: `std::env::var` reads without clearing — the var stays in the process env block until the process exits. Any subprocess spawned later (today, tomorrow, by a future feature) inherits the parent's env block and can read the secret via `std::env::var` from the child. Removing the var post-read blocks this inheritance class without requiring knowledge of which future subprocesses will exist.
+
+The Mutex is necessary because `cargo test` runs tests in parallel by default; without the lock, one test's `set_var` races with another test's `var()` and produces flaky failures or false-positive assertions (e.g. the cleanup removes the var that another test just set).
+
+**Apply**:
+- For any `std::env::var("SECRET")` call in production code (passwords, tokens, keys), follow it with `std::env::remove_var("SECRET")` in the same scope.
+- The cleanup must happen unconditionally — not just on the success path. Use a `let _guard = ...` pattern or explicit `remove_var` at the end of the read scope.
+- Test the removal in a unit test that uses a static `Mutex<()>` to serialize env mutation within the test binary. The `Mutex` is local to the test module (one per file); other test modules can still mutate env in parallel.
+- Cleanup BEFORE assertions — if the assertion panics, the cleanup still runs (Rust drops `_guard` on panic, which doesn't help here because we want explicit `remove_var` not RAII; but the explicit `remove_var` before assertions gives a loud failure if a sibling test already clobbered the var).
+- This is defense-in-depth for code that doesn't exist yet — the security lens ("what COULD be inherited by code that doesn't exist yet") catches it; TDD alone can't write a test for "no future subprocess can inherit the var".
+
+## L55 — Step 11 verify gate: scope `cargo test -p <crate>` — never `--workspace`
+
+**Trigger**: Session 2026-08-26, Issue #358 verify gate. `cargo test -p eth -p eth-wallet-core --workspace` ran >5 min and crossed the 300s Bash timeout. The slow part isn't `eth`/`eth-wallet-core` (which finish in <60s combined) — it's `bitcoin-wallet-core` integration tests that the `--workspace` flag pulls in (FFI tests that spawn Dart VMs, threat-model tests, etc., some 3–5 min each).
+
+**Rule**: In step 11 verify gate, run `cargo test` with **only `-p <touched-crate>`** flags, never `--workspace`. L13 step 11 already says "Skip `cargo test --workspace --all-targets` here" — codify the workspace-flag trap explicitly + point at this rule.
+
+**Why**: Workspace-wide test invocations in this repo are dominated by `bitcoin-wallet-core` integration tests that have nothing to do with the active PR. A `rust-eth-core`-only PR still pays the bitcoin FFI cost when `--workspace` is set. Time-cost compounds across multiple fix-loop rounds (3-round max per Q5 = 15+ min wasted per task).
+
+**Apply**:
+
+- Step 11 verify gate (L13): `cargo test -p <touched-1> [-p <touched-2> ...]` — never `--workspace`. `-p` is already workspace-aware.
+- Step 11-ci dedup (L13): keep `cargo tree --workspace --duplicates` in CI workflow (cheap, one-time per push).
+- If PR diff touches more than 2 crates, add each as a `-p` flag.
+- L13 step 11 header line updated to reference L55 + show the scoped-cargo-test command.
 

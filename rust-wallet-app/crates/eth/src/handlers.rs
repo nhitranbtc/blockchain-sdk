@@ -334,6 +334,149 @@ pub async fn wallet_balance(
     }
 }
 
+/// Iterate the bundled token registry for `network` + any `--token`
+/// overrides, printing one line per token (Issue #358). Output format:
+/// `<symbol> <scaled_balance> <token-addr>` (text mode) or a JSON array of
+/// `{symbol, address, balance, decimals}` rows (`--json`).
+///
+/// Failure isolation (AC #4): per-token `token_balance` (and per-token
+/// `query_decimals` for non-registry overrides) failures are logged to
+/// stderr + skipped. When at least one token succeeded → exit 0. When ALL
+/// tokens failed (e.g. unreachable RPC) → return the first error so the
+/// dominant failure category wins (AC #7: exit 3 + stderr carries
+/// `balanceOf` from the first `erc20::token_balance` call).
+///
+/// `--decimals <N>` (AC #6): when set, applies to every token in the batch
+/// and skips per-token `decimals()` auto-detect. When unset, registry
+/// entries use their cached `decimals`; non-registry overrides RPC-query.
+pub async fn wallet_balance_all(
+    provider: &RootProvider<Ethereum>,
+    address: &str,
+    network: &str,
+    token_overrides: &[String],
+    decimals_override: Option<u8>,
+    json: bool,
+) -> Result<()> {
+    let holder = Address::from_str(address)
+        .map_err(|e| Error::InvalidInput(format!("invalid address: {e}")))?;
+    let chain_id = match eth_wallet_core::Network::parse_cli(network) {
+        Ok(n) => n.chain_id(),
+        // Unknown CLI network (e.g. local Anvil chain_id 31337) — registry
+        // lookup is per-chain, so it returns the empty stub and the
+        // token_overrides become the only entries.
+        Err(_) => 31337,
+    };
+
+    /// Per-token entry built from `load_chain` + user-supplied `--token`.
+    struct Entry {
+        label: String,
+        addr: Address,
+        /// Cached decimals from the bundled registry. `None` means the
+        /// address was not in the registry — caller will fall through to
+        /// `query_decimals` RPC (or `--decimals` override).
+        registry_decimals: Option<u8>,
+    }
+    let mut entries: Vec<Entry> = Vec::new();
+    let registry = eth_wallet_core::load_chain(chain_id)?;
+    for t in &registry {
+        entries.push(Entry {
+            label: t.symbol.clone(),
+            addr: t.address,
+            registry_decimals: Some(t.decimals),
+        });
+    }
+    // AC #2: user-supplied --token overrides appended AFTER the registry
+    // entries, in CLI order. Same address may appear twice (dedup is the
+    // caller's responsibility; we iterate as-supplied to preserve order).
+    for addr_str in token_overrides {
+        let addr = Address::from_str(addr_str)
+            .map_err(|e| Error::InvalidInput(format!("invalid --token address: {e}")))?;
+        let (label, cached) = match eth_wallet_core::lookup_by_address(chain_id, addr) {
+            Ok(Some(t)) => (t.symbol, Some(t.decimals)),
+            _ => (format!("{addr:#x}"), None),
+        };
+        entries.push(Entry {
+            label,
+            addr,
+            registry_decimals: cached,
+        });
+    }
+    if entries.is_empty() {
+        return Err(Error::InvalidInput(format!(
+            "no tokens for chain_id={chain_id} (--all requires at least one bundled entry or --token)"
+        )));
+    }
+
+    let mut json_rows: Vec<serde_json::Value> = Vec::new();
+    let mut first_err: Option<Error> = None;
+    let mut succeeded_any = false;
+
+    for entry in &entries {
+        // AC #6: --decimals override wins for every token.
+        // Otherwise: registry cache → per-token `query_decimals` RPC.
+        let decimals = match decimals_override {
+            Some(d) => d,
+            None => match entry.registry_decimals {
+                Some(d) => d,
+                None => match eth_wallet_core::erc20::query_decimals(provider, entry.addr).await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("error: decimals for {} ({}): {e}", entry.label, entry.addr);
+                        if first_err.is_none() {
+                            first_err = Some(e);
+                        }
+                        continue;
+                    }
+                },
+            },
+        };
+        match eth_wallet_core::erc20::token_balance(provider, entry.addr, holder).await {
+            Ok(raw) => {
+                let formatted = format_wei_as(raw, decimals);
+                if json {
+                    json_rows.push(serde_json::json!({
+                        "symbol": entry.label,
+                        // `Display` for `alloy_primitives::Address` writes
+                        // EIP-55 checksum; `{:#x}` calls `LowerHex` (lowercase)
+                        // which would break the AC #1 contract + any
+                        // operator piping through `jq` + checksum tools.
+                        "address": format!("{}", entry.addr),
+                        "balance": formatted,
+                        "decimals": decimals,
+                    }));
+                } else {
+                    println!("{} {} {}", entry.label, formatted, entry.addr);
+                }
+                succeeded_any = true;
+            }
+            Err(e) => {
+                eprintln!("error: balance for {} ({}): {e}", entry.label, entry.addr);
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_rows)
+                .expect("serialize Vec<serde_json::Value> (constructed above)")
+        );
+    }
+
+    if succeeded_any {
+        Ok(())
+    } else {
+        // AC #7 + #4: when all per-token calls failed (unreachable RPC,
+        // non-ERC-20 target, etc.), return the first error. Per-token
+        // failures were already logged to stderr above so the operator
+        // can see which subset failed.
+        Err(first_err.expect("entries non-empty + all failed → first_err set"))
+    }
+}
+
 /// Resolved ERC-20 metadata for `wallet balance --token` output (Issue #360 +
 /// Issue #366).
 ///
