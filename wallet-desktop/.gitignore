@@ -6,6 +6,10 @@
 .pub/
 build/
 .metadata
+
+# Prebuilt FFI shared library (built by `cargo build` against bitcoin-wallet-core)
+# Source repo stays slim — regenerate via build instructions in runner/.
+native/
 *.iml
 .idea/
 .vscode/
