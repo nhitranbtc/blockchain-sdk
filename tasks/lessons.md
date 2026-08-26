@@ -450,6 +450,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Document lives with the commit (audit trail); no separate file to maintain
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections), with `mattpocock-skills:grill-with-docs` as ADR-emission shim. **For wallet-desktop PRs** (files in `wallet-desktop/web/` or `wallet-desktop/native/`), also invoke `anthropics/skills:frontend-design` (structural UI patterns lens, sister to taste-skill's `design-taste-frontend`).
 15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
+    - **Sub-step 15b.1 — agent-driven verification (per 2026-08-26 amendment)**: tier-gated (`normal` + `critical` only, skip `trivial`). Invoke Explore subagent with PR diff + user-stories.md + active plan + deep-dive.md paths. Agent outputs: (a) checkboxes to flip `[ ]` → `[x]` with file:line evidence, (b) drift findings (impl exists, doc missing or stale), (c) new-issue suggestions (planned-but-not-implemented stories). Human reviews the report + applies edits via separate commit(s). Never auto-merge doc edits from subagent output — the subagent reports, the human edits, the PR review gates the doc commit. Trigger on every `rust-eth-core` PR + every `main` release cut; opt-in elsewhere.
 15c. **Review all L13 steps 1-15b completed** (broader pre-merge gate — widens 15d's PR-body checklist to all L13 steps):
     - **Walk each L13 step 1 through 15b** and confirm artifact exists before merging:
         - Step 1 (L11 skill tag — recorded in branch commits or PR body)
@@ -558,6 +559,18 @@ User noticed L13 referenced `pr-review-toolkit:security-auditor` for critical ti
 - Triggers forward-looking from next picked-up task on `rust-eth-core` (eth-wallet-core v0.2 critical-tier surfaces: key material, signing, encryption, network, persistence). In-flight eth-wallet-core tasks not retroactively re-reviewed; each task's L11 skill-tag includes `security-review` from next pickup.
 - **Status (2026-08-25 → 2026-08-26):** trigger not yet honored (no sub-task PRs since amendment landed). **FIRST HONORED 2026-08-26** — Issue #351 PR #368 (cycle 8b / C-1 from #339, critical-tier key-encryption material). See L53 for the post-mortem: L12 critical-tier cluster (3 sub-agents + standalone `security-review` + `pr-test-analyzer`) caught 2 real bugs TDD alone missed — empty `--password ""` accepted (would brick wallets, diverges from `btc/src/handlers.rs:86`) + `map_err(|_|)` discarded IO error context — plus a defense-in-depth gap the kernel-level reviewers couldn't see (ETH_PASSWORD env var lingering in process env post-read → future subprocess inheritance risk).
 - **Fix-up (commit `74e2c88`):** original commit `dc5972c` claimed the L11 row was added but the actual diff only included 2 of 3 intended hunks. Follow-up commit added the missing L11 row with L9 honest disclosure. See L51 (post-commit verification) + L52 (honest fix-up pattern) for the discipline that prevents recurrence.
+
+### L13 amendment 2026-08-26 — agent-driven user-stories verification (15b sub-step)
+
+User confirmed subagent-driven verification should be codified in L13 step 15b (the L24 cascade step). Rationale: today's post-PR-#386 verification sweep found 14 partial + 5 missing stories that the manual `[ ]` → `[x]` cascade missed. Drift accumulates silently across releases when only humans update docs.
+
+Added per amendment:
+
+- L13 step 15b: new tier-gated sub-bullet — Explore subagent reads PR diff + user-stories.md + active plan + deep-dive.md; outputs checkbox flips + drift findings + gap findings + new-issue suggestions.
+- Tier gate: `normal` + `critical` complexity only. `trivial` skips (single-story flip doesn't justify ~5–10k token burn).
+- Human-in-the-loop: agent surfaces findings, human edits. Never auto-commit doc edits from subagent output.
+- Trigger: every PR on `rust-eth-core` branch (eth-wallet-core + eth CLI active dev line) and on `main` release cuts. Other branches opt-in.
+- First honored on PR #394 (this PR — feat/spki-pin-localnet-tests, Stories 28/29 added with research section, no checkbox flips needed since both are new).
 
 ## Flutter / Dart adaptation (wallet-desktop)
 
