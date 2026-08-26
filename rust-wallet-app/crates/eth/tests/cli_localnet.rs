@@ -1804,3 +1804,170 @@ async fn alpha_send_beta_100_dai_against_anvil_fork_mainnet() {
         DAI_TRANSFER_AMOUNT_RAW,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #357 box 7 (deferred follow-up): 2 lock-down tests for the
+// `Error::AbiDecodeFailed` exit-2 path on ERC-20 decode failures.
+//
+// Strategy: install STOP-only bytecode (`0x00`) at a deterministic
+// non-ERC-20 address via `anvil_set_code`. The EVM responds to
+// `eth_call balanceOf`/`decimals` with `0x` (empty bytes). The
+// `*Call::abi_decode_returns(&[])` calls fail with buffer-too-short —
+// the new wrap sites (PR #361, commit `a0d59f6`) return
+// `Error::AbiDecodeFailed { context: "balanceOf" | "decimals", reason }`,
+// and `exit_code()` maps to 2. Distinguishing decode-fail (exit 2) from
+// RPC-fail (exit 3) is the whole point of #357 — operators scripting
+// around exit codes can now tell the two failure modes apart.
+//
+// These tests stay `#[ignore]` per L29 (operator-driven). Box 7 flips
+// `[x]` after an operator runs `RUN_ANVIL_E2E=1 cargo test -p eth
+// --test cli_localnet -- --ignored` and confirms the tests pass.
+// ---------------------------------------------------------------------------
+
+/// Deterministic non-ERC-20 address. STOP-only bytecode installed via
+/// `anvil_set_code(0x...beef, 0x00)` so `eth_call` returns `0x` (empty
+/// bytes). Used by both `wallet_balance_token_non_erc20_*` tests.
+const NOT_ERC20_ADDR: alloy_primitives::Address =
+    alloy_primitives::address!("000000000000000000000000000000000000beef");
+
+/// STOP-only bytecode (single `0x00` opcode). `eth_call` to this contract
+/// returns success with `0x` output — short enough that
+/// `*Call::abi_decode_returns(&[])` fails for `uint256` / `uint8` returns.
+const STOP_BYTECODE: &[u8] = &[0x00];
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_token_non_erc20_with_decimals_override_yields_exit_2() {
+    // Issue #357 box 7 lock-down: `Error::AbiDecodeFailed { context: "balanceOf" }`.
+    // RED: with `--decimals 18` override, `query_decimals` is skipped, so
+    // the only decode path exercised is `balanceOfCall::abi_decode_returns`
+    // in `erc20::token_balance`. If `0x...beef` had valid ERC-20 bytecode
+    // the decode would succeed (exit 0). STOP-only bytecode forces empty
+    // `eth_call` response → decode fails → `Error::AbiDecodeFailed` → exit 2.
+    //
+    // GREEN: exit code = 2 (NOT 3 — distinguishes decode-fail from RPC-fail)
+    // + stderr contains the "balanceOf" context string + does NOT contain
+    // the `Error::Rpc` "rpc:" prefix (lock-down for "decode-fail path
+    // exercised, not RPC-fail path").
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new().chain_id(31337).spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    provider
+        .anvil_set_code(
+            NOT_ERC20_ADDR,
+            alloy_primitives::Bytes::from_static(STOP_BYTECODE),
+        )
+        .await
+        .expect("anvil_set_code(STOP-only bytecode at 0x...beef)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // --decimals 18 override skips `query_decimals`; only the `token_balance`
+    // `balanceOf` decode-fail path is exercised.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            "0x000000000000000000000000000000000000beef",
+            "--decimals",
+            "18",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "non-ERC-20 token (decode-fail on balanceOf) must yield bad-input exit code (2), NOT RPC exit 3\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("balanceOf"),
+        "stderr should mention the balanceOf decode context:\nstderr: {stderr}",
+    );
+    // Lock-down: confirm decode-fail path (Error::AbiDecodeFailed) fired,
+    // not RPC-fail path (Error::Rpc carries "rpc:" prefix per its
+    // `#[error("rpc: {0}")]` Display impl).
+    assert!(
+        !stderr.contains("rpc:"),
+        "stderr must not contain Error::Rpc prefix — the decode-fail path should fire, not RPC transport-fail:\nstderr: {stderr}",
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_token_non_erc20_auto_detect_yields_exit_2() {
+    // Issue #357 box 7 lock-down: `Error::AbiDecodeFailed { context: "decimals" }`.
+    // RED: no `--decimals` override, so `query_decimals` runs first (auto-detect).
+    // STOP-only bytecode forces empty `eth_call decimals` response → decode fails
+    // → `Error::AbiDecodeFailed { context: "decimals", reason }` → exit 2.
+    //
+    // GREEN: exit code = 2 + stderr contains "decimals" context string + does
+    // NOT contain the `Error::Rpc` "rpc:" prefix.
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new().chain_id(31337).spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    provider
+        .anvil_set_code(
+            NOT_ERC20_ADDR,
+            alloy_primitives::Bytes::from_static(STOP_BYTECODE),
+        )
+        .await
+        .expect("anvil_set_code(STOP-only bytecode at 0x...beef)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    // No --decimals override → `query_decimals` runs first; this test
+    // exercises the `decimalsCall::abi_decode_returns` decode-fail path.
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--token",
+            "0x000000000000000000000000000000000000beef",
+            "--network",
+            "anvil",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "non-ERC-20 token decode-fail (auto-detect path on decimals) must yield exit 2\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    assert!(
+        stderr.contains("decimals"),
+        "stderr should mention the decimals decode context:\nstderr: {stderr}",
+    );
+    assert!(
+        !stderr.contains("rpc:"),
+        "stderr must not contain Error::Rpc prefix:\nstderr: {stderr}",
+    );
+}
