@@ -422,7 +422,23 @@ pub async fn wallet_balance_all(
                 None => match eth_wallet_core::erc20::query_decimals(provider, entry.addr).await {
                     Ok(d) => d,
                     Err(e) => {
-                        eprintln!("error: decimals for {} ({}): {e}", entry.label, entry.addr);
+                        // When `--json`, suppress stderr to keep the JSON stream
+                        // parseable by `jq`/downstream consumers — the failure is
+                        // surfaced in the `errors[]`-style row instead (Issue #380).
+                        if !json {
+                            eprintln!("error: decimals for {} ({}): {e}", entry.label, entry.addr);
+                        }
+                        if json {
+                            json_rows.push(serde_json::json!({
+                                "symbol": entry.label,
+                                // `Display` for `alloy_primitives::Address` writes
+                                // EIP-55 checksum (see balance-success branch for why
+                                // we use `{}` instead of `{:#x}`).
+                                "address": format!("{}", entry.addr),
+                                "error": format!("{e}"),
+                                "context": "decimals",
+                            }));
+                        }
                         if first_err.is_none() {
                             first_err = Some(e);
                         }
@@ -451,7 +467,19 @@ pub async fn wallet_balance_all(
                 succeeded_any = true;
             }
             Err(e) => {
-                eprintln!("error: balance for {} ({}): {e}", entry.label, entry.addr);
+                // When `--json`, suppress stderr to keep the JSON stream
+                // parseable (see query_decimals branch for the same rationale).
+                if !json {
+                    eprintln!("error: balance for {} ({}): {e}", entry.label, entry.addr);
+                }
+                if json {
+                    json_rows.push(serde_json::json!({
+                        "symbol": entry.label,
+                        "address": format!("{}", entry.addr),
+                        "error": format!("{e}"),
+                        "context": "balance",
+                    }));
+                }
                 if first_err.is_none() {
                     first_err = Some(e);
                 }

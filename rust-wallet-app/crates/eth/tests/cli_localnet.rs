@@ -698,6 +698,164 @@ fn wallet_balance_all_flag_against_unreachable_rpc_exits_3_with_balanceof() {
 }
 
 #[test]
+fn wallet_balance_all_json_against_unreachable_rpc_emits_error_rows() {
+    // Issue #380 AC: --json output must surface per-token failures in the
+    // structured output (not just stderr). Field-presence discriminator:
+    // success rows carry `balance`+`decimals`, failure rows carry `error`+`context`.
+    // Lock-down: when ALL RPCs fail, every row in the JSON array has `error`;
+    // none has `balance`. Proves the failure channel is wired (not stubbed
+    // out by the unreachable-RPC path swallowing the error).
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--json",
+            "--network",
+            "sepolia",
+            "--rpc-url",
+            "http://127.0.0.1:1",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // AC contract: unreachable RPC → exit 3 (Error::Rpc from first failed call).
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "wallet balance --all --json against unreachable RPC must exit 3\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    // Per-token stderr must be suppressed in --json mode — the JSON row
+    // carries the failure (Issue #380). The outer one-line `error: {e}`
+    // summary from main.rs is operator noise and acceptable (operators
+    // using --json pipe `2>/dev/null` or filter it out at the call site).
+    assert!(
+        !stderr.contains("error: balance for") && !stderr.contains("error: decimals for"),
+        "--json mode must not emit per-token error lines to stderr; got: {stderr}"
+    );
+    // Sepolia registry has 1 USDC entry + no overrides → 1 row in the array.
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("stdout is not valid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let rows = parsed
+        .as_array()
+        .unwrap_or_else(|| panic!("top-level must be a JSON array: {parsed:?}"));
+    assert!(
+        !rows.is_empty(),
+        "JSON array must contain at least one row, got: {rows:?}"
+    );
+    for (i, row) in rows.iter().enumerate() {
+        let obj = row
+            .as_object()
+            .unwrap_or_else(|| panic!("row {i} not an object: {row:?}"));
+        // Common keys for any row (success or failure).
+        for key in ["symbol", "address", "error", "context"] {
+            assert!(
+                obj.contains_key(key),
+                "row {i} missing key {key:?}: {row:?}"
+            );
+        }
+        // Failure discriminator: ALL RPCs unreachable → NO row has `balance`.
+        assert!(
+            !obj.contains_key("balance"),
+            "row {i} must NOT have `balance` when RPC fails: {row:?}"
+        );
+        assert!(
+            !obj.contains_key("decimals"),
+            "row {i} must NOT have `decimals` when RPC fails: {row:?}"
+        );
+        // `error` is a non-empty string.
+        let err = obj["error"]
+            .as_str()
+            .unwrap_or_else(|| panic!("row {i} error not a string: {row:?}"));
+        assert!(!err.is_empty(), "row {i} error must be non-empty: {row:?}");
+        // `context` is "balance" or "decimals" (which RPC step failed).
+        let ctx = obj["context"]
+            .as_str()
+            .unwrap_or_else(|| panic!("row {i} context not a string: {row:?}"));
+        assert!(
+            ctx == "balance" || ctx == "decimals",
+            "row {i} context must be `balance` or `decimals`, got {ctx:?}: {row:?}"
+        );
+    }
+}
+
+#[test]
+fn wallet_balance_all_json_override_without_decimals_forces_query_decimals_failure() {
+    // Companion to the lock-down test above. Sepolia's only registry entry
+    // (USDC) carries `registry_decimals: Some(6)`, so `query_decimals` is
+    // skipped (cache hit) and the failure fires on `token_balance` →
+    // `context: "balance"`. To exercise the `context: "decimals"` code
+    // path we add a `--token` override with no registry hit AND no
+    // `--decimals` flag — the handler must call `query_decimals` against
+    // the unreachable RPC, surfacing a row with `context: "decimals"`.
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--json",
+            "--token",
+            "0x000000000000000000000000000000000000beef",
+            "--network",
+            "sepolia",
+            "--rpc-url",
+            "http://127.0.0.1:1",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("stdout is not valid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let rows = parsed
+        .as_array()
+        .unwrap_or_else(|| panic!("top-level must be a JSON array: {parsed:?}"));
+
+    // Sepolia USDC (registry hit, cache hit on decimals → context "balance")
+    // + override (no registry hit, no --decimals → context "decimals") = 2 rows.
+    assert!(
+        rows.len() >= 2,
+        "expected >=2 rows (USDC + override), got: {rows:?}"
+    );
+
+    // At least one row must carry `context: "decimals"` (proves the path
+    // is reachable, not vacuously true via the existing balance-only test).
+    let any_decimals_context = rows.iter().any(|r| r["context"] == "decimals");
+    assert!(
+        any_decimals_context,
+        "at least one row must carry `context: decimals` to exercise that branch: {rows:?}"
+    );
+
+    // Locate the override row by EIP-55 address (Display format).
+    let override_addr_str = "0x000000000000000000000000000000000000bEEF";
+    let override_row = rows
+        .iter()
+        .find(|r| r["address"] == override_addr_str)
+        .unwrap_or_else(|| {
+            panic!("override row with address {override_addr_str} missing: {rows:?}")
+        });
+    assert_eq!(
+        override_row["context"], "decimals",
+        "override row (no registry hit, no --decimals) must surface query_decimals error: {override_row:?}"
+    );
+}
+
+#[test]
 fn wallet_balance_all_with_anvil_network_and_no_token_overrides_yields_exit_2() {
     // L12 coverage G1 — `--network anvil --all` with no `--token`
     // override finds zero entries (Anvil registry is the empty v0.2
@@ -1188,6 +1346,169 @@ async fn wallet_balance_all_json_output_emits_array_of_rows() {
     assert_eq!(
         usdt_row["decimals"], 6,
         "USDT decimals must be 6 from the registry, got: {usdt_row:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
+async fn wallet_balance_all_json_failure_channel_emits_mixed_rows() {
+    // Issue #380 — `--json` output must surface per-token failures alongside
+    // successes in the same array. Field-presence discriminator: success
+    // rows carry `balance`+`decimals`, failure rows carry `error`+`context`.
+    // This L29 mirrors `failure_isolation_logs_per_token_errors_and_exits_0`
+    // but asserts the structured JSON channel (not just stderr).
+    //
+    // Setup: forked mainnet Anvil, pre-fund USDT (success path) + install
+    // STOP-only bytecode at the override address (decode-fail path).
+    anvil_or_skip!();
+
+    let anvil = alloy_node_bindings::Anvil::new()
+        .fork(MAINNET_RPC_URL)
+        .chain_id(1)
+        .spawn();
+    let endpoint = anvil.endpoint();
+
+    let rpc_url = alloy_transport_http::reqwest::Url::parse(&endpoint).expect("anvil url");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(rpc_url);
+
+    let alpha_addr: alloy_primitives::Address = "f39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("alpha addr");
+
+    // Pre-fund USDT at slot 2 so the registry USDT entry succeeds.
+    let usdt_slot = alloy_primitives::keccak256(
+        (
+            alpha_addr,
+            alloy_primitives::U256::from(USDT_BALANCEOF_SLOT),
+        )
+            .abi_encode(),
+    );
+    let usdt_slot_u: alloy_primitives::U256 = usdt_slot.into();
+    let usdt_val: alloy_primitives::B256 = alloy_primitives::U256::from(USDT_ALPHA_INITIAL_RAW)
+        .to_be_bytes::<32>()
+        .into();
+    provider
+        .anvil_set_storage_at(USDT_MAINNET, usdt_slot_u, usdt_val)
+        .await
+        .expect("anvil_set_storage_at(USDT)");
+
+    // Install STOP-only bytecode at the override address so its `balanceOf`
+    // returns empty bytes → decode-fail path (the failure_isolation test
+    // uses --decimals 18 to skip past the `query_decimals` step; mirror
+    // that here so the failure fires on `token_balance` specifically,
+    // not on `query_decimals`).
+    provider
+        .anvil_set_code(
+            NOT_ERC20_ADDR,
+            alloy_primitives::Bytes::from_static(STOP_BYTECODE),
+        )
+        .await
+        .expect("anvil_set_code(STOP-only bytecode)");
+
+    let tmp = TempDir::new().expect("tempdir");
+    let data_dir = tmp.path().to_path_buf();
+
+    let out = run_eth(
+        &data_dir,
+        &[
+            "--rpc-url",
+            &endpoint,
+            "wallet",
+            "balance",
+            "--address",
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+            "--all",
+            "--json",
+            "--token",
+            &format!("{NOT_ERC20_ADDR:#x}"),
+            "--decimals",
+            "18",
+            "--network",
+            "mainnet",
+        ],
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // AC #4: at least one registry token succeeded → exit 0.
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "wallet balance --all --json must exit 0 when at least one token succeeded\nstdout: {stdout}\nstderr: {stderr}",
+    );
+    let parsed: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap_or_else(|e| {
+        panic!("stdout is not valid JSON: {e}\nstdout: {stdout}\nstderr: {stderr}")
+    });
+    let rows = parsed
+        .as_array()
+        .unwrap_or_else(|| panic!("top-level must be a JSON array: {parsed:?}"));
+    assert!(
+        !rows.is_empty(),
+        "JSON array must contain at least one row, got: {rows:?}"
+    );
+
+    // Find the USDT success row.
+    let usdt_row = rows
+        .iter()
+        .find(|r| r["symbol"] == "USDT")
+        .expect("USDT row must be in JSON output");
+    let usdt_obj = usdt_row.as_object().expect("USDT row must be an object");
+    for key in ["symbol", "address", "balance", "decimals"] {
+        assert!(
+            usdt_obj.contains_key(key),
+            "USDT success row missing {key:?}: {usdt_row:?}"
+        );
+    }
+    assert!(
+        !usdt_obj.contains_key("error"),
+        "USDT success row must NOT carry `error`: {usdt_row:?}"
+    );
+    assert!(
+        !usdt_obj.contains_key("context"),
+        "USDT success row must NOT carry `context`: {usdt_row:?}"
+    );
+
+    // Find the override failure row (matched by EIP-55 address — same
+    // display format as the success branch's `{}` formatter).
+    let override_addr_str = format!("{NOT_ERC20_ADDR}");
+    let fail_row = rows
+        .iter()
+        .find(|r| r["address"] == override_addr_str)
+        .unwrap_or_else(|| {
+            panic!("override row with address {override_addr_str} missing: {rows:?}")
+        });
+    let fail_obj = fail_row.as_object().expect("failure row must be an object");
+    for key in ["symbol", "address", "error", "context"] {
+        assert!(
+            fail_obj.contains_key(key),
+            "override failure row missing {key:?}: {fail_row:?}"
+        );
+    }
+    assert!(
+        !fail_obj.contains_key("balance"),
+        "override failure row must NOT carry `balance`: {fail_row:?}"
+    );
+    assert!(
+        !fail_obj.contains_key("decimals"),
+        "override failure row must NOT carry `decimals`: {fail_row:?}"
+    );
+    assert_eq!(
+        fail_obj["context"], "balance",
+        "override failure row context must be `balance` (token_balance call fired): {fail_row:?}"
+    );
+    // Version-tolerant: `format!("{e}")` for Error::AbiDecodeFailed renders
+    // a `"ABI decode failed for <context>: <reason>"` message, but the
+    // exact prefix may evolve. The contract we lock here is: (1) non-empty,
+    // (2) the operator can correlate the failure to the address that
+    // surfaced it. Avoids over-coupling to internal error wording.
+    let err = fail_obj["error"].as_str().expect("error must be a string");
+    assert!(
+        !err.is_empty(),
+        "override failure row error must be non-empty: {fail_row:?}"
+    );
+    assert!(
+        err.to_ascii_lowercase().contains(&format!("{NOT_ERC20_ADDR:#x}")),
+        "override failure row error should mention the address that failed ({NOT_ERC20_ADDR:#x}), got: {err:?}"
     );
 }
 
