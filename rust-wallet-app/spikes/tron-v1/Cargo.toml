@@ -3,6 +3,7 @@ name = "tron-v1-spike"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.85"
+license = "MIT"
 publish = false
 
 # Spike V1–V10 verification harness (Issue #403, follow-up to #399).
