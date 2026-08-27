@@ -269,7 +269,28 @@ End-to-end use case: "alpha → beta 100 USDC on Polygon mainnet" (mirrors TRON'
 
 **Steps:**
 - [ ] Step 1: Add `polygon` to umbrella `members`
-- [ ] Step 2: Implement clap subcommands: `wallet create`, `wallet import`, `wallet list`, `wallet show`, `wallet balance`, `wallet send`, `erc20 send`, `erc20 balance`, `tx list`, `tx get`, `fee`, `config`, `faucet`, `sign-typed` (per user-stories 31 stories)
+- [ ] Step 2: Implement clap subcommands + flags covering all 31 user-stories + 3 cross-cutting (full mapping per audit doc §"User-stories → Plan traceability matrix"):
+  - `wallet create --name w --network amoy|mainnet|anvil` — Story 1
+  - `wallet import --name w --mnemonic "..." --network ...` (also `--private-key`) — Story 2
+  - `wallet list [--network ...]` — Story 9
+  - `wallet show --name w --network ... [--addresses | --export]` — Stories 9, 19
+  - `wallet balance --address 0x... --network ... [--unit pol|wei|matic(deprecated)]` — Stories 3, 31
+  - `wallet sync --address 0x... --network ...` — Story 4
+  - `wallet send --name w --password p --to 0x... --amount 0.01 --network ... [--batch <file> | --drain | --nonce <N> | --gas-limit <N> | --fee fastest|half_hour|hour|economy | --max-fee-gwei <N> | --priority-fee-gwei <N> | --dry-run | --wait]` — Stories 5, 6, 13, 14, 15, 16
+  - `wallet send speed-up --tx-hash 0x... --max-fee-gwei <N> --priority-fee-gwei <N> --network ...` — Story 17
+  - `tx list --address 0x... --network ... [--since-block <N>] [--limit <N>]` — Story 7
+  - `tx get --tx-hash 0x... --network ...` — Story 7
+  - `erc20 send --name w --password p --token USDC|USDT|DAI --to 0x... --amount 1.5 --network ... [--token-address 0x...]` — Story 21
+  - `erc20 balance --address 0x... --token USDC|USDT|DAI --network ... [--all]` — Story 22
+  - `erc20 list --network ... [--json]` — Story 23
+  - `erc20 register --address 0x... --network ... [--list | --remove --symbol FOOBAR]` — Story 24
+  - `erc20 approve --name w --password p --token USDC --spender 0x... --amount 100 --network ... [--amount unlimited|max]` — Story 25
+  - `fee --network ... [--json]` — Story 8
+  - `config show [--json]` — Story 11
+  - `faucet --address 0x... --network amoy [--faucet-token <TOKEN>] [--auto]` — Story 30
+  - `sign-message --name w --password p --message "..." --address <addr> [--verify <addr>]` — Story 18
+  - `sign-typed --name w --password p --typed-data '<JSON>' --chain-id 137|80002 [--typed-data-file <path>] [--verify <addr>]` — Story 27 (EIP-712 with chain_id validation per Q7 + C1)
+  - Cross-cutting: `--json` flag on every command (Story -json); `std::process::ExitCode` stable exit codes (Story -exit); no daemons (Story -nodaemon); `zeroize::Zeroizing<Mnemonic>` for mnemonic (Story -zeroize); `alloy_primitives::Address::to_checksum_buffer(None)` EIP-55 display (Story -eip55)
 - [ ] Step 3: Default network = Amoy; mainnet opt-in via `--network mainnet`
 - [ ] Step 4: `--rpc-url` flag overrides default RPC URL
 - [ ] Step 5: `--legacy-token-symbol` flag enables MATIC alias display

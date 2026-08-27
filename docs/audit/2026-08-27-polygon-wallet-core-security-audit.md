@@ -93,6 +93,49 @@ tests in #417. Drift scan: clean (zero findings, see §"Drift scan").
 | **P4-4** | `--legacy-token-symbol` flag (off by default) renames "POL" → "MATIC" in CLI output — preserves pre-September-2024 mental model for legacy wallet UX (Q8) | 🔵 low | Task 6 |
 | **P4-5** | Release-cut audit: `cargo tree --depth 1` shows only `alloy-chains` as new direct dep since eth-wallet-core v0.2 (C6 enforcement) | 🟠 high | Task 9 |
 
+## User-stories → Plan traceability matrix
+
+All 31 user-stories + 3 cross-cutting from `docs/wallets/2026-08-27-polygon-wallet-user-stories.md` mapped to plan phases + tasks. Verified 2026-08-27 against plan §"Phase 4 Task 6 Step 2" (full subcommand/flag enumeration). Zero gaps.
+
+| Story | Title | Maps to plan phase / task |
+|---|---|---|
+| 1 | Create a new wallet | Phase 0 Task 1 (WalletManager re-export from evm-wallet-core) + Phase 4 Task 6 (`wallet create` subcommand) |
+| 2 | Import an existing wallet | Phase 0 Task 1 + Phase 4 Task 6 (`wallet import`) |
+| 3 | Check POL balance | Phase 2 Task 3 (RPC constructors) + Phase 4 Task 6 (`wallet balance`) |
+| 4 | Sync chain state | Phase 2 Task 3 + Phase 4 Task 6 (`wallet sync`) |
+| 5 | Send native POL | Phase 4 Task 6 (`wallet send`) + V8 spike |
+| 6 | Send with custom EIP-1559 fee | Phase 4 Task 6 (`--max-fee-gwei --priority-fee-gwei`) + V4 spike |
+| 7 | Inspect transaction history | Phase 4 Task 6 (`tx list`, `tx get`) |
+| 8 | Get current gas estimates | Phase 2 Task 3 (per-broadcast cadence) + Phase 4 Task 6 (`fee`) + V4 spike |
+| 9 | List / show / delete / rename wallets | Phase 0 Task 1 (WalletManager) + Phase 4 Task 6 (`wallet list`, `wallet show`, `wallet delete`) |
+| 10 | Use mainnet explicitly | Phase 1 Task 2 (Network::Polygon config) + Phase 4 Task 6 (`--network mainnet`) + V5 spike |
+| 11 | Show config + debug info | Phase 4 Task 6 (`config show`) |
+| 12 | Persist wallet across CLI invocations | Phase 0 Task 1 (WalletManager inherited from ETH v0.3 — no new code per Option A) |
+| 13 | Send to multiple recipients (sequential txs) | Phase 4 Task 6 (`wallet send --batch <file>`) |
+| 14 | Sweep / drain wallet to one address | Phase 4 Task 6 (`wallet send --drain`) |
+| 15 | Choose nonce strategy (auto vs manual) | Phase 4 Task 6 (`wallet send --nonce <N>`) |
+| 16 | Manual nonce + gas limit override | Phase 4 Task 6 (`wallet send --nonce --gas-limit`) |
+| 17 | Replace / speed-up tx (same nonce, higher fee) | Phase 4 Task 6 (`wallet send speed-up --tx-hash`) |
+| 18 | Sign EIP-191 personal message | Phase 4 Task 6 (`sign-message`) |
+| 19 | Export the wallet xpub + first addresses | Phase 4 Task 6 (`wallet show --export`) |
+| 20 | Pick derivation path (Ledger vs MetaMask) | Phase 1 Task 2 + Phase 4 Task 6 (`--derivation-path m/44'/60'/...` validation per C7) |
+| 21 | Send ERC-20 stablecoin (USDT/USDC/DAI) | Phase 1 Task 2 (token registry) + Phase 3 Task 4 (decimals cross-check) + Phase 4 Task 6 (`erc20 send`) + V9 spike |
+| 22 | Check ERC-20 token balance | Phase 4 Task 6 (`erc20 balance`) |
+| 23 | List registered stablecoins / tokens | Phase 1 Task 2 (`tokens/{mainnet,amoy}.json`) + Phase 4 Task 6 (`erc20 list`) |
+| 24 | Add custom ERC-20 token by contract address | Phase 4 Task 6 (`erc20 register`) |
+| 25 | Approve ERC-20 spending (for QuickSwap etc.) | Phase 4 Task 6 (`erc20 approve`) |
+| 26 | Use Anvil local node for testing | Phase 2 Task 3 (RPC constructors support Anvil) + Phase 4 Task 6 (`--rpc-url http://localhost:8545`) + V9 spike |
+| 27 | Sign EIP-712 typed data | Phase 3 Task 5 (chain_id validation per C1) + Phase 4 Task 6 (`sign-typed --chain-id 137\|80002`) + V10 spike |
+| 28 | Connect to RPC with SPKI pin | Phase 2 Task 3 (reuse `bitcoin-wallet-core::chain::spki`) + V7 spike |
+| 29 | Connect to RPC without SPKI pin (system CAs) | Phase 2 Task 3 + V7 spike |
+| 30 | Request Amoy testnet POL from faucet | Phase 4 Task 7 (Amoy smoke) + Phase 4 Task 6 (`faucet`) + V7 spike |
+| 31 | Display POL gas-token balance with MATIC alias | Phase 3 Task 5 (`gas_token_label` + `legacy_token_label`) + Phase 4 Task 6 (`--legacy-token-symbol` flag per Q8) |
+| Cross-cutting: `--json` | per-command JSON output | Phase 4 Task 6 (mirrors `btc` + `eth` CLI shape) |
+| Cross-cutting: stable exit codes | `std::process::ExitCode` 0-5 mapping | Phase 4 Task 6 (inherited from eth-wallet-core v0.3 per #297 M11) |
+| Cross-cutting: no daemons | single-foreground invocation | Phase 4 Task 6 (per L29) |
+
+**Gap history (closed 2026-08-27):** prior plan Task 6 Step 2 enumerated 14 subcommands with "(per user-stories 31 stories)" — surface-level coverage. Drift audit found 10+ stories lacking explicit CLI subcommand/flag mapping (Stories 13, 14, 15, 16, 17, 18, 19, 20, 24, 25, 26, 28/29). Plan doc updated with full per-story mapping in Task 6 Step 2.
+
 ## Minimum ship-gate checklist (v0.1)
 
 Reverse-engineered from 🔴 critical + 🟠 high findings. Each must be green before squash-merge.
@@ -109,6 +152,7 @@ Reverse-engineered from 🔴 critical + 🟠 high findings. Each must be green b
 - [ ] **G10 — Anvil Polygon-fork ERC-20 transfer** (P3-1 + V9): `cargo test -p polygon-v1-spike --test v9_erc20_transfer` PASS against Anvil Polygon-fork
 - [ ] **G11 — Zero new deps** (C6): `cargo tree --depth 1 -p polygon-wallet-core` shows ONLY `alloy-chains` as net-new direct dep vs eth-wallet-core v0.2
 - [ ] **G12 — Mainnet confirmation** (P4-1): `polygon wallet send --network mainnet` requires literal `yes` input (default abort, exit 1)
+- [ ] **G13 — User-stories traceability** (drift closed 2026-08-27): all 31 user-stories + 3 cross-cutting have explicit CLI subcommand/flag mapping in plan Task 6 Step 2 (per audit §"User-stories → Plan traceability matrix"). Reviewer spot-check confirms no `MISSING_SUB` markers, no `(TBD)` placeholders.
 
 ## Out of scope (deferred per plan)
 
