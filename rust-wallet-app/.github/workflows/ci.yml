@@ -34,6 +34,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install rust-toolchain
         run: rustup show
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored core/Tron.proto).
+        # Issue #403 deliverable #9. Debian/Ubuntu: protobuf-compiler package ships protoc 3.x.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -47,6 +51,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install rust-toolchain
         run: rustup show
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored core/Tron.proto).
+        # Issue #403 deliverable #9. Debian/Ubuntu: protobuf-compiler package ships protoc 3.x.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: cargo test
         # Live testnet test stays #[ignore] per L29; operator-driven, not CI
         run: cargo test --workspace
@@ -63,6 +71,10 @@ jobs:
         run: rustup show
       - name: Install cargo-geiger
         run: cargo install cargo-geiger --locked
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored core/Tron.proto).
+        # Issue #403 deliverable #9. Debian/Ubuntu: protobuf-compiler package ships protoc 3.x.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: cargo geiger
         # Own-code audit only; deps carry expected unsafe (ring, aes-gcm, nom)
         run: cargo geiger --all-targets
