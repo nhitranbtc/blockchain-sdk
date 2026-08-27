@@ -304,7 +304,8 @@ V8 (sign-only).
 - [ ] Step 7: Implement `network::Network` enum with Mainnet/Shasta/Nile variants (all `prefix: 0x41`, distinct chain-id hex)
 - [ ] Step 8: Write `tests/mnemonic_address.rs` — all-`abandon` mnemonic → seed → `m/44'/195'/0'/0/0` → T-address must match TronWeb reference (round-trip via `nile.tronscan.org` lookup is acceptable for Nile testnet)
 - [ ] Step 9: Verify gate (cargo fmt + clippy --all-targets -- -D warnings + test)
-- [ ] Step 10: Commit `feat(tron): scaffold tron-wallet-core crate — address + derivation (Task 1)`
+- [ ] Step 10: **Audit ship-gate** — verify controls **C1** (proto SHA assert in `build.rs`), **C2** (`bip39` features `["zeroize","rand"]`), **P0-1** (Keccak-256 vs SHA3-256 negative test), **P0-2** (base58check property test ≥10k rounds), **P0-3** (`derive_address` returns `Zeroizing<[u8;21]>`). See [audit doc §Phase 0](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 11: Commit `feat(tron): scaffold tron-wallet-core crate — address + derivation (Task 1)`
 
 ## Phase 1 — Core wallet ops (3 tasks)
 
@@ -325,7 +326,8 @@ V8 (sign-only).
 - [ ] Step 3: Implement `import_wallet(phrase, password) -> WalletId`
 - [ ] Step 4: Implement `list_wallets() -> Vec<WalletInfo>` + `delete_wallet(id)` + `show_wallet(id)`
 - [ ] Step 5: Tests for each op + persistence round-trip
-- [ ] Step 6: Commit
+- [ ] Step 6: **Audit ship-gate** — verify controls **C3** (`WalletConfig::default()` has no `default_rpc_url`), **P1-1** (mnemonic-at-rest encrypted with Argon2id m≥64MiB t≥3 p=4 + AES-256-GCM — **block v0.1 ship without this**), **P1-2** (`create_wallet(words, password)` either drops param or returns `Error::PasswordUnsupportedInV01`), **P1-3** (passphrase length ∈ {0, 1..8} → `Error::WeakPassphrase`), **P1-5** (`list_wallets()` defaults to address-only; `--metadata` opt-in). See [audit doc §Phase 1](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 7: Commit
 
 ### Task 3 (#4XX): Sign-only path (Q8 + signature convention hazard)
 
@@ -345,7 +347,8 @@ V8 (sign-only).
 - [ ] Step 2: Implement `sign_trx_transfer()` — build `TransferContract` via `Transaction.raw_data` protobuf, get TAPOS reference from `walletsolidity/getnowblock`, set `expiration = head_block_ts + 60_000`, `fee_limit = 0` (TRX transfers use bandwidth, not energy), sign, return `SignedTx`
 - [ ] Step 3: Implement `sign_trc20_transfer()` — build `TriggerSmartContract` with `data` at **field 4** (off-by-one hazard flagged in deep-dive), `fee_limit` sized via Phase 3 resource model, sign, return `SignedTx`
 - [ ] Step 4: Test `sign_only.rs` verifies **signature byte order `r‖s‖v` with `v ∈ {0, 1}`** (assert `signature[64] == 0 || signature[64] == 1`, NOT `27 || 28`). Ethereum-default signers produce invalid TRON signatures — this test catches the regression at build time.
-- [ ] Step 5: Commit
+- [ ] Step 5: **Audit ship-gate** — verify controls **C4** (compile-fail test that `k256::ecdsa::Signature::from_sliced_64(...)` output is rejected by eth-default `v+27` decoder), **C5** (`Network::Mainnet` ↔ embedded `ref_block` chain_id mismatch → refuse to sign), **C6** (zeroize-on-drop `SigningKey`; `to_bytes()` only callable inside `signing.rs`), **P1-4** (Error enum adds `ExpiredTransaction`, `NonceReuse`, `InsufficientEnergy`, `InsufficientBandwidth`). See [audit doc §Phase 1](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 6: Commit
 
 ### Task 4 (#4XX): Error enum + serde + zeroize wrap
 
@@ -357,7 +360,8 @@ V8 (sign-only).
 - [ ] Step 1: ~20-variant Error enum mirroring eth Error schema + TRON-specific variants (`OutOfEnergy`, `BandwidthExhausted`, `SignatureRecoveryFailed`, `ProtoDecodeError`, `Base58ChecksumMismatch`, `AddressPrefixMismatch` etc.)
 - [ ] Step 2: Wrap `Mnemonic` in `Zeroizing<Mnemonic>` (Q7 zeroize treatment, mirrors eth Task 4 + Bitcoin Task 30)
 - [ ] Step 3: `Zeroizing` wrap for `SigningKey`'s internal secret bytes
-- [ ] Step 4: Commit
+- [ ] Step 4: **Audit ship-gate** — verify control **P1-4** Error enum surfaces `ExpiredTransaction`, `NonceReuse`, `InsufficientEnergy`, `InsufficientBandwidth` (rejects `String`-payload variants in PR review). See [audit doc §P1-4](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 5: Commit
 
 ## Phase 2 — RPC integration + protobuf tx (4 tasks)
 
@@ -373,7 +377,8 @@ V8 (sign-only).
 - [ ] Step 2: `build.rs` calls `prost_build::Config::new().compile_protos(&["proto/core/Tron.proto"], &["proto/"])?` — generates `Transaction`, `TransferContract`, `TriggerSmartContract`, `BlockHeader`, `Block` types in `pub mod proto`
 - [ ] Step 3: Verify `cargo build` produces the generated types (commit `cargo:rerun-if-changed=proto/core/Tron.proto` so proto changes trigger rebuild)
 - [ ] Step 4: Document `protoc ≥3.12` requirement in `Cargo.toml` `[package.build-dependencies]` + README
-- [ ] Step 5: Commit
+- [ ] Step 5: **Audit ship-gate** — verify control **C1** re-affirmed: vendored `core/Tron.proto` SHA `851575d` matches in `build.rs` (assert via `sha256_of_file`); CI fails on drift. See [audit doc §C1](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 6: Commit
 
 ### Task 6 (#4XX): Raw reqwest JSON-RPC client + SPKI pin verifier (Q7)
 
@@ -392,7 +397,8 @@ V8 (sign-only).
 - [ ] Step 3: Implement `parse_rpc_url()` for `pinned://<hex>@host` extension
 - [ ] Step 4: Test `spki_pin.rs` — correct pin against `pinned://<hex>@api.trongrid.io` succeeds; wrong pin returns `Error::SpkiPinMismatch { expected, actual }`
 - [ ] Step 5: Add `TRON-PRO-API-KEY` header support via `--trongrid-api-key` CLI flag (raises rate limit from 3 QPS unauth to 15 QPS auth — corrected 2026-08-27)
-- [ ] Step 6: Commit
+- [ ] Step 6: **Audit ship-gate** — verify controls **C7** (`pinned_endpoints.json` ships in repo for `api.trongrid.io` / `nile.trongrid.io` / `api.shasta.trongrid.io`; CLI `--print-pinned-hosts` lists them), **C8** (`new_http()` non-pinned gated `#[cfg(test)]`; production builds reach only `new_http_pinned()`), **P2-1** (`pinned://<hex>@host` parser — 12 unit-test cases: odd-length, non-hex, empty, missing `@`, multi `@`, mixed case, whitespace, NUL bytes). See [audit doc §Phase 2](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 7: Commit
 
 ### Task 7 (#4XX): RPC methods — getnowblock, getchainid, createaccount, getaccount, getblockbynum
 
@@ -411,7 +417,8 @@ V8 (sign-only).
 - [ ] Step 3: Implement `get_account()` — POST to `/wallet/getaccount`, parse JSON response with balance + frozen bandwidth/energy
 - [ ] Step 4: Implement `broadcast_transaction()` — POST to `/wallet/broadcasttransaction` with signed tx + `visible: true`, parse `result: true, txid: "..."` response
 - [ ] Step 5: All RPC tests use `#[tokio::test]` per `docs/wallets/2026-08-23-ethereum-rust-sdks-deep-dive.md` §"Appendix: Async test function priority"
-- [ ] Step 6: Commit
+- [ ] Step 6: **Audit ship-gate** — verify controls **P2-2** (`eth_chainId` parser strict: `0x` prefix + lowercase + 8 hex chars; rejects non-canonical), **P2-3** (`walletsolidity/getnowblock` + `wallet/getnowblock` fallback with `ref_block_bytes/hash` cross-validate), **P2-4** (`broadcast_transaction` defaults `visible: false`; opt-in `visible: true` only for debug), **P2-5** (`get_account` uses `serde_json` + `deserialize_with`; property test against canonical TronGrid response). See [audit doc §Phase 2](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 7: Commit
 
 ### Task 8 (#4XX): Transaction builder — TransferContract + TriggerSmartContract (Q2)
 
@@ -429,7 +436,8 @@ V8 (sign-only).
 - [ ] Step 2: Implement `build_trx_transfer()` — protobuf `Transaction.raw_data { contract: [TransferContract { owner_address, to_address, amount }], ref_block_bytes, ref_block_hash, expiration: head_block_ts + 60_000, timestamp: now_ms, fee_limit: 0, data: b"" }`
 - [ ] Step 3: Implement `build_trc20_call()` — protobuf `Transaction.raw_data { contract: [TriggerSmartContract { owner_address, contract_address, call_value: 0, data: calldata, call_token_value: 0, token_id: 0 }], ref_block_bytes, ref_block_hash, expiration, timestamp, fee_limit: <sized in Task 10>, data: b"" }` — **`data` is field 4 (NOT 3)** — off-by-one hazard flagged
 - [ ] Step 4: Test `transaction_roundtrip.rs` — `RawData::encode_to_vec()` + `RawData::decode()` round-trip for hand-crafted TransferContract + TriggerSmartContract
-- [ ] Step 5: Commit
+- [ ] Step 5: **Audit ship-gate** — verify controls **P2-6** (`build_trx_transfer` rejects `to_21 == [0u8; 21]` and `0x41 ++ [0u8; 20]` burn address), **P2-7** (`build_trx_transfer` asserts `fee_limit == 0` AND `contract == TransferContract`; `TriggerSmartContract` asserts `fee_limit > 0`), **P2-8** (`expiration = node_timestamp + 60s` via `walletsolidity/getnowblock`; NOT local `Instant::now()`), **P2-9** (end-to-end protobuf fixture: commit hex dump of real TRC-20 transfer; `cargo test` asserts round-trip). See [audit doc §Phase 2](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 6: Commit
 
 ## Phase 3 — TRC-20 stablecoin transfer + resource model UX (4 tasks)
 
@@ -448,7 +456,8 @@ V8 (sign-only).
 - [ ] Step 1: Implement `encode_transfer()` — `[0xa9, 0x05, 0x9c, 0xbb] ++ pad_left_32(to_20) ++ pad_left_32(&value.to_be_bytes())`
 - [ ] Step 2: Implement `encode_balance_of()` + `encode_decimals()`
 - [ ] Step 3: Test `trc20_calldata.rs` — selector at bytes 0..4 == `0xa9059cbb`, total length 68 bytes; round-trips against `alloy-sol-types` standalone reference (`sol! { function transfer(address to, uint256 value) external returns (bool); }` + `transferCall.abi_encode()` produces identical bytes per Agent B finding)
-- [ ] Step 4: Commit
+- [ ] Step 4: **Audit ship-gate** — verify controls **P3-1** (ABI encoder byte-equals `alloy_sol_types::sol!` for 100 random `(addr, value)` pairs — property test), **P3-3** (`$TRON_TOKEN_REGISTRY` env var + `--token-registry <path>` flag override compile-time bundle). See [audit doc §Phase 3](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 5: Commit
 
 ### Task 10 (#4XX): Resource model — energy estimation + fee_limit sizing + DEM awareness (Q5)
 
@@ -470,7 +479,8 @@ V8 (sign-only).
 - [ ] Step 4: Implement `size_fee_limit()` — buffer the estimate: `ceil(energy_used * sun_per_energy * max_factor * 1.1)` (DEM + 10% safety). **Hard cap: 15,000,000,000 sun = 15,000 TRX** (`getMaxFeeLimit` chain parameter #47). **UNITS: sun, not TRX** — footgun flagged (Q5)
 - [ ] Step 5: Implement `get_resource_snapshot()` — POST to `/wallet/getaccount`, parse frozen + free bandwidth/energy + TRON Power
 - [ ] Step 6: Test `resource_model.rs` — verify `estimate_energy` returns 65k–130k range for USDT-TRC20 transfer (lower bound when recipient holds USDT, upper bound for empty recipient); verify DEM factor round-trip; verify `size_fee_limit` produces sun units in correct range
-- [ ] Step 7: Commit
+- [ ] Step 7: **Audit ship-gate** — verify controls **P3-4** (post-build check: if `size_fee_limit < energy_used * sun_per_energy`, log warning + require `--yes-i-know`), **P3-5** (DEM factor fetched every call; reject hardcoded `3.4` — mainnet-only), **P3-6** (CLI prints `fee_limit = N SUN (X TRX)`; refuse user-supplied `fee_limit < 0.5 × computed`), **P3-7** (v0.1 ships read-only stake view via `getaccount`; refuse `freezeBalanceV2` mutation — deferred to v0.2). See [audit doc §Phase 3](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 8: Commit
 
 ### Task 11 (#4XX): Token registry loader + USDT/USDC decimals (Q9)
 
@@ -486,7 +496,8 @@ V8 (sign-only).
 - [ ] Step 3: Implement `tokens::load(network: Network) -> Vec<Token>` — reads bundled JSON, returns `Vec<Token { symbol, contract_t_address, decimals }>`
 - [ ] Step 4: Implement `tokens::resolve_decimals(client: &Client, token: &Token) -> Result<u8, Error>` — calls `triggerconstantcontract` with `encode_decimals()` selector (cache result; Q5 decimals caching pattern)
 - [ ] Step 5: Test `token_registry.rs` — 5 mainnet + 1 nile entries load; USDT decimals = 6 verified via `decimals()` call
-- [ ] Step 6: Commit
+- [ ] Step 6: **Audit ship-gate** — verify controls **P3-2** (decimals resolution **always** cross-checked against live chain before sign; refuse if `bundled != on-chain`), **P3-8** (each `tokens/*.json` entry has `provenance: {issue, pr, commit}` field at top of file). See [audit doc §Phase 3](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 7: Commit
 
 ### Task 12 (#4XX): Sign + broadcast TRC-20 transfer (end-to-end)
 
@@ -502,7 +513,8 @@ V8 (sign-only).
 - [ ] Step 2: Implement `provider::tron_provider(rpc_url: &str) -> TronProvider` — explicit nonce + explicit fee (NO fillers — parallel to eth Q4 decision)
 - [ ] Step 3: Implement error retry on `BANDWIDTH_INSUFFICIENT` + `OUT_OF_ENERGY` (return structured error so CLI can suggest stake)
 - [ ] Step 4: Tests on Nile testnet + MockTRC20 (TronBox regtest) — `send_trc20_transfer` succeeds; recipient `balanceOf` reflects change
-- [ ] Step 5: Commit
+- [ ] Step 5: **Audit ship-gate** — verify controls **P3-9** (idempotency: refuse double-sign in same 60s window — sender nonce + ref_block), **P3-10** (`BANDWIDTH_INSUFFICIENT` / `OUT_OF_ENERGY` returned as structured error; **no auto-retry** — surface to user + suggest stake). See [audit doc §Phase 3](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 6: Commit
 
 ## Phase 4 — `tron` CLI + smoke + release cut (3 tasks)
 
@@ -517,7 +529,8 @@ V8 (sign-only).
 - [ ] Step 2: Implement clap subcommands: `tron wallet create --name w --network mainnet|nile`, `tron wallet import`, `tron wallet list`, `tron wallet show --name w`, `tron wallet delete --name w`
 - [ ] Step 3: Add `--trongrid-api-key` global flag (Q6 — raises rate limit 3 QPS → 15 QPS)
 - [ ] Step 4: Tests: CLI integration tests cover create + import + list + show + delete (parallel to btc-import-demo pattern)
-- [ ] Step 5: Commit
+- [ ] Step 5: **Audit ship-gate** — verify control **P4-2** (`tron wallet list --redact` flag; default off in v0.1, default on in v0.2). See [audit doc §Phase 4](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 6: Commit
 
 ### Task 14 (#4XX): `tron send` subcommand + Nile smoke
 
@@ -531,7 +544,8 @@ V8 (sign-only).
 - [ ] Step 4: Add `--dry-run` flag (build + sign only, no broadcast — Q8 sign-only path)
 - [ ] Step 5: Add `--broadcast` flag (default true) for explicit opt-out
 - [ ] Step 6: Smoke test on Nile testnet: `tron send --wallet w --to T... --amount 1 --token USDT --network nile --dry-run` produces valid signed tx; without `--dry-run` broadcasts and `txID` returned
-- [ ] Step 7: Commit
+- [ ] Step 7: **Audit ship-gate** — verify controls **P4-3** (`tron send --dry-run` does **not** log signed tx bytes; only shows txID + ready-to-broadcast prompt), **P4-4** (mainnet smoke only via `<env flag>` opt-in; default CI smoke on `nile.trongrid.io`). See [audit doc §Phase 4](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 8: Commit
 
 ### Task 15 (#4XX): Mainnet smoke + release cut
 
@@ -545,7 +559,8 @@ V8 (sign-only).
 - [ ] Step 2: Bump `tron-wallet-core` to `0.1.0` + `tron` to `0.1.0` in respective `Cargo.toml`
 - [ ] Step 3: Author `CHANGELOG.md` entry: "v0.1.0 — Initial release. Mnemonic HD wallet (BIP-39 + BIP-32 m/44'/195'/0'/0/0), raw reqwest JSON-RPC, protobuf tx construction via prost 0.14.4, TRC-20 transfer (USDT, USDC, TUSD, USDD, stUSDT), Stake 2.0 fee display, SPKI pin support via bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier."
 - [ ] Step 4: Update `rust-wallet-app/README.md` to mention `tron` CLI alongside `btc` and `eth`
-- [ ] Step 5: Final commit + tag `tron-wallet-core-v0.1.0` + `tron-cli-v0.1.0`
+- [ ] Step 5: **Audit ship-gate** — verify controls **C9** (`SECURITY.md` + `cargo-cyclonedx` SBOM + `cargo audit` report committed at release), **P4-1** (`--trongrid-api-key-file <path>` or env `TRON_PRO_API_KEY` only; **never** as CLI flag), **P4-5** (release workflow generates SBOM `cargo-cyclonedx` + commits `cargo audit` JSON to `SECURITY.md`), **P4-6** (`SECURITY.md` with `security@…` contact + 90-day disclosure window), **P4-7** (`--debug` output goes to stderr-only; refuse `--debug --broadcast` combination). See [audit doc §Phase 4](../audit/2026-08-27-tron-wallet-core-security-audit.md).
+- [ ] Step 6: Final commit + tag `tron-wallet-core-v0.1.0` + `tron-cli-v0.1.0`
 
 ## Spike closure (V1–V10 acceptance)
 
