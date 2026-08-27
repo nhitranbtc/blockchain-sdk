@@ -1,0 +1,81 @@
+[package]
+name = "tron-v1-spike"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+# Spike V1–V10 verification harness (Issue #403, follow-up to #399).
+# Lives in rust-wallet-app umbrella workspace per plan §File Structure.
+
+[dependencies]
+# Protobuf (Q2 — NEW workspace deps from plan §B)
+prost = { workspace = true }
+prost-types = { workspace = true }
+
+# Encoding + hashing (Q3/Q4)
+bs58 = { workspace = true }
+tiny-keccak = { workspace = true }
+
+# Crypto (k256 + sha2 — workspace reused)
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+sha2 = { workspace = true }
+
+# BIP-32/BIP-39 (Q10 — workspace reused)
+bip32 = { workspace = true }
+bip39 = { workspace = true }
+
+# HTTP + TLS (Q7 — reuse bitcoin-wallet-core::chain::spki SPKI primitives)
+reqwest = { workspace = true, features = ["blocking"] }
+rustls = { workspace = true }
+hex = { workspace = true }
+
+# Bitcoin SPKI verifier (Q7 cross-crate reuse)
+bitcoin-wallet-core = { workspace = true }
+
+# Serde (Q9 token registry JSON)
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.14.4"
+
+[[test]]
+name = "v1_compile"
+path = "tests/v1_compile.rs"
+
+[[test]]
+name = "v2_protobuf_roundtrip"
+path = "tests/v2_protobuf_roundtrip.rs"
+
+[[test]]
+name = "v3_trc20_abi"
+path = "tests/v3_trc20_abi.rs"
+
+[[test]]
+name = "v4_base58check"
+path = "tests/v4_base58check.rs"
+
+[[test]]
+name = "v5_resource"
+path = "tests/v5_resource.rs"
+
+[[test]]
+name = "v6_nile"
+path = "tests/v6_nile.rs"
+
+[[test]]
+name = "v7_spki_pin"
+path = "tests/v7_spki_pin.rs"
+
+[[test]]
+name = "v8_sign_only"
+path = "tests/v8_sign_only.rs"
+
+[[test]]
+name = "v9_token_registry"
+path = "tests/v9_token_registry.rs"
+
+[[test]]
+name = "v10_slip44"
+path = "tests/v10_slip44.rs"

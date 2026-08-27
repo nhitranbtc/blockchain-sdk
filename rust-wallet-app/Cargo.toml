@@ -6,6 +6,7 @@ members = [
     "crates/btc",
     "crates/eth-wallet-core",
     "crates/eth",
+    "spikes/tron-v1",
 ]
 
 [workspace.package]
@@ -107,3 +108,9 @@ alloy = { version = "=1.8.3", default-features = false, features = [
 ] }
 alloy-primitives = { version = "^1.6", default-features = false, features = ["std"] }
 alloy-signer-local = { version = "^1.0", features = ["mnemonic"] }
+
+# TRON SDK — prost/bs58/keccak (Q2/Q3/Q4 — plan §B; added 2026-08-27 for Issue #403 spike)
+prost = "=0.14.4"
+prost-types = "=0.14.4"
+bs58 = "0.5"
+tiny-keccak = { version = "2.0.2", features = ["keccak"] }
