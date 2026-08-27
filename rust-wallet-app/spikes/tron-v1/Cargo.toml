@@ -40,6 +40,18 @@ serde_json = { workspace = true }
 [build-dependencies]
 prost-build = "0.14.4"
 
+[dev-dependencies]
+# Local TRON devnet via testcontainers + tronbox/tre (Java + Node-based TRON local node).
+# Mirrors the alloy-v1 `alloy-node-bindings::Anvil` pattern (alloy-v1/tests/v6_erc20_anvil.rs:67):
+# operator-driven `#[ignore]` test, gated behind `RUN_TRON_LOCAL=1`.
+# Requires Docker daemon available at test runtime (CI excluded).
+testcontainers = "0.23"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[[test]]
+name = "use_case_alpha_sends_beta_100_usdt"
+path = "tests/use_case_alpha_sends_beta_100_usdt.rs"
+
 [[test]]
 name = "v1_compile"
 path = "tests/v1_compile.rs"

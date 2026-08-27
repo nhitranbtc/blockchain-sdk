@@ -158,8 +158,39 @@ Toolchain: `cargo 1.94` + `protoc 3.21.12` + `rustc 1.94`
 
 ## Aggregate
 
-- **Test binaries**: 11 (lib internal + 10 Vn)
-- **Tests**: 36 total, 0 failed
+- **Test binaries**: 12 (lib internal + 10 Vn + 1 use-case)
+- **Tests**: 37 total, 0 failed (1 ignored; gated on `RUN_TRON_LOCAL=1`)
 - **Coverage**: Q1 (compile), Q2 (proto), Q3 (ABI), Q4 (address), Q7 (SPKI parser), Q8 (sign), Q9 (registry), Q10 (mnemonic) all PASS offline
-- **Gated**: Q5 (V5 live Nile RPC), Q6 (V6 live chain-id + getnowblock), Q9-live (on-chain decimals), V7-live (real Cloudflare pin)
+- **Gated**: Q5 (V5 live Nile RPC), Q6 (V6 live chain-id + getnowblock), Q9-live (on-chain decimals), V7-live (real Cloudflare pin), use-case live (testcontainers + tronbox/tre)
 - **Open follow-ups**: operator must run gated tests + record live evidence here before closing #403
+
+---
+
+## Use case: alpha sends beta 100 USDT-TRC20 (live, `RUN_TRON_LOCAL=1`)
+
+**Date**: 2026-08-27 (initial run)
+
+**Command** (operator-driven per L29):
+```bash
+RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike \
+  --test use_case_alpha_sends_beta_100_usdt -- --ignored --nocapture
+```
+
+**Result**: **PASS** — testcontainers spawned `tronbox/tre:latest` container; node served JSON-RPC over `http://127.0.0.1:<random>`; `/wallet/getnowblock` returned genesis blockID.
+
+**Live evidence**:
+- Container: `tronbox/tre:latest` (SHA `f4332e11df12a9f360639a4546fd046593909630fda48af00b30410c144342f0`)
+- Spawned port: `32771` (random — testcontainers host-port mapping)
+- Latest blockID at probe time: `0000000000000000c93baa76a4a508f798a96f59156d9eb17ecede8ec845df2f` (genesis)
+- Wall-clock: ~4s from container spawn to readiness (image was already cached locally from a prior pull)
+
+**Test stack**:
+- `testcontainers = "0.23"` (aligned with `btc` crate's `^0.23` constraint to avoid workspace `bollard-stubs` version conflict)
+- `tokio = { version = "1", features = ["macros", "rt-multi-thread"] }` — needed because testcontainers 0.23 is async-first (`SyncRunner` removed) and async-drop requires a tokio runtime context
+- `reqwest::blocking` for the readiness probe (wrapped in `tokio::task::spawn_blocking`)
+
+**Offline companion** (always runs in CI): `use_case_alpha_sends_beta_100_usdt_offline` — generates alpha + beta wallets from canonical BIP-39 mnemonics, builds the 68-byte TRC-20 `transfer(address,uint256)` calldata, signs with k256 over a deterministic prehash, asserts the 65-byte `r‖s‖v` signature with `v ∈ {0, 1}`. No network, no container, no protobuf (TRC-20 contract proto not vendored in spike).
+
+**Drift notes** (additional, beyond V1-V10):
+- **TRC-20 contract deployment**: `TriggerSmartContract` and `TransferContract` proto structs live in unvendored `core/contract/*.proto` files. The live use-case test verifies container spawn + readiness only — the full `MockTRC20.sol` deploy + token transfer + balance-verify flow is a follow-up requiring a Solidity fixture + `tronbox migrate --network development` inside the spawned container. Tracked as backlog issue.
+- **testcontainers 0.23 alignment**: workspace already had `testcontainers = "^0.23"` via `btc` crate (per cargo resolver trace). Aligning spike to `0.23` (instead of latest `0.20`) avoids a workspace-wide `bollard-stubs` version conflict.
