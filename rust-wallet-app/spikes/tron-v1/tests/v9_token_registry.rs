@@ -1,10 +1,12 @@
-//! V9 — token registry (Q9) — partially gated (L29).
+//! TRON spike V1–V10 verification harness (Issue #403).
 //!
-//! Plan §Q9: bundled `tokens/{mainnet,nile}.json` deserial — 5 + 1 entries per plan §Q9.
-//! USDT mainnet decimals = 6. Live `triggerconstantcontract` against USDT-TRC20's
-//! `decimals()` selector verifies against on-chain value — gated on RUN_TRON_NILE=1.
+//! Each module is a thin verification primitive for one open question from
+//! the TRON Rust SDK deep-dive (PR #402, Issue #399). Real implementation
+//! lives in `crates/tron-wallet-core/` per the plan in
+//! `docs/superpowers/plans/2026-08-27-tron-wallet-core.md`.
 
 use serde::Deserialize;
+use tron_v1_spike::config::nile_config;
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct Token {
@@ -31,14 +33,15 @@ fn v9_mainnet_registry_loads_5_entries() {
 
 #[test]
 fn v9_nile_registry_loads_1_entry() {
-    let raw = include_str!("../tokens/nile.json");
-    let tokens: Vec<Token> = serde_json::from_str(raw).expect("nile.json parse");
+    // Nile config is loaded from the lib's single source of truth.
+    let cfg = nile_config();
     assert_eq!(
-        tokens.len(),
+        cfg.tokens.len(),
         1,
         "nile must have 1 community test USDT entry"
     );
-    assert_eq!(tokens[0].decimals, 6);
+    assert_eq!(cfg.tokens[0].decimals, 6);
+    assert_eq!(cfg.tokens[0].symbol, "USDT");
 }
 
 #[test]
@@ -62,16 +65,26 @@ fn v9_usdt_decimals_onchain_live() {
         return;
     }
 
+    let cfg = nile_config();
+    let rpc_url = cfg.rpc_url;
+    let usdt_address = cfg
+        .tokens
+        .iter()
+        .find(|t| t.symbol == "USDT")
+        .expect("USDT-TEST must be in nile config")
+        .address
+        .clone();
+
     let body = serde_json::json!({
         "owner_address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
-        "contract_address": "TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z", // Nile community USDT
+        "contract_address": usdt_address,
         "function_selector": "decimals()",
         "parameter": "",
         "call_value": 0,
     });
 
     let resp: serde_json::Value = reqwest::blocking::Client::new()
-        .post("https://nile.trongrid.io/wallet/triggerconstantcontract")
+        .post(format!("{rpc_url}/wallet/triggerconstantcontract"))
         .json(&body)
         .send()
         .expect("Nile RPC unreachable")

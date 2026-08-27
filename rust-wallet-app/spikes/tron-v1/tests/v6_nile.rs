@@ -5,9 +5,8 @@
 //! Address generation uses prefix `0x41` (same code path for mainnet/Shasta/Nile).
 //! For TAPOS reference: `walletsolidity/getnowblock` (not `wallet/getnowblock`).
 
+use tron_v1_spike::config::nile_config;
 use tron_v1_spike::rpc::{JsonRpcRequest, JsonRpcResponse, NILE_CHAIN_ID_HEX};
-
-const NILE_HOST: &str = "https://nile.trongrid.io";
 
 #[test]
 fn v6_nile_chain_id_via_eth_chainid() {
@@ -15,6 +14,8 @@ fn v6_nile_chain_id_via_eth_chainid() {
         eprintln!("[SKIP — RUN_TRON_NILE=1 required for V6 live Nile RPC]");
         return;
     }
+
+    let rpc_url = nile_config().rpc_url;
 
     let body = serde_json::to_value(JsonRpcRequest {
         jsonrpc: "2.0",
@@ -25,7 +26,7 @@ fn v6_nile_chain_id_via_eth_chainid() {
     .unwrap();
 
     let resp: JsonRpcResponse<String> = reqwest::blocking::Client::new()
-        .post(format!("{NILE_HOST}/jsonrpc"))
+        .post(format!("{rpc_url}/jsonrpc"))
         .json(&body)
         .send()
         .expect("Nile RPC unreachable")
@@ -47,9 +48,11 @@ fn v6_nile_getnowblock_for_tapos() {
         return;
     }
 
+    let rpc_url = nile_config().rpc_url;
+
     // walletsolidity/getnowblock (NOT wallet/getnowblock) for TAPOS per plan §Q6.
     let resp: serde_json::Value = reqwest::blocking::Client::new()
-        .post(format!("{NILE_HOST}/walletsolidity/getnowblock"))
+        .post(format!("{rpc_url}/walletsolidity/getnowblock"))
         .json(&serde_json::json!({}))
         .send()
         .expect("Nile RPC unreachable")

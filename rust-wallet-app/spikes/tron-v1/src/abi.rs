@@ -38,6 +38,17 @@ fn left_pad_32(addr20: &[u8; 20]) -> [u8; 32] {
     out
 }
 
+/// Encode `balanceOf(address owner)` calldata. 36 bytes total:
+/// `selector(4) ‖ owner_32_be(32)`.
+///
+/// `owner` = 20-byte address (left-padded to 32 bytes with zeros).
+pub fn encode_balance_of(owner: &[u8; 20]) -> [u8; 36] {
+    let mut out = [0u8; 36];
+    out[0..4].copy_from_slice(&BALANCE_OF_SELECTOR);
+    out[4..36].copy_from_slice(&left_pad_32(owner));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -57,5 +68,15 @@ mod tests {
         assert_eq!(&calldata[4..16], &[0u8; 12]); // zero-pad
         assert_eq!(&calldata[16..36], &to);
         assert_eq!(&calldata[36..68], &value);
+    }
+
+    #[test]
+    fn encode_balance_of_layout() {
+        let owner = [0xcd; 20];
+        let calldata = encode_balance_of(&owner);
+        assert_eq!(calldata.len(), 36);
+        assert_eq!(&calldata[0..4], &BALANCE_OF_SELECTOR);
+        assert_eq!(&calldata[4..16], &[0u8; 12]); // zero-pad prefix
+        assert_eq!(&calldata[16..36], &owner);
     }
 }

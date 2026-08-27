@@ -8,10 +8,12 @@
 pub mod abi;
 pub mod address;
 pub mod base58check;
+pub mod config;
 pub mod keccak;
 pub mod protobuf;
 pub mod rpc;
 pub mod spki;
+pub mod tx;
 
 pub mod proto {
     //! Re-export of generated protobuf types from `proto/core/Tron.proto`.

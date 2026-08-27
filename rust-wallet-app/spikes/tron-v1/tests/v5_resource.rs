@@ -12,7 +12,7 @@
 //! `decimals()` selector and asserts `energy_used` falls in [50_000, 150_000]
 //! (USDT constants call range, generous bounds).
 
-const NILE_HOST: &str = "https://nile.trongrid.io";
+use tron_v1_spike::config::nile_config;
 
 #[test]
 fn v5_resource_estimate_energy_for_usdt_decimals() {
@@ -21,8 +21,11 @@ fn v5_resource_estimate_energy_for_usdt_decimals() {
         return;
     }
 
-    // USDT-TRC20 on Nile (community test token, same selector behavior).
-    let contract_address_t = "TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z";
+    // USDT-TRC20 on Nile (resolved via config; verified live 2026-08-27).
+    let contract_address_t = tron_v1_spike::config::nile_config()
+        .token("USDT")
+        .map(|t| t.address.clone())
+        .expect("USDT token must be present in tokens/nile.json");
 
     let body = serde_json::json!({
         "owner_address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", // any valid T-address
@@ -34,7 +37,10 @@ fn v5_resource_estimate_energy_for_usdt_decimals() {
 
     // Synchronous reqwest call (no tokio runtime needed for this single blocking call).
     let resp = reqwest::blocking::Client::new()
-        .post(format!("{NILE_HOST}/wallet/triggerconstantcontract"))
+        .post(format!(
+            "{}/wallet/triggerconstantcontract",
+            nile_config().rpc_url
+        ))
         .json(&body)
         .send()
         .expect("Nile RPC unreachable");

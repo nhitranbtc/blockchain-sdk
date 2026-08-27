@@ -50,8 +50,8 @@ testcontainers = "0.23"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [[test]]
-name = "use_case_alpha_sends_beta_100_usdt"
-path = "tests/use_case_alpha_sends_beta_100_usdt.rs"
+name = "use_case_alpha_sends_beta_usdt"
+path = "tests/use_case_alpha_sends_beta_usdt.rs"
 
 [[test]]
 name = "v1_compile"
