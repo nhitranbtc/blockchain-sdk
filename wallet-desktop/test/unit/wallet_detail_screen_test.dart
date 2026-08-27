@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:golden_toolkit/golden_toolkit.dart';
 import 'package:wallet_desktop/core/btc/models/wallet_detail.dart';
 import 'package:wallet_desktop/core/ffi/ffi_enums.dart';
 import 'package:wallet_desktop/features/wallet_detail/wallet_detail_screen.dart';
@@ -28,6 +29,12 @@ class _FakeEsploraConfigNotifier extends EsploraConfigNotifier {
 }
 
 void main() {
+  setUpAll(() async {
+    // Load Material Icons font in test runner (matches CI environment).
+    // Without this, IconData resolves to missing-glyph U+0E45C and
+    // find.widgetWithIcon(TextButton, Icons.open_in_new) finds 0 matches.
+    await loadAppFonts();
+  });
   testWidgets(
     'WalletDetailScreen shows the Unlock form (Password + Unlock button) '
     'when the wallet session is null',
