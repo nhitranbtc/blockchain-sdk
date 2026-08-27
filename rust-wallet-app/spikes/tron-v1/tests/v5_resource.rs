@@ -12,6 +12,7 @@
 //! `decimals()` selector and asserts `energy_used` falls in [50_000, 150_000]
 //! (USDT constants call range, generous bounds).
 
+use tron_v1_spike::address::from_base58check;
 use tron_v1_spike::config::nile_config;
 
 #[test]
@@ -27,9 +28,21 @@ fn v5_resource_estimate_energy_for_usdt_decimals() {
         .map(|t| t.address.clone())
         .expect("USDT token must be present in tokens/nile.json");
 
+    // `/wallet/triggerconstantcontract` requires 21-byte hex form for
+    // `owner_address` + `contract_address` (NOT T-base58check). The Java-tron
+    // server parses both fields as hex before protobuf serialization; sending
+    // T-base58check produces `INVALID hex String` at the first non-hex char.
+    // Verified live 2026-08-27: error position 1:36 = 'G' in T-base58check
+    // owner_address = non-hex char. `triggersmartcontract` is permissive on
+    // address format (use_case flow passes); this endpoint is strict.
+    let owner_t = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb";
+    let owner_hex = hex::encode(from_base58check(owner_t).expect("owner T-address decodes"));
+    let contract_hex =
+        hex::encode(from_base58check(&contract_address_t).expect("USDT address decodes"));
+
     let body = serde_json::json!({
-        "owner_address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", // any valid T-address
-        "contract_address": contract_address_t,
+        "owner_address": owner_hex,
+        "contract_address": contract_hex,
         "function_selector": "decimals()",
         "parameter": "",
         "call_value": 0,
@@ -51,9 +64,12 @@ fn v5_resource_estimate_energy_for_usdt_decimals() {
         .and_then(|v| v.as_i64())
         .unwrap_or_else(|| panic!("missing energy_used in response: {json}"));
 
+    // `decimals()` is a constant getter — costs ~500 energy (vs `transfer`'s
+    // ~65k-130k). Original `[50_000, 150_000]` band was a copy-paste from the
+    // transfer test; corrected 2026-08-27 to reflect the constant-call cost.
     assert!(
-        (50_000..=150_000).contains(&energy_used),
-        "energy_used out of expected band: {energy_used}"
+        (100..=10_000).contains(&energy_used),
+        "decimals() energy_used out of expected band: {energy_used}"
     );
 
     eprintln!("[PASS] V5 Nile USDT decimals() energy_used = {energy_used}");
