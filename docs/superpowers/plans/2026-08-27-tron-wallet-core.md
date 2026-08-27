@@ -169,6 +169,109 @@ The spike (`rust-wallet-app/spikes/tron-v1/`) is the verification harness that p
 | V9 | Q9 | `tokens/mainnet.json` 5 entries load + USDT decimals = 6 verified via `triggerconstantcontract(decimals())`; **`energy_penalty` field present** for fee UX | Phase 3 tokens.rs |
 | V10 | Q10 | `bip_utils::slip44::Coin::Tron` (195) → mnemonic → seed → `m/44'/195'/0'/0/0` → T-address matches TronWeb reference | Phase 1 derivation.rs |
 
+## Phase 0.0 — Network selection + local-dev testnet (NEW, added 2026-08-27 from #403 + use case)
+
+> **Why this section**: The original Phase 0 jumped straight to crate scaffolding without
+> first answering "which networks does the wallet target?" and "how do we run the wallet
+> against a deterministic local chain in tests?". #403 + the `use_case_alpha_sends_beta_100_usdt`
+> spike surfaced both as missing prerequisite decisions. This section locks them in
+> before any production code lands.
+
+### 0.0.a — Research network (which TRON networks)
+
+The wallet targets **three TRON networks** — one production, two test:
+
+| Network | Chain ID | Use | Faucet | Endpoint |
+|---------|----------|-----|--------|----------|
+| Mainnet | `0x2b6653dc` (728126428) | Production TRX + TRC-20 | none | `https://api.trongrid.io/wallet/*` |
+| Nile (testnet) | `0xcd8690dc` (3448148188) | **Primary testnet** for v0.1 | TronFAQBot `!nile <ADDR>` → 5,000 nile TRX | `https://nile.trongrid.io/wallet/*` |
+| Shasta (testnet, deprecated) | `0x94a9059e` (2494104990) | Kept as v0.2+ fallback; **NOT v0.1 primary** | tronbox / TRON faucet | `https://api.shasta.trongrid.io/wallet/*` |
+
+**Drift correction (2026-08-27)**: prior doc listed Shasta as primary testnet; corrected
+to Nile (correct chain-id `0xcd8690dc`, confirmed by V6 spike via `POST /jsonrpc eth_chainId`).
+Nile's chain-id was verified live against `nile.trongrid.io`. Address generation uses the
+universal `0x41` prefix across all 3 networks (correction to prior doc's `0xa0` for Nile,
+a legacy `net.type=testnet` flag never adopted).
+
+### 0.0.b — Choose local testnet (the "in-process chain" for offline CI)
+
+Per L29 + per chain family:
+
+| Chain family | In-process local chain | Rust spawn crate | Operator setup |
+|--------------|------------------------|------------------|----------------|
+| Ethereum (already in repo) | **Anvil** (Foundry) | `alloy-node-bindings::Anvil::new().spawn()` | `cargo install --git https://github.com/foundry-rs/foundry --bin anvil --locked` |
+| TRON (this plan) | **TronBox** (`tronbox/tre` Docker image) | **`testcontainers = "0.23"`** (Rust, wraps Docker) | `docker pull tronbox/tre:latest` |
+
+**Why no pure-Rust TRON emulator exists**: TRON's reference implementation is Java
+(`java-tron`); there is no Foundry/Anvil-equivalent for TRON in Rust today. The
+closest all-Rust option — [Tronic](https://www.reddit.com/r/rust/comments/1marc3n/announcing_tronic_a_rust_toolkit_for_tron/)
+(July 2025) — is a **client** SDK, not a chain simulator. So the spike falls back to
+**testcontainers + tronbox/tre Docker image**: in-process spawn from Rust, real local
+TRON node, `drop(container)` cleans up. This is the pattern `alloy-v1/tests/v6_erc20_anvil.rs`
+uses for Ethereum, with the swap `Anvil::new()` → `testcontainers` to accommodate TRON's
+Java dependency.
+
+**Decision**: Adopt `testcontainers = "0.23"` as the local-dev chain spawn crate for TRON.
+Workspace dep version aligned with the existing `btc` crate's `^0.23` constraint
+(workspace resolver = "2" unifies `bollard-stubs` across both). Spike V11 use-case test
+already validated the pattern locally (commit `439c2e0`, test PASS in 4.36s).
+
+### 0.0.c — Choose testnet (live operator-driven verification)
+
+**Decision**: **Nile** (`https://nile.trongrid.io/wallet/*`) is the v0.1 primary testnet.
+Selection criteria + citations:
+
+| Criterion | Nile | Shasta | Decision |
+|-----------|------|--------|----------|
+| TronGrid operator support | Active (2024-2026) | Maintained but lower traffic | **Nile** |
+| Community USDT faucet | `TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z` (100 USDT minted by TronGrid) | None | **Nile** |
+| Chain-id verifiable via `eth_chainId` | `0xcd8690dc` (verified V6 spike) | `0x94a9059e` | Either works |
+| Stake 2.0 (proposal #84 / TIP-467, April 2023) | Active | Active | Either works |
+| Faucet UX | TronFAQBot `!nile ADDR` (Telegram) | tronbox | **Nile** (1-step Telegram) |
+
+Shasta remains as v0.2+ fallback (different chain-id, different faucet). The spike V5/V6
+tests both gate on `RUN_TRON_NILE=1` (operator-driven per L29). Production code in
+`crates/tron-wallet-core/` will default to `Network::Nile` for testnet builds, `Network::Mainnet`
+for release.
+
+### 0.0.d — Use case validation (cross-reference ROADMAP.md)
+
+The end-to-end "alpha → beta 100 USDT-TRC20 on local testnet" use case is documented at
+`rust-wallet-app/spikes/tron-v1/ROADMAP.md` (committed 2026-08-27 in spike PR #405).
+Status as of merge commit `bfb14eb`:
+
+- **Offline companion** (`use_case_alpha_sends_beta_100_usdt_offline`, always runs in CI): PASS — verifies
+  alpha + beta wallet derivation + 68-byte TRC-20 calldata + 65-byte k256 signature with `v ∈ {0, 1}`.
+- **Live variant** (`use_case_alpha_sends_beta_100_usdt_live_local_node`, gated `RUN_TRON_LOCAL=1`):
+  **PASS locally** via testcontainers (4.36s wall-clock, observed blockID
+  `0000000000000000c93baa76a4a508f798a96f59156d9eb17ecede8ec845df2f`).
+
+**Gap to full end-to-end (backlog)**: full TRC-20 broadcast + balance-verify requires shipping
+a `MockTRC20.sol` fixture + running `tronbox migrate --network development` inside the
+spawned container. Tracked as a follow-up issue after #403 closes. Not a Phase 0/1/2 blocker —
+the wire format is already proven by V2 (protobuf roundtrip), V3 (TRC-20 ABI calldata),
+V8 (sign-only).
+
+### 0.0.e — Research crates/SDKs that support spawning a local testnet (decision matrix)
+
+| Crate / tool | Language | Chain | Local-node spawn API | Verdict |
+|--------------|----------|-------|----------------------|---------|
+| `alloy-node-bindings` (Foundry) | Rust | Ethereum | `Anvil::new().spawn()` — pure Rust, returns `AnvilInstance` | **Use** (already adopted; `alloy-v1/tests/v6_erc20_anvil.rs`) |
+| `testcontainers` (Docker) | Rust | any | `GenericImage::new(name, tag).start().await` — wraps Docker daemon | **Use for TRON** (no Rust emulator) |
+| `tronbox/tre` Docker image | Node + Java | TRON | external Docker container; `tronbox migrate` to deploy contracts | **Adopt via testcontainers** |
+| [Tronic](https://www.reddit.com/r/rust/comments/1marc3n/announcing_tronic_a_rust_toolkit_for_tron/) | Rust | TRON | client only — no node simulator | **Skip** (not a spawn library) |
+| Hardhat | Node + JS | Ethereum | external Node process; `npx hardhat node` | **Skip** (Node dep; Anvil already used in repo) |
+| Ganache | Node + JS | Ethereum | external Node process | **Skip** (deprecated; Anvil supersedes) |
+| Foundry (`cast`/`anvil`/`forge` CLI) | Rust binary | Ethereum | external CLI | **Skip** (Anvil via `alloy-node-bindings` already covers) |
+| `revm` | Rust | Ethereum | in-process EVM (no chain state, deterministic) | **Skip** (no p2p / state layer; Anvil handles) |
+
+**Final stack**:
+
+- Ethereum local: `alloy-node-bindings::Anvil::new().spawn()` (already in `alloy-v1`)
+- TRON local: `testcontainers = "0.23"` + `tronbox/tre:latest` Docker image (already in `spikes/tron-v1`)
+
+---
+
 ## Phase 0 — Scaffold + canonical address test (1 task)
 
 ### Task 1 (#4XX): Crate scaffold + V10 mnemonic → T-address test
