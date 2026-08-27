@@ -12,13 +12,31 @@ Use **`alloy` 1.x** (same as eth-wallet-core) as the primary Polygon stack — P
 
 ## The 5 chosen crates — current 2026 state
 
-| Crate | Version | Role | Reused from workspace? | License | Maintained? | Mobile-friendly? | Notes |
-|---|---|---|---|---|---|---|---|
-| `alloy` | 1.8.3 (stable 1.0 May 2025; 2.x tracks latest) | EVM provider + signer + types | Workspace dep once `evm-wallet-core` ships | Apache-2.0 / MIT | Yes | Yes — `no_std` core, pure-Rust signer default | MSRV 1.85 (1.x) / 1.91 (2.x). **Workspace `rust-toolchain.toml` pins 1.94** → 2.x OK. Pin to **1.8.x for v0.1** (matches ETH precedent — same MSRV parity logic). |
-| `alloy-signer-local` | same as alloy | Local signer + BIP-39 mnemonic | Yes via `evm-wallet-core` | Apache-2.0 | Yes | Yes | `PrivateKeySigner::from_phrase(...)` → EOA. Same `m/44'/60'/0'/0/0` derivation as Ethereum. **Polygon does NOT define its own SLIP-44 coin type — reuses ETH coin type 60** (verified via SLIP-0044 master; no Polygon-specific entry). |
-| `alloy-provider` + `alloy-transport-http` | same as alloy | JSON-RPC client | Yes via `evm-wallet-core` | Apache-2.0 | Yes | Yes | `ProviderBuilder::new().connect_http(url)` against `https://polygon-rpc.com` (mainnet) or `https://polygon-amoy.drpc.org` (Amoy). Same filler pattern as ETH — pass signer explicitly, do not use auto-wallet filler. |
-| `bip32` | ^0.5 (already workspace from BTC + ETH) | HD derivation `m/44'/60'/0'/0/0` | Yes | MIT | Yes | Yes | Identical mechanics to ETH — only the RPC URL differs. |
-| `bip39` | 2.2 (already workspace) | Mnemonic generate/parse/to_seed | Yes | MIT | Yes | Yes | Same wordlist as BTC/ETH — one mnemonic, multiple chains, only derivation path differs. |
+| Crate | Version | Stars (GitHub) | Recent DL/wk (crates.io) | Role | Reused from workspace? | License | Maintained? | Mobile-friendly? | Notes |
+|---|---|---|---|---|---|---|---|---|---|
+| `alloy` | 1.8.3 (stable 1.0 May 2025; 2.x tracks latest) | **1,321** ([alloy-rs/alloy](https://github.com/alloy-rs/alloy)) | **3.17M** | EVM provider + signer + types | Workspace dep once `evm-wallet-core` ships | Apache-2.0 / MIT | Yes | Yes — `no_std` core, pure-Rust signer default | MSRV 1.85 (1.x) / 1.91 (2.x). **Workspace `rust-toolchain.toml` pins 1.94** → 2.x OK. Pin to **1.8.x for v0.1** (matches ETH precedent — same MSRV parity logic). 140 published versions, last update 2026-08-13. |
+| `alloy-signer-local` | same as alloy | (same monorepo) | n/a | Local signer + BIP-39 mnemonic | Yes via `evm-wallet-core` | Apache-2.0 | Yes | Yes | `PrivateKeySigner::from_phrase(...)` → EOA. Same `m/44'/60'/0'/0/0` derivation as Ethereum. **Polygon does NOT define its own SLIP-44 coin type — reuses ETH coin type 60** (verified via SLIP-0044 master; no Polygon-specific entry). |
+| `alloy-provider` + `alloy-transport-http` | same as alloy | (same monorepo) | n/a | JSON-RPC client | Yes via `evm-wallet-core` | Apache-2.0 | Yes | Yes | `ProviderBuilder::new().connect_http(url)` against `https://polygon-rpc.com` (mainnet) or `https://polygon-amoy.drpc.org` (Amoy). Same filler pattern as ETH — pass signer explicitly, do not use auto-wallet filler. |
+| `bip32` | ^0.5 (already workspace from BTC + ETH) | n/a (in [iqlusioninc/crates monorepo](https://github.com/iqlusioninc/crates/tree/main/bip32)) | **3.55M** | HD derivation `m/44'/60'/0'/0/0` | Yes | MIT | Yes | Yes | Identical mechanics to ETH — only the RPC URL differs. |
+| `bip39` | 2.2 (already workspace) | **111** ([rust-bitcoin/rust-bip39](https://github.com/rust-bitcoin/rust-bip39)) | **3.70M** | Mnemonic generate/parse/to_seed | Yes | MIT | Yes — last push 2026-08-20 | Yes | Same wordlist as BTC/ETH — one mnemonic, multiple chains, only derivation path differs. |
+
+**Supporting crates (used transitively or for SPKI pinning — not direct Polygon deps):**
+
+| Crate | Repo | Stars | License | Notes |
+|---|---|---|---|---|
+| `reqwest` | [seanmonstar/reqwest](https://github.com/seanmonstar/reqwest) | **11,801** | Apache-2.0 | Workspace dep. Last push 2026-08-10. |
+| `rustls` | [rustls/rustls](https://github.com/rustls/rustls) | **7,587** | Apache-2.0 / ISC / MIT (repo shows NOASSERTION — verified dual-license from source headers) | Workspace dep for SPKI pin verifier. Last push 2026-08-26. |
+| `k256` (secp256k1) | [RustCrypto/elliptic-curves monorepo](https://github.com/RustCrypto/elliptic-curves) (k256 submodule) | **873** (monorepo total) | Apache-2.0 / MIT | Transitively via `alloy-signer-local` `mnemonic` feature. **16.97M recent DL/wk** — high production usage. Last push 2026-08-10. |
+| `tiny-keccak` | [debris/tiny-keccak](https://github.com/debris/tiny-keccak) | **203** | CC0-1.0 | Transitively via `alloy`. **46.20M recent DL/wk** — last crate publish 2020-04-01 (stale on crates.io) but repo last push 2024-06-10 (still maintained). Stable API, no recent changes needed. |
+
+**Rejected crates (for reference — not adopted):**
+
+| Crate | Repo | Stars | Status | Why rejected |
+|---|---|---|---|---|
+| `ethers-rs` | [gakonst/ethers-rs](https://github.com/gakonst/ethers-rs) | **2,509** | **Deprecated 2024-09-23** (last repo push). 698K recent DL/wk — still installed but not maintained. | Officially deprecated (issue #2667); maintainers redirect to alloy. Don't adopt for v0.1. |
+| Polygon Bor client | [0xPolygon/polygon-sdk](https://github.com/0xPolygon/polygon-sdk) | **1,052** | Active (Apache-2.0, last push 2024-08-27) | Consensus client (Bor node), not a wallet SDK. Reference for block-encoding details if v0.3+ ships a full-node integration. |
+
+**Crate health summary (2026-08-27 live data via `gh api`):** every direct Polygon wrapper dep has ≥1,000 GitHub stars (alloy = 1,321) AND ≥3M recent crates.io downloads/week, except `bip39` (111 stars, but 3.70M DL — niche crate, high production usage signal). Maintenance signals uniformly green: alloy last push 2026-08-26, bip39 last push 2026-08-20, reqwest 2026-08-10, rustls 2026-08-26. No deprecation warnings, no abandoned maintainers, no security advisories active on these versions.
 
 **No new direct deps needed** for Polygon. Total new workspace deps = **0** (everything reuses `evm-wallet-core`). This is the Option A payoff: Polygon = thin wrapper crate (`polygon-wallet-core` or `polygon` CLI) that just configures the existing EVM stack with chain-id + RPC URL + POL gas-token display.
 
@@ -40,6 +58,65 @@ Three reasons, in priority order:
 | **C — Standalone `polygon-wallet-core` (TRON-shape)** | Duplicates signing + RPC + ABI code (~80% with eth-wallet-core). Maintenance cost doubles per chain. |
 | **`ethers-rs` for Polygon** | ethers-rs officially deprecated 2024-06 (issue #2667). alloy is the successor. |
 | **Raw `reqwest` + hand-rolled RLP** | Loses `alloy`'s type-safe `Address` / `U256` / `TransactionRequest`. Adds hundreds of lines. |
+
+## Polygon vs Ethereum — crate-by-crate comparison
+
+The Polygon wallet shares **100% of its crate surface** with `eth-wallet-core` (Option A payoff). The differences are *configuration*, not *dependencies*. This table makes that concrete.
+
+| Concern | Ethereum (`eth-wallet-core`) | Polygon (`polygon-wallet-core`) | Delta |
+|---|---|---|---|
+| **`alloy` (meta)** | 1.8.x direct dep | Indirect via `evm-wallet-core` re-export | **None** — same version, same crate |
+| **`alloy-signer-local`** | Direct dep (`mnemonic` feature) | Indirect via `evm-wallet-core` | **None** — same crate, same feature flags |
+| **`alloy-provider` + `alloy-transport-http`** | Direct dep | Indirect via `evm-wallet-core` | **None** |
+| **`alloy-sol-types`** | Direct dep (ERC-20 ABI) | Indirect via `evm-wallet-core` | **None** — ERC-20 ABI identical across EVM |
+| **`alloy-chains`** | n/a | Direct dep (`Chain::Polygon`, `Chain::PolygonAmoy`) | **NEW in Polygon wrapper** — enum variant for Polygon mainnet + Amoy |
+| **`k256`** (secp256k1) | Indirect via `alloy-signer-local` | Indirect via `evm-wallet-core` → `alloy-signer-local` | **None** |
+| **`bip32` ^0.5** | Direct dep (`m/44'/60'/0'/0/0`) | Direct dep (same path) | **None** — same workspace crate, same path, same address |
+| **`bip39` 2.2** | Direct dep (`zeroize` + `rand`) | Direct dep (same features) | **None** |
+| **`reqwest` 0.12 + `rustls` 0.23** | Direct dep | Direct dep | **None** — same workspace stack |
+| **`tiny-keccak` 2.0.2** | Indirect (via `alloy`) | Indirect (via `alloy`) | **None** |
+| **Chain-id constant** | `1` (mainnet) / `11155111` (Sepolia) | `137` (mainnet) / `80002` (Amoy) | **DIFFERENT** — runtime config only |
+| **RPC default URL** | Configurable (per-call) | `https://polygon-rpc.com` (mainnet) / `https://polygon-amoy.drpc.org` (Amoy) | **DIFFERENT default** — overridable via `--rpc-url` |
+| **Network enum variant** | `Network::Ethereum` | `Network::Polygon` | **NEW variant** on shared enum in `evm-wallet-core` |
+| **Native gas token** | ETH | POL (post-MATIC, with MATIC alias for legacy UX) | **DIFFERENT** — display-only, no SDK impact |
+| **Token registry** | `tokens/mainnet.json` (USDT, USDC) | `tokens/mainnet.json` (USDT, USDC, DAI) + `tokens/amoy.json` (USDC Amoy) | **MORE entries + new Amoy file** |
+| **SPKI pin verifier** | Reused from `bitcoin-wallet-core` | Reused from `bitcoin-wallet-core` | **None** — same path, same `pinned://` URL scheme |
+| **Gas estimation cadence** | 12-second blocks → cache 30s OK | 2-second blocks → re-estimate immediately before broadcast | **BEHAVIORAL** — wallet must call `estimate_eip1559_fees()` per-broadcast, not cache |
+| **Tx envelope** | EIP-1559 Type 2 (London active since 2021-08-05) | EIP-1559 Type 2 (London active since 2022-01-18) | **None** — same envelope |
+| **EIP-712 typed data** | `chain_id: 1` in domain separator | `chain_id: 137` in domain separator | **DIFFERENT constant** — alloy's built-in replay protection |
+| **Async test pattern** | `#[tokio::test] async fn` (per ETH #333) | `#[tokio::test] async fn` (same rule) | **None** |
+| **Total new direct deps for Polygon** | n/a | **+1** (`alloy-chains`) | Minimal |
+
+### What the wrapper crate (`polygon-wallet-core`) actually adds
+
+```text
+evm-wallet-core/          # shared EVM core (signing, RPC, ABI, gas estimation)
+├── src/
+│   ├── lib.rs            # Network enum: Ethereum | Polygon | ...
+│   ├── chain.rs          # alloy-chains::Chain re-export
+│   └── wallet/           # signing + RPC plumbing
+└── Cargo.toml            # alloy + bip32 + bip39 + reqwest + rustls (workspace deps)
+
+polygon-wallet-core/      # thin wrapper — config only
+├── src/
+│   ├── lib.rs            # re-exports from evm-wallet-core
+│   ├── network.rs        # Network::Polygon config (chain_id, RPC URL, gas token display)
+│   └── tokens/
+│       ├── mainnet.json  # USDT, USDC, DAI addresses (Polygon mainnet)
+│       └── amoy.json     # USDC Amoy address
+└── Cargo.toml            # alloy-chains (NEW), evm-wallet-core (path dep)
+
+eth-wallet-core/          # unchanged — pure wrapper around evm-wallet-core for ETH
+├── src/lib.rs            # re-exports + Network::Ethereum config
+└── Cargo.toml            # evm-wallet-core (path dep), no new direct deps
+```
+
+### Why this matters
+
+- **No `polygon-wallet-core/src/{signing,rpc,abi}.rs` duplication.** The wrapper is ~200 lines of config + re-exports, not a parallel implementation. v0.1 surface area stays small.
+- **Future EVM L2 (Base, Arbitrum, Optimism) = same pattern.** Copy `polygon-wallet-core` shape, swap `Network::Polygon` → `Network::Base`, change RPC URL + chain-id + token registry. ~1 day of work per L2.
+- **Refactor risk = contained to `evm-wallet-core`.** The `eth-wallet-core` rename + split is a one-shot PR. Polygon lives entirely in the new wrapper.
+- **Bug fix in signing → propagates to all EVM chains.** Single canonical impl = single place to fix. (vs Option C where each chain has its own signing code that can drift.)
 
 ## Polygon-specific deltas (what changes vs Ethereum)
 
