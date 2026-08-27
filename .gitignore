@@ -17,6 +17,7 @@ tangem-app-ios/
 **/*.env
 
 .local/
+*.local
 
 # Python bytecode (leak from e2e test scripts)
 **/__pycache__/

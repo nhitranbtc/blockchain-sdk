@@ -1,0 +1,17 @@
+{
+  "chain_id_hex": "0xcd8690dc",
+  "chain_id_dec": 3448148188,
+  "rpc_url": "https://nile.trongrid.io",
+  "faucet_url": "https://nileex.io/join/getJoinPage",
+  "explorer_tx_url": "https://nile.tronscan.org/#/transaction/{tx_id}",
+  "spki_pin_env": "TRON_NILE_SPKI_PIN",
+  "tokens": [
+    {
+      "symbol": "USDT",
+      "name": "Tether USD",
+      "address": "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
+      "decimals": 6,
+      "issuer": "Tether Limited"
+    }
+  ]
+}
