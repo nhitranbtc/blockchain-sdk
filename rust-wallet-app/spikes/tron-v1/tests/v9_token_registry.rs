@@ -6,6 +6,7 @@
 //! `docs/superpowers/plans/2026-08-27-tron-wallet-core.md`.
 
 use serde::Deserialize;
+use tron_v1_spike::address::from_base58check;
 use tron_v1_spike::config::nile_config;
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -67,7 +68,7 @@ fn v9_usdt_decimals_onchain_live() {
 
     let cfg = nile_config();
     let rpc_url = cfg.rpc_url;
-    let usdt_address = cfg
+    let usdt_address_t = cfg
         .tokens
         .iter()
         .find(|t| t.symbol == "USDT")
@@ -75,9 +76,16 @@ fn v9_usdt_decimals_onchain_live() {
         .address
         .clone();
 
+    // See V5 for root-cause rationale: `/wallet/triggerconstantcontract`
+    // requires 21-byte hex form for owner_address + contract_address.
+    let owner_t = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb";
+    let owner_hex = hex::encode(from_base58check(owner_t).expect("owner T-address decodes"));
+    let contract_hex =
+        hex::encode(from_base58check(&usdt_address_t).expect("USDT T-address decodes"));
+
     let body = serde_json::json!({
-        "owner_address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
-        "contract_address": usdt_address,
+        "owner_address": owner_hex,
+        "contract_address": contract_hex,
         "function_selector": "decimals()",
         "parameter": "",
         "call_value": 0,
