@@ -33,10 +33,10 @@ Companion to issue **#407**. Phase-by-phase threat catalog + minimum ship-gate c
 | **C2** | `bip39` feature pinned to `["zeroize", "rand"]`; `cargo-deny` bans `bip39/rng` feature | 🟡 | Phase 0 Step 2 |
 | **C3** | `WalletConfig::default()` MUST NOT have a `default_rpc_url`; require `Some(_)` at construction | 🟡 | Phase 1 Task 2 |
 | **C4** | Compile-fail test: `k256::ecdsa::Signature::from_sliced_64(...)` output is rejected by an eth-default `v+27` decoder; asserts our signer never produces eth-style sig | 🟠 | Phase 1 Task 3 |
-| **C5** | `Network::Mainnet` ↔ `ref_block` chain_id mismatch → refuse to sign (replay protection, see cross-cutting #2) | 🔴 | Phase 1 Task 3 |
+| **C5** | `Network::Mainnet` / configured network must match the RPC `eth_chainId`; refuse to sign on network mismatch (replay protection, see cross-cutting #2). TRON signatures have no EIP-155-style `chain_id`; residual protection is limited to the TAPOS reference block plus the approximately 60-second expiration window, so replay remains possible inside that window. | 🔴 | Phase 1 Task 3 |
 | **C6** | Zeroize-on-drop wrapper for `SigningKey`; `to_bytes()` only callable inside `signing.rs` | 🟠 | Phase 1 Task 3 |
-| **C7** | SPKI pin table (`pinned_endpoints.json`) ships in repo for `api.trongrid.io`, `nile.trongrid.io`, `api.shasta.trongrid.io`; CLI `--print-pinned-hosts` lists them | 🟠 | Phase 2 Task 6 |
-| **C8** | `new_http()` (non-pinned) gated `#[cfg(test)]`; production builds can only reach `new_http_pinned()` | 🔴 | Phase 2 Task 6 |
+| **C7** | SPKI pin table (`pinned_endpoints.json`) ships in repo for `api.trongrid.io`, `nile.trongrid.io`, `api.shasta.trongrid.io`; CLI `--print-pinned-hosts` lists them. Production pin enforcement is fail-closed when `TRON_REQUIRE_PIN=1` (or `true`): unpinned RPC URLs are rejected rather than silently downgraded; test/development-only unpinned paths remain `#[cfg(test)]`. | 🟠 | Phase 2 Task 6 |
+| **C8** | `new_http()` (non-pinned) gated `#[cfg(test)]`; production builds can only reach `new_http_pinned()`. In production, `TRON_REQUIRE_PIN=1` must be present and the endpoint must have a valid pin; an absent pin is an error, never an implicit trust fallback. | 🔴 | Phase 2 Task 6 |
 | **C9** | `SECURITY.md` + `cargo-cyclonedx` SBOM + `cargo audit` report committed at release | 🟠 | Phase 4 Task 15 |
 
 ---
