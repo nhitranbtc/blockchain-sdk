@@ -68,21 +68,49 @@ rust-wallet-app/crates/polygon/                # CLI binary
 └── src/main.rs                  # clap subcommands: create, import, list, show, send, erc20 send, balance, fee, faucet, config
 
 rust-wallet-app/spikes/polygon-v1/             # verification harness (V1–V10, one per Q)
-├── Cargo.toml                   # workspace member; deps = alloy + reqwest + tokio (mirrors alloy-v1 pattern)
-├── README.md
-├── RESULT.md                    # PASS evidence log
-├── src/                         # helpers: address, fee-history, provider pinning
-└── tests/
-    ├── v1_evm_reuse.rs          # cargo build -p evm-wallet-core -p eth-wallet-core -p polygon-wallet-core clean
-    ├── v2_chain_id.rs           # get_chain_id() returns 137 (mainnet) + 80002 (amoy)
-    ├── v3_derivation.rs         # m/44'/60'/0'/0/0 → same address on ETH + Polygon
-    ├── v4_eip1559_estimates.rs  # estimate_eip1559_fees() — re-estimate cadence proof
-    ├── v5_rpc_connectivity.rs   # provider.get_block_number() against polygon-rpc.com
-    ├── v6_token_registry.rs     # mainnet.json + amoy.json load + decimals() verify
-    ├── v7_amoy_faucet.rs        # request Amoy POL, verify balance update
-    ├── v8_native_pol_transfer.rs # send 0.01 POL on Amoy, verify balance change
-    ├── v9_erc20_transfer.rs     # deploy MockERC20 to Anvil, transfer, verify
-    └── v10_eip712_replay.rs     # sign EIP-712 with chain_id 137, verify replay on 1 fails
+├── Cargo.toml                   # workspace member; deps = alloy + reqwest + tokio + bitcoin-wallet-core (SPKI pin reuse)
+├── README.md                    # V1-V10 acceptance + run instructions (mirrors TRON spike README shape)
+├── ROADMAP.md                   # spike purpose + Phase 0.0 network selection + use_case reference
+├── RESULT.md                    # PASS evidence log (filled post-smoke run)
+├── src/
+│   ├── lib.rs                    # re-exports + spike config
+│   ├── config.rs                 # POLYGON_MAINNET_RPC_URL, POLYGON_AMOY_RPC_URL, chain-ids, gas-token labels
+│   ├── address.rs                # EIP-55 checksum helper (wraps alloy_primitives::Address::to_checksum_buffer)
+│   ├── provider.rs               # alloy Provider helpers for polygon-rpc.com + polygon-amoy.drpc.org
+│   ├── tokens.rs                 # bundled token registry loader (mirror eth-wallet-core::tokens)
+│   ├── spki.rs                   # SPKI pin wrapper (reuses bitcoin-wallet-core::chain::spki — Q7)
+│   └── erc20.rs                  # ERC-20 ABI helpers (wraps alloy_sol_types::sol! for transfer/balanceOf/decimals)
+├── tests/
+│   ├── env.example               # RUN_POLYGON_AMOY=1, RUN_POLYGON_MAINNET=1, RUN_POLYGON_ANVIL=1
+│   ├── use_case_alpha_sends_beta_100_usdc.rs  # end-to-end smoke (V8 + V9 combined; 100 USDC native on Polygon)
+│   ├── v1_evm_reuse.rs           # cargo build -p evm-wallet-core -p eth-wallet-core -p polygon-wallet-core clean
+│   ├── v2_chain_id.rs            # get_chain_id() returns 137 (mainnet) + 80002 (amoy)
+│   ├── v3_derivation.rs          # m/44'/60'/0'/0/0 → same address on ETH + Polygon
+│   ├── v4_eip1559_estimates.rs   # estimate_eip1559_fees() — re-estimate cadence proof
+│   ├── v5_rpc_connectivity.rs    # provider.get_block_number() against polygon-rpc.com
+│   ├── v6_token_registry.rs      # mainnet.json + amoy.json load + decimals() verify
+│   ├── v7_amoy_faucet.rs         # request Amoy POL, verify balance update
+│   ├── v8_native_pol_transfer.rs # send 0.01 POL on Amoy, verify balance change
+│   ├── v9_erc20_transfer.rs      # deploy MockERC20 to Anvil (Polygon-fork), transfer, verify
+│   └── v10_eip712_replay.rs      # sign EIP-712 with chain_id 137, verify replay on 1 fails
+└── tokens/
+    ├── mainnet.json              # USDC (0x3c499c...3359), USDT (0xc2132D...e8F), DAI (0x8f3Cf7...63) — 3 entries
+    └── amoy.json                 # USDC Amoy (0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582) — 1 entry
+
+**Spike build dependencies (mirrors TRON plan §"Spike build dependency", with EVM deltas):**
+- `protoc` **NOT needed** — EVM has no protobuf transactions (explicit delta vs TRON spike; drop `build.rs` + `proto/` dirs entirely)
+- `alloy-node-bindings` (dev-dep) for `AnvilInstance::new().spawn()` Polygon-fork mode (`--fork-url https://polygon-rpc.com --fork-block-number 60000000`)
+- `tokio` (workspace) for `#[tokio::test]` async tests
+- `bitcoin-wallet-core` (path dep) for SPKI pin verifier reuse (Q7)
+- `alloy` features added on top of workspace: `transport-http`, `provider`, `network`, `sol-types` (cargo feature unification is additive across members)
+
+**Spike live-testnet gating (per L29, mirrors TRON plan §"Spike live-testnet gating"):**
+- V1/V3/V9/V10 always run (offline — Anvil Polygon-fork + deterministic derivation + EIP-712 fixture)
+- V2/V4/V6/V7/V8 gated behind `RUN_POLYGON_AMOY=1` (live Amoy RPC `https://polygon-amoy.drpc.org`)
+- V5 gated behind `RUN_POLYGON_MAINNET=1` (live mainnet RPC `https://polygon-rpc.com`, operator-driven only)
+- Without env vars, gated tests print `[SKIP — RUN_POLYGON_AMOY=1 required]` and exit 0
+
+**Async test policy:** every test touching async code (RPC via `alloy_provider::Provider`, HTTP via `reqwest`, tokio primitives) MUST be `async fn` + `#[tokio::test]` per eth #333 + plan §"Async test policy". Sync `#[test]` is forbidden for any code path that touches `alloy_provider::Provider`, `reqwest` transport, or any tokio primitive. Mirrors eth-wallet-core v0.3 test policy.
 ```
 
 **Spike live-testnet gating (per L29):** V2/V4/V5/V6/V7/V8 require live RPC access. These gated behind `RUN_POLYGON_AMOY=1` (Amoy) and `RUN_POLYGON_MAINNET=1` (mainnet — operator-driven only). V1/V3/V9/V10 are offline (Anvil) and always run.
@@ -364,6 +392,7 @@ When all 10 Vns pass, issue #416 acceptance criterion "Open questions resolved b
   - `docs/superpowers/plans/2026-08-27-tron-wallet-core.md` (v0.1 — sibling non-EVM chain template + spike mapping)
 - **eth-wallet-core source (refactor input):** `rust-wallet-app/crates/eth-wallet-core/`
 - **Workspace deps to add (Phase 1 Task 2 Step 1):** `alloy-chains` (NEW direct dep for `polygon-wallet-core` only — for `Chain::Polygon` enum). All other deps (alloy, bip32, bip39, reqwest, rustls) reused.
+- **Workspace `members` array (Phase 0 — plan doc only, not actual file):** add `"spikes/polygon-v1"` to `rust-wallet-app/Cargo.toml` `members` (mirrors `"spikes/tron-v1"` entry). Per L25 this is documentation of a future workspace edit, NOT an action — user instruction was to enrich the plan only (per session 2026-08-27 "we only edit plan with polygon-v1 structure in plan, don't execute").
 - **Bitcoin SPKI pin reuse:** `bitcoin-wallet-core/src/chain/spki.rs` (F20 / Q7)
 - **Alloy version:** `=1.8.3` (matches eth-wallet-core v0.2 — Q1 MSRV parity)
 - **Tokio test policy:** every test that touches async code MUST be `async fn` + `#[tokio::test]` per eth #333.
