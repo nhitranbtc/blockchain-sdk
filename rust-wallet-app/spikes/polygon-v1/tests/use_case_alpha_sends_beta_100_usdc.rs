@@ -39,7 +39,12 @@ const BETA_MNEMONIC: &str =
 mod common;
 
 #[tokio::test]
+#[ignore = "operator-driven per L29 — run with: RUN_POLYGON_ANVIL_E2E=1 cargo test --test use_case_alpha_sends_beta_100_usdc -- --ignored"]
 async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
+    if !common::env_opt_in("RUN_POLYGON_ANVIL_E2E") {
+        eprintln!("[use_case] SKIP — set RUN_POLYGON_ANVIL_E2E=1 to enable Anvil Polygon-fork e2e");
+        return;
+    }
     // V3 — cross-chain identity.
     let alpha_addr = build_signer(ALPHA_MNEMONIC, Network::Polygon)
         .expect("alpha mnemonic valid")

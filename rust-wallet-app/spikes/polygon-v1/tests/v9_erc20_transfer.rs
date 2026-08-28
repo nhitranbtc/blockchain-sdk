@@ -33,7 +33,12 @@ use polygon_v1_spike::erc20::{usdc_to_raw, MockUSDC};
 mod common;
 
 #[tokio::test]
+#[ignore = "operator-driven per L29 — run with: RUN_POLYGON_ANVIL_E2E=1 cargo test --test v9_erc20_transfer -- --ignored"]
 async fn v9_deploy_mock_usdc_and_transfer_on_anvil_polygon_fork() {
+    if !common::env_opt_in("RUN_POLYGON_ANVIL_E2E") {
+        eprintln!("[V9] SKIP — set RUN_POLYGON_ANVIL_E2E=1 to enable Anvil Polygon-fork e2e");
+        return;
+    }
     let anvil = Anvil::new().spawn();
     let endpoint = anvil.endpoint().parse().expect("valid Anvil endpoint URL");
     let provider = ProviderBuilder::new().connect_http(endpoint);
