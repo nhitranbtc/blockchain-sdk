@@ -4159,6 +4159,7 @@ dependencies = [
  "alloy-primitives",
  "bip39",
  "evm-wallet-core",
+ "serde_json",
 ]
 
 [[package]]

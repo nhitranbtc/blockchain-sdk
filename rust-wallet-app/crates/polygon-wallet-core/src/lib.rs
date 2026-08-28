@@ -13,7 +13,9 @@
 //! Issue #416 sub-tasks: #423 (Phase 1, this file) · sibling #424 (Phase 2
 //! RPC constructors) · #425 (Phase 3 token registry) · #426 (Phase 4 CLI).
 
+pub mod disambig;
 pub mod network;
+pub mod tokens;
 
 // Re-export shared EVM types so callers can depend on `polygon-wallet-core`
 // alone. The `Network` enum is two-level (family + instance) per Phase 0

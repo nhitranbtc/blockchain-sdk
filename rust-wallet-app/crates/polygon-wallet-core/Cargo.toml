@@ -16,6 +16,14 @@ evm-wallet-core = { path = "../evm-wallet-core" }
 alloy-primitives = { workspace = true }
 bip39 = { workspace = true }
 
+# Token registry JSON loader (Task 4 of #425). serde_json needed
+# at the polygon-wallet-core boundary rather than relying on
+# evm-wallet-core's transitive dep — explicit surface for future
+# Phase 4 CLI custom-registry writes (Story 24). `Token` derives
+# Serialize/Deserialize in evm-wallet-core, so the `derive` feature
+# is reachable transitively — no need to declare serde here.
+serde_json = { workspace = true }
+
 [dev-dependencies]
 # Tests cross-validate derivation against evm-wallet-core's shared mnemonic fn
 # (coin type 60' is chain-agnostic). Same setup as evm-wallet-core/tests/mnemonic.rs.
