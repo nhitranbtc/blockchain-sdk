@@ -11,17 +11,29 @@ use polygon_wallet_core::{Error, Network};
 pub mod erc20;
 pub mod sign;
 
-/// Parse `--network` at the polygon CLI boundary. Default = amoy.
+/// Parse `--network` at the polygon CLI boundary, narrowing the
+/// vocabulary to `Network::Polygon(...)` only. Delegates to
+/// `PolygonChain::parse_cli`; anything outside the polygon-flavored
+/// vocabulary falls into the catch-all `Err(Error::InvalidInput(...))`
+/// arm (per `evm-wallet-core/src/network.rs:228-237`).
 ///
-/// Delegates to `PolygonChain::parse_cli` (already rejects "anvil" +
-/// "mumbai" + unknown networks with `Error::InvalidInput` per
-/// `evm-wallet-core/src/network.rs:228-237`). The wrapper is here so
-/// the CLI can later surface a friendlier drift-#2 message without
-/// touching the lib.
+/// L13 Round 1 fix #5 (drift #2 — design doc §2.2): the wrapper
+/// surfaces a friendlier error message for `anvil` (the Ethereum
+/// fork's name) and `31337` (the chain_id) — directs the operator to
+/// the `eth` CLI for Anvil regtest. The base lib's generic
+/// "unknown polygon network" message stays for all other unknowns.
+#[allow(dead_code)] // wired into cli.rs --network flag in T6 follow-up
 pub fn parse_network(s: &str) -> polygon_wallet_core::Result<Network> {
-    Ok(Network::Polygon(
-        polygon_wallet_core::PolygonChain::parse_cli(s)?,
-    ))
+    polygon_wallet_core::PolygonChain::parse_cli(s)
+        .map_err(|e| match s.to_ascii_lowercase().as_str() {
+            "anvil" | "31337" => Error::InvalidInput(
+                "polygon-cli targets Polygon PoS; for Anvil regtest (chain_id 31337), \
+                 run the `eth` CLI with --network anvil (drift #2)"
+                    .into(),
+            ),
+            _ => e,
+        })
+        .map(Network::Polygon)
 }
 
 #[cfg(test)]

@@ -4,16 +4,14 @@
 //! tree + handler dispatch land in subsequent batches per
 //! `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md`.
 //!
-//! `#![allow(dead_code)]` covers the critical-tier helper functions
-//! (`parse_network`, `assert_polygon_chain_id`, `polygon_chain_from_id`,
-//! `guard_usdc_e`) that the minimal `fn main` does not yet dispatch to.
-//! Each helper has unit tests (TDD Batch A/B/D/E green); the dispatch
-//! wiring lands in the next T6 follow-up commit alongside the clap
-//! tree. Honest state: tests pass, dispatch not wired.
-
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
+//! L13 Round 1 fix #6: per-helper `#[allow(dead_code)]` annotations cover
+//! the critical-tier helper functions (`resolve_password`,
+//! `resolve_password_with`, `prompt_password`) that the minimal
+//! `fn main` does not yet dispatch to. Each helper has unit tests (TDD
+//! Batch A green); the dispatch wiring lands in the next T6 follow-up
+//! commit alongside the clap tree. Honest state: tests pass, dispatch
+//! not wired. Helpers in submodules (`handlers::{mod,sign,erc20}`)
+//! carry their own `#[allow(dead_code)]` per-function.
 
 mod handlers;
 
@@ -25,6 +23,7 @@ mod handlers;
 ///
 /// Mirrors `eth/src/main.rs:439-458` per design doc §5.1. Returns errors
 /// from `prompt_fn` verbatim — the kernel does not re-wrap.
+#[allow(dead_code)] // wired into resolve_password wrapper below (L13 fix #6)
 fn resolve_password_with(
     cli_pw: Option<&str>,
     env_pw: Option<String>,
@@ -57,8 +56,17 @@ fn resolve_password_with(
 /// The var is single-use for this invocation; reading it twice would be
 /// a security regression.
 ///
+/// **Threading assumption (L13 Round 1 fix #6 / review M-3):** must be
+/// invoked synchronously *before* any tokio runtime is built or any
+/// `tokio::spawn` / `Command::new` happens. A thread spawned before
+/// the `remove_var` call still inherits the env var (Unix: env vars
+/// are copied at fork / exec time; `std::env::remove_var` mutates only
+/// the leader thread). Future async dispatch (T6 follow-up Batch B)
+/// must call `resolve_password` BEFORE entering the tokio runtime.
+///
 /// Mirrors `eth/src/main.rs:421-429`. Returns `Error::InvalidInput`
 /// (exit 2) when every source fails.
+#[allow(dead_code)] // wired into fn main() in T6 follow-up (before tokio runtime)
 fn resolve_password(cli_pw: Option<&str>) -> polygon_wallet_core::Result<String> {
     let env_pw = std::env::var("POLYGON_PASSWORD").ok();
     std::env::remove_var("POLYGON_PASSWORD");
@@ -69,7 +77,12 @@ fn resolve_password(cli_pw: Option<&str>) -> polygon_wallet_core::Result<String>
 /// in a follow-up commit (rpassword dep added in Batch B). Returns
 /// `Error::InvalidInput` so the kernel propagates without panicking if
 /// the closure is ever invoked before the real impl lands.
-fn prompt_password(prompt: &str) -> polygon_wallet_core::Result<String> {
+///
+/// L13 Round 1 fix #6 (review L1): `_prompt` underscore prefix makes the
+/// unused status explicit. The real impl will forward it to
+/// `rpassword::prompt_password(_prompt)`.
+#[allow(dead_code)] // wired into resolve_password wrapper in T6 follow-up
+fn prompt_password(_prompt: &str) -> polygon_wallet_core::Result<String> {
     Err(polygon_wallet_core::Error::InvalidInput(
         "prompt_password: stub — rpassword::prompt_password impl lands in Batch B".into(),
     ))
@@ -186,7 +199,9 @@ mod password_resolution_tests {
     /// Test #7 (Batch A item 5 from design doc §6.1): POLYGON_PASSWORD
     /// must be removed from process env after read — defense-in-depth
     /// against subprocess inheritance per L54.
-    /// Mirrors `eth/src/main.rs:869-888`.
+    /// Mirrors `eth/src/main.rs:869-888`. L13 Round 1 fix #6 (review L4):
+    /// explicit `remove_var` cleanup removed — the wrapper already
+    /// removes before returning; redundant. ETH pattern (eth/src/main.rs:880-882).
     #[test]
     fn resolve_password_reads_and_removes_polygon_password_env() {
         let _guard = ENV_LOCK.lock().unwrap();
@@ -194,9 +209,6 @@ mod password_resolution_tests {
         // Empty argv falls through to env path, exercising the env
         // read + remove sequence.
         let result = resolve_password(Some(""));
-        // Cleanup before assertions so the test fails loud (env leak)
-        // rather than silently affecting other tests if assertions panic.
-        std::env::remove_var("POLYGON_PASSWORD");
         assert!(result.is_ok(), "empty argv + POLYGON_PASSWORD env = Ok");
         assert_eq!(result.unwrap(), "env-pw");
         assert!(

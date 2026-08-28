@@ -20,6 +20,7 @@ use alloy_primitives::Address;
 /// NOT "this address is native USDC." Callers that need a positive
 /// identity assertion must compare against the canonical native USDC
 /// address `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359` themselves.
+#[allow(dead_code)] // wired into erc20_send handler in T6 follow-up
 pub fn guard_usdc_e(token: Address) -> polygon_wallet_core::Result<()> {
     polygon_wallet_core::disambig::reject_bridged_usdc_e(token)
 }
@@ -29,15 +30,18 @@ mod tests {
     //! Batch E tests (per design doc §6.5): USDC.e footgun guard.
     use super::guard_usdc_e;
     use alloy_primitives::Address;
+    use polygon_wallet_core::disambig::BRIDGED_USDC_E_ADDRESSES;
 
-    /// Polygon mainnet bridged USDC.e (legacy, pre-Circle native USDC).
-    /// Bytes from `polygon-wallet-core/src/disambig.rs:40-43` —
-    /// byte-equality with `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174`.
+    /// L13 Round 1 review fix #4: pull the canonical bridged USDC.e
+    /// address from the lib's slice (was duplicating bytes — silent
+    /// drift risk when slice extended). Fails loud if the slice is
+    /// empty (would render the "rejection" claim meaningless).
     fn bridged_usdc_e() -> Address {
-        Address::new([
-            0x27, 0x91, 0xBC, 0xa1, 0xf2, 0xde, 0x46, 0x61, 0xED, 0x88, 0xA3, 0x0C, 0x99, 0xA7,
-            0xa9, 0x44, 0x9A, 0xa8, 0x41, 0x74,
-        ])
+        assert!(
+            !BRIDGED_USDC_E_ADDRESSES.is_empty(),
+            "BRIDGED_USDC_E_ADDRESSES must not be empty (test fixture depends on it)"
+        );
+        BRIDGED_USDC_E_ADDRESSES[0]
     }
 
     /// Polygon mainnet canonical native USDC (Circle issuance).

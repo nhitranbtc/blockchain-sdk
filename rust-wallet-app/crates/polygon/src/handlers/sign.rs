@@ -3,37 +3,44 @@
 //! Per `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md`
 //! §5.10 + §6.4. Batch D (TDD): `assert_polygon_chain_id` (Q7 critical-tier
 //! gate against cross-chain replay on EIP-712 typed-data signing).
+//!
+//! L13 Round 1 review fix #2: thin CLI wrappers around `PolygonChain`
+//! inherent methods (`from_chain_id`, `is_polygon_chain_id`) — single
+//! source of truth in the enum kills the zkEVM forward-compat trap
+//! when `PolygonChain::ZkEvm` lands in v0.2.
 
 use polygon_wallet_core::{Error, PolygonChain};
 
-/// Q7 + C1 enforcement: EIP-712 `chain_id` must be a Polygon chain
-/// (`PolygonChain::Mainnet` = 137 or `PolygonChain::Amoy` = 80002).
+/// Q7 + C1 enforcement: EIP-712 `chain_id` must be a Polygon PoS chain
+/// (137 = mainnet, 80002 = amoy). Single chokepoint for cross-chain
+/// replay protection on EIP-712 typed-data signing. Both `sign_typed_data`
+/// (explicit arg) and any future EIP-712 path (Permit2, route handlers,
+/// etc.) call this before signing.
 ///
-/// Single chokepoint for cross-chain replay protection on EIP-712 typed-data
-/// signing. Both `sign_typed_data` (explicit arg) and any future EIP-712
-/// path (Permit2, route handlers, etc.) call this before signing.
+/// Delegates to `PolygonChain::is_polygon_chain_id` — adding a new
+/// variant (e.g. `PolygonChain::ZkEvm` for v0.2 per design doc §9)
+/// automatically extends acceptance without a CLI-side change.
 ///
-/// Returns `Error::InvalidInput` for any chain_id not in {137, 80002}.
+/// Returns `Error::InvalidInput` for non-Polygon-PoS chain_ids.
+#[allow(dead_code)] // wired into cli.rs sign-typed command in T6 follow-up
 pub fn assert_polygon_chain_id(chain_id: u64) -> polygon_wallet_core::Result<()> {
-    match chain_id {
-        137 | 80002 => Ok(()),
-        other => Err(Error::InvalidInput(format!(
-            "EIP-712 chain_id {other} is not a polygon chain (expected 137|80002)"
-        ))),
+    if PolygonChain::is_polygon_chain_id(chain_id) {
+        Ok(())
+    } else {
+        Err(Error::InvalidInput(format!(
+            "EIP-712 chain_id {chain_id} is not a polygon PoS chain (expected 137|80002)"
+        )))
     }
 }
 
-/// Resolve a `--chain-id` u64 to a `PolygonChain` enum variant. Inverse
-/// of `PolygonChain::chain_id()`. Returns `Error::InvalidInput` for
-/// unknown chain_ids (defense-in-depth alongside `assert_polygon_chain_id`).
+/// Resolve a `--chain-id` u64 to a `PolygonChain` enum variant. Thin
+/// CLI wrapper around `PolygonChain::from_chain_id` — same single
+/// source of truth. Returns `Error::InvalidInput` for unknown
+/// chain_ids.
+#[allow(dead_code)] // wired into cli.rs sign-typed command in T6 follow-up
 pub fn polygon_chain_from_id(chain_id: u64) -> polygon_wallet_core::Result<PolygonChain> {
-    match chain_id {
-        137 => Ok(PolygonChain::Mainnet),
-        80002 => Ok(PolygonChain::Amoy),
-        other => Err(Error::InvalidInput(format!(
-            "unknown polygon chain_id {other} (expected 137|80002)"
-        ))),
-    }
+    PolygonChain::from_chain_id(chain_id)
+        .ok_or_else(|| Error::InvalidInput(format!("unknown polygon chain_id {chain_id}")))
 }
 
 #[cfg(test)]
@@ -64,13 +71,13 @@ mod tests {
         );
     }
 
-    /// Batch D test #3: chain_id=137 (Polygon mainnet) accepted.
+    /// Batch D test #3: chain_id=137 (Polygon PoS mainnet) accepted.
     #[test]
     fn assert_polygon_chain_id_accepts_chain_id_137() {
         assert!(assert_polygon_chain_id(137).is_ok());
     }
 
-    /// Batch D test #4: chain_id=80002 (Polygon amoy) accepted.
+    /// Batch D test #4: chain_id=80002 (Polygon PoS amoy) accepted.
     #[test]
     fn assert_polygon_chain_id_accepts_chain_id_80002() {
         assert!(assert_polygon_chain_id(80002).is_ok());
