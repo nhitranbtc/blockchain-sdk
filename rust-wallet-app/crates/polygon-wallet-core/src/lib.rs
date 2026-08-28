@@ -30,3 +30,9 @@ pub mod tokens;
 // additive re-export.
 pub use evm_wallet_core::network::{EthereumChain, Network, PolygonChain};
 pub use evm_wallet_core::{Error, Result};
+
+// T6c re-export: WalletManager is the canonical wallet-state container.
+// Re-exporting here lets the polygon CLI consume it through the
+// single-import-surface (Q1 Option A) without depending on `evm-wallet-core`
+// directly — per design doc Drift #5 + §10.3 (Q1 Option A thin wrapper).
+pub use evm_wallet_core::wallet::WalletManager;

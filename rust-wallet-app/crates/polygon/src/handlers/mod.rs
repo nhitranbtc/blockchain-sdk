@@ -10,6 +10,7 @@ use polygon_wallet_core::{Error, Network};
 // instead of reaching into individual files. Mirrors design doc §5.3.
 pub mod erc20;
 pub mod sign;
+pub mod wallet;
 
 /// Parse `--network` at the polygon CLI boundary, narrowing the
 /// vocabulary to `Network::Polygon(...)` only. Delegates to

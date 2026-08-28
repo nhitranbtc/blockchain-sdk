@@ -15,6 +15,7 @@ path = "src/main.rs"
 # Single import surface (Q1 Option A — polygon CLI depends on polygon-wallet-core
 # alone for non-alloy types). Includes Error + Result re-exports per Drift #5
 # of `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md` §2.5.
+# T6c: also re-exports WalletManager (additive — `pub use evm_wallet_core::WalletManager`).
 polygon-wallet-core    = { path = "../polygon-wallet-core" }
 
 # T6b (clap tree + dispatch per L25 sub-task split). Issue #426 / design §3.4.
@@ -24,10 +25,21 @@ polygon-wallet-core    = { path = "../polygon-wallet-core" }
 clap                 = { workspace = true }
 tokio                = { workspace = true }
 
-# alloy-primitives carried over from T6a (used by erc20 USDC.e guard tests).
-# alloy-provider + alloy-transport-http land in T6c/T6d when open_provider
-# + send/speedup impls wire up.
+# alloy family for wallet + RPC + signing (T6c — per L25 sub-task split).
+# all features from workspace declarations (`rust-wallet-app/Cargo.toml:107-122`).
 alloy-primitives     = { workspace = true }
+alloy-provider       = { workspace = true }
+alloy-network        = { workspace = true }
+alloy-transport-http = { workspace = true }
+alloy-rpc-types      = { workspace = true }
+alloy-signer-local   = { workspace = true }
+alloy-consensus      = { workspace = true }
 
-# T6b handler stubs return `Error::Rpc("deferred past T6b")` — no rpassword /
-# real impl deps yet (lands in T6d when prompt_password is wired to real impl).
+# bitcoin-wallet-core for SpkiPin (T6c wiring — design §3.1, §5.1, §9).
+bitcoin-wallet-core  = { workspace = true }
+
+# `url` for parsing `--rpc-url` (T6c open_provider). alloy's Http transport
+# accepts `url::Url`; reqwest also re-exports it. Direct dep for explicit
+# type clarity (the `reqwest` transitive pulls `url` but isn't in our
+# direct deps).
+url                  = "2.5"
