@@ -435,9 +435,9 @@ impl WalletManager {
                     Ok(b) => b,
                     Err(_) => continue,
                 };
-                let meta: WalletMeta = match serde_json::from_slice(&meta_bytes) {
-                    Ok(m) => m,
-                    Err(_) => continue,
+                let meta: WalletMeta = match from_slice_with_legacy(&meta_bytes) {
+                    Some(m) => m,
+                    None => continue,
                 };
                 out.push(WalletInfo {
                     wallet_id: meta.wallet_id,
@@ -477,9 +477,9 @@ impl WalletManager {
                 Ok(b) => b,
                 Err(_) => continue,
             };
-            let meta: WalletMeta = match serde_json::from_slice(&meta_bytes) {
-                Ok(m) => m,
-                Err(_) => continue,
+            let meta: WalletMeta = match from_slice_with_legacy(&meta_bytes) {
+                Some(m) => m,
+                None => continue,
             };
             if meta.name == name {
                 return Ok(meta.wallet_id);
@@ -686,6 +686,39 @@ impl WalletManager {
             .expect("mnemonic build")
             .address()
     }
+}
+
+/// Compatibility deserializer for `WalletMeta` JSON blobs.
+///
+/// Pre-Phase-0 (eth-wallet-core v0.2) stored the `network` field as a
+/// bare lowercase enum tag (`"network": "sepolia"`). Phase 0's two-level
+/// Network envelope serializes as `{"family": "ethereum", "instance":
+/// "sepolia"}`. Pre-Phase-0 `.meta.json` blobs on disk would silently
+/// fail `serde_json::from_slice::<WalletMeta>`, causing
+/// `WalletManager::list_wallets` + similar code paths to drop the
+/// entry on `Err(_) => continue` (PR #427 reviewer finding).
+///
+/// This helper tries the Phase 0 envelope first; on failure, parses
+/// as generic `Value` and patches `network` from bare string into the
+/// envelope shape, then re-deserializes through `WalletMeta`.
+///
+/// Returns `None` for any blob that doesn't match either shape —
+/// callers should `continue` past the entry, matching the prior
+/// `Err(_) => continue` semantics at the two on-disk read sites.
+fn from_slice_with_legacy(bytes: &[u8]) -> Option<WalletMeta> {
+    if let Ok(m) = serde_json::from_slice::<WalletMeta>(bytes) {
+        return Some(m);
+    }
+    let mut v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let net_str = v.get("network")?.as_str()?.to_owned();
+    let envelope = match net_str.as_str() {
+        "mainnet" => serde_json::json!({"family": "ethereum", "instance": "mainnet"}),
+        "sepolia" => serde_json::json!({"family": "ethereum", "instance": "sepolia"}),
+        "anvil" => serde_json::json!({"family": "ethereum", "instance": "anvil"}),
+        _ => return None,
+    };
+    v["network"] = envelope;
+    serde_json::from_value(v).ok()
 }
 
 fn wallet_path(network_dir: &Path, wallet_id: Uuid) -> PathBuf {
@@ -1041,5 +1074,43 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(signer.address(), expected);
+    }
+
+    /// Pre-Phase-0 (`eth-wallet-core` v0.2) on-disk shape: bare lowercase
+    /// `network` tag. Must round-trip via `from_slice_with_legacy` fallback
+    /// or operators with pre-merge wallet blobs silently lose them on
+    /// first restart (PR #427 reviewer finding).
+    #[test]
+    fn v0_2_meta_json_compat_loads_bare_network_tag() {
+        let legacy = serde_json::json!({
+            "wallet_id": "00000000-0000-0000-0000-000000000001",
+            "name": "legacy-test",
+            "network": "sepolia",
+            "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+            "derivation_path": "m/44'/60'/0'/0/0",
+            "created_at_secs": 1_700_000_000u64
+        });
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        let meta = from_slice_with_legacy(&bytes).expect("legacy blob must load");
+        assert_eq!(meta.network, Network::Ethereum(EthereumChain::Sepolia));
+        assert_eq!(meta.name, "legacy-test");
+    }
+
+    /// Post-Phase-0 envelope shape must round-trip directly without the
+    /// fallback path. Catches regressions in the envelope's serde config
+    /// itself (PR #427 envelope contract).
+    #[test]
+    fn phase_0_meta_json_loads_envelope_directly() {
+        let new_shape = serde_json::json!({
+            "wallet_id": "00000000-0000-0000-0000-000000000002",
+            "name": "phase0-test",
+            "network": {"family": "ethereum", "instance": "sepolia"},
+            "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+            "derivation_path": "m/44'/60'/0'/0/0",
+            "created_at_secs": 1_700_000_000u64
+        });
+        let bytes = serde_json::to_vec(&new_shape).unwrap();
+        let meta = from_slice_with_legacy(&bytes).expect("phase-0 blob must load");
+        assert_eq!(meta.network, Network::Ethereum(EthereumChain::Sepolia));
     }
 }
