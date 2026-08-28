@@ -599,7 +599,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                         Error::InvalidInput(format!("invalid --speedup tx hash: {e}"))
                     })?;
                     let password = resolve_password(password.as_deref())?;
-                    let net = Network::parse_cli(&network)
+                    let net = Network::parse_cli_eth(&network)
                         .map_err(|e| Error::InvalidInput(e.to_string()))?;
                     let wallet_id = mgr
                         .lookup_by_name(&name, net)
@@ -644,7 +644,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                     .as_deref()
                     .ok_or_else(|| Error::InvalidInput("--name required".into()))?;
                 let password = resolve_password(args.password.as_deref())?;
-                let net = Network::parse_cli(&args.network)
+                let net = Network::parse_cli_eth(&args.network)
                     .map_err(|e| Error::InvalidInput(e.to_string()))?;
                 let wallet_id = mgr
                     .lookup_by_name(name, net)
@@ -731,7 +731,7 @@ fn run(cli: Cli) -> eth_wallet_core::Result<()> {
                         .as_deref()
                         .ok_or_else(|| Error::InvalidInput("--name required".into()))?;
                     let p = resolve_password(password.as_deref())?;
-                    let net = Network::parse_cli(&network)
+                    let net = Network::parse_cli_eth(&network)
                         .map_err(|e| Error::InvalidInput(e.to_string()))?;
                     let wallet_id = mgr
                         .lookup_by_name(n, net)
