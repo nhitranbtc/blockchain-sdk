@@ -224,6 +224,27 @@ impl PolygonChain {
         }
     }
 
+    /// Inverse of `chain_id()`: returns `Some(Self)` iff `chain_id`
+    /// corresponds to a `PolygonChain` variant. Single source of truth —
+    /// adding a new variant (e.g. `PolygonChain::ZkEvm` for v0.2 per
+    /// design doc §9 backlog) extends this match arm and the new
+    /// chain becomes accepted automatically. The compiler enforces
+    /// exhaustiveness when the enum grows.
+    pub fn from_chain_id(chain_id: u64) -> Option<Self> {
+        match chain_id {
+            137 => Some(PolygonChain::Mainnet),
+            80002 => Some(PolygonChain::Amoy),
+            _ => None,
+        }
+    }
+
+    /// Q7 + C1 enforcement: `true` iff `chain_id` is a `PolygonChain`
+    /// variant. Single chokepoint — `sign_typed_data` + future EIP-712
+    /// paths (Permit2, route handlers) call this before signing.
+    pub fn is_polygon_chain_id(chain_id: u64) -> bool {
+        Self::from_chain_id(chain_id).is_some()
+    }
+
     /// Polygon-only parser. Used by Phase 4 `polygon` CLI.
     pub fn parse_cli(s: &str) -> crate::Result<Self> {
         use crate::Error;

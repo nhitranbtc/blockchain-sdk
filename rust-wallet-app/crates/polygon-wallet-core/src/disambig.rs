@@ -31,7 +31,15 @@ use evm_wallet_core::{Error, Result};
 ///
 /// Mainnet-only as of v0.1. Amoy testnet has no bridged USDC.e
 /// issuance — if Amoy ever ships one, widen this slice with care.
-const BRIDGED_USDC_E_ADDRESSES: &[Address] = &[
+///
+/// L13 Round 1 review fix #3: `pub` (wider than `pub(crate)` — the
+/// polygon CLI is a separate crate and needs to import this slice
+/// directly so its USDC.e guard test couples to the lib's source of
+/// truth instead of duplicating bytes; kills the silent-drift risk
+/// when this slice extends). The slice contains public on-chain
+/// contract addresses — no secret leak; the `pub` boundary is
+/// appropriate for "canonical disallow list" data.
+pub const BRIDGED_USDC_E_ADDRESSES: &[Address] = &[
     // Polygon mainnet USDC.e (legacy bridged from Ethereum).
     // Bytes match the hex string `0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174`
     // byte-for-byte; the EIP-55 checksum happens to be that exact
@@ -42,6 +50,15 @@ const BRIDGED_USDC_E_ADDRESSES: &[Address] = &[
         0x44, 0x9A, 0xa8, 0x41, 0x74,
     ]),
 ];
+
+/// L13 Round 1 review fix #3: compile-time assertion that the slice is
+/// non-empty. Future regressions where the slice gets emptied (would
+/// silently accept all addresses via `reject_bridged_usdc_e`) fail loud
+/// at compile time rather than at runtime.
+const _: () = assert!(
+    !BRIDGED_USDC_E_ADDRESSES.is_empty(),
+    "BRIDGED_USDC_E_ADDRESSES must not be empty — empty slice accepts every address"
+);
 
 /// Returns the display label for Polygon's native gas token.
 ///

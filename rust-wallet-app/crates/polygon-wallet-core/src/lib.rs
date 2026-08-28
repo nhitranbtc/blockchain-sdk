@@ -21,4 +21,12 @@ pub mod tokens;
 // alone. The `Network` enum is two-level (family + instance) per Phase 0
 // of the polygon plan; `EthereumChain` / `PolygonChain` are the per-family
 // instance enums.
+//
+// Issue #426 T6 / Drift #5 in
+// `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md` §2.5:
+// `Error` + `Result` re-exported so the `polygon` CLI binary can mirror
+// the ETH CLI's single-import-surface pattern (`use eth_wallet_core::*`)
+// without depending on `evm-wallet-core` directly. Backward-compatible
+// additive re-export.
 pub use evm_wallet_core::network::{EthereumChain, Network, PolygonChain};
+pub use evm_wallet_core::{Error, Result};

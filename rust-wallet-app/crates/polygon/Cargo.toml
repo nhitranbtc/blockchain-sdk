@@ -1,0 +1,22 @@
+[package]
+name = "polygon"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "MIT"
+description = "`polygon` CLI for the polygon-wallet-core v0.1 library (Issue #426 / Phase 4 of #416)."
+publish = false
+
+[[bin]]
+name = "polygon"
+path = "src/main.rs"
+
+[dependencies]
+# Single import surface (Q1 Option A — polygon CLI depends on polygon-wallet-core
+# alone for non-alloy types). Includes Error + Result re-exports per Drift #5
+# of `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md` §2.5.
+polygon-wallet-core    = { path = "../polygon-wallet-core" }
+
+# alloy family for Address types (Batch E: erc20 USDC.e guard needs Address).
+# Full alloy-* dep list per design doc §3.1 lands with subsequent batches.
+alloy-primitives       = { workspace = true }
