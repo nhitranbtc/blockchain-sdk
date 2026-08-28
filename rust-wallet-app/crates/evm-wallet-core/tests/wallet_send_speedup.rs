@@ -22,7 +22,7 @@ mod common;
 use alloy_primitives::{Address, TxKind, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types::TransactionRequest;
-use eth_wallet_core::{encoded_envelope, sign_native_eth_tx};
+use evm_wallet_core::{encoded_envelope, sign_native_eth_tx};
 
 const TRANSFER_WEI: u128 = 1_000_000_000_000_000; // 0.001 ETH
 const GAS_LIMIT: u64 = 21_000;

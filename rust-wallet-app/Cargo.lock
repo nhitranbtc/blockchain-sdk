@@ -2534,6 +2534,13 @@ dependencies = [
 name = "eth-wallet-core"
 version = "0.2.0"
 dependencies = [
+ "evm-wallet-core",
+]
+
+[[package]]
+name = "evm-wallet-core"
+version = "0.1.0"
+dependencies = [
  "aes-gcm",
  "alloy-consensus",
  "alloy-eips",

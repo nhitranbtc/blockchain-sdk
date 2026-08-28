@@ -33,6 +33,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{self, CryptoError, KEY_LEN, NONCE_LEN, SALT_LEN};
 use crate::mnemonic;
+use crate::network::{EthereumChain, Network};
 
 /// Default XDG layout (operator-side). Overridable via `open_at` (tests).
 const PROJECT_QUALIFIER: &str = "btc";
@@ -42,70 +43,13 @@ const PROJECT_APP: &str = "eth-wallet-core";
 /// Companion file extension for plaintext `WalletMeta` next to each `.enc`.
 const META_EXT: &str = "meta.json";
 
-/// Logical network for a wallet (Task 10 CLI will pass --network).
-/// Default = Sepolia for v0.2 (cross-cutting testnet default per #291).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Network {
-    Mainnet,
-    Sepolia,
-    Anvil,
-}
-
-impl Network {
-    pub fn default_v0_2() -> Self {
-        Network::Sepolia
-    }
-
-    pub fn as_dir_name(&self) -> &'static str {
-        match self {
-            Network::Mainnet => "mainnet",
-            Network::Sepolia => "sepolia",
-            Network::Anvil => "anvil",
-        }
-    }
-
-    /// EIP-155 chain id for this network. Used by handlers to cross-
-    /// check the RPC-reported chain_id against the wallet's network
-    /// before signing (chain_id trust-boundary per L12 review).
-    pub fn chain_id(&self) -> u64 {
-        match self {
-            Network::Mainnet => 1,
-            Network::Sepolia => 11_155_111,
-            Network::Anvil => 31_337,
-        }
-    }
-
-    /// Parse from CLI `--network` flag. Lowercase, tolerant of common
-    /// aliases. Returns `Error::InvalidInput` on unknown values so the
-    /// CLI surfaces exit code 2 (bad input) — not `WalletError::Path`
-    /// which would translate to exit 3 (Rpc) per #337 type-design
-    /// CRITICAL fix.
-    pub fn parse_cli(s: &str) -> crate::Result<Self> {
-        use crate::Error;
-        match s.to_ascii_lowercase().as_str() {
-            "mainnet" | "1" => Ok(Network::Mainnet),
-            "sepolia" | "11155111" => Ok(Network::Sepolia),
-            "anvil" | "31337" | "dev" | "local" => Ok(Network::Anvil),
-            other => Err(Error::InvalidInput(format!(
-                "unknown network '{other}' — expected mainnet|sepolia|anvil"
-            ))),
-        }
-    }
-
-    /// Inverse of `chain_id()` — resolve a numeric EIP-155 chain id back
-    /// to a `Network`. Returns `None` for unknown chain ids. Single source
-    /// of truth for the network table; replaces ad-hoc hardcoded match
-    /// blocks in `eth config show` (Issue #341 type-design review finding).
-    pub fn from_chain_id(chain_id: u64) -> Option<Self> {
-        match chain_id {
-            1 => Some(Network::Mainnet),
-            11_155_111 => Some(Network::Sepolia),
-            31_337 => Some(Network::Anvil),
-            _ => None,
-        }
-    }
-}
+// NOTE: `Network` (the two-level chain-family enum) lives in `crate::network`
+// — moved there in Phase 0 of the polygon-wallet-core plan
+// (`docs/superpowers/plans/2026-08-27-polygon-wallet-core.md`). The previous
+// ETH-only flat enum (Mainnet/Sepolia/Anvil) is now
+// `Network::Ethereum(EthereumChain::Mainnet)` etc. — see wallet.rs test
+// assertions for the migration. All wallet.rs struct fields still type as
+// `Network` because the family-level type composes via inner enum.
 
 /// Persisted encrypted blob on disk. Salt + nonce + ciphertext in a JSON file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,7 +409,11 @@ impl WalletManager {
     /// created before meta.json persistence shipped.
     pub fn list_wallets(&self) -> Result<Vec<WalletInfo>> {
         let mut out: Vec<WalletInfo> = Vec::new();
-        for network in [Network::Mainnet, Network::Sepolia, Network::Anvil] {
+        for network in [
+            Network::Ethereum(EthereumChain::Mainnet),
+            Network::Ethereum(EthereumChain::Sepolia),
+            Network::Ethereum(EthereumChain::Anvil),
+        ] {
             let network_dir = self.base_dir.join(network.as_dir_name());
             let entries = match fs::read_dir(&network_dir) {
                 Ok(e) => e,
@@ -487,9 +435,9 @@ impl WalletManager {
                     Ok(b) => b,
                     Err(_) => continue,
                 };
-                let meta: WalletMeta = match serde_json::from_slice(&meta_bytes) {
-                    Ok(m) => m,
-                    Err(_) => continue,
+                let meta: WalletMeta = match from_slice_with_legacy(&meta_bytes) {
+                    Some(m) => m,
+                    None => continue,
                 };
                 out.push(WalletInfo {
                     wallet_id: meta.wallet_id,
@@ -529,9 +477,9 @@ impl WalletManager {
                 Ok(b) => b,
                 Err(_) => continue,
             };
-            let meta: WalletMeta = match serde_json::from_slice(&meta_bytes) {
-                Ok(m) => m,
-                Err(_) => continue,
+            let meta: WalletMeta = match from_slice_with_legacy(&meta_bytes) {
+                Some(m) => m,
+                None => continue,
             };
             if meta.name == name {
                 return Ok(meta.wallet_id);
@@ -740,6 +688,39 @@ impl WalletManager {
     }
 }
 
+/// Compatibility deserializer for `WalletMeta` JSON blobs.
+///
+/// Pre-Phase-0 (eth-wallet-core v0.2) stored the `network` field as a
+/// bare lowercase enum tag (`"network": "sepolia"`). Phase 0's two-level
+/// Network envelope serializes as `{"family": "ethereum", "instance":
+/// "sepolia"}`. Pre-Phase-0 `.meta.json` blobs on disk would silently
+/// fail `serde_json::from_slice::<WalletMeta>`, causing
+/// `WalletManager::list_wallets` + similar code paths to drop the
+/// entry on `Err(_) => continue` (PR #427 reviewer finding).
+///
+/// This helper tries the Phase 0 envelope first; on failure, parses
+/// as generic `Value` and patches `network` from bare string into the
+/// envelope shape, then re-deserializes through `WalletMeta`.
+///
+/// Returns `None` for any blob that doesn't match either shape —
+/// callers should `continue` past the entry, matching the prior
+/// `Err(_) => continue` semantics at the two on-disk read sites.
+fn from_slice_with_legacy(bytes: &[u8]) -> Option<WalletMeta> {
+    if let Ok(m) = serde_json::from_slice::<WalletMeta>(bytes) {
+        return Some(m);
+    }
+    let mut v: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let net_str = v.get("network")?.as_str()?.to_owned();
+    let envelope = match net_str.as_str() {
+        "mainnet" => serde_json::json!({"family": "ethereum", "instance": "mainnet"}),
+        "sepolia" => serde_json::json!({"family": "ethereum", "instance": "sepolia"}),
+        "anvil" => serde_json::json!({"family": "ethereum", "instance": "anvil"}),
+        _ => return None,
+    };
+    v["network"] = envelope;
+    serde_json::from_value(v).ok()
+}
+
 fn wallet_path(network_dir: &Path, wallet_id: Uuid) -> PathBuf {
     network_dir.join(format!("{wallet_id}.enc"))
 }
@@ -860,6 +841,7 @@ pub fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::network::PolygonChain;
     use tempfile::tempdir;
 
     fn password() -> Vec<u8> {
@@ -868,12 +850,33 @@ mod tests {
 
     #[test]
     fn network_parse_accepts_known_aliases() {
-        assert_eq!(Network::parse_cli("mainnet").unwrap(), Network::Mainnet);
-        assert_eq!(Network::parse_cli("Sepolia").unwrap(), Network::Sepolia);
-        assert_eq!(Network::parse_cli("anvil").unwrap(), Network::Anvil);
-        assert_eq!(Network::parse_cli("dev").unwrap(), Network::Anvil);
-        assert_eq!(Network::parse_cli("31337").unwrap(), Network::Anvil);
-        assert!(Network::parse_cli("polygon").is_err());
+        assert_eq!(
+            Network::parse_cli("mainnet").unwrap(),
+            Network::Ethereum(EthereumChain::Mainnet)
+        );
+        assert_eq!(
+            Network::parse_cli("Sepolia").unwrap(),
+            Network::Ethereum(EthereumChain::Sepolia)
+        );
+        assert_eq!(
+            Network::parse_cli("anvil").unwrap(),
+            Network::Ethereum(EthereumChain::Anvil)
+        );
+        assert_eq!(
+            Network::parse_cli("dev").unwrap(),
+            Network::Ethereum(EthereumChain::Anvil)
+        );
+        assert_eq!(
+            Network::parse_cli("31337").unwrap(),
+            Network::Ethereum(EthereumChain::Anvil)
+        );
+        // Phase 0 family-level: polygon now parses to Polygon::Mainnet.
+        assert_eq!(
+            Network::parse_cli("polygon").unwrap(),
+            Network::Polygon(PolygonChain::Mainnet)
+        );
+        // ETH-only parser (used by `eth` CLI) still rejects polygon.
+        assert!(EthereumChain::parse_cli("polygon").is_err());
     }
 
     #[test]
@@ -901,7 +904,7 @@ mod tests {
                 w.name
             );
             assert_ne!(w.address, Address::ZERO, "address leaked ZERO");
-            assert_eq!(w.network, Network::Sepolia);
+            assert_eq!(w.network, Network::Ethereum(EthereumChain::Sepolia));
             assert_eq!(w.derivation_path, "m/44'/60'/0'/0/0");
         }
     }
@@ -912,9 +915,13 @@ mod tests {
         let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
         let created = mgr.create_wallet("findme", &password()).unwrap();
 
-        let resolved = mgr.lookup_by_name("findme", Network::Sepolia).unwrap();
+        let resolved = mgr
+            .lookup_by_name("findme", Network::Ethereum(EthereumChain::Sepolia))
+            .unwrap();
         assert_eq!(resolved, created.wallet_id);
-        assert!(mgr.lookup_by_name("nope", Network::Sepolia).is_err());
+        assert!(mgr
+            .lookup_by_name("nope", Network::Ethereum(EthereumChain::Sepolia))
+            .is_err());
     }
 
     #[test]
@@ -1005,10 +1012,10 @@ mod tests {
                 "anvil-test",
                 "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
                 &password(),
-                Network::Anvil,
+                Network::Ethereum(EthereumChain::Anvil),
             )
             .unwrap();
-        assert_eq!(created.network, Network::Anvil);
+        assert_eq!(created.network, Network::Ethereum(EthereumChain::Anvil));
         assert!(tmp
             .path()
             .join("anvil")
@@ -1067,5 +1074,43 @@ mod tests {
             .parse()
             .unwrap();
         assert_eq!(signer.address(), expected);
+    }
+
+    /// Pre-Phase-0 (`eth-wallet-core` v0.2) on-disk shape: bare lowercase
+    /// `network` tag. Must round-trip via `from_slice_with_legacy` fallback
+    /// or operators with pre-merge wallet blobs silently lose them on
+    /// first restart (PR #427 reviewer finding).
+    #[test]
+    fn v0_2_meta_json_compat_loads_bare_network_tag() {
+        let legacy = serde_json::json!({
+            "wallet_id": "00000000-0000-0000-0000-000000000001",
+            "name": "legacy-test",
+            "network": "sepolia",
+            "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+            "derivation_path": "m/44'/60'/0'/0/0",
+            "created_at_secs": 1_700_000_000u64
+        });
+        let bytes = serde_json::to_vec(&legacy).unwrap();
+        let meta = from_slice_with_legacy(&bytes).expect("legacy blob must load");
+        assert_eq!(meta.network, Network::Ethereum(EthereumChain::Sepolia));
+        assert_eq!(meta.name, "legacy-test");
+    }
+
+    /// Post-Phase-0 envelope shape must round-trip directly without the
+    /// fallback path. Catches regressions in the envelope's serde config
+    /// itself (PR #427 envelope contract).
+    #[test]
+    fn phase_0_meta_json_loads_envelope_directly() {
+        let new_shape = serde_json::json!({
+            "wallet_id": "00000000-0000-0000-0000-000000000002",
+            "name": "phase0-test",
+            "network": {"family": "ethereum", "instance": "sepolia"},
+            "address": "0x9858EfFD232B4033E47d90003D41EC34EcaEda94",
+            "derivation_path": "m/44'/60'/0'/0/0",
+            "created_at_secs": 1_700_000_000u64
+        });
+        let bytes = serde_json::to_vec(&new_shape).unwrap();
+        let meta = from_slice_with_legacy(&bytes).expect("phase-0 blob must load");
+        assert_eq!(meta.network, Network::Ethereum(EthereumChain::Sepolia));
     }
 }

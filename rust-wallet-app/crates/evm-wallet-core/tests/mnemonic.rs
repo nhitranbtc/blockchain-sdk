@@ -5,7 +5,7 @@
 
 use alloy_primitives::Address;
 use bip39::{Language, Mnemonic};
-use eth_wallet_core::mnemonic::derive_address;
+use evm_wallet_core::mnemonic::derive_address;
 
 /// 12-word "abandon" mnemonic — BIP-39 reference test vector.
 const TEST_MNEMONIC: &str =

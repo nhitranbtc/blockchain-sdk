@@ -20,7 +20,7 @@ use alloy_network::Ethereum;
 use alloy_primitives::Address;
 use alloy_provider::RootProvider;
 use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
-use eth_wallet_core::new_http;
+use evm_wallet_core::new_http;
 use std::str::FromStr;
 
 pub const SEPOLIA_CHAIN_ID: u64 = 11155111;
