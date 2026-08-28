@@ -386,6 +386,15 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 13. commit-commands:commit-push-pr
     - **L46 — pre-execute destination re-check:** run `git branch --show-current` again immediately before invoking `commit-push-pr`. Even if step 12's check passed, HEAD may have moved (post-merge housekeeping, `git checkout -`, IDE tab switch). Mismatch → STOP, re-checkout expected branch, then proceed. Pair with L42 (`git diff --cached --stat`): L42 audits content, L46 audits destination, both at the same gate.
     - **L51 — resolve merge conflict:** if `git push` (or the step-4 rebase from integration branch) fails with conflicts, STOP commit-push-pr; invoke `mattpocock-skills:resolving-merge-conflicts` (canonical flow: read markers, decide ours/theirs/combine, re-run step 11 triple gate after resolution, resume push). Do NOT manually hand-edit conflict markers without the skill — skipping the flow risks silent content loss and missing test regressions.
+    - **`[ci-skip]` for .md-only commits** (added 2026-08-28 per user rule): before invoking `commit-push-pr`, run `git diff --cached --name-only`. If every staged path ends in `.md`, append `[ci-skip]` to the commit subject (GitHub Actions treats `[ci-skip]`, `[skip ci]`, `[no ci]`, `[ci skip]` as no-op markers — Rust CI gates are irrelevant for markdown diffs). If any staged path is not `.md` (`.rs` / `.toml` / `.yml` / `.json` / etc.), do NOT add `[ci-skip]` — CI must run. Pattern:
+        ```bash
+        if git diff --cached --name-only | grep -qv '\.md$'; then
+          git commit -m "<subject>"            # CI runs normally
+        else
+          git commit -m "<subject> [ci-skip]"  # doc-only — CI skipped
+        fi
+        ```
+        Pair with L42 (verify staged) + L51 (post-commit `git show --stat` confirms marker + scope). Anti-patterns: adding `[ci-skip]` to a non-.md commit (bypasses required checks; PR cannot merge red); omitting `[ci-skip]` on a pure .md commit (wastes CI minutes).
 14. **Flip issue checkboxes [ ]→[x] — only after verifying each box is actually completed** (before PR open, after commit-push-pr):
     - **Walk the issue body before flipping** — for every `[ ]` box, confirm the acceptance criterion is actually met in the committed code (test passes, doc landed, dependency merged, etc.). Per L28 (verify-before-claim) + L24 anti-pattern "Flipping the box speculatively before the merge" — every flip must be backed by a verifiable artifact, not intent.
     - **One-by-one audit** — read each checkbox, name the artifact that satisfies it (test name, file:line, commit SHA, PR number), then flip. Bulk-flipping without per-box evidence is the failure mode.
