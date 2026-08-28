@@ -4127,10 +4127,18 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "polygon"
 version = "0.1.0"
 dependencies = [
+ "alloy-consensus",
+ "alloy-network",
  "alloy-primitives",
+ "alloy-provider",
+ "alloy-rpc-types",
+ "alloy-signer-local",
+ "alloy-transport-http",
+ "bitcoin-wallet-core",
  "clap",
  "polygon-wallet-core",
  "tokio",
+ "url",
 ]
 
 [[package]]

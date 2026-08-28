@@ -196,9 +196,9 @@ pub struct SendArgs {
     #[arg(long, default_value = "half_hour")]
     pub fee: String,
     #[arg(long)]
-        max_fee_gwei: Option<f64>,
+    max_fee_gwei: Option<f64>,
     #[arg(long)]
-        priority_fee_gwei: Option<f64>,
+    priority_fee_gwei: Option<f64>,
     #[arg(long)]
     pub dry_run: bool,
     #[arg(long)]
@@ -213,9 +213,9 @@ pub struct SendSpeedupArgs {
     #[arg(long)]
     pub tx_hash: String,
     #[arg(long)]
-        max_fee_gwei: f64,
+    max_fee_gwei: f64,
     #[arg(long)]
-        priority_fee_gwei: f64,
+    priority_fee_gwei: f64,
     #[arg(long)]
     pub name: String,
     #[arg(long)]
@@ -277,7 +277,7 @@ pub enum Erc20Action {
         #[arg(long)]
         max_fee_gwei: Option<f64>,
         #[arg(long)]
-            priority_fee_gwei: Option<f64>,
+        priority_fee_gwei: Option<f64>,
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -335,7 +335,7 @@ pub enum Erc20Action {
         #[arg(long)]
         max_fee_gwei: Option<f64>,
         #[arg(long)]
-            priority_fee_gwei: Option<f64>,
+        priority_fee_gwei: Option<f64>,
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
