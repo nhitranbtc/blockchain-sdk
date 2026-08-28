@@ -4128,7 +4128,9 @@ name = "polygon"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "clap",
  "polygon-wallet-core",
+ "tokio",
 ]
 
 [[package]]
