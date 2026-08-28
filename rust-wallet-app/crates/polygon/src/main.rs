@@ -108,6 +108,15 @@ fn main() -> std::process::ExitCode {
 /// T6b dispatch scaffold: match on `Command`, route to per-handler
 /// stub. Handler bodies land in T6c (wallet/tx/erc20/send/speedup)
 /// and T6d (sign/fee/config/faucet).
+/// Resolve the default wallet data directory: `$XDG_DATA_HOME/polygon/`
+/// (Linux) / platform-equivalent via the `directories` crate. Used when
+/// `--data-dir` is not provided on the CLI.
+fn default_data_dir() -> std::path::PathBuf {
+    directories::ProjectDirs::from("io", "polygon-cli", "polygon")
+        .map(|d| d.data_dir().to_path_buf())
+        .unwrap_or_default()
+}
+
 fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
     use cli::{Command, Erc20Action, TxAction, WalletAction};
     use polygon_wallet_core::Error;
@@ -126,7 +135,29 @@ fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
         Command::Wallet { action } => match action {
             WalletAction::Create { .. } => stub("wallet create"),
             WalletAction::Import { .. } => stub("wallet import"),
-            WalletAction::List { .. } => stub("wallet list"),
+            WalletAction::List {
+                network,
+                all: _,
+                json,
+            } => {
+                let net = handlers::parse_network(&network)?;
+                let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let names = handlers::wallet::wallet_list(&data_dir, net)?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&names).unwrap_or_else(|_| "[]".into())
+                    );
+                } else {
+                    for name in &names {
+                        println!("{name}");
+                    }
+                    if names.is_empty() {
+                        eprintln!("(no wallets in {})", net.as_dir_name());
+                    }
+                }
+                Ok(())
+            }
             WalletAction::Show { .. } => stub("wallet show"),
             WalletAction::Delete { .. } => stub("wallet delete"),
             WalletAction::Balance { .. } => stub("wallet balance"),
