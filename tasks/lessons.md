@@ -1511,3 +1511,54 @@ The Mutex is necessary because `cargo test` runs tests in parallel by default; w
 - Job scoped to `--ignored` / `if: success()` — defeats the permanent-block intent.
 - Generic `grep` for `format!` or `Rpc` — too broad, causes false positives in unrelated code. Anchor on the specific leaky pattern (`Error::Rpc(format`).
 
+### L13 amendment 2026-08-28 — `cancel-in-progress: true` cascade-cancels cargo test in workspace-wide CI
+
+Trigger: PR #430 (Phase 1 `polygon-wallet-core` thin wrapper, issue #423) on `feat/polygon-phase-1-423` against `rust-evm-core`. Three substantive commits in 17 minutes (feature scaffold, L24 CHANGELOG bullet, [ci-skip] lessons amendment) cascade-cancelled the in-flight `Rust test` job twice — Run 7 cancelled at 13m20s, Run 8 cancelled at 14m — before `cargo test --workspace --all-targets` could finish. The 40m `timeout-minutes` was never reached. The cancel signal came from the workflow's `concurrency.cancel-in-progress: true` setting, NOT from the timeout.
+
+**Rule**: When a PR to `rust-evm-core` (or any integration branch) is likely to receive >1 substantive commit during the run of its longest required-check job, either (a) drop `cancel-in-progress: true` from the workflow `concurrency` block, OR (b) bump the relevant job's `timeout-minutes` past `expected_runtime × 2` AND accept that any push during the run kills the in-flight test.
+
+**Why**: `cargo test --workspace --all-targets` against `rust-wallet-app/` includes `bitcoin-wallet-core` FFI tests that deliberately wait for esplora sync timeouts (~60-90s each) plus several FFI tests in the same magnitude. Whole-workspace run takes 30-40 min depending on cache state. The default 40m timeout is tight; a single substantive push mid-run cancels the test, the next push cancels that one too, and the test never gets to complete.
+
+**Apply — pattern**:
+
+```yaml
+# BAD (cascade-cancels in-flight runs on every push):
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# GOOD (let runs queue, each gets full budget):
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+# GOOD (scope cancel-in-progress per-job, only safe jobs):
+jobs:
+  rust-fmt:
+    concurrency:
+      group: fmt-${{ github.ref }}
+      cancel-in-progress: true
+  rust-test:
+    # NO cancel-in-progress here — let it run to completion
+```
+
+**Pair with** the [ci-skip] amendment above: doc-only commits no longer churn the required-check list (saved by [ci-skip]); code-bearing commits no longer cascade-cancel (saved by removing `cancel-in-progress`). Two complementary rules, both shipped via PR #430.
+
+**Pair with** the timeout-bump pattern: when `cargo test --workspace --all-targets` is the required gate, `timeout-minutes` should be ≥ `expected_runtime × 1.5` to absorb cache-miss variance. PR #430 bumped `rust-test` from 40m → 60m on the same edit.
+
+**Anti-patterns**:
+
+- Setting `cancel-in-progress: true` globally on an integration-branch workflow that runs `cargo test --workspace` — every push kills in-flight test runs.
+- Trusting the operator's push cadence ("I'll just push one typo fix") — substantive commits land more often than expected, especially during plan-driven multi-step work.
+- Bumping `timeout-minutes` without also addressing `cancel-in-progress` — if cancel is the killer, more timeout headroom just means more wasted CI minutes per cancelled run.
+- Removing `cancel-in-progress` from a per-push-typo-fix workflow (e.g. a fork-and-fix branch) where it's still useful — this amendment is for integration branches with `cargo test --workspace` as a required check.
+
+**Worked example (PR #430 timeline)**:
+
+| Push | Run | Result | Why |
+|------|-----|--------|-----|
+| 09:17 — `846778b` (feature scaffold) | Run 7 (head `846778b`) | cancelled @ 09:34 | superseded by Run 8 from `17066ba` push at 09:34 |
+| 09:34 — `17066ba` (L24 CHANGELOG bullet) | Run 8 (head `17066ba`) | cancelled @ 09:49 | superseded by Run 9 from `e7f1144` push at 09:48 |
+| 09:48 — `e7f1144` ([ci-skip] lessons amendment) | Run 9 (head `e7f1144`) | in progress @ 09:49 | awaiting Rust test completion |
+
+`Rust test` (the only required-check that takes >5 min) never had a chance to finish a single cargo test cycle. Fix landed in commit `45d0669` on `feat/polygon-phase-1-423` (folded into squash `92256ad` on `rust-evm-core`).
+
