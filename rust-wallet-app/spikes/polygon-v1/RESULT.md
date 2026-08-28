@@ -1,6 +1,10 @@
 # Polygon PoS spike V1-V10 — PASS evidence log
 
-> **Status (2026-08-28):** Phase 2 landed on `spike/polygon-v1` at commit `1bfd4c0`. Offline tests V1/V3/V9/V10/use_case PASS; live-gated V2/V4/V5/V6/V7/V8 not yet exercised (operator-driven per L29); V9/use_case `balanceOf` decode deferred per backlog #419 (anvil 1.6.0-nightly + alloy 1.8.x `raw_request` wire-format quirk). Schema mirrors TRON spike `RESULT.md`.
+> **Status (2026-08-28, commit `b7d7cb9`):** All 5 commits landed on `spike/polygon-v1`. Phase 1 scaffold (`7d33c95`) + Phase 2 lib + tests (`1bfd4c0`) + RESULT.md fill (`755e9ad`) + L12 critical-tier review fix batch (`d5fd0dc`) + #419 defer for V9/use_case `balanceOf` (`b7d7cb9`).
+>
+> `cargo test -p polygon-v1-spike --tests --offline` → **9 passed + 6 ignored (live-gated per L29) + 0 failed**. PR #420 open against `rust-evm-core`. Live-gated V2/V4/V5/V6/V7/V8 + V8 live path still require operator session.
+>
+> **#419 root cause** (discovered this session): the `sol!` macro in alloy 1.8.x only generates the `BYTECODE` static const + `deploy()` helper when the `bytecode = "0x..."` attribute is passed to the macro invocation. Our `MockUSDC` lacks that attribute — Anvil receives only the constructor-args payload and deploys an empty-code "contract" that returns `0x` from any `eth_call`. Schema mirrors TRON spike `RESULT.md`.
 
 ---
 
@@ -149,22 +153,32 @@
 | V10 | Q7 | PASS | n/a | n/a | done |
 | use_case | Q1-Q8 | PASS (partial) | pending | n/a | deploy + transfer OK; `balanceOf` per #419 |
 
-**Offline coverage (2026-08-28):** V1 + V3 + V9 (deploy+transfer) + V10 + use_case (deploy+transfer) = 5 Vns PASS (with one known gap per #419).
+**Offline coverage (2026-08-28, commit `b7d7cb9`):** V1 + V3 + V9 (deploy+transfer) + V10 + use_case (deploy+transfer) = 5 Vns PASS (V9 + use_case `balanceOf` per #419 deferred, not removed). **9 tests passed + 6 ignored + 0 failed** per the 11 integration-test binaries (`v1_compile` 1, `v3_derivation` 2, `v9_erc20_transfer` 1, `v10_eip712_replay` 4, `use_case_alpha_sends_beta_100_usdc` 1; the other 6 binaries are `#[ignore]`'d live-gated paths).
+
 **Live coverage:** 0 of 6 live-gated Vns exercised — operator session required.
-**Open questions resolved:** Q1 (EVM-reuse via V1+V3+Q1) + Q7 (replay defense via V10) — empirically. Q3/Q4/Q5/Q6/Q8 deferred to live operator runs.
+
+**Open questions resolved (empirically via offline tests):**
+- Q1 (EVM-reuse): V3 — same canonical "abandon ×11 + about" mnemonic + m/44'/60'/0'/0/0 → identical EVM address on Ethereum + Polygon + PolygonAmoy
+- Q7 (cross-chain replay defense): V10 — signature bound to Polygon-domain typed-data hash does NOT recover on Ethereum-domain hash
+- Q3 (ERC-20 surface): V9 + use_case — deploy + transfer receipt status = true; `balanceOf` post-transfer deferred per #419
+
+**Open questions deferred to live operator runs:** Q4 (RPC connectivity), Q5 (fee estimation), Q6 (token registry on-chain verify), Q8 (full e2e broadcast on Amoy).
 
 ## Verify gate
 
 ```bash
-cargo fmt --all -- --check                                  # ✓ clean (commit 1bfd4c0)
-cargo clippy -p polygon-v1-spike --all-targets -- -D warnings   # ✓ clean
-cargo test -p polygon-v1-spike --tests --offline             # ✓ 9 passed + 6 ignored + 0 failed
+cargo fmt --all -- --check                                    # ✓ clean (verified at commit b7d7cb9)
+cargo clippy -p polygon-v1-spike --all-targets -- -D warnings  # ✓ clean
+cargo test -p polygon-v1-spike --tests --offline              # ✓ 9 passed + 6 ignored + 0 failed
 ```
 
 ## Next session TODO
 
-1. Resolve #419 (V9/use_case `balanceOf` eth_call round-trip on Anvil)
+1. Resolve #419 (V9/use_case `balanceOf` post-transfer round-trip — requires `bytecode = "0x..."` attribute on `sol!` macro per #419 root cause in this file)
 2. Operator session: run live V2/V4/V5/V6/V7/V8 against Amoy + mainnet, populate PASS evidence + tx hashes
-3. L12 review cluster (3 sub-agents + standalone security-review) on `1bfd4c0`
-4. Open PR `spike/polygon-v1` → `rust-evm-core`
-5. Step 14 flip-checkboxes + step 15a tech doc + step 15d merge
+3. L12 review cluster **(DONE in commit `d5fd0dc`)** — 3 sub-agents (type-design-analyzer + code-reviewer + compass:security-auditor per L53 fallback) + standalone security-review; findings landed as `d5fd0dc`
+4. PR #420 open against `rust-evm-core` ✓
+5. Step 14: `gh issue edit 417 --body "..."` — flip V1/V3/V9 (partial)/V10/use_case (partial) `[x]` with artifact evidence per L13 step 14; leave 6 live-gated boxes as `<!-- TODO: operator -->` per L29 external-gate rule
+6. Step 15a: write 10-section tech doc → PR body via `gh pr edit` (Goal, Drift from plan, API surface, Threat-model coverage, Implementation, Tests, L12 review, Lessons, Backlog #419, Migration notes)
+7. Step 15b/15c/15d: L24 verify merged + broader L13 audit (steps 1-15b walk) + `gh pr merge --squash --delete-branch` PAUSE
+8. Step 17/18/19: ledger (`.superpowers/sdd/2026-08-27-polygon-wallet-core/progress.md`) + lessons (`tasks/lessons.md` if any new corrections) + L21 sub-agent cascade (estimate-report + ai-cost-report updates)
