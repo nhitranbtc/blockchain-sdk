@@ -8,6 +8,7 @@ members = [
     "crates/eth-wallet-core",
     "crates/eth",
     "crates/polygon-wallet-core",
+    "crates/polygon",
     "spikes/tron-v1",
     "spikes/polygon-v1",
 ]
