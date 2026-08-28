@@ -17,6 +17,17 @@ path = "src/main.rs"
 # of `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md` §2.5.
 polygon-wallet-core    = { path = "../polygon-wallet-core" }
 
-# alloy family for Address types (Batch E: erc20 USDC.e guard needs Address).
-# Full alloy-* dep list per design doc §3.1 lands with subsequent batches.
-alloy-primitives       = { workspace = true }
+# T6b (clap tree + dispatch per L25 sub-task split). Issue #426 / design §3.4.
+# `clap = { workspace = true }` carries the `derive` + `env` features per
+# `rust-wallet-app/Cargo.toml:67`. `tokio` enables the `block_on(async { ... })`
+# dispatch kernel (mirrors `eth/src/main.rs:487-491`).
+clap                 = { workspace = true }
+tokio                = { workspace = true }
+
+# alloy-primitives carried over from T6a (used by erc20 USDC.e guard tests).
+# alloy-provider + alloy-transport-http land in T6c/T6d when open_provider
+# + send/speedup impls wire up.
+alloy-primitives     = { workspace = true }
+
+# T6b handler stubs return `Error::Rpc("deferred past T6b")` — no rpassword /
+# real impl deps yet (lands in T6d when prompt_password is wired to real impl).

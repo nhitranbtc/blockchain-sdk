@@ -1,18 +1,15 @@
 //! `polygon` CLI binary — Issue #426 / Phase 4 of #416.
 //!
-//! Minimal TDD scaffold for Batch A (password resolution tests). Full clap
-//! tree + handler dispatch land in subsequent batches per
-//! `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md`.
+//! T6b (L25 sub-task split): clap tree + dispatch scaffold. The clap
+//! subcommand types live in `cli.rs`; `run()` matches each `Command` variant
+//! to a per-handler stub. Handler BODIES land in T6c/T6d (per L25 split).
+//! Round 1 critical-tier helpers (`resolve_password`, etc.) remain
+//! available; dispatch to them lands in T6c.
 //!
-//! L13 Round 1 fix #6: per-helper `#[allow(dead_code)]` annotations cover
-//! the critical-tier helper functions (`resolve_password`,
-//! `resolve_password_with`, `prompt_password`) that the minimal
-//! `fn main` does not yet dispatch to. Each helper has unit tests (TDD
-//! Batch A green); the dispatch wiring lands in the next T6 follow-up
-//! commit alongside the clap tree. Honest state: tests pass, dispatch
-//! not wired. Helpers in submodules (`handlers::{mod,sign,erc20}`)
-//! carry their own `#[allow(dead_code)]` per-function.
+//! See `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md`
+//! for the full T6 surface (31 user-stories + 3 cross-cutting flags).
 
+mod cli;
 mod handlers;
 
 /// Resolution kernel: argv → env → TTY prompt priority chain.
@@ -89,10 +86,71 @@ fn prompt_password(_prompt: &str) -> polygon_wallet_core::Result<String> {
 }
 
 fn main() -> std::process::ExitCode {
-    // TDD scaffold: full dispatch (Cli::parse + match arms + tokio runtime)
-    // lands in subsequent batches. Today's main returns success so the
-    // binary builds + the password tests can run.
-    std::process::ExitCode::SUCCESS
+    // T6b (L25 sub-task split): parse + dispatch scaffold.
+    // `Cli::parse()` is sync; per-handler stubs return `Error::Rpc("deferred
+    // past T6b — landing in T6c/T6d")` so the binary exits with a clear
+    // operator-facing message until real impls land. tokio runtime lands in
+    // T6c when async handlers (send/balance/sync) wire up.
+    use clap::Parser;
+    let cli = cli::Cli::parse();
+    match run(cli) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            // T6b: all errors map to exit 1. Per-error mapping via
+            // `Error::exit_code()` lands in T6c when the error table
+            // becomes meaningful (currently every error is `Error::Rpc`).
+            std::process::ExitCode::from(1)
+        }
+    }
+}
+
+/// T6b dispatch scaffold: match on `Command`, route to per-handler
+/// stub. Handler bodies land in T6c (wallet/tx/erc20/send/speedup)
+/// and T6d (sign/fee/config/faucet).
+fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
+    use cli::{Command, Erc20Action, TxAction, WalletAction};
+    use polygon_wallet_core::Error;
+
+    let stub = |cmd: &'static str| -> polygon_wallet_core::Result<()> {
+        Err(Error::Rpc(format!(
+            "{cmd}: deferred past T6b — landing in T6c/T6d"
+        )))
+    };
+
+    match cli.command {
+        Command::Version => {
+            println!("polygon {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Command::Wallet { action } => match action {
+            WalletAction::Create { .. } => stub("wallet create"),
+            WalletAction::Import { .. } => stub("wallet import"),
+            WalletAction::List { .. } => stub("wallet list"),
+            WalletAction::Show { .. } => stub("wallet show"),
+            WalletAction::Delete { .. } => stub("wallet delete"),
+            WalletAction::Balance { .. } => stub("wallet balance"),
+            WalletAction::Sync { .. } => stub("wallet sync"),
+            WalletAction::Send(_) => stub("wallet send"),
+            WalletAction::SendSpeedup(_) => stub("wallet send speed-up"),
+        },
+        Command::Tx { action } => match action {
+            TxAction::List { .. } => stub("tx list"),
+            TxAction::Get { .. } => stub("tx get"),
+        },
+        Command::Erc20 { action } => match action {
+            Erc20Action::Send { .. } => stub("erc20 send"),
+            Erc20Action::Balance { .. } => stub("erc20 balance"),
+            Erc20Action::List { .. } => stub("erc20 list"),
+            Erc20Action::Register { .. } => stub("erc20 register"),
+            Erc20Action::Approve { .. } => stub("erc20 approve"),
+        },
+        Command::Fee(_) => stub("fee"),
+        Command::Config { .. } => stub("config"),
+        Command::Faucet(_) => stub("faucet"),
+        Command::SignMessage(_) => stub("sign-message"),
+        Command::SignTyped(_) => stub("sign-typed"),
+    }
 }
 
 #[cfg(test)]
