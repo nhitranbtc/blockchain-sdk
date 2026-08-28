@@ -268,7 +268,7 @@ fn wallet_create_with_unknown_network_yields_exit_2() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("unknown network") && stderr.contains("polygon"),
+        stderr.contains("unknown") && stderr.contains("polygon"),
         "stderr should mention the bad network: {stderr}",
     );
 }

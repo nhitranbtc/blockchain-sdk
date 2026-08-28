@@ -1,0 +1,245 @@
+name: rust-evm-core
+
+# CI for the `rust-evm-core` integration branch.
+#
+# Scope: any PR that targets `rust-evm-core` (NOT main). Each issue labeled
+# `rust-evm-core` (#423-#426 for the Polygon chain, umbrella #416) feeds work
+# via a sub-task branch that PRs into this branch. At v0.1 completion, a
+# final cut PR merges `rust-evm-core` -> main (per L25).
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the umbrella
+# ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain@stable`,
+# `Swatinem/rust-cache@v2`). No SHA pins available yet; tag-based reference
+# acceptable per L37 rule 2 (verified-cached SHAs land in a follow-up commit
+# after the first successful CI run captures the resolved SHAs).
+
+on:
+  push:
+    branches: [rust-evm-core]
+  pull_request:
+    branches: [rust-evm-core]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# NOTE (Path B 2026-08-28, PR #430): `cancel-in-progress: true` removed.
+# Phase 1 PR (#430) hit cascade-cancel: 3 substantive commits in 17 min
+# killed the in-flight `Rust test` job twice (Run 7 @ 13m20s, Run 8 @ 14m)
+# before `cargo test --workspace` could finish. The 40m `timeout-minutes`
+# on `Rust test` was never reached — auto-cancel from new pushes was the
+# real killer. Removed here so the test budget is the test budget.
+# Re-add per-workflow if a different gate pattern emerges.
+# Concurrency group kept for log dedup (still useful for grouping runs).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  rust-fmt:
+    name: Rust fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: clippy
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Issue #403 deliverable #9. Debian/Ubuntu:
+        # protobuf-compiler package ships protoc 3.x.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo clippy
+        working-directory: rust-wallet-app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rust-test:
+    name: Rust test
+    runs-on: ubuntu-latest
+    # 60m ceiling (bumped from 40m on 2026-08-28 per PR #430 Path B):
+    # `bitcoin-wallet-core` FFI tests in the workspace include a
+    # `wallet_show_unreachable_esplora` test that deliberately waits for
+    # an esplora sync timeout (~60-90s), plus several FFI tests around
+    # the same magnitude. Whole-workspace `cargo test --workspace
+    # --all-targets` can take 30-40 min depending on cache state. 60m
+    # gives headroom without GH default 6h.
+    # `evm-wallet-core/tests/` carries 18 #[ignore] e2e tests across 9
+    # files (L29 carve-out — operator-driven against live testnets /
+    # Anvil fork). `cargo test --workspace --all-targets` defaults skip
+    # them; the run never opens a live RPC connection.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Issue #403 deliverable #9.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo build
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test
+        working-directory: rust-wallet-app
+        run: cargo test --workspace --all-targets
+
+  # CI 4th gate per L13 step 11: cargo tree --workspace --duplicates. Local
+  # step 11 is double gate only (fmt + clippy); `cargo test --workspace
+  # --all-targets` lives in CI (rust-test job above). Dedup moves to CI
+  # cadence because workspace-wide tree walks are slow on large workspaces.
+  rust-dedup:
+    name: Rust dep dedup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Issue #403 deliverable #9.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo tree --duplicates
+        working-directory: rust-wallet-app
+        run: cargo tree --workspace --duplicates
+
+  # Audit policy mirrors rust-eth-core-ci.yml exactly: the 4 `--ignore` flags
+  # below cover transitive dev-deps (rust-bitcoin regtest chain,
+  # testcontainers-tokio-tar, pre-existing umbrella allowance). The canonical
+  # list lives in `rust-wallet-app/deny.toml`. Add inline justification per
+  # advisory if/when the upstream publishes a fix.
+  rust-audit:
+    name: Rust audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        working-directory: rust-wallet-app
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
+
+  # Split from the old combined lint-audit job so deny runs in parallel with
+  # audit — same per-concern shape as umbrella `ci.yml` and `rust-eth-core-ci.yml`.
+  rust-deny:
+    name: Rust deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny
+        working-directory: rust-wallet-app
+        run: cargo deny check
+
+  # AC #5 audit-gate per Issue #382 (rooted in the centralised
+  # `Error::rpc(impl Display)` redaction in `eth-wallet-core`). Scope
+  # expansion in #428: this job now also scans `evm-wallet-core` since the
+  # Phase 0 refactor (commit `21540f0`) moved the `Network` enum + redaction
+  # shape into the new crate. Pattern matches `Rpc(\s*format!` (extended
+  # regex) — catches both `Error::Rpc(format!(...))` and the equally leaky
+  # `Self::Rpc(format!(...))` + tolerates whitespace after the open paren.
+  # Rust doc-comment lines (`///`) are filtered so the gate does not
+  # self-flag on its own pointer. Any non-zero exit fails the workflow on
+  # PR + push to `rust-evm-core`.
+  rust-error-grep:
+    name: Rust Error::Rpc(format!) audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - name: grep -rnE 'Rpc\(\s*format!' must return 0 code matches
+        run: |
+          if grep -rnE 'Rpc\(\s*format!' \
+              rust-wallet-app/crates/eth \
+              rust-wallet-app/crates/eth-wallet-core \
+              rust-wallet-app/crates/evm-wallet-core \
+              | grep -v '///'; then
+            echo "::error::Rpc(format!...) bypasses the centralised" \
+              "redaction in Error::rpc(impl Display) and may leak RPC URL" \
+              "secrets via Display. Use Error::rpc(e) instead."
+            exit 1
+          fi
+
+  # Anvil-fork e2e suite for `polygon-v1-spike` (V9 MockUSDC + use-case
+  # alpha→beta 100 USDC). Mirrors `.github/workflows/rust-eth-core-ci.yml`
+  # `anvil-e2e` job shape: Anvil spawns a fork in-process, no live RPC
+  # broadcast, no public-RPC flake or CI-IP rate-limit risk (L29 carve-out).
+  # Both V9 + use_case tests are now `#[ignore]`'d with `RUN_POLYGON_ANVIL_E2E=1`
+  # opt-in gate — default `cargo test --workspace --all-targets` skips them.
+  polygon-anvil-e2e:
+    name: Polygon Anvil e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Issue #403 deliverable #9.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Foundry (anvil)
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Polygon Anvil-fork e2e tests
+        working-directory: rust-wallet-app
+        env:
+          RUN_POLYGON_ANVIL_E2E: "1"
+        run: |
+          # `cargo test -p polygon-v1-spike -- --ignored` runs every
+          # `#[ignore]`'d test in the package. The Anvil-fork tests check
+          # `RUN_POLYGON_ANVIL_E2E=1` and run; the live-RPC tests check
+          # `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1`, find their
+          # var unset, return early → PASS (their bodies never execute).
+          cargo test -p polygon-v1-spike -- --ignored
