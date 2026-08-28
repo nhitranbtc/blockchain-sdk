@@ -24,7 +24,7 @@ mod common;
 use alloy_primitives::U256;
 use alloy_provider::Provider;
 use alloy_sol_types::{sol, SolCall};
-use eth_wallet_core::{encoded_envelope, sign_erc20_tx_bytes};
+use evm_wallet_core::{encoded_envelope, sign_erc20_tx_bytes};
 
 sol! {
     interface IERC20 {

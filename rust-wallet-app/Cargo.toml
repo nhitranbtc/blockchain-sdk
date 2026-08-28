@@ -4,6 +4,7 @@ members = [
     "crates/chain-traits",
     "crates/bitcoin-wallet-core",
     "crates/btc",
+    "crates/evm-wallet-core",
     "crates/eth-wallet-core",
     "crates/eth",
     "spikes/tron-v1",

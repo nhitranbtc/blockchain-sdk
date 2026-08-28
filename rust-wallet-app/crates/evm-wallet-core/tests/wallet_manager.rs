@@ -12,7 +12,8 @@
 
 use std::fs;
 
-use eth_wallet_core::wallet::{Network, WalletError, WalletManager};
+use evm_wallet_core::network::{EthereumChain, Network};
+use evm_wallet_core::wallet::{WalletError, WalletManager};
 
 /// 12-word determinate mnemonic for round-trip tests.
 const TEST_MNEMONIC: &str =
@@ -36,7 +37,7 @@ fn create_wallet_round_trip_unlock_yields_original_phrase() {
     let w = mgr
         .create_wallet("test-create", TEST_PASSWORD)
         .expect("create");
-    assert_eq!(w.network, Network::Sepolia);
+    assert_eq!(w.network, Network::Ethereum(EthereumChain::Sepolia));
     assert_ne!(w.address, alloy_primitives::Address::ZERO);
     assert_ne!(
         w.address,

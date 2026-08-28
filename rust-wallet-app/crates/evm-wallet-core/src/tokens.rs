@@ -54,7 +54,7 @@ fn bundled_registry(chain_id: u64) -> &'static str {
     // for v0.2; the local test instances the operator adds via Story 24
     // land in the user registry wired by Task 10).
     match chain_id {
-        1 => include_str!("../tokens/mainnet.json"),
+        1 => include_str!("../tokens/mainnet_eth.json"),
         11155111 => include_str!("../tokens/sepolia.json"),
         31337 => include_str!("../tokens/anvil.json"),
         _ => "[]",

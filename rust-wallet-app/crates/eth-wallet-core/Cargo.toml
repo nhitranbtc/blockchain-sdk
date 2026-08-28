@@ -4,59 +4,12 @@ version = "0.2.0"
 edition = "2021"
 rust-version = "1.94"
 license = "MIT"
-description = "Ethereum (ETH + ERC-20) wallet library built on alloy v1.8.x"
-# Phase 0 of eth-wallet-core plan (`docs/superpowers/plans/2026-08-23-eth-wallet-core.md`).
-# Task 1 scaffold = mnemonic generation + BIP-44 derivation → Address. Issue #295.
+description = "Ethereum (ETH + ERC-20) wallet library — thin wrapper over `evm-wallet-core`. Phase 0 refactor of Issue #416 / plan `docs/superpowers/plans/2026-08-27-polygon-wallet-core.md`. Future work: polygon-wallet-core mirrors this shape."
+# All implementation now lives in `evm-wallet-core` (Q1 Option A).
+# eth-wallet-core is preserved as the Ethereum-specific public surface
+# via thin re-exports so existing downstream consumers (`eth` CLI,
+# external integrations) compile without import-path changes.
 publish = false
 
 [dependencies]
-# all v1.8.x workspace deps. Features kept minimal for Task 1.
-alloy-primitives = { workspace = true }
-alloy-signer = { version = "=1.8.3" }  # Signer trait (transitive via signer-local but pinned to keep 1.x synced)
-alloy-signer-local = { workspace = true }
-bip39 = { workspace = true }
-reqwest = { workspace = true }  # for crate-wide Error From<reqwest::Error> (Task 4)
-zeroize = { workspace = true }
-
-# Task 3 (Issue #302) — sign-only primitives. Adds the consensus / network /
-# rpc-types / eips / sol-types sub-crates needed to build & sign EIP-1559
-# tx envelopes + ABI calldata, plus EIP-191 / EIP-712 typed signatures.
-alloy-consensus = { version = "=1.8.3" }
-alloy-eips = { version = "=1.8.3" }
-alloy-network = { version = "^1.0" }
-alloy-provider = { version = "^1.0" }  # ProviderBuilder + RootProvider (Task 5/6)
-alloy-rpc-types = { version = "^1.0" }
-alloy-sol-types = { version = "^1.6" }
-alloy-transport = { version = "^1.0" }  # TransportError type for crate-wide Error From impl (Task 4)
-alloy-transport-http = { version = "^1.0" }  # for crate-wide Error From<alloy_transport_http::Error>
-
-# Task 2 (Issue #301) — Argon2id KDF + AES-256-GCM + WalletManager persistence.
-# All from workspace [workspace.dependencies] (no per-crate re-pin).
-argon2 = { workspace = true }
-aes-gcm = { workspace = true }
-rand = { workspace = true }
-thiserror = { workspace = true }
-uuid = { workspace = true }
-directories = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-hex = "0.4"  # compact JSON serialization of EncryptedBlob
-
-# Task 5 (Issue #304) — DEFERRED. The SPKI pin verifier + `new_http_pinned`
-# API surface were removed entirely pending webpki composition. Production
-# builds use `new_http` (default rustls TLS + system CAs) for all RPC.
-
-[features]
-# `insecure_tls` enables `provider::new_http_insecure` for dev/CI. Defaults
-# to DEBUG-only via `debug_assertions` cfg in src/provider.rs; this feature
-# is opt-in for release builds that need it (rare).
-insecure_tls = []
-
-[dev-dependencies]
-# Hermetic per-test base_dir for the WalletManager round-trip tests.
-tempfile = { workspace = true }
-# Task 9 (Issue #308): Anvil spawn per V6 spike evidence
-# (rust-wallet-app/spikes/alloy-v1/tests/v6_erc20_anvil.rs). Dev-only.
-alloy-node-bindings = { version = "=1.8.3" }
-# tokio runtime for the L29-gated Anvil smoke test.
-tokio = { workspace = true }
+evm-wallet-core = { path = "../evm-wallet-core" }

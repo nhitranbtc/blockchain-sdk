@@ -10,8 +10,8 @@
 use alloy_node_bindings::Anvil;
 use alloy_provider::Provider;
 
-use eth_wallet_core::provider::new_http;
-use eth_wallet_core::tokens::{load_chain, lookup_by_symbol};
+use evm_wallet_core::provider::new_http;
+use evm_wallet_core::tokens::{load_chain, lookup_by_symbol};
 
 /// Always-on smoke: confirm the bundled registry parses for known chain
 /// ids + that `load_chain` returns the empty list for unknown chain

@@ -1,7 +1,7 @@
 //! User Story 29 — Connect to RPC endpoint without SPKI pin (system CAs only).
 //!
 //! Story 28 (SPKI pin) tests live in the issue #393 PR — that work adds
-//! `new_http_pinned()` to `eth_wallet_core::provider` and a `pinned://` URL
+//! `new_http_pinned()` to `bevm_wallet_core::provider` and a `pinned://` URL
 //! scheme. Until then, this file covers the **no-pin** path only.
 //!
 //! Per L29 + Q8: live network smoke is operator-driven — Anvil tests are
@@ -12,7 +12,7 @@
 use alloy_node_bindings::Anvil;
 use alloy_provider::Provider;
 
-use eth_wallet_core::provider::new_http;
+use evm_wallet_core::provider::new_http;
 
 // ---------------------------------------------------------------------------
 // Always-on tests (no network I/O)
@@ -35,7 +35,7 @@ fn new_http_accepts_localhost_http_without_spki_pin() {
 /// in v0.3 — the guard is about the *number*, not the registry contents).
 #[test]
 fn chain_id_31337_resolves_to_anvil_stub_registry() {
-    use eth_wallet_core::tokens::load_chain;
+    use evm_wallet_core::tokens::load_chain;
     let anvil_tokens = load_chain(31337).expect("anvil JSON parses");
     assert!(
         anvil_tokens.is_empty(),
