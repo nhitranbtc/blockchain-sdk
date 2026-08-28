@@ -71,6 +71,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "alloy"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "50ab0cd8afe573d1f7dc2353698a51b1f93aec362c8211e28cfd3948c6adba39"
+dependencies = [
+ "alloy-consensus",
+ "alloy-core",
+ "alloy-eips",
+ "alloy-genesis",
+ "alloy-serde",
+ "alloy-signer",
+ "alloy-signer-local",
+ "alloy-trie",
+]
+
+[[package]]
 name = "alloy-chains"
 version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -142,6 +158,19 @@ dependencies = [
  "futures-util",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "alloy-core"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8421a5ee9019b6d89f92935d0f8facd9f6ca088b41d7cc47244a02ccde4545f"
+dependencies = [
+ "alloy-dyn-abi",
+ "alloy-json-abi",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-sol-types",
 ]
 
 [[package]]
@@ -246,7 +275,9 @@ dependencies = [
  "alloy-primitives",
  "alloy-serde",
  "alloy-trie",
+ "borsh",
  "serde",
+ "serde_with",
 ]
 
 [[package]]
@@ -4084,6 +4115,31 @@ name = "pkg-config"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+
+[[package]]
+name = "polygon-v1-spike"
+version = "0.0.0"
+dependencies = [
+ "alloy",
+ "alloy-network",
+ "alloy-node-bindings",
+ "alloy-primitives",
+ "alloy-provider",
+ "alloy-signer-local",
+ "alloy-sol-types",
+ "alloy-transport-http",
+ "anyhow",
+ "bitcoin-wallet-core",
+ "hex",
+ "proptest",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "polyval"

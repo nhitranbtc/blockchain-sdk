@@ -1,0 +1,45 @@
+[package]
+name = "polygon-v1-spike"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+# Polygon PoS spike V1-V10 verification harness (Issue #417, follow-up to #416).
+# Lives in rust-wallet-app umbrella workspace per plan §File Structure.
+
+[dependencies]
+# EVM SDK — alloy 1.8.x sub-crates (workspace: std + signers + signer-local).
+# Sub-crates used per eth-wallet-core precedent (Q1 + Q3 + Q4 surfaces).
+alloy = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-signer-local = { workspace = true }
+alloy-provider = { workspace = true }
+alloy-network = { workspace = true }
+alloy-transport-http = { workspace = true }
+alloy-sol-types = { workspace = true }
+
+# HTTP + async runtime (Q4 RPC connectivity + Q5 baseFee cadence polling)
+reqwest = { workspace = true }
+tokio = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Bitcoin SPKI verifier (cross-crate reuse per #414 F20 precedent — Q7 replay
+# protection for cross-chain signed payloads)
+bitcoin-wallet-core = { workspace = true }
+
+# Errors + tracing
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# Anvil Polygon-fork for V9 ERC-20 transfer + use-case live path (Q3 ERC-20
+# transfer surface on a fork of Polygon's mainnet state).
+alloy-node-bindings = { version = "=1.8.3" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tempfile = { workspace = true }
+proptest = { workspace = true }
