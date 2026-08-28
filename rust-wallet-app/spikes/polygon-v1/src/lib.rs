@@ -7,10 +7,9 @@
 //! Per L29 operator-driven smoke gated on `RUN_POLYGON_AMOY=1` /
 //! `RUN_POLYGON_MAINNET=1` env vars; offline tests always run.
 
-#![allow(dead_code)] // skeleton scaffold — placeholders filled in Phase 2 TDD
-
 pub mod address;
 pub mod config;
+pub mod eip712;
 pub mod erc20;
 pub mod provider;
 pub mod spki;

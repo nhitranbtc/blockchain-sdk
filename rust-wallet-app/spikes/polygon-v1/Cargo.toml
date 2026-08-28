@@ -19,6 +19,9 @@ alloy-provider = { workspace = true }
 alloy-network = { workspace = true }
 alloy-transport-http = { workspace = true }
 alloy-sol-types = { workspace = true }
+alloy-consensus = { workspace = true }
+alloy-eips = { workspace = true }
+alloy-rpc-types = { workspace = true }
 
 # HTTP + async runtime (Q4 RPC connectivity + Q5 baseFee cadence polling)
 reqwest = { workspace = true }

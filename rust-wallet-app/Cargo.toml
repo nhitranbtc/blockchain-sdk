@@ -116,6 +116,9 @@ alloy-provider = { version = "=1.8.3" }
 alloy-network = { version = "=1.8.3" }
 alloy-transport-http = { version = "=1.8.3" }
 alloy-sol-types = { version = "^1.6" }
+alloy-consensus = { version = "=1.8.3" }
+alloy-eips = { version = "=1.8.3" }
+alloy-rpc-types = { version = "=1.8.3" }
 
 # TRON SDK — prost/bs58/keccak (Q2/Q3/Q4 — plan §B; added 2026-08-27 for Issue #403 spike)
 prost = "=0.14.4"
