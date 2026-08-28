@@ -5,6 +5,12 @@
 //! * `new_http(rpc_url)` — system-TLS-backed `RootProvider<Ethereum>` for
 //!   localhost Anvil regtest + dev. Per Q4 (no auto-fillers; explicit nonce +
 //!   gas). Issue #305 (Task 6).
+//! * `new_http_polygon_mainnet()` — convenience constructor against
+//!   `https://polygon-rpc.com` (Q4). Returns a `RootProvider<Ethereum>`
+//!   ready for `eth_chainId` / `estimate_eip1559_fees` calls. Issue
+//!   #424 (Phase 2 / Task 3 of #416).
+//! * `new_http_polygon_amoy()` — convenience constructor against
+//!   `https://polygon-amoy.drpc.org` (Q4 testnet). Issue #424.
 //!
 //! ## Task 5 (Issue #304) status: REMOVED
 //!
@@ -52,6 +58,34 @@ pub fn new_http(rpc_url: Url) -> Result<RootProvider<Ethereum>> {
 #[cfg(any(debug_assertions, feature = "insecure_tls"))]
 pub fn new_http_insecure(rpc_url: Url) -> Result<RootProvider<Ethereum>> {
     Ok(RootProvider::new_http(rpc_url))
+}
+
+/// Convenience constructor: open a `RootProvider<Ethereum>` against the
+/// public Polygon mainnet RPC (`https://polygon-rpc.com`, EIP-155
+/// chain_id 137). Issue #424 / Task 3 of #416.
+///
+/// Thin wrapper over `new_http` — no SPKI pin is applied (see module
+/// docs for why the ETH-side verifier was removed in F20 M-2). Relies
+/// on rustls default system CAs.
+pub fn new_http_polygon_mainnet() -> Result<RootProvider<Ethereum>> {
+    let url: Url = "https://polygon-rpc.com"
+        .parse()
+        .expect("polygon mainnet RPC URL is a known-valid literal");
+    new_http(url)
+}
+
+/// Convenience constructor: open a `RootProvider<Ethereum>` against the
+/// public Polygon Amoy testnet RPC (`https://polygon-amoy.drpc.org`,
+/// EIP-155 chain_id 80_002). Issue #424 / Task 3 of #416.
+///
+/// Thin wrapper over `new_http` — no SPKI pin is applied (see module
+/// docs for why the ETH-side verifier was removed in F20 M-2). Relies
+/// on rustls default system CAs.
+pub fn new_http_polygon_amoy() -> Result<RootProvider<Ethereum>> {
+    let url: Url = "https://polygon-amoy.drpc.org"
+        .parse()
+        .expect("polygon amoy RPC URL is a known-valid literal");
+    new_http(url)
 }
 
 #[cfg(test)]
