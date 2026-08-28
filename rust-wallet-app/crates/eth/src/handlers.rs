@@ -30,8 +30,7 @@ use alloy_signer_local::PrivateKeySigner;
 use alloy_transport_http::reqwest::Url;
 
 use eth_wallet_core::error::{Error, Result};
-use eth_wallet_core::network::Network;
-use eth_wallet_core::wallet::{WalletError, WalletManager};
+use eth_wallet_core::wallet::{Network, WalletError, WalletManager};
 use eth_wallet_core::{new_http, WalletCreated};
 
 // ---------------------------------------------------------------------------
@@ -127,7 +126,7 @@ pub fn wallet_create(
         return Err(Error::InvalidPassword("password must be non-empty".into()));
     }
     let network =
-        Network::parse_cli_eth(network_str).map_err(|e| Error::InvalidInput(e.to_string()))?;
+        Network::parse_cli(network_str).map_err(|e| Error::InvalidInput(e.to_string()))?;
     mgr.create_wallet_for_network(name, password.as_bytes(), network)
         .map_err(map_wallet_err)
 }
@@ -146,8 +145,8 @@ pub fn wallet_import(
     }
     match (mnemonic, private_key) {
         (Some(phrase), None) => {
-            let network = Network::parse_cli_eth(network_str)
-                .map_err(|e| Error::InvalidInput(e.to_string()))?;
+            let network =
+                Network::parse_cli(network_str).map_err(|e| Error::InvalidInput(e.to_string()))?;
             mgr.import_wallet_for_network(name, phrase, password.as_bytes(), network)
                 .map_err(map_wallet_err)
         }
@@ -197,7 +196,7 @@ pub fn wallet_show(
     id: Option<&str>,
     network: &str,
 ) -> Result<()> {
-    let net = Network::parse_cli_eth(network).map_err(|e| Error::InvalidInput(e.to_string()))?;
+    let net = Network::parse_cli(network).map_err(|e| Error::InvalidInput(e.to_string()))?;
     let infos = mgr.list_wallets().map_err(map_wallet_err)?;
 
     let info =
@@ -242,7 +241,7 @@ pub fn wallet_delete(
     id: Option<&str>,
     network: &str,
 ) -> Result<()> {
-    let net = Network::parse_cli_eth(network).map_err(|e| Error::InvalidInput(e.to_string()))?;
+    let net = Network::parse_cli(network).map_err(|e| Error::InvalidInput(e.to_string()))?;
     let wallet_id = match (name, id) {
         (Some(n), None) => mgr.lookup_by_name(n, net).map_err(map_wallet_err)?,
         (None, Some(s)) => uuid::Uuid::parse_str(s)
@@ -361,7 +360,7 @@ pub async fn wallet_balance_all(
 ) -> Result<()> {
     let holder = Address::from_str(address)
         .map_err(|e| Error::InvalidInput(format!("invalid address: {e}")))?;
-    let chain_id = match eth_wallet_core::Network::parse_cli_eth(network) {
+    let chain_id = match eth_wallet_core::Network::parse_cli(network) {
         Ok(n) => n.chain_id(),
         // Unknown CLI network (e.g. local Anvil chain_id 31337) — registry
         // lookup is per-chain, so it returns the empty stub and the
@@ -535,7 +534,7 @@ async fn resolve_token_metadata(
     network: &str,
     token_addr: Address,
 ) -> TokenMetadata {
-    let chain_id = match eth_wallet_core::Network::parse_cli_eth(network) {
+    let chain_id = match eth_wallet_core::Network::parse_cli(network) {
         Ok(n) => n.chain_id(),
         // Unknown CLI network (e.g. local Anvil) → chain_id 31337. The
         // Anvil registry is the empty stub, so lookup misses, and the
@@ -988,7 +987,7 @@ pub fn config_show(rpc_url: &str, data_dir: Option<&PathBuf>, json: bool) -> Res
     let (network_str, chain_id_str) = match network_raw.as_deref() {
         None => ("(unset)".to_string(), "(unset)".to_string()),
         Some(s) => {
-            let net = Network::parse_cli_eth(s).map_err(|e| {
+            let net = Network::parse_cli(s).map_err(|e| {
                 Error::InvalidInput(format!("config-show: invalid ETH_NETWORK={s:?}: {e}"))
             })?;
             (

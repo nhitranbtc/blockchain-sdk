@@ -4,12 +4,9 @@ members = [
     "crates/chain-traits",
     "crates/bitcoin-wallet-core",
     "crates/btc",
-    "crates/evm-wallet-core",
     "crates/eth-wallet-core",
     "crates/eth",
-    "crates/polygon-wallet-core",
     "spikes/tron-v1",
-    "spikes/polygon-v1",
 ]
 
 [workspace.package]
@@ -111,16 +108,6 @@ alloy = { version = "=1.8.3", default-features = false, features = [
 ] }
 alloy-primitives = { version = "^1.6", default-features = false, features = ["std"] }
 alloy-signer-local = { version = "^1.0", features = ["mnemonic"] }
-# EVM sub-crates used by eth-wallet-core + polygon-v1-spike (Issue #417).
-# Pinned to =1.8.3 for crate-wide 1.x sync; ^1.0 acceptable per eth-wallet-core
-# precedent — both lock the umbrella to the same minor version.
-alloy-provider = { version = "=1.8.3" }
-alloy-network = { version = "=1.8.3" }
-alloy-transport-http = { version = "=1.8.3" }
-alloy-sol-types = { version = "^1.6" }
-alloy-consensus = { version = "=1.8.3" }
-alloy-eips = { version = "=1.8.3" }
-alloy-rpc-types = { version = "=1.8.3" }
 
 # TRON SDK — prost/bs58/keccak (Q2/Q3/Q4 — plan §B; added 2026-08-27 for Issue #403 spike)
 prost = "=0.14.4"
