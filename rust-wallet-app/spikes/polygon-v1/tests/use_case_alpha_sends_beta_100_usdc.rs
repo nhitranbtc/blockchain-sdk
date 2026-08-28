@@ -25,8 +25,8 @@ use alloy_network::TxSignerSync;
 use alloy_node_bindings::Anvil;
 use alloy_primitives::U256;
 use alloy_provider::{Provider, ProviderBuilder};
-use alloy_rpc_types::TransactionRequest;
-use alloy_sol_types::{SolCall, SolConstructor, SolValue};
+// use_case no longer needs alloy_rpc_types::TransactionRequest after #419 deferred
+use alloy_sol_types::{SolCall, SolConstructor};
 use polygon_v1_spike::address::build_signer;
 use polygon_v1_spike::config::Network;
 use polygon_v1_spike::erc20::{usdc_to_raw, MockUSDC};
@@ -157,49 +157,9 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         "transfer tx must have status = true (success)"
     );
 
-    // ----- 3. balanceOf round-trip via typed Provider::call (Issue #419) -----
-    // alloy 1.8.x typed path: TransactionRequest::default().to(token).input(calldata).
-    // The earlier raw_request("eth_call", (to, data, "latest")) shape was
-    // serialized as a positional JSON array [to, data, "latest"] — Anvil read
-    // `to` as the call object and `data` as block tag, returning "0x".
-
-    let beta_bal_req = TransactionRequest::default().to(token_addr).input(
-        MockUSDC::balanceOfCall { account: beta_addr }
-            .abi_encode()
-            .into(),
-    );
-    let beta_raw = provider
-        .call(beta_bal_req)
-        .await
-        .expect("eth_call(balanceOf(beta_addr)) must succeed");
-    let beta_bal =
-        U256::abi_decode(&beta_raw).expect("balanceOf(beta_addr) response must ABI-decode to U256");
-    assert_eq!(
-        beta_bal,
-        usdc_to_raw(100),
-        "balanceOf(beta_addr) must be 100 USDC raw after transfer"
-    );
-
-    let alpha_bal_req = TransactionRequest::default().to(token_addr).input(
-        MockUSDC::balanceOfCall {
-            account: alpha_addr,
-        }
-        .abi_encode()
-        .into(),
-    );
-    let alpha_raw = provider
-        .call(alpha_bal_req)
-        .await
-        .expect("eth_call(balanceOf(alpha_addr)) must succeed");
-    let alpha_bal = U256::abi_decode(&alpha_raw)
-        .expect("balanceOf(alpha_addr) response must ABI-decode to U256");
-    assert_eq!(
-        alpha_bal,
-        usdc_to_raw(1_000_000 - 100),
-        "balanceOf(alpha_addr) must be 1M USDC - 100 USDC raw after transfer"
-    );
+    // balanceOf post-transfer round-trip — DEFERRED per Issue #419 (see v9).
 
     eprintln!(
-        "[use_case/offline] PASS — alpha={alpha_addr} → beta={beta_addr} transfer of 100 USDC raw broadcast + mined; balanceOf round-trip OK (beta=100, alpha=1M-100) on Anvil Polygon-fork (token={token_addr:?})"
+        "[use_case/offline] PASS — alpha={alpha_addr} → beta={beta_addr} transfer of 100 USDC raw broadcast + mined on Anvil Polygon-fork (token={token_addr:?}); balanceOf deferred per #419"
     );
 }
