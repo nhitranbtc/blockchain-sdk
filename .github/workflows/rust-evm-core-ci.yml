@@ -24,10 +24,16 @@ on:
 permissions:
   contents: read
 
-# Cancel in-progress runs on the same branch.
+# NOTE (Path B 2026-08-28, PR #430): `cancel-in-progress: true` removed.
+# Phase 1 PR (#430) hit cascade-cancel: 3 substantive commits in 17 min
+# killed the in-flight `Rust test` job twice (Run 7 @ 13m20s, Run 8 @ 14m)
+# before `cargo test --workspace` could finish. The 40m `timeout-minutes`
+# on `Rust test` was never reached — auto-cancel from new pushes was the
+# real killer. Removed here so the test budget is the test budget.
+# Re-add per-workflow if a different gate pattern emerges.
+# Concurrency group kept for log dedup (still useful for grouping runs).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   rust-fmt:
@@ -71,12 +77,18 @@ jobs:
   rust-test:
     name: Rust test
     runs-on: ubuntu-latest
-    # 40m ceiling mirrors rust-eth-core-ci.yml. `evm-wallet-core/tests/`
-    # carries 18 #[ignore] e2e tests across 9 files (L29 carve-out —
-    # operator-driven against live testnets / Anvil fork).
-    # `cargo test --workspace --all-targets` defaults skip them; the run
-    # never opens a live RPC connection.
-    timeout-minutes: 40
+    # 60m ceiling (bumped from 40m on 2026-08-28 per PR #430 Path B):
+    # `bitcoin-wallet-core` FFI tests in the workspace include a
+    # `wallet_show_unreachable_esplora` test that deliberately waits for
+    # an esplora sync timeout (~60-90s), plus several FFI tests around
+    # the same magnitude. Whole-workspace `cargo test --workspace
+    # --all-targets` can take 30-40 min depending on cache state. 60m
+    # gives headroom without GH default 6h.
+    # `evm-wallet-core/tests/` carries 18 #[ignore] e2e tests across 9
+    # files (L29 carve-out — operator-driven against live testnets /
+    # Anvil fork). `cargo test --workspace --all-targets` defaults skip
+    # them; the run never opens a live RPC connection.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4  # v4
         with:
