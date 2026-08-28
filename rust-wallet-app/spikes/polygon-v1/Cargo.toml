@@ -46,3 +46,5 @@ alloy-node-bindings = { version = "=1.8.3" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
 proptest = { workspace = true }
+# Zeroize the env-var private key in V8 per L12 security-auditor MEDIUM finding.
+zeroize = { workspace = true }

@@ -3,8 +3,6 @@
 //! Carries the same `Network` enum shape that `evm-wallet-core` will adopt
 //! in Phase 0 of the plan. Pre-step per plan §Phase 0.0.
 
-use alloy_primitives::Address;
-
 /// EVM network selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Network {
@@ -47,6 +45,3 @@ impl ChainConfig {
         }
     }
 }
-
-/// Trivial helper to make `address` import non-dead during Phase 1 scaffold.
-pub fn _placeholder(_a: Address) {}

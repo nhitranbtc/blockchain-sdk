@@ -8,16 +8,12 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_transport_http::reqwest::Url;
 use polygon_v1_spike::config::{ChainConfig, Network};
 
-fn env_opt_in() -> bool {
-    std::env::var("RUN_POLYGON_MAINNET")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
+mod common;
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — run with: RUN_POLYGON_MAINNET=1 cargo test --test v5_rpc_connectivity -- --ignored"]
 async fn v5_polygon_mainnet_rpc_returns_chain_id_137() {
-    if !env_opt_in() {
+    if !common::env_opt_in("RUN_POLYGON_MAINNET") {
         eprintln!("[V5] SKIP — set RUN_POLYGON_MAINNET=1 to enable mainnet probe");
         return;
     }

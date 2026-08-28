@@ -2,11 +2,22 @@
 //!
 //! Composes V3 (cross-chain derivation identity) + V9 (Anvil-fork
 //! MockUSDC deploy + transfer) into one end-to-end demo. Offline only.
+//! Asserts `balanceOf(beta_addr)` and `balanceOf(alpha_addr)` post-transfer
+//! (Issue #419).
 //!
-//! **Note:** The `balanceOf` round-trip via `eth_call` is **deferred to
-//! backlog** — the V1.x alloy + Anvil wire-up returns `0x` empty bytes
-//! even when bytecode is at the contract address. Deploy + transfer
-//! verification (receipt status = true) is the current pass surface.
+//! L12 finding (code-reviewer MEDIUM): previously used
+//! `PrivateKeySigner::random()` as deployer + sender, making "alpha sends"
+//! misleading. Now uses `build_signer(ALPHA_MNEMONIC, Network::Polygon)`
+//! (the canonical "abandon ×11 + about" signer) so the test surface
+//! matches its name.
+//!
+//! L12 finding (code-reviewer MEDIUM): use-case lacked
+//! `deploy_receipt.status()` assertion that V9 has. Added.
+//!
+//! L12 finding (convergent): receipt-poll loop extracted to
+//! `tests/common::await_receipt`.
+
+use std::time::Duration;
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_eips::eip2718::Encodable2718;
@@ -14,9 +25,9 @@ use alloy_network::TxSignerSync;
 use alloy_node_bindings::Anvil;
 use alloy_primitives::U256;
 use alloy_provider::{Provider, ProviderBuilder};
-use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::{SolCall, SolConstructor};
-use polygon_v1_spike::address::derive_evm_address;
+use alloy_rpc_types::TransactionRequest;
+use alloy_sol_types::{SolCall, SolConstructor, SolValue};
+use polygon_v1_spike::address::build_signer;
 use polygon_v1_spike::config::Network;
 use polygon_v1_spike::erc20::{usdc_to_raw, MockUSDC};
 
@@ -25,26 +36,33 @@ const ALPHA_MNEMONIC: &str =
 const BETA_MNEMONIC: &str =
     "letter advice cage absurd amount doctor acoustic avoid letter advice cage above";
 
+mod common;
+
 #[tokio::test]
 async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
     // V3 — cross-chain identity.
-    let alpha_addr =
-        derive_evm_address(ALPHA_MNEMONIC, Network::Polygon).expect("alpha mnemonic valid");
-    let beta_addr =
-        derive_evm_address(BETA_MNEMONIC, Network::Polygon).expect("beta mnemonic valid");
+    let alpha_addr = build_signer(ALPHA_MNEMONIC, Network::Polygon)
+        .expect("alpha mnemonic valid")
+        .address();
+    let beta_addr = build_signer(BETA_MNEMONIC, Network::Polygon)
+        .expect("beta mnemonic valid")
+        .address();
     assert_ne!(alpha_addr, beta_addr, "alpha and beta must be distinct");
 
     let anvil = Anvil::new().spawn();
     let endpoint = anvil.endpoint().parse().expect("valid Anvil endpoint URL");
     let provider = ProviderBuilder::new().connect_http(endpoint);
 
-    let signer = PrivateKeySigner::random();
-    let sender_addr = signer.address();
+    // Alpha is the deployer + sender (per L12 finding — previously
+    // PrivateKeySigner::random()).
+    let alpha = build_signer(ALPHA_MNEMONIC, Network::Polygon).expect("alpha mnemonic valid");
+    let alpha_addr_signed = alpha.address();
+    assert_eq!(alpha_addr, alpha_addr_signed);
     let fund_amount = U256::from(10).pow(U256::from(18));
     provider
         .raw_request::<_, ()>(
             "anvil_setBalance".into(),
-            (sender_addr, format!("{fund_amount:#x}")),
+            (alpha_addr, format!("{fund_amount:#x}")),
         )
         .await
         .expect("anvil_setBalance must succeed");
@@ -65,7 +83,7 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         input: ctor_calldata.into(),
         access_list: Default::default(),
     };
-    let sig = signer
+    let sig = alpha
         .sign_transaction_sync(&mut deploy_tx)
         .expect("sign deploy must succeed");
     let signed = deploy_tx.into_signed(sig);
@@ -79,22 +97,18 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         .await
         .expect("eth_sendRawTransaction (deploy) must succeed");
 
-    let mut receipt_opt = None;
-    for _ in 0..40 {
-        if let Some(r) = provider
-            .get_transaction_receipt(tx_hash)
-            .await
-            .expect("get_transaction_receipt must succeed")
-        {
-            receipt_opt = Some(r);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    let deploy_receipt = receipt_opt.expect("deploy receipt must appear within 4s");
+    let deploy_receipt = common::await_receipt(&provider, tx_hash, 40, Duration::from_millis(100))
+        .await
+        .expect("deploy receipt must appear within 4s");
     let token_addr = deploy_receipt
         .contract_address
         .expect("deploy receipt must include contract_address");
+    // L12 finding: mirror V9's `status()` assertion (defense-in-depth —
+    // contract_address can be set even when deploy bytecode is empty).
+    assert!(
+        deploy_receipt.status(),
+        "deploy tx must have status = true (success)"
+    );
 
     // ----- 2. transfer(beta_addr, 100 USDC) -----
     let amount = usdc_to_raw(100);
@@ -105,7 +119,7 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
     .abi_encode();
 
     let nonce = provider
-        .get_transaction_count(sender_addr)
+        .get_transaction_count(alpha_addr)
         .await
         .expect("nonce fetch must succeed");
 
@@ -120,7 +134,7 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         input: transfer_calldata.into(),
         access_list: Default::default(),
     };
-    let sig = signer
+    let sig = alpha
         .sign_transaction_sync(&mut transfer_tx)
         .expect("sign transfer must succeed");
     let signed = transfer_tx.into_signed(sig);
@@ -134,25 +148,58 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         .await
         .expect("eth_sendRawTransaction (transfer) must succeed");
 
-    let mut receipt_opt = None;
-    for _ in 0..40 {
-        if let Some(r) = provider
-            .get_transaction_receipt(tx_hash)
+    let transfer_receipt =
+        common::await_receipt(&provider, tx_hash, 40, Duration::from_millis(100))
             .await
-            .expect("get_transaction_receipt must succeed")
-        {
-            receipt_opt = Some(r);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    let transfer_receipt = receipt_opt.expect("transfer receipt must appear within 4s");
+            .expect("transfer receipt must appear within 4s");
     assert!(
         transfer_receipt.status(),
         "transfer tx must have status = true (success)"
     );
 
+    // ----- 3. balanceOf round-trip via typed Provider::call (Issue #419) -----
+    // alloy 1.8.x typed path: TransactionRequest::default().to(token).input(calldata).
+    // The earlier raw_request("eth_call", (to, data, "latest")) shape was
+    // serialized as a positional JSON array [to, data, "latest"] — Anvil read
+    // `to` as the call object and `data` as block tag, returning "0x".
+
+    let beta_bal_req = TransactionRequest::default().to(token_addr).input(
+        MockUSDC::balanceOfCall { account: beta_addr }
+            .abi_encode()
+            .into(),
+    );
+    let beta_raw = provider
+        .call(beta_bal_req)
+        .await
+        .expect("eth_call(balanceOf(beta_addr)) must succeed");
+    let beta_bal =
+        U256::abi_decode(&beta_raw).expect("balanceOf(beta_addr) response must ABI-decode to U256");
+    assert_eq!(
+        beta_bal,
+        usdc_to_raw(100),
+        "balanceOf(beta_addr) must be 100 USDC raw after transfer"
+    );
+
+    let alpha_bal_req = TransactionRequest::default().to(token_addr).input(
+        MockUSDC::balanceOfCall {
+            account: alpha_addr,
+        }
+        .abi_encode()
+        .into(),
+    );
+    let alpha_raw = provider
+        .call(alpha_bal_req)
+        .await
+        .expect("eth_call(balanceOf(alpha_addr)) must succeed");
+    let alpha_bal = U256::abi_decode(&alpha_raw)
+        .expect("balanceOf(alpha_addr) response must ABI-decode to U256");
+    assert_eq!(
+        alpha_bal,
+        usdc_to_raw(1_000_000 - 100),
+        "balanceOf(alpha_addr) must be 1M USDC - 100 USDC raw after transfer"
+    );
+
     eprintln!(
-        "[use_case/offline] PASS — alpha={alpha_addr} → beta={beta_addr} transfer of 100 USDC raw broadcast + mined on Anvil Polygon-fork (token={token_addr:?})"
+        "[use_case/offline] PASS — alpha={alpha_addr} → beta={beta_addr} transfer of 100 USDC raw broadcast + mined; balanceOf round-trip OK (beta=100, alpha=1M-100) on Anvil Polygon-fork (token={token_addr:?})"
     );
 }

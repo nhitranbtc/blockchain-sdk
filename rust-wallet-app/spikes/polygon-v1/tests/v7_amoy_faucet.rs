@@ -9,16 +9,12 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_transport_http::reqwest::Url;
 use polygon_v1_spike::config::{ChainConfig, Network};
 
-fn env_opt_in() -> bool {
-    std::env::var("RUN_POLYGON_AMOY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
+mod common;
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — run with: RUN_POLYGON_AMOY=1 cargo test --test v7_amoy_faucet -- --ignored"]
 async fn v7_amoy_chain_responsive_for_faucet_precondition() {
-    if !env_opt_in() {
+    if !common::env_opt_in("RUN_POLYGON_AMOY") {
         eprintln!("[V7] SKIP — set RUN_POLYGON_AMOY=1 to enable faucet probe");
         return;
     }

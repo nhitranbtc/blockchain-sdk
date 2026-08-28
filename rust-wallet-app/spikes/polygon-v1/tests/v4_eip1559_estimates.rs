@@ -1,8 +1,8 @@
 //! V4 — EIP-1559 fee estimates + 2-second-block baseFee cadence (Q5).
 //!
-//! Polls `eth_gasPrice` (legacy) + `eth_maxPriorityFeePerGas` (EIP-1559 tip
-//! suggestion) and asserts the gas-price invariants. Cadence is asserted
-//! via a separate #[ignore] test. Gated on `RUN_POLYGON_AMOY=1`.
+//! Polls `eth_gasPrice` (legacy) + `eth_maxPriorityFeePerGas` (EIP-1559
+//! tip suggestion) and asserts the gas-price invariants. Cadence is
+//! asserted via a separate #[ignore] test. Gated on `RUN_POLYGON_AMOY=1`.
 
 use std::time::{Duration, Instant};
 
@@ -11,16 +11,12 @@ use alloy_provider::{Provider, ProviderBuilder};
 use alloy_transport_http::reqwest::Url;
 use polygon_v1_spike::config::{ChainConfig, Network};
 
-fn env_opt_in() -> bool {
-    std::env::var("RUN_POLYGON_AMOY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
+mod common;
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — run with: RUN_POLYGON_AMOY=1 cargo test --test v4_eip1559_estimates -- --ignored"]
 async fn v4_amoy_base_fee_and_priority_fee_within_band() {
-    if !env_opt_in() {
+    if !common::env_opt_in("RUN_POLYGON_AMOY") {
         eprintln!("[V4] SKIP — set RUN_POLYGON_AMOY=1 to enable Amoy gas probe");
         return;
     }
@@ -52,7 +48,7 @@ async fn v4_amoy_base_fee_and_priority_fee_within_band() {
 #[tokio::test]
 #[ignore = "operator-driven per L29 — run with: RUN_POLYGON_AMOY=1 cargo test --test v4_eip1559_estimates -- --ignored"]
 async fn v4_amoy_block_cadence_is_approximately_2_seconds() {
-    if !env_opt_in() {
+    if !common::env_opt_in("RUN_POLYGON_AMOY") {
         eprintln!("[V4-cadence] SKIP — set RUN_POLYGON_AMOY=1 to enable Amoy cadence probe");
         return;
     }
