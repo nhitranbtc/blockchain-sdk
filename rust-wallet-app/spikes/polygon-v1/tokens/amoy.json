@@ -1,8 +1,0 @@
-[
-  {
-    "symbol": "USDC",
-    "address": "0x41e94eb019c0762f9bfcf29fb1e7664d170daffb",
-    "decimals": 6,
-    "note": "Circle Amoy testnet USDC. Confirm via on-chain decimals() in V6 — registry value is the expected baseline."
-  }
-]
