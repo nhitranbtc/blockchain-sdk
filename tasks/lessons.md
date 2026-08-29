@@ -200,6 +200,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Behavioral discipline (every L13 step)       | `andrej-karpathy-skills:karpathy-guidelines` — wrapper at step 4 (branch checkout) + step 15c (broad L13 audit). Per L13 behavioral discipline section (4 principles: think-first, simplicity, surgical, goal-driven). |
 | Pre-PR code review (comprehensive)          | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10). Scope: correctness, security, tests, structure. |
 | Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
+| Code smell / debt reported (any tier) | `ecc:refactor-clean` (dead-code audit first) → per-language `*-review` (interpret findings) → `ecc:quality-gate` (formatter check) |
 | Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
 | PR review feedback (L13 step 15, 3-round fix loop) | `superpowers:receiving-code-review` wrapped by `pr-review-toolkit:code-review` |
 | Test coverage gap analysis                   | `pr-review-toolkit:pr-test-analyzer`                                                                                                 |
@@ -341,11 +342,12 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task). Sequence: step 11c (systematic-debugging) → step 11a (triage decision) → either fix-and-rerun-11 OR create-backlog-item.
-    - **Triage classes** (6, with deterministic decision criteria):
+    - **Triage classes** (7, with deterministic decision criteria):
         - **Fixable now**: ≤10 min + in scope + no new test required → fix in current commit, re-verify, continue
         - **In-PR follow-up**: >10 min OR scope-creep risk → commit in current PR (before merge), not main yet; lands via the feature PR's pipeline
         - **Small deferred** (cosmetic, follow-up): touches adjacent code OR needs new test but doesn't block → log in current session's backlogs list + L14 progress.md events
         - **Big task** (multi-PR, multi-week): own PR OR multi-week OR cross-crate → create GitHub issue, label `backlog`, link to parent task
+        - **Code smell / debt** (knip / depcheck / dead-code finding from L12 sub-agent or `refactor-clean` audit): ≤10 min + in scope + no new test → fixable now; touches adjacent code OR scope-creep risk → small deferred with `refactor-clean` audit as acceptance criteria; cross-crate OR multi-PR → big task with backlog issue + parent task ref
         - **Future milestone** (v0.1.1, v0.2): doesn't ship before parent task's release → log with `priority/p2|p3` tag
         - **External gate** (operator-driven, L29 manual smoke / L28 Gate B): can't run in CI → mark `[ ]` in PR body with `<!-- TODO: <operator-action> -->` deferral note (per step 14 external-gate discipline)
     - **Decision criteria** (deterministic, not vibes):
