@@ -55,3 +55,15 @@ serde_json           = { workspace = true }
 # `uuid` for `wallet_delete --id <UUID>` parsing (T6c3). Wallet IDs are
 # UUIDs per WalletManager convention (PR #424 Phase 1 wallet storage).
 uuid                 = { workspace = true }
+
+# T6c4: `Zeroizing<Vec<u8>>` parameter for `wallet_create` +
+# `wallet_import` (L54 env-var-secret defense-in-depth — caller
+# passes the password already wrapped in Zeroizing; the heap copy
+# gets overwritten on drop).
+zeroize              = { workspace = true }
+
+[dev-dependencies]
+# T6c4 tests: `tempfile::tempdir()` for hermetic wallet-store fixtures
+# (mirrors `evm-wallet-core/src/wallet.rs:845`). Pinned at 3.x; the
+# workspace's existing `tempfile` constraint (if any) takes precedence.
+tempfile             = "3"

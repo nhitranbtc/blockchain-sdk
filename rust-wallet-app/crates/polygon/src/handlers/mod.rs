@@ -12,6 +12,89 @@ pub mod erc20;
 pub mod sign;
 pub mod wallet;
 
+/// Map `WalletError` (lib-level) onto `polygon_wallet_core::Error`
+/// (CLI-canonical). Called by every handler that touches `WalletManager`
+/// so the CLI's `Error::exit_code()` table applies (design §3.5 cross-
+/// cutting line 293). Localities:
+///
+///   `InvalidInput` (exit 2) for caller-side errors (password, name,
+///       mnemonic, duplicate name, missing wallet).
+///   `Rpc` for filesystem + serialization + corruption — distinct
+///       exit code per the canonical `evm-wallet-core::Error::exit_code()`
+///       table.
+///
+/// T6c4: required because `WalletError` is the lib-canonical error
+/// type (per Drift §2.5 + re-export added in
+/// `polygon-wallet-core/src/lib.rs`). Centralizing the translation
+/// here keeps per-handler code small + the exit-code table
+/// authoritative.
+pub(crate) fn map_wallet_err(e: polygon_wallet_core::WalletError) -> polygon_wallet_core::Error {
+    use polygon_wallet_core::WalletError;
+    match e {
+        WalletError::Crypto(c) => {
+            polygon_wallet_core::Error::InvalidInput(format!("wallet crypto error: {c}"))
+        }
+        WalletError::AlreadyExists { name, network } => polygon_wallet_core::Error::InvalidInput(
+            format!("wallet '{name}' already exists on {network:?}"),
+        ),
+        WalletError::Mnemonic(s) => {
+            polygon_wallet_core::Error::InvalidInput(format!("invalid mnemonic: {s}"))
+        }
+        WalletError::PrivateKey(s) => {
+            polygon_wallet_core::Error::InvalidInput(format!("invalid private key: {s}"))
+        }
+        WalletError::NotFound { wallet_id } => {
+            polygon_wallet_core::Error::InvalidInput(format!("wallet not found: {wallet_id}"))
+        }
+        WalletError::NotFoundByName { name, network } => polygon_wallet_core::Error::InvalidInput(
+            format!("wallet '{name}' not found on {network:?}"),
+        ),
+        WalletError::Corrupt { reason } => {
+            polygon_wallet_core::Error::Rpc(format!("wallet file corrupt: {reason}"))
+        }
+        WalletError::Io(io) => polygon_wallet_core::Error::Rpc(format!("io: {io}")),
+        WalletError::Json(j) => polygon_wallet_core::Error::Rpc(format!("json: {j}")),
+        WalletError::Path(s) => polygon_wallet_core::Error::Rpc(format!("path: {s}")),
+    }
+}
+
+/// Validate a wallet name against the CLI-side charset. Mirrors
+/// `eth/src/handlers.rs:95-113` with a tightening per
+/// `code-review L2` + `type-design F5` + `security L-6` (L12 cluster
+/// for T6c4): charset `[A-Za-z0-9_-]` (no space) — drops the space
+/// to close the all-whitespace UX footgun where a wallet named `"   "`
+/// would be invisible in `wallet list`. Length 1..=32 chars
+/// (byte length, ASCII-only by construction). Separate error messages
+/// per violation: empty / too-long / bad-charset / all-whitespace.
+/// Returns `Error::InvalidInput` (exit 2) on any violation.
+pub(crate) fn validate_wallet_name(name: &str) -> polygon_wallet_core::Result<()> {
+    if name.is_empty() {
+        return Err(polygon_wallet_core::Error::InvalidInput(
+            "wallet name must not be empty".into(),
+        ));
+    }
+    if name.len() > 32 {
+        return Err(polygon_wallet_core::Error::InvalidInput(format!(
+            "wallet name must be 1..=32 chars; got {}",
+            name.len()
+        )));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(polygon_wallet_core::Error::InvalidInput(
+            "wallet name charset: [A-Za-z0-9_-] only (no whitespace)".into(),
+        ));
+    }
+    if name.chars().all(|c| c.is_whitespace()) {
+        return Err(polygon_wallet_core::Error::InvalidInput(
+            "wallet name must contain at least one non-whitespace character".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Parse `--network` at the polygon CLI boundary, narrowing the
 /// vocabulary to `Network::Polygon(...)` only. Delegates to
 /// `PolygonChain::parse_cli`; anything outside the polygon-flavored
