@@ -149,9 +149,10 @@ fn default_data_dir() -> std::path::PathBuf {
 /// `wallet_sync`, T6c5 `wallet_send_*`). `main()` wraps `run()` in a
 /// tokio current-thread runtime via `block_on` (mirrors `eth/src/main.rs:487-491`).
 async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
-    use alloy_primitives::utils::parse_units;
+    use alloy_primitives::{utils::parse_units, Address, U256};
     use cli::{Command, Erc20Action, TxAction, WalletAction};
     use polygon_wallet_core::Error;
+    use std::str::FromStr;
     use zeroize::Zeroizing;
 
     let stub = |cmd: &'static str| -> polygon_wallet_core::Result<()> {
@@ -470,11 +471,130 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             TxAction::Get { .. } => stub("tx get"),
         },
         Command::Erc20 { action } => match action {
-            Erc20Action::Send { .. } => stub("erc20 send"),
-            Erc20Action::Balance { .. } => stub("erc20 balance"),
-            Erc20Action::List { .. } => stub("erc20 list"),
-            Erc20Action::Register { .. } => stub("erc20 register"),
-            Erc20Action::Approve { .. } => stub("erc20 approve"),
+            Erc20Action::Send {
+                name,
+                password,
+                token,
+                token_address,
+                to,
+                amount,
+                network,
+                gas_limit,
+                max_fee_gwei,
+                priority_fee_gwei,
+                dry_run,
+                rpc_url: action_rpc_url,
+            } => {
+                let network = handlers::parse_network(&network)?;
+                let token_addr = match token_address {
+                    Some(a) => handlers::erc20::resolve_token_address(&a, network)?,
+                    None => handlers::erc20::resolve_token_address(&token, network)?,
+                };
+                let to_addr = Address::from_str(&to)
+                    .map_err(|e| Error::InvalidInput(format!("invalid --to: {e}")))?;
+                let amount_raw = U256::from_str_radix(&amount, 10).map_err(|e| {
+                    Error::InvalidInput(format!("invalid --amount (erc20, base units wei): {e}"))
+                })?;
+                handlers::validate_wallet_name(&name)?;
+                let pw_string = resolve_password(password.as_deref())?;
+                let pw = Zeroizing::new(pw_string.into_bytes());
+                let data_dir: std::path::PathBuf =
+                    cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let rpc_url = action_rpc_url.as_deref();
+                let tx_hash = handlers::erc20::erc20_send(
+                    &data_dir,
+                    rpc_url,
+                    network,
+                    &name,
+                    &pw,
+                    token_addr,
+                    to_addr,
+                    amount_raw,
+                    gas_limit,
+                    max_fee_gwei,
+                    priority_fee_gwei,
+                    dry_run,
+                )
+                .await?;
+                println!(
+                    "tx_hash: 0x{}",
+                    alloy_primitives::hex::encode(tx_hash.as_slice())
+                );
+                Ok(())
+            }
+            Erc20Action::Balance { .. } => {
+                // T6d-2 follow-up: Balance handler requires a
+                // standalone refactor (cli.rs Balance.address typed
+                // String vs value_parser=parse_address returning
+                // Address; needs deeper cli.rs surgery than one PR).
+                Err(Error::Rpc(
+                    "erc20 balance: deferred to T6d-2.1 follow-up (cli.rs Balance.address type conflict)".into(),
+                ))
+            }
+            Erc20Action::List { network, json } => {
+                let network = handlers::parse_network(&network)?;
+                handlers::erc20::erc20_list(network, json)?;
+                Ok(())
+            }
+            Erc20Action::Register { .. } => {
+                // T6d-2 follow-up: XDG-persisted user token registry is
+                // heavier scope than one PR.
+                Err(Error::Rpc(
+                    "erc20 register: deferred to T6d-2.2 follow-up (XDG-persisted user registry)"
+                        .into(),
+                ))
+            }
+            Erc20Action::Approve {
+                name,
+                password,
+                token,
+                spender,
+                amount,
+                unlimited,
+                network,
+                gas_limit,
+                max_fee_gwei,
+                priority_fee_gwei,
+                dry_run,
+                rpc_url: action_rpc_url,
+            } => {
+                let network = handlers::parse_network(&network)?;
+                let token_addr = handlers::erc20::resolve_token_address(&token, network)?;
+                let spender_addr = Address::from_str(&spender)
+                    .map_err(|e| Error::InvalidInput(format!("invalid --spender: {e}")))?;
+                let amount_raw = U256::from_str_radix(&amount, 10).map_err(|e| {
+                    Error::InvalidInput(format!(
+                        "invalid --amount (erc20 approve, base units wei): {e}"
+                    ))
+                })?;
+                handlers::validate_wallet_name(&name)?;
+                let pw_string = resolve_password(password.as_deref())?;
+                let pw = Zeroizing::new(pw_string.into_bytes());
+                let data_dir: std::path::PathBuf =
+                    cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let rpc_url = action_rpc_url.as_deref();
+                let tx_hash = handlers::erc20::erc20_approve(
+                    &data_dir,
+                    rpc_url,
+                    network,
+                    &name,
+                    &pw,
+                    token_addr,
+                    spender_addr,
+                    amount_raw,
+                    gas_limit,
+                    max_fee_gwei,
+                    priority_fee_gwei,
+                    unlimited,
+                    dry_run,
+                )
+                .await?;
+                println!(
+                    "tx_hash: 0x{}",
+                    alloy_primitives::hex::encode(tx_hash.as_slice())
+                );
+                Ok(())
+            }
         },
         Command::Fee(args) => {
             // T6d-1 (Issue #426 / Story 8): dispatch to the real
