@@ -17,12 +17,16 @@ use std::path::PathBuf;
 /// marker contains no further credentials to leak).
 ///
 /// **RFC 3986 compliance:** per §3.2.1, the userinfo sub-component is
-/// terminated by the first `@` that appears before the first `/` (or
-/// end of string if no path). `@` in path / query / fragment must NOT
-/// be treated as the userinfo delimiter (paths are not userinfo, and
-/// passwords cannot legally contain raw `@` — it would be percent-
-/// encoded as `%40`). The algorithm therefore looks for `@` only in
-/// the "authority" segment (between `://` and the first `/`).
+/// delimited by `@` in the **authority** segment (between `://` and
+/// the first `/`, or end of string if no path). The algorithm scans
+/// only that segment; `@` in path / query / fragment must NOT be
+/// treated as the userinfo delimiter (paths are not userinfo, and
+/// raw `@` in passwords is not legal — it would be percent-encoded
+/// as `%40`). Within the authority, `rfind('@')` (last `@`) is the
+/// boundary — handles the degenerate multi-`@` authority case
+/// `user@pass@host` by trusting the rightmost `@` as the
+/// userinfo/host separator (matching what RFC 3986 §3.2.1 §7.2
+/// prescribes for resolving authority ambiguity).
 pub fn redact_rpc_url(url: &str) -> String {
     let Some(scheme_end) = url.find("://") else {
         return url.to_string();
@@ -41,7 +45,7 @@ pub fn redact_rpc_url(url: &str) -> String {
     format!("{prefix}***:***{host}{path}")
 }
 
-/// T6d-3 handler: `polygon config show [--json]`.
+/// T6d-3 handler: `polygon config show [--network] [--json]`.
 ///
 /// Per design doc §5.8. Returns the formatted output (text or JSON)
 /// as a `String` so unit tests can verify the structure + redaction
@@ -49,9 +53,16 @@ pub fn redact_rpc_url(url: &str) -> String {
 /// returned value. Returns `Result<()>` for forward compatibility
 /// (future redaction failures + network resolution can be added
 /// without a signature change).
+///
+/// The `network` arg is honored from `--network` or `POLYGON_NETWORK`
+/// env (defaults to `"amoy"`). The reported value reflects the CLI
+/// arg, NOT the RPC-side chain_id — calling `eth_chainId` would need
+/// a live RPC + is out of T6d-3 scope. Operators can verify via
+/// `polygon wallet balance` for a chain_id cross-check.
 pub fn config_show(
     rpc_url: Option<&str>,
     data_dir: Option<&PathBuf>,
+    network: &str,
     json: bool,
 ) -> polygon_wallet_core::Result<String> {
     let resolved_rpc = rpc_url
@@ -60,11 +71,11 @@ pub fn config_show(
     let resolved_dir: String = data_dir
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "<XDG_DATA_HOME/polygon>".into());
-    let resolved_pin = "<T8 reserved>";
+    let resolved_pin = "<reserved>";
 
     let out = if json {
         let obj = serde_json::json!({
-            "network": "amoy",
+            "network": network,
             "rpc_url": resolved_rpc,
             "data_dir": resolved_dir,
             "pin_spki": resolved_pin,
@@ -72,7 +83,7 @@ pub fn config_show(
         obj.to_string()
     } else {
         format!(
-            "network: amoy\nrpc_url: {resolved_rpc}\ndata_dir: {resolved_dir}\npin_spki: {resolved_pin}\n"
+            "network: {network}\nrpc_url: {resolved_rpc}\ndata_dir: {resolved_dir}\npin_spki: {resolved_pin}\n"
         )
     };
     Ok(out)
@@ -133,30 +144,49 @@ mod tests {
 
     #[test]
     fn config_show_text_mode_emits_lines() {
-        let out = config_show(Some("https://user:pass@rpc.example.com"), None, false)
-            .expect("config_show text ok");
+        let out = config_show(
+            Some("https://user:pass@rpc.example.com"),
+            None,
+            "amoy",
+            false,
+        )
+        .expect("config_show text ok");
         assert!(out.contains("network: amoy"));
         assert!(out.contains("rpc_url: https://***:***@rpc.example.com"));
         assert!(out.contains("data_dir: <XDG_DATA_HOME/polygon>"));
-        assert!(out.contains("pin_spki: <T8 reserved>"));
+        assert!(out.contains("pin_spki: <reserved>"));
         assert!(!out.contains("user:pass"));
     }
 
     #[test]
     fn config_show_json_mode_emits_object() {
-        let out = config_show(Some("https://user:pass@rpc.example.com"), None, true)
-            .expect("config_show json ok");
+        let out = config_show(
+            Some("https://user:pass@rpc.example.com"),
+            None,
+            "amoy",
+            true,
+        )
+        .expect("config_show json ok");
         let parsed: serde_json::Value =
             serde_json::from_str(&out).expect("output must be valid JSON");
         assert_eq!(parsed["network"], "amoy");
         assert_eq!(parsed["rpc_url"], "https://***:***@rpc.example.com");
         assert_eq!(parsed["data_dir"], "<XDG_DATA_HOME/polygon>");
-        assert_eq!(parsed["pin_spki"], "<T8 reserved>");
+        assert_eq!(parsed["pin_spki"], "<reserved>");
+    }
+
+    #[test]
+    fn config_show_network_arg_overrides_default() {
+        let out = config_show(None, None, "mainnet", false).expect("ok");
+        assert!(
+            out.contains("network: mainnet"),
+            "explicit --network must override default; got {out}"
+        );
     }
 
     #[test]
     fn config_show_default_rpc_placeholder_when_none() {
-        let out = config_show(None, None, false).expect("ok");
+        let out = config_show(None, None, "amoy", false).expect("ok");
         assert!(out.contains("rpc_url: <default-amoy-rpc>"));
     }
 

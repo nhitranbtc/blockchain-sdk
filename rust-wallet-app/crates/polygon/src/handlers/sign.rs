@@ -108,6 +108,21 @@ pub fn sign_message(
 /// `{137, 80002}` with `Error::InvalidInput` (exit 2). Valid chain_id
 /// proceeds to the lib helper.
 ///
+/// **Gate contract (Q7 critical-tier):** the `--chain-id` CLI arg is
+/// the gate. When the alloy `eip712` feature lands and the lib can
+/// parse `typed_data_json`, the handler MUST additionally:
+///   1. parse `typed_data.domain.chainId` from the JSON,
+///   2. call `assert_polygon_chain_id(typed.domain.chain_id)`,
+///   3. require `typed.domain.chain_id == chain_id` (CLI arg must
+///      match the authoritative domain value).
+///
+/// Per EIP-712 the domain's `chainId` is authoritative; the CLI arg
+/// is convenience. Skipping this leaves a cross-chain replay hole
+/// when the lib lands — an attacker passes `--chain-id 137` with a
+/// payload declaring `domain.chainId=1` (Ethereum mainnet), the gate
+/// accepts, the lib signs the Ethereum-domain payload. Tracked in
+/// the T6d-3 follow-up PR alongside the eip712 feature gate.
+///
 /// **Deferral notice (T6d-3 scope):** the underlying
 /// `polygon_wallet_core::sign_typed_data` (at
 /// `evm-wallet-core/src/signer.rs:164`) is currently stubbed pending the
@@ -321,25 +336,27 @@ mod tests {
     /// T6d-3 test #13: `sign_typed_data` accepts chain_id=137 (Polygon
     /// PoS mainnet) and reaches the lib call. The lib is currently
     /// stubbed (alloy eip712 feature gate deferred per signer.rs:164),
-    /// so we expect either the gate-passed marker (if the lib error
-    /// happens to land as an `Error::Rpc` we tolerate the path) OR
-    /// the lib's `Error::Rpc`. Either way the gate DID NOT fire —
-    /// which is the contract we're verifying here.
+    /// so we expect either the gate-passed path (real `0x` hex sig
+    /// once lib lands) OR the lib's `Error::Rpc`. Either way the gate
+    /// DID NOT fire — which is the contract we're verifying here.
     #[test]
     fn sign_typed_data_chain_id_137_passes_gate() {
         let signer = cli_test_signer();
         let r = super::sign_typed_data(&signer, r#"{"types":{}}"#, 137, None);
         match r {
-            Ok(marker) => assert!(
-                marker.contains("chain_id=137"),
-                "gate-passed marker must include chain_id=137; got {marker}"
+            // Once alloy eip712 lands, the handler returns the real
+            // 65-byte signature encoded as `0x` + 130 hex chars.
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "gate-passed result must be 0x-prefixed 65-byte hex; got {sig}"
             ),
+            // Today the lib stub returns Error::Rpc — gate DID NOT fire.
             Err(Error::Rpc(msg)) => assert!(
                 msg.contains("eip712"),
                 "lib-side error must surface honestly; got {msg}"
             ),
             other => panic!(
-                "chain_id=137 must pass gate (Ok or Rpc); got {other:?} \
+                "chain_id=137 must pass gate (Ok sig or Rpc); got {other:?} \
                  — gate must NOT reject Polygon chain_ids"
             ),
         }
@@ -351,7 +368,7 @@ mod tests {
         let signer = cli_test_signer();
         let r = super::sign_typed_data(&signer, r#"{"types":{}}"#, 80_002, None);
         match r {
-            Ok(marker) => assert!(marker.contains("chain_id=80002")),
+            Ok(sig) => assert!(sig.starts_with("0x") && sig.len() == 132),
             Err(Error::Rpc(_)) => {} // honest lib-side deferral
             other => panic!("chain_id=80002 must pass gate; got {other:?}"),
         }

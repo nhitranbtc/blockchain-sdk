@@ -646,7 +646,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             Ok(())
         }
         Command::Config { action } => match action {
-            ConfigAction::Show { json } => {
+            ConfigAction::Show { network, json } => {
                 // T6d-3 (Issue #426 / Story 11): dispatch to the real
                 // `handlers::config::config_show` handler. Pure
                 // resolution — no RPC, no signing. RPC URL credentials
@@ -654,6 +654,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 let out = handlers::config::config_show(
                     cli.rpc_url.as_deref(),
                     cli.data_dir.as_ref(),
+                    &network,
                     json,
                 )?;
                 print!("{out}");
@@ -665,27 +666,19 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             // T6d-3 (Issue #426 / Story 18): handler
             // `handlers::sign::sign_message` is implemented (pure EIP-191
             // crypto via `polygon_wallet_core::sign_message`). Dispatch
-            // wiring requires `WalletManager::unlock` to derive the
-            // `PrivateKeySigner` — deferred to T6 follow-up PR alongside
-            // the sign-typed dispatch wiring (single WalletManager
-            // unlock helper covers both).
-            Err(Error::Rpc(
-                "sign-message dispatch deferred to T6 follow-up (WalletManager::unlock wiring)"
-                    .into(),
-            ))
+            // wiring requires the wallet-unlock helper to derive the
+            // `PrivateKeySigner` — see follow-up PR.
+            Err(Error::Rpc("sign message: not yet implemented".into()))
         }
         Command::SignTyped(_) => {
             // T6d-3 (Issue #426 / Story 27 + Q7): handler
             // `handlers::sign::sign_typed_data` is implemented (Q7
             // chain_id gate at type level). Dispatch wiring requires
-            // `WalletManager::unlock` — deferred to T6 follow-up PR.
-            // The Q7 gate is testable via `handlers::sign` unit tests;
-            // CLI wiring is a 5-line dispatcher addition once the
-            // unlock helper lands.
-            Err(Error::Rpc(
-                "sign-typed dispatch deferred to T6 follow-up (WalletManager::unlock wiring)"
-                    .into(),
-            ))
+            // the wallet-unlock helper — see follow-up PR. The Q7 gate
+            // is testable via `handlers::sign` unit tests; CLI wiring
+            // is a 5-line dispatcher addition once the unlock helper
+            // lands.
+            Err(Error::Rpc("sign typed: not yet implemented".into()))
         }
     }
 }

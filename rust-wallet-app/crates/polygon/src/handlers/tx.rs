@@ -33,15 +33,15 @@ pub async fn tx_list(
     let _addr = parse_address_strict(address)?;
     if let Some(lim) = limit {
         if lim == 0 || lim > 10_000 {
-            return Err(polygon_wallet_core::Error::InvalidInput(format!(
-                "tx list --limit must be in [1, 10000]; got {lim}"
-            )));
+            return Err(polygon_wallet_core::Error::InvalidInput(
+                "tx list --limit must be in [1, 10000]".into(),
+            ));
         }
     }
-    let _ = since_block; // accepted; default-resolved at T7 live scan
-                         // Live RPC deferred to T7 (L29 operator-driven Amoy smoke).
+    let _ = since_block; // accepted; default-resolved at the RPC follow-up
+                         // Live RPC not yet implemented (operator-driven follow-up).
     Err(polygon_wallet_core::Error::Rpc(
-        "tx list live RPC deferred to T7 (L29 operator-driven)".into(),
+        "tx list: not yet implemented".into(),
     ))
 }
 
@@ -50,18 +50,23 @@ pub async fn tx_list(
 /// Per design doc §5.5. Parses the tx_hash as a 32-byte B256 hex
 /// (EIP-55 insensitive — `B256::from_str` accepts both cased and
 /// lowercased). Invalid format → `Error::InvalidInput` (exit 2).
-/// Live `provider.get_transaction_by_hash` deferred to T7.
+/// Live `provider.get_transaction_by_hash` deferred to a follow-up
+/// release (RPC body lands alongside other read-side RPC bodies).
 pub async fn tx_get(tx_hash: &str, _json: bool) -> polygon_wallet_core::Result<()> {
     // Validate hash format — defensive even though clap already does it,
-    // because programmatic callers can bypass clap.
-    let _hash = B256::from_str(tx_hash).map_err(|e| {
-        polygon_wallet_core::Error::InvalidInput(format!(
-            "tx hash must be 32-byte hex (0x + 64 chars); got {tx_hash:?}: {e}"
-        ))
-    })?;
-    // Live RPC deferred to T7 (L29 operator-driven Amoy smoke).
+    // because programmatic callers can bypass clap. Length-guarded first
+    // so raw input is never echoed (defense against terminal/log
+    // injection via control sequences in pasted input).
+    if tx_hash.len() != 66 {
+        return Err(polygon_wallet_core::Error::InvalidInput(
+            "invalid tx hash (must be 0x + 64 hex chars)".into(),
+        ));
+    }
+    let _hash = B256::from_str(tx_hash)
+        .map_err(|_| polygon_wallet_core::Error::InvalidInput("invalid tx hash format".into()))?;
+    // Live RPC not yet implemented (operator-driven follow-up).
     Err(polygon_wallet_core::Error::Rpc(
-        "tx get live RPC deferred to T7 (L29 operator-driven)".into(),
+        "tx get: not yet implemented".into(),
     ))
 }
 
@@ -69,11 +74,18 @@ pub async fn tx_get(tx_hash: &str, _json: bool) -> polygon_wallet_core::Result<(
 /// a 20-byte EIP-55 hex. Returns `Ok(Address)` on success; `Err(InvalidInput)`
 /// on parse failure. Used by `tx_list` and any future address-bearing
 /// handler — single chokepoint for address-format validation.
+///
+/// Length-guarded first so raw input is never echoed (defense against
+/// terminal/log injection via control sequences in pasted input).
 #[allow(dead_code)] // exported for future batch reuse
 pub fn parse_address_strict(s: &str) -> polygon_wallet_core::Result<Address> {
-    Address::from_str(s).map_err(|e| {
-        polygon_wallet_core::Error::InvalidInput(format!("invalid address {s:?}: {e}"))
-    })
+    if s.len() != 42 {
+        return Err(polygon_wallet_core::Error::InvalidInput(
+            "invalid address (must be 0x + 40 hex chars)".into(),
+        ));
+    }
+    Address::from_str(s)
+        .map_err(|_| polygon_wallet_core::Error::InvalidInput("invalid address format".into()))
 }
 
 #[cfg(test)]
@@ -111,8 +123,8 @@ mod tests {
         let valid_hash = "0x".to_string() + &"0".repeat(64); // 32 zero bytes
         let r = tx_get(&valid_hash, false).await;
         match r {
-            Err(Error::Rpc(ref msg)) if msg.contains("T7") => {}
-            other => panic!("well-formed hash must reach T7 deferral gate; got {other:?}"),
+            Err(Error::Rpc(ref msg)) if msg.contains("not yet implemented") => {}
+            other => panic!("well-formed hash must reach deferral gate; got {other:?}"),
         }
     }
 
@@ -159,9 +171,53 @@ mod tests {
         )
         .await;
         match r {
-            Err(Error::Rpc(ref msg)) if msg.contains("T7") => {}
-            other => panic!("valid args must reach T7 deferral gate; got {other:?}"),
+            Err(Error::Rpc(ref msg)) if msg.contains("not yet implemented") => {}
+            other => panic!("valid args must reach deferral gate; got {other:?}"),
         }
+    }
+
+    /// Batch F test #6a: tx_list rejects malformed address (handler-level
+    /// test, not just the `parse_address_strict` helper — guards against
+    /// accidental removal of the defensive re-parse).
+    #[tokio::test]
+    async fn tx_list_rejects_malformed_address() {
+        let r = tx_list("not-an-address", None, Some(50), false).await;
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "malformed address must be rejected; got {r:?}"
+        );
+    }
+
+    /// Batch F test #6b: tx_list accepts limit=1 (lower boundary).
+    #[tokio::test]
+    async fn tx_list_accepts_limit_one() {
+        let r = tx_list(
+            "0x0000000000000000000000000000000000000001",
+            None,
+            Some(1),
+            false,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(Error::Rpc(_))),
+            "limit=1 must be accepted (lower boundary); got {r:?}"
+        );
+    }
+
+    /// Batch F test #6c: tx_list accepts limit=10000 (upper boundary).
+    #[tokio::test]
+    async fn tx_list_accepts_limit_ten_thousand() {
+        let r = tx_list(
+            "0x0000000000000000000000000000000000000001",
+            None,
+            Some(10_000),
+            false,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(Error::Rpc(_))),
+            "limit=10000 must be accepted (upper boundary); got {r:?}"
+        );
     }
 
     /// Batch F test #7: parse_address_strict accepts valid hex.
