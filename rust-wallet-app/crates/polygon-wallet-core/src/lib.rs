@@ -41,6 +41,18 @@ pub use evm_wallet_core::provider::{
     new_http, new_http_insecure, new_http_polygon_amoy, new_http_polygon_mainnet,
 };
 
+// T6c4: re-export `WalletCreated` + `WalletError` so the polygon CLI's
+// `map_wallet_err` helper (per design doc §5.3) can translate the
+// lib's wallet-specific error variants (`AlreadyExists`, `Crypto(_)`,
+// `Mnemonic(_)`, etc.) onto the CLI's canonical `Error::InvalidInput`
+// exit-2 surface. Same explicit per-item re-export pattern as
+// `Network`/`PolygonChain`/`EthereumChain`/`Error`/`Result` above and
+// `WalletInfo`/`WalletManager`/`new_http*` below — `pub use glob`
+// would over-export lib internals (Q1 Option A single-import-surface
+// property, per design §10.3). Additive, backward-compatible.
+pub use evm_wallet_core::wallet::WalletCreated;
+pub use evm_wallet_core::wallet::WalletError;
+
 // T6c3 follow-up #3: `TxSummary` is the Transfer-event summary type
 // returned by the `polygon wallet sync` handler. Lives here (not in
 // the polygon binary crate, which is `publish = false` and effectively

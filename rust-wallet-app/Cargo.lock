@@ -4139,9 +4139,11 @@ dependencies = [
  "directories",
  "polygon-wallet-core",
  "serde_json",
+ "tempfile",
  "tokio",
  "url",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

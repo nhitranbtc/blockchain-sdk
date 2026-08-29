@@ -4,18 +4,28 @@
 //! §3.3 (handlers/{mod,wallet,tx,erc20,fee,config,faucet,sign}.rs split)
 //! + §5.4 (per-command signatures).
 //!
-//! T6c3 follow-up: real `wallet_show` impl (Story 9 — `wallet show`).
-//! Reads `.meta.json` (plaintext metadata; no decrypt — encrypted blob
-//! inspection deferred to T6d when rpassword + AES-GCM decryption
-//! wires up). Real `wallet_create` + `wallet_import` deferred to T6c4;
-//! `wallet_send_*` to T6c5 per L25 sub-task split.
+//! T6c3 follow-ups landed: `wallet_show` (Story 9 — T6c3 follow-up #1),
+//! `wallet_sync` body + `TxSummary` + `--json` formatter (Story 4 — T6c3
+//! follow-ups #2 + #3), and `wallet_delete` (Story 9 — T6c3).
+//!
+//! T6c4 follow-up: real `wallet_create` + `wallet_import` impls
+//! (Stories 1, 2). Mnemonic-import path only — `--private-key` import
+//! deferred to a follow-up sub-task (lib `import_private_key` hardcodes
+//! `Network::default_v0_2()` per `evm-wallet-core/src/wallet.rs:341-404`
+//! and lacks a `_for_network` variant).
+//!
+//! T6c5 (deferred): `wallet_send_native` + `wallet_send_speedup`. Stubs
+//! remain below until T6c5 lands.
 
 use alloy_primitives::{Address, B256, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types::Filter;
 use std::str::FromStr;
+use zeroize::Zeroizing;
 
-use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Result, WalletInfo};
+use polygon_wallet_core::{
+    new_http, new_http_polygon_amoy, Error, Result, WalletCreated, WalletInfo,
+};
 
 /// ERC-20 Transfer(address,address,uint256) event topic0 hash.
 ///
@@ -169,18 +179,6 @@ pub fn wallet_delete(
     Ok(())
 }
 
-#[allow(dead_code)]
-pub fn wallet_create(_name: &str) -> Result<()> {
-    Err(Error::Rpc(
-        "wallet create: deferred past T6c3 follow-up (lands in T6c4)".into(),
-    ))
-}
-#[allow(dead_code)]
-pub fn wallet_import(_name: &str) -> Result<()> {
-    Err(Error::Rpc(
-        "wallet import: deferred past T6c3 follow-up (lands in T6c4)".into(),
-    ))
-}
 /// `wallet sync` handler — T6c3 follow-up #3.
 ///
 /// Polls ERC-20 Transfer events involving `address`. Returns one
@@ -233,6 +231,86 @@ pub async fn wallet_sync(
     let _filter = filter;
     Err(Error::Rpc("wallet sync not yet implemented".into()))
 }
+
+// === T6c4 follow-up: real wallet_create + wallet_import ===
+//
+// Per L13 step 9a (mandatory module-interface design): both functions
+// are thin wrappers over `polygon-wallet-core::WalletManager`. The
+// handler returns `WalletCreated` (which carries only
+// `wallet_id`/`name`/`network`/`address` — no mnemonic field), so
+// the type system structurally prevents the mnemonic from leaking
+// into the return type. main.rs is responsible for printing the
+// mnemonic to STDERR (design §3.5 + F49 L28 mnemonic-leak discipline);
+// the handlers never own a `String` mnemonic.
+//
+// Critical-tier (per L13 Q4): touches key material + AES-GCM password
+// wrap. L12 review cluster (type-design-analyzer + code-reviewer +
+// security-auditor) + standalone `security-review` gate this code.
+
+/// Real `wallet_create` impl (Story 1) — T6c4 follow-up.
+///
+/// Thin wrapper over `WalletManager::create_wallet_for_network`:
+///   1. Validate `name` via `handlers::validate_wallet_name`
+///      (1..=32 chars, `[A-Za-z0-9 _-]` charset; exit 2 on violation).
+///   2. Open a `WalletManager` rooted at `data_dir`. `open_at` creates
+///      the directory tree + tightens perms to `0o700` per #337 H-1.
+///   3. Delegate to `create_wallet_for_network`. Lib generates a
+///      fresh 12-word BIP-39 mnemonic, derives first receive address,
+///      Argon2id-derives the AES key, AES-256-GCM-encrypts the
+///      mnemonic blob, writes `0o600` `<uuid>.enc` + `<uuid>.meta.json`.
+///   4. Map `WalletError` → `polygon_wallet_core::Error` via
+///      `handlers::map_wallet_err` so the CLI's exit-code table
+///      (cryptic internal errors → `Error::InvalidInput` exit 2)
+///
+/// Empty password → `WalletError::Crypto(Argon2("password must be
+/// non-empty"))` → `Error::InvalidInput`. Duplicate name →
+/// `AlreadyExists` → `Error::InvalidInput`. Both exit 2.
+#[allow(dead_code)] // wired into main.rs::run() dispatch (separate sub-task)
+pub fn wallet_create(
+    data_dir: &std::path::Path,
+    name: &str,
+    password: &Zeroizing<Vec<u8>>,
+    network: polygon_wallet_core::Network,
+) -> Result<WalletCreated> {
+    crate::handlers::validate_wallet_name(name)?;
+    let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.to_path_buf())
+        .map_err(crate::handlers::map_wallet_err)?;
+    mgr.create_wallet_for_network(name, password.as_slice(), network)
+        .map_err(crate::handlers::map_wallet_err)
+}
+
+/// Real `wallet_import` impl (Story 2) — T6c4 follow-up (mnemonic-only).
+///
+/// Thin wrapper over `WalletManager::import_wallet_for_network`. Parses
+/// `phrase` as a BIP-39 mnemonic (English wordlist), re-derives the
+/// first receive address, encrypts under `password`, persists to disk.
+///
+/// `--private-key` import path is deferred — the lib's
+/// `import_private_key` (line 341) hardcodes `Network::default_v0_2()`
+/// and lacks a `_for_network` variant. Adds follow-up sub-task for
+/// the lib extension; mnemonic import ships first.
+///
+/// Sync (not `async`): `WalletManager::import_wallet_for_network`
+/// is fully synchronous on the lib side. The `async` keyword on a
+/// prior revision forced every caller + test to spin up a
+/// `tokio::runtime` for no concurrency benefit — reverted per
+/// `code-review M1` + `type-design F8` (L12 cluster for T6c4).
+/// Re-add `async` only if a future live-RPC path needs it.
+#[allow(dead_code)] // wired into main.rs::run() dispatch (separate sub-task)
+pub fn wallet_import(
+    data_dir: &std::path::Path,
+    name: &str,
+    password: &Zeroizing<Vec<u8>>,
+    network: polygon_wallet_core::Network,
+    phrase: &str,
+) -> Result<WalletCreated> {
+    crate::handlers::validate_wallet_name(name)?;
+    let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.to_path_buf())
+        .map_err(crate::handlers::map_wallet_err)?;
+    mgr.import_wallet_for_network(name, phrase, password.as_slice(), network)
+        .map_err(crate::handlers::map_wallet_err)
+}
+
 #[allow(dead_code)]
 pub async fn wallet_send_native(_to: &str, _amount: &str) -> Result<()> {
     Err(Error::Rpc(
@@ -468,5 +546,483 @@ mod tests {
         let json = serde_json::to_string(&summary).expect("TxSummary serializes");
         let back: TxSummary = serde_json::from_str(&json).expect("TxSummary deserializes");
         assert_eq!(back, summary);
+    }
+
+    // ============================================================
+    // T6c4 tests: wallet_create + wallet_import + map_wallet_err
+    // + validate_wallet_name
+    // ============================================================
+    //
+    // All tests use hermetic `tempfile::tempdir()` — no live RPC,
+    // no Anvil, no network. Pure filesystem + crypto assertions.
+    // Round-trip tests exercise the AES-GCM auth-tag path on the
+    // wrong-password side + the Argon2id-derive-key path on the
+    // correct-password side.
+
+    use polygon_wallet_core::{Error, WalletCreated, WalletError};
+    use tempfile::tempdir;
+    use zeroize::Zeroizing;
+
+    fn amoy() -> Network {
+        Network::Polygon(PolygonChain::Amoy)
+    }
+    /// 12 lowercase BIP-39 English wordlist words. Used to verify
+    /// the encrypted blob actually carries the test mnemonic.
+    const GOOD_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    fn good_mnemonic() -> &'static str {
+        GOOD_MNEMONIC
+    }
+    /// Wrong word count — bip39 expects 12/15/18/21/24.
+    const BAD_WORD_COUNT: &str = "foo bar baz";
+    fn bad_word_count() -> &'static str {
+        BAD_WORD_COUNT
+    }
+    /// 12 words but the last 10 are not on the BIP-39 English wordlist.
+    /// bip39 returns error + lib surfaces `Error::InvalidInput`.
+    const BAD_WORDS: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon zzzqx";
+    fn bad_words() -> &'static str {
+        BAD_WORDS
+    }
+
+    // ----- wallet_create tests -----
+
+    #[test]
+    fn wallet_create_writes_encrypted_blob_and_meta_json() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let created = super::wallet_create(tmp.path(), "alpha", &pwd, amoy()).expect("create ok");
+        assert_eq!(created.name, "alpha");
+        assert_eq!(created.network, amoy());
+        assert!(
+            !created.address.is_zero(),
+            "address must be non-zero (real derive)"
+        );
+        let dir = tmp.path().join(amoy().as_dir_name());
+        let blob = dir.join(format!("{}.enc", created.wallet_id));
+        let meta = dir.join(format!("{}.meta.json", created.wallet_id));
+        assert!(blob.exists(), ".enc blob missing at {}", blob.display());
+        assert!(meta.exists(), ".meta.json missing at {}", meta.display());
+    }
+
+    #[test]
+    fn wallet_create_rejects_empty_password() {
+        let tmp = tempdir().expect("tempdir");
+        let empty = Zeroizing::new(Vec::<u8>::new());
+        let r = super::wallet_create(tmp.path(), "alpha", &empty, amoy());
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("crypto") || msg.contains("password"),
+                    "InvalidInput must mention crypto/password; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+        // No files written on rejection.
+        let amoy_dir = tmp.path().join(amoy().as_dir_name());
+        let count_after = std::fs::read_dir(&amoy_dir).map(|d| d.count()).unwrap_or(0);
+        assert_eq!(count_after, 0, "no files written on rejection");
+    }
+
+    #[test]
+    fn wallet_create_rejects_duplicate_name_on_same_network() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd1 = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let _first =
+            super::wallet_create(tmp.path(), "alpha", &pwd1, amoy()).expect("first create ok");
+        let pwd2 = Zeroizing::new(b"different password 1234567".to_vec());
+        let r = super::wallet_create(tmp.path(), "alpha", &pwd2, amoy());
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("already exists") && msg.contains("alpha"),
+                    "InvalidInput must mention duplicate + name; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wallet_create_address_is_eip55_checksum() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let created = super::wallet_create(tmp.path(), "alpha", &pwd, amoy()).expect("create ok");
+        // alloy Display impl for Address is EIP-55 checksummed.
+        // Pure lowercase/uppercase = not checksummed.
+        let formatted = format!("{}", created.address);
+        assert!(
+            formatted.starts_with("0x"),
+            "address must start with 0x; got {formatted}"
+        );
+        let has_upper = formatted.chars().any(|c| c.is_ascii_uppercase());
+        let has_lower_or_nibble = formatted
+            .chars()
+            .any(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        assert!(
+            has_upper && has_lower_or_nibble,
+            "address must be EIP-55 checksum (mixed case); got {formatted}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)] // complex fn-pointer type is the assertion
+    fn wallet_create_zeroizing_wrapper_type() {
+        // Type-system proof: `password: &Zeroizing<Vec<u8>>` is the
+        // parameter type. Compile-time guarantee that callers cannot
+        // pass a `String` or `&[u8]` without wrapping. Drop timing is
+        // verified by `evm-wallet-core` integration tests; this test
+        // asserts the type contract at the handler boundary.
+        let _fn_sig: fn(
+            &std::path::Path,
+            &str,
+            &Zeroizing<Vec<u8>>,
+            Network,
+        ) -> Result<WalletCreated, polygon_wallet_core::Error> = super::wallet_create;
+    }
+
+    #[test]
+    fn wallet_create_wallet_created_struct_carries_no_mnemonic() {
+        // Structural no-mnemonic proof (per L12 cluster: type-design
+        // F6 + security M-3 tightened this). The `WalletCreated` return
+        // type has only `wallet_id`/`name`/`network`/`address` per
+        // `evm-wallet-core/src/wallet.rs:102-109`. Two layers of assertion:
+        //   1. Schema-shape: the four expected fields appear in Debug
+        //      output. Catches drift if a future field is added.
+        //   2. Vocabulary exclusion: no mnemonic / phrase / secret /
+        //      PrivateKey / password strings — tightens the prior
+        //      4-word BIP-39 sample that would silently pass a
+        //      redact-prefix pattern.
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let created = super::wallet_create(tmp.path(), "alpha", &pwd, amoy()).expect("create ok");
+        let dbg = format!("{:?}", created);
+        for field in &["wallet_id", "name:", "network:", "address:"] {
+            assert!(
+                dbg.contains(field),
+                "WalletCreated missing expected field {field:?}: {dbg}"
+            );
+        }
+        let dbg_lc = dbg.to_lowercase();
+        for forbidden in &[
+            "mnemonic",
+            "phrase",
+            "secret",
+            "privatekey",
+            "private_key",
+            "password",
+        ] {
+            assert!(
+                !dbg_lc.contains(forbidden),
+                "WalletCreated debug leaks forbidden token {forbidden:?}: {dbg}"
+            );
+        }
+    }
+
+    // ----- wallet_import tests -----
+
+    #[test]
+    fn wallet_import_writes_encrypted_blob_and_meta_json() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let phrase = good_mnemonic();
+        let created = super::wallet_import(tmp.path(), "beta-import", &pwd, amoy(), phrase)
+            .expect("import ok");
+        assert_eq!(created.name, "beta-import");
+        let dir = tmp.path().join(amoy().as_dir_name());
+        assert!(dir.join(format!("{}.enc", created.wallet_id)).exists());
+        assert!(dir
+            .join(format!("{}.meta.json", created.wallet_id))
+            .exists());
+    }
+
+    #[test]
+    fn wallet_import_rejects_empty_password() {
+        let tmp = tempdir().expect("tempdir");
+        let empty = Zeroizing::new(Vec::<u8>::new());
+        let r = super::wallet_import(tmp.path(), "beta", &empty, amoy(), good_mnemonic());
+        match r {
+            Err(Error::InvalidInput(_)) => {}
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wallet_import_rejects_invalid_mnemonic_word_count() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), bad_word_count());
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("mnemonic") || msg.contains("word"),
+                    "InvalidInput must mention mnemonic/word; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wallet_import_rejects_invalid_mnemonic_word() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), bad_words());
+        match r {
+            Err(Error::InvalidInput(_)) => {}
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wallet_import_rejects_already_exists() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd1 = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let _first = super::wallet_import(tmp.path(), "dupe", &pwd1, amoy(), good_mnemonic())
+            .expect("first import ok");
+        let pwd2 = Zeroizing::new(b"different password 1234567".to_vec());
+        let r = super::wallet_import(tmp.path(), "dupe", &pwd2, amoy(), good_mnemonic());
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("already exists") && msg.contains("dupe"),
+                    "InvalidInput must mention duplicate + name; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    // Round-trip via a fresh `WalletManager::open_at` is deferred — the
+    // lib's `scan_disk_into` (`evm-wallet-core/src/wallet.rs:763-766`)
+    // only recognizes `mainnet` / `sepolia` / `anvil` directories, not
+    // `polygon_mainnet` / `polygon_amoy`. Extending `scan_disk_into`
+    // lives in follow-up issue #448 (per L13 step 10a pr-test-analyzer
+    // H-1 fix). When that extension lands, re-enable as a real `#[test]`
+    // covering:
+    //   1. `mgr.lookup_by_name(name, network)` returns the wallet_id, OR
+    //   2. fall back to `mgr.unlock(wallet_id, password)` proving the
+    //      AES-GCM auth-tag path round-trips correctly.
+    // Until then no `#[test]` here — an empty body would silently inflate
+    // `cargo test -p polygon` count without exercising behavior (L-1).
+
+    #[test]
+    fn wallet_import_wallet_created_struct_carries_no_mnemonic() {
+        // Structural no-mnemonic proof (per L12 cluster: type-design
+        // F6 + security M-3 tightened this). Mirror of the create-side
+        // test: schema-shape + vocabulary-exclusion checks. The
+        // previous 4-word BIP-39 sample was tightened to forbid any
+        // mnemonic/phrase/secret/private-key/password surface.
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let phrase = good_mnemonic();
+        let created =
+            super::wallet_import(tmp.path(), "noleak", &pwd, amoy(), phrase).expect("import ok");
+        let dbg = format!("{:?}", created);
+        for field in &["wallet_id", "name:", "network:", "address:"] {
+            assert!(
+                dbg.contains(field),
+                "WalletCreated missing expected field {field:?}: {dbg}"
+            );
+        }
+        let dbg_lc = dbg.to_lowercase();
+        for forbidden in &[
+            "mnemonic",
+            "phrase",
+            "secret",
+            "privatekey",
+            "private_key",
+            "password",
+        ] {
+            assert!(
+                !dbg_lc.contains(forbidden),
+                "WalletCreated debug leaks forbidden token {forbidden:?}: {dbg}"
+            );
+        }
+    }
+
+    // ----- map_wallet_err tests -----
+
+    #[test]
+    fn map_wallet_err_already_exists_to_invalid_input() {
+        let wallet_err = WalletError::AlreadyExists {
+            name: "alpha".into(),
+            network: amoy(),
+        };
+        let mapped = crate::handlers::map_wallet_err(wallet_err);
+        match mapped {
+            Error::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("alpha") && msg.contains("exists"),
+                    "msg must mention alpha + exists; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// H-1 from L13 step 10a — `Corrupt` is the ONLY `WalletError`
+    /// variant that maps to `Error::Rpc` (not `InvalidInput`), so the
+    /// exit code differs. A future refactor that "normalizes" Corrupt
+    /// into `InvalidInput` would silently change the CLI's exit-code
+    /// contract. Locked here. Reachable via `WalletManager::unlock`
+    /// (UTF-8 decode failure / mnemonic parse / `0x` prefix detection).
+    #[test]
+    fn map_wallet_err_corrupt_to_rpc() {
+        let wallet_err = WalletError::Corrupt {
+            reason: "mnemonic parse: bad entropy".into(),
+        };
+        let mapped = crate::handlers::map_wallet_err(wallet_err);
+        match mapped {
+            Error::Rpc(msg) => {
+                assert!(
+                    msg.contains("corrupt"),
+                    "Rpc msg must mention 'corrupt'; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::Rpc (different exit code!), got {other:?}"),
+        }
+    }
+
+    /// H-2 from L13 step 10a — Io/Json/Path all zero coverage. These
+    /// are the only `Error::Rpc`-encoding variants besides `Corrupt`;
+    /// they cover fs permission errors, back-meta deserialize failure,
+    /// and the lib's `RwLock` poisoning defense. Pinning each unit
+    /// here means future handler additions that DO touch fs can trust
+    /// the translation table.
+    #[test]
+    fn map_wallet_err_io_to_rpc() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "x");
+        let mapped = crate::handlers::map_wallet_err(WalletError::Io(io_err));
+        match mapped {
+            Error::Rpc(msg) => {
+                assert!(msg.contains("io"), "Rpc msg must mention 'io'; got: {msg}");
+            }
+            other => panic!("expected Error::Rpc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_wallet_err_json_to_rpc() {
+        let json_err = serde_json::from_str::<u8>("{").unwrap_err();
+        let mapped = crate::handlers::map_wallet_err(WalletError::Json(json_err));
+        match mapped {
+            Error::Rpc(msg) => {
+                assert!(
+                    msg.contains("json"),
+                    "Rpc msg must mention 'json'; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::Rpc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_wallet_err_path_to_rpc() {
+        let mapped = crate::handlers::map_wallet_err(WalletError::Path("store poisoned".into()));
+        match mapped {
+            Error::Rpc(msg) => {
+                assert!(
+                    msg.contains("path"),
+                    "Rpc msg must mention 'path'; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::Rpc, got {other:?}"),
+        }
+    }
+
+    /// H-3 from L13 step 10a — the documented all-whitespace error
+    /// branch in `validate_wallet_name` is actually unreachable for
+    /// ASCII space input (the charset check fires first with "no
+    /// whitespace" message). This test locks down that the documented
+    /// contract holds: input `"   "` is rejected with the charset
+    /// message (NOT the unreachable all-whitespace message). Future
+    /// refactor that loosens the charset to allow spaces would flip
+    /// this to the all-whitespace branch — the test surfaces the
+    /// design inconsistency.
+    #[test]
+    fn validate_wallet_name_rejects_all_whitespace_via_charset() {
+        let r = crate::handlers::validate_wallet_name("   ");
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("charset") && !msg.contains("non-whitespace"),
+                    "expected charset rejection (not unreachable all-whitespace branch); got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    // ----- validate_wallet_name tests -----
+
+    #[test]
+    fn validate_wallet_name_rejects_empty() {
+        let r = crate::handlers::validate_wallet_name("");
+        assert!(matches!(r, Err(Error::InvalidInput(_))), "got: {r:?}");
+    }
+
+    #[test]
+    fn validate_wallet_name_rejects_too_long() {
+        let too_long = "a".repeat(33);
+        let r = crate::handlers::validate_wallet_name(&too_long);
+        assert!(matches!(r, Err(Error::InvalidInput(_))), "got: {r:?}");
+    }
+
+    #[test]
+    fn validate_wallet_name_rejects_bad_charset() {
+        let r = crate::handlers::validate_wallet_name("bad!name");
+        assert!(matches!(r, Err(Error::InvalidInput(_))), "got: {r:?}");
+    }
+
+    #[test]
+    fn validate_wallet_name_accepts_valid() {
+        let r = crate::handlers::validate_wallet_name("alpha-123");
+        assert!(r.is_ok(), "got: {r:?}");
+    }
+
+    #[test]
+    fn validate_wallet_name_accepts_max_length() {
+        let max_len = "a".repeat(32);
+        let r = crate::handlers::validate_wallet_name(&max_len);
+        assert!(r.is_ok(), "got: {r:?}");
+    }
+
+    /// H-4 from L13 step 10a — `data_dir` errors must surface as
+    /// `Error::Rpc` (via `map_wallet_err` `WalletError::Io`) without
+    /// panicking. Approach: pre-place a regular file at `data_dir`,
+    /// so `WalletManager::open_at`'s `fs::create_dir_all(&base_dir)?`
+    /// fails with `NotADir` / `AlreadyExists` — portable across
+    /// unix + windows + root user (the original 0o500 unix-only
+    /// permission test was bypassed when the test runs as root, per
+    /// standard Linux DAC-bypass behavior; this approach triggers the
+    /// lib's IO error path regardless).
+    #[test]
+    fn wallet_create_fails_when_data_dir_is_a_file() {
+        let tmp = tempdir().expect("tempdir");
+        let file_path = tmp.path().join("not-a-dir");
+        std::fs::write(&file_path, b"blocker").expect("pre-write file");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let r = super::wallet_create(&file_path, "alpha", &pwd, amoy());
+        match r {
+            Err(Error::Rpc(_)) => {}
+            Err(Error::InvalidInput(_)) => panic!(
+                "data_dir IO error must surface as Error::Rpc (distinct exit code), not InvalidInput"
+            ),
+            other => panic!("expected Error::Rpc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wallet_import_fails_when_data_dir_is_a_file() {
+        let tmp = tempdir().expect("tempdir");
+        let file_path = tmp.path().join("not-a-dir");
+        std::fs::write(&file_path, b"blocker").expect("pre-write file");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let r = super::wallet_import(&file_path, "alpha", &pwd, amoy(), good_mnemonic());
+        match r {
+            Err(Error::Rpc(_)) => {}
+            other => panic!("expected Error::Rpc, got {other:?}"),
+        }
     }
 }
