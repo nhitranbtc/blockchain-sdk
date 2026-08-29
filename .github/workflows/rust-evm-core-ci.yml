@@ -174,6 +174,34 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo deny check
 
+  # Unsafe-code audit per CLAUDE.md conventions (`cargo geiger` listed).
+  # Mirrors the deny/audit shape: parallel job, rust-cache warms deps,
+  # cargo-geiger installed via `cargo install --locked` (L37 hygiene —
+  # upstream crate, not a third-party binary blob).
+  # Workspace-wide scan; transitive `unsafe` counts are noisy but the
+  # trend over time is the signal. rust-cache warms the build + install.
+  rust-geiger:
+    name: Rust unsafe-code audit (geiger)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Issue #403 deliverable #9.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install cargo-geiger
+        run: cargo install cargo-geiger --locked
+      - name: cargo geiger (workspace)
+        working-directory: rust-wallet-app
+        run: cargo geiger --workspace
+
   # AC #5 audit-gate per Issue #382 (rooted in the centralised
   # `Error::rpc(impl Display)` redaction in `eth-wallet-core`). Scope
   # expansion in #428: this job now also scans `evm-wallet-core` since the
