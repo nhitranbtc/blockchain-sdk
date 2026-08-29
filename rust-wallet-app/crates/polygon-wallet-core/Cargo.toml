@@ -24,6 +24,13 @@ bip39 = { workspace = true }
 # is reachable transitively — no need to declare serde here.
 serde_json = { workspace = true }
 
+# T6c3 follow-up #3: `TxSummary` lives in polygon-wallet-core (not
+# the polygon binary crate, which is `publish = false` and effectively
+# can't be imported by downstream consumers). The derive macros need
+# to be reachable here so the type can be Serialize + Deserialize for
+# the polygon CLI `--json` output + JSON roundtrip tests.
+serde = { workspace = true }
+
 [dev-dependencies]
 # Tests cross-validate derivation against evm-wallet-core's shared mnemonic fn
 # (coin type 60' is chain-agnostic). Same setup as evm-wallet-core/tests/mnemonic.rs.

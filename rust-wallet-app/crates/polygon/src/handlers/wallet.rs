@@ -10,11 +10,31 @@
 //! wires up). Real `wallet_create` + `wallet_import` deferred to T6c4;
 //! `wallet_send_*` to T6c5 per L25 sub-task split.
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use alloy_provider::Provider;
+use alloy_rpc_types::Filter;
 use std::str::FromStr;
 
 use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Result, WalletInfo};
+
+/// ERC-20 Transfer(address,address,uint256) event topic0 hash.
+///
+/// `keccak256("Transfer(address,address,uint256)")` =
+/// `0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef`.
+/// Used to filter `eth_getLogs` to Transfer events involving the watch
+/// address (matches topics[1] when the address is the sender — see
+/// `wallet_sync` body for the OR semantics T7 must expand to).
+const TRANSFER_TOPIC: [u8; 32] = [
+    0xdd, 0xf2, 0x52, 0xad, 0x1b, 0xe2, 0xc8, 0x9b, 0x69, 0xc2, 0xb0, 0x68, 0xfc, 0x37, 0x8d, 0xaa,
+    0x95, 0x2b, 0xa7, 0xf1, 0x63, 0xc4, 0xa1, 0x16, 0x28, 0xf5, 0x5a, 0x4d, 0xf5, 0x23, 0xb3, 0xef,
+];
+
+// `TxSummary` lives in `polygon-wallet-core` (not here) — see
+// `polygon-wallet-core/src/lib.rs`. Keeping it in this publish=false
+// binary crate would make it unreachable to any sister CLI / future
+// `--export` writer. Re-exported for ergonomics via the existing
+// `polygon_wallet_core::*` import above; the local `use` of
+// `polygon_wallet_core::TxSummary` happens at the call site.
 
 /// Query native POL balance for `address` (Story 3 — `wallet balance`).
 ///
@@ -134,28 +154,56 @@ pub fn wallet_import(_name: &str) -> Result<()> {
         "wallet import: deferred past T6c3 follow-up (lands in T6c4)".into(),
     ))
 }
-/// Real `wallet_sync` async signature — T6c3 follow-up #2.
+/// `wallet sync` handler — T6c3 follow-up #3.
 ///
-/// `async fn` with full signature (rpc_url, network, address) so
-/// `main.rs::run()` can dispatch to it. Body returns `Error::Rpc`
-/// until T7 operator-driven integration per L29 (live
-/// `provider.watch_logs()` for `eth_getLogs` matching the address).
+/// Polls ERC-20 Transfer events involving `address`. Returns one
+/// `polygon_wallet_core::TxSummary` per matching log entry. Per design
+/// doc §5.4 the return type is `Vec<TxSummary>` (lightweight subset of
+/// the full `Vec<Transaction>`) — AMENDMENT to original §5.4 which
+/// specified `Result<()>` + internal print. Decision rationale: same
+/// pattern as `wallet_balance` (returns `U256`, main.rs formats); the
+/// handler/formatter split enables `--json` + future `--export` without
+/// duplicating formatting in the handler.
 ///
-/// The actual implementation (per design doc §5.4): call
-/// `provider.watch_logs(filter)` for `Transfer` + `0x...` topic0 events
-/// matching the address, deserialize each log entry into a `Transaction`
-/// summary, return `Vec<Transaction>`.
-#[allow(dead_code)]
+/// Live RPC body (the `provider.get_logs(&filter).await` call that
+/// fetches logs and decodes them) is deferred to T7 operator-driven
+/// integration per L29 — operator session runs against Amoy testnet.
+/// The address parse + provider build paths exercise now; the actual
+/// `get_logs` call sits behind an early-return `Error::Rpc` so CI
+/// compiles + negative-tests pass without a live RPC dependency. T7
+/// removes the early-return.
+#[allow(dead_code)] // wired in main.rs::run() (T6c3 follow-up #2 dispatch)
 pub async fn wallet_sync(
-    _rpc_url: Option<&str>,
+    rpc_url: Option<&str>,
     _network: polygon_wallet_core::Network,
-    _address: &str,
-) -> Result<()> {
-    Err(Error::Rpc(
-        "wallet sync: live RPC deferred to T7 (operator-driven per L29); \
-         async signature wired, body returns Error::Rpc until T7 integration"
-            .into(),
-    ))
+    address: &str,
+) -> Result<Vec<polygon_wallet_core::TxSummary>> {
+    let addr = Address::from_str(address)
+        .map_err(|e| Error::InvalidInput(format!("invalid --address: {e}")))?;
+    let provider = match rpc_url {
+        Some(url_str) => {
+            let url = url::Url::parse(url_str)
+                .map_err(|e| Error::Rpc(format!("rpc url parse failed: {e}")))?;
+            new_http(url).map_err(|e| Error::Rpc(format!("provider new_http: {e}")))?
+        }
+        None => new_http_polygon_amoy()
+            .map_err(|e| Error::Rpc(format!("provider new_http_polygon_amoy: {e}")))?,
+    };
+    // Filter: Transfer events where `from` (topic1) equals the watch
+    // address (left-padded to 32 bytes). `eth_getLogs` semantics: a
+    // null topic = wildcard, so `[X, null]` = topic1==X AND
+    // topic2==any. T7 expands this to two `get_logs` calls — one for
+    // topic1==X (transfers FROM the address), one for topic2==X
+    // (transfers TO the address) — then merges + dedupes by
+    // `(tx_hash, log_index)`. Keeping it single-topic for now keeps
+    // the CI-compile surface small.
+    let padded = B256::left_padding_from(addr.as_slice());
+    let filter = Filter::new()
+        .event_signature(B256::from_slice(&TRANSFER_TOPIC))
+        .topic1(padded);
+    let _provider = provider;
+    let _filter = filter;
+    Err(Error::Rpc("wallet sync not yet implemented".into()))
 }
 #[allow(dead_code)]
 pub async fn wallet_send_native(_to: &str, _amount: &str) -> Result<()> {
@@ -173,6 +221,7 @@ pub async fn wallet_send_speedup(_tx_hash: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::wallet_list;
+    use alloy_primitives::{Address, B256, U256};
     use polygon_wallet_core::{Network, PolygonChain};
     use std::path::PathBuf;
 
@@ -265,5 +314,67 @@ mod tests {
             matches!(r, Err(polygon_wallet_core::Error::Rpc(_))),
             "nonexistent wallet_id file should be Err (Rpc), not Ok; got {r:?}"
         );
+    }
+
+    /// T6c3 follow-up #3 test: `wallet_sync` rejects invalid (non-hex)
+    /// --address. Mirrors `wallet_balance_rejects_invalid_address`.
+    /// Live RPC body deferred to T7 per L29 — this test exercises the
+    /// address-parse path that runs BEFORE provider construction.
+    #[test]
+    fn wallet_sync_rejects_invalid_address() {
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_sync(
+                None,
+                Network::Polygon(PolygonChain::Amoy),
+                "not-an-address",
+            ));
+        assert!(
+            matches!(r, Err(polygon_wallet_core::Error::InvalidInput(_))),
+            "invalid --address must surface as Error::InvalidInput; got {r:?}"
+        );
+    }
+
+    /// T6c3 follow-up #3 test: `wallet_sync` rejects malformed
+    /// `--rpc-url` via the URL-parse path. Exercises the provider-build
+    /// branch that runs BEFORE the live-RPC early-return.
+    #[test]
+    fn wallet_sync_rejects_invalid_rpc_url() {
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_sync(
+                Some("not a url"),
+                Network::Polygon(PolygonChain::Amoy),
+                "0x0000000000000000000000000000000000000001",
+            ));
+        assert!(
+            matches!(r, Err(polygon_wallet_core::Error::Rpc(_))),
+            "invalid --rpc-url must surface as Error::Rpc; got {r:?}"
+        );
+    }
+
+    /// T6c3 follow-up #3 test: `TxSummary` survives a JSON
+    /// serialize → deserialize roundtrip with field values intact.
+    /// Independent of provider / RPC — fixture-driven. Required for
+    /// the `--json` output formatter wired in main.rs::run().
+    /// `TxSummary` lives in `polygon-wallet-core` (not this crate's
+    /// binary scope) — see `polygon-wallet-core/src/lib.rs`.
+    #[test]
+    fn tx_summary_serde_json_roundtrip() {
+        use polygon_wallet_core::TxSummary;
+        let summary = TxSummary {
+            block_number: 12_345,
+            tx_hash: B256::repeat_byte(0xab),
+            from: Address::repeat_byte(0x01),
+            to: Address::repeat_byte(0x02),
+            value: U256::from(1_000u64),
+        };
+        let json = serde_json::to_string(&summary).expect("TxSummary serializes");
+        let back: TxSummary = serde_json::from_str(&json).expect("TxSummary deserializes");
+        assert_eq!(back, summary);
     }
 }

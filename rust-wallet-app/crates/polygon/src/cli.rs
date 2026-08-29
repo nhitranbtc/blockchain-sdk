@@ -163,6 +163,13 @@ pub enum WalletAction {
         network: String,
         #[arg(long)]
         rpc_url: Option<String>,
+        /// Output Transfer events as JSON (`Vec<TxSummary>`).
+        /// JSON fields: `block_number` (u64), `tx_hash` (0x-hex B256),
+        /// `from` (0x-hex Address), `to` (0x-hex Address), `value`
+        /// (decimal U256). Default = human-readable text (one line per
+        /// Transfer).
+        #[arg(long)]
+        json: bool,
     },
     Send(SendArgs),
     /// RBF / speed-up replace-by-fee (Story 17).
