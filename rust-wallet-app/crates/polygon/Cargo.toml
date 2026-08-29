@@ -43,3 +43,11 @@ bitcoin-wallet-core  = { workspace = true }
 # type clarity (the `reqwest` transitive pulls `url` but isn't in our
 # direct deps).
 url                  = "2.5"
+
+# `directories` for default wallet data dir resolution (XDG on Linux,
+# platform-equivalent elsewhere). Used by `main.rs::default_data_dir()`
+# when `--data-dir` is not provided on the CLI.
+directories          = { workspace = true }
+
+# `serde_json` for the `wallet list --json` formatter (T6c2 follow-up).
+serde_json           = { workspace = true }

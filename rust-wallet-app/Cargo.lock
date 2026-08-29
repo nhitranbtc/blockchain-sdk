@@ -4136,7 +4136,9 @@ dependencies = [
  "alloy-transport-http",
  "bitcoin-wallet-core",
  "clap",
+ "directories",
  "polygon-wallet-core",
+ "serde_json",
  "tokio",
  "url",
 ]
