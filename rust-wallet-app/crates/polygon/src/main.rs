@@ -190,7 +190,23 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 Ok(())
             }
             WalletAction::Show { .. } => stub("wallet show"),
-            WalletAction::Delete { .. } => stub("wallet delete"),
+            WalletAction::Delete {
+                network,
+                id,
+                name: _,
+            } => {
+                // T6c3: dispatch to the real `wallet_delete` handler.
+                // Wallet ID comes from `--id` (preferred) or `--name`
+                // (look up first, deferred to T6c3 follow-up). For now
+                // `--id` is required.
+                let net = handlers::parse_network(&network)?;
+                let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let wallet_id = id
+                    .ok_or_else(|| Error::InvalidInput("--id required for wallet delete".into()))?;
+                handlers::wallet::wallet_delete(&data_dir, net, wallet_id.as_str())?;
+                println!("wallet deleted: {wallet_id}");
+                Ok(())
+            }
             WalletAction::Balance {
                 address,
                 network: _,

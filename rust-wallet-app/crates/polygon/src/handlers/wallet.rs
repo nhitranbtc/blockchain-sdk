@@ -4,20 +4,14 @@
 //! §3.3 (handlers/{mod,wallet,tx,erc20,fee,config,faucet,sign}.rs split)
 //! + §5.4 (per-command signatures).
 //!
-//! T6c1 (this commit) = wallet_balance real impl (Story 3) — async
-//! alloy transport via the `new_http_polygon_amoy()` convenience
-//! constructor (PR #424 / #431 Phase 2; re-exported from
-//! `polygon-wallet-core` per the T6c1 re-export commit). The convenience
-//! constructor returns `RootProvider<Ethereum>` directly — bypasses
-//! the `ProviderBuilder::connect_http(url).await` type-inference
-//! rough edges that blocked earlier T6c1 attempts. Remaining wallet
-//! commands (create / import / show / delete / sync / send / speed-up)
-//! deferred to T6c3/T6c4/T6c5 commits per L25.
+//! T6c3 partial (this commit) = real `wallet_delete` impl. Real
+//! `wallet_show` + `wallet_sync` deferred to T6c3 follow-up; `wallet_create`
+//! + `wallet_import` to T6c4; `wallet_send_*` to T6c5 per L25 sub-task split.
 
 use alloy_primitives::{Address, U256};
+use alloy_provider::Provider;
 use std::str::FromStr;
 
-use alloy_provider::Provider;
 use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Result};
 
 /// Query native POL balance for `address` (Story 3 — `wallet balance`).
@@ -28,10 +22,10 @@ use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Result};
 ///
 /// When `rpc_url` is `Some`, parses it via `url::Url::parse` and uses
 /// the generic `new_http(url)` constructor (re-exported from
-// `polygon-wallet-core`). When `None`, falls back to Amoy default.
+/// `polygon-wallet-core`). When `None`, falls back to Amoy default.
 ///
 /// Returns the balance in wei (U256). Caller formats with `--unit pol|wei`
-/// (T6c1 follow-up wires the unit-aware formatter + dispatch).
+/// (T6c1 follow-up #2 wires the unit-aware formatter + dispatch).
 pub async fn wallet_balance(rpc_url: Option<&str>, address: &str) -> Result<U256> {
     let addr = Address::from_str(address)
         .map_err(|e| Error::InvalidInput(format!("invalid --address: {e}")))?;
@@ -75,47 +69,74 @@ pub fn wallet_list(
     Ok(names)
 }
 
-/// T6c1 stubs — real impls deferred to T6c3/T6c4/T6c5 per L25.
+/// T6c3 partial — only `wallet_delete` has a real impl in this commit.
+/// Remaining wallet commands deferred to subsequent T6c3 follow-up /
+/// T6c4 / T6c5 per L25.
 #[allow(dead_code)]
 pub fn wallet_create(_name: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet create: deferred past T6c1 (lands in T6c4)".into(),
+        "wallet create: deferred past T6c3 (lands in T6c4)".into(),
     ))
 }
 #[allow(dead_code)]
 pub fn wallet_import(_name: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet import: deferred past T6c1 (lands in T6c4)".into(),
+        "wallet import: deferred past T6c3 (lands in T6c4)".into(),
     ))
 }
 #[allow(dead_code)]
 pub fn wallet_show(_name: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet show: deferred past T6c1 (lands in T6c3)".into(),
+        "wallet show: deferred past T6c3 (lands in T6c3 follow-up)".into(),
     ))
 }
-#[allow(dead_code)]
-pub fn wallet_delete(_name: &str) -> Result<()> {
-    Err(Error::Rpc(
-        "wallet delete: deferred past T6c1 (lands in T6c3)".into(),
-    ))
+
+/// Real `wallet delete` impl (Story 9 — `wallet delete`) — T6c3.
+///
+/// Removes `<data_dir>/<network>/<wallet_id>.meta.json` and the
+/// matching `<wallet_id>.enc` blob. Returns `Error::InvalidInput` if
+/// the wallet_id is malformed (must be UUID format per WalletManager).
+/// Returns `Error::Rpc` on filesystem errors. Returns `Ok(())` even if
+/// the wallet doesn't exist (idempotent — matches Story 9 AC).
+pub fn wallet_delete(
+    data_dir: &std::path::Path,
+    network: polygon_wallet_core::Network,
+    wallet_id: &str,
+) -> Result<()> {
+    let uuid = uuid::Uuid::from_str(wallet_id)
+        .map_err(|e| Error::InvalidInput(format!("invalid wallet_id (expected UUID): {e}")))?;
+    let network_dir = data_dir.join(network.as_dir_name());
+    for ext in ["meta.json", "enc"] {
+        let path = network_dir.join(format!("{uuid}.{ext}"));
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Idempotent: ignore missing files.
+            }
+            Err(e) => {
+                return Err(Error::Rpc(format!("remove_file {}: {e}", path.display())));
+            }
+        }
+    }
+    Ok(())
 }
+
 #[allow(dead_code)]
 pub async fn wallet_sync(_address: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet sync: deferred past T6c1 (lands in T6c3)".into(),
+        "wallet sync: deferred past T6c3 (lands in T6c3 follow-up)".into(),
     ))
 }
 #[allow(dead_code)]
 pub async fn wallet_send_native(_to: &str, _amount: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet send: deferred past T6c1 (lands in T6c5)".into(),
+        "wallet send: deferred past T6c3 (lands in T6c5)".into(),
     ))
 }
 #[allow(dead_code)]
 pub async fn wallet_send_speedup(_tx_hash: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet send speed-up: deferred past T6c1 (lands in T6c5)".into(),
+        "wallet send speed-up: deferred past T6c3 (lands in T6c5)".into(),
     ))
 }
 
@@ -153,6 +174,36 @@ mod tests {
         assert!(
             matches!(r, Err(polygon_wallet_core::Error::InvalidInput(_))),
             "invalid --address must surface as Error::InvalidInput; got {r:?}"
+        );
+    }
+
+    /// T6c3 test: `wallet_delete` rejects invalid (non-UUID) wallet_id.
+    #[test]
+    fn wallet_delete_rejects_invalid_wallet_id() {
+        use super::wallet_delete;
+        let r = wallet_delete(
+            &PathBuf::from("/tmp/polygon-cli-test"),
+            Network::Polygon(PolygonChain::Amoy),
+            "not-a-uuid",
+        );
+        assert!(
+            matches!(r, Err(polygon_wallet_core::Error::InvalidInput(_))),
+            "non-UUID wallet_id must surface as Error::InvalidInput; got {r:?}"
+        );
+    }
+
+    /// T6c3 test: `wallet_delete` on nonexistent path is idempotent (Ok).
+    #[test]
+    fn wallet_delete_nonexistent_is_idempotent() {
+        use super::wallet_delete;
+        let r = wallet_delete(
+            &PathBuf::from("/nonexistent/path/polygon-cli-test-xyz"),
+            Network::Polygon(PolygonChain::Amoy),
+            "00000000-0000-0000-0000-000000000000",
+        );
+        assert!(
+            r.is_ok(),
+            "nonexistent dir should be Ok(idempotent), not Err; got {r:?}"
         );
     }
 }
