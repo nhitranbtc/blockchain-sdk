@@ -28,7 +28,7 @@ pub mod wallet;
 /// share the same scheme policy. Centralizing prevents
 /// per-handler drift — each new RPC call site gets the guard by
 /// default rather than remembering to inline a copy.
-pub(crate) fn validate_rpc_scheme(url: &url::Url) -> polygon_wallet_core::Result<()> {
+pub(super) fn validate_rpc_scheme(url: &url::Url) -> polygon_wallet_core::Result<()> {
     match url.scheme() {
         "https" => Ok(()),
         "http"

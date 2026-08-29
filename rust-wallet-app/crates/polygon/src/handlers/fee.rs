@@ -82,32 +82,56 @@ pub(crate) fn build_provider(
 /// misconfigured RPC that reports a different chain is rejected as
 /// `Error::InvalidInput` (exit 2) so operators see the mismatch at
 /// the boundary, not as a silently-signed transaction.
+/// RPC timeout for `fetch_fee_estimate` (10s). Without this, a slow /
+/// hostile RPC at the `fee` boundary can hang the CLI indefinitely —
+/// `fee` is typically the first non-write RPC call a user hits, so a
+/// silent hang there blocks every downstream `wallet send`.
+const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub async fn fetch_fee_estimate(rpc_url: Option<&str>, network: Network) -> Result<FeeEstimate> {
     let provider = build_provider(rpc_url, network)?;
-    let actual_chain_id = provider
-        .get_chain_id()
+    let provider_chain_id = tokio::time::timeout(RPC_TIMEOUT, provider.get_chain_id())
         .await
+        .map_err(|_| Error::Rpc(format!("get_chain_id timed out after {:?}", RPC_TIMEOUT)))?
         .map_err(|e| Error::Rpc(format!("get_chain_id: {e}")))?;
     let expected_chain_id = network.chain_id();
-    if actual_chain_id != expected_chain_id {
+    if provider_chain_id != expected_chain_id {
         return Err(Error::InvalidInput(format!(
-            "rpc chain_id {actual_chain_id} does not match network {network:?} (expected {expected_chain_id})"
+            "rpc chain_id {provider_chain_id} does not match wallet network {network:?} (expected {expected_chain_id})"
         )));
     }
-    let est = provider
-        .estimate_eip1559_fees()
+    let est = tokio::time::timeout(RPC_TIMEOUT, provider.estimate_eip1559_fees())
         .await
+        .map_err(|_| {
+            Error::Rpc(format!(
+                "estimate_eip1559_fees timed out after {:?}",
+                RPC_TIMEOUT
+            ))
+        })?
         .map_err(|e| Error::Rpc(format!("estimate_eip1559_fees: {e}")))?;
     let max_fee_per_gas_wei = est.max_fee_per_gas;
     let max_priority_fee_per_gas_wei = est.max_priority_fee_per_gas;
     Ok(FeeEstimate {
-        network: format!("{network:?}"),
-        chain_id: actual_chain_id,
+        network: network_label(network),
+        chain_id: provider_chain_id,
         max_fee_per_gas_wei,
         max_priority_fee_per_gas_wei,
         max_fee_per_gas_gwei: max_fee_per_gas_wei as f64 / 1e9,
         max_priority_fee_per_gas_gwei: max_priority_fee_per_gas_wei as f64 / 1e9,
     })
+}
+
+/// Stable string mapping for the `FeeEstimate.network` JSON field.
+///
+/// `format!("{network:?}")` leaks Rust's Debug repr (e.g. `"Polygon(Amoy)"`)
+/// into the wire contract — any future `Network` enum variant reorder
+/// silently shifts the JSON. Use a fixed vocabulary instead.
+fn network_label(network: Network) -> String {
+    match network {
+        Network::Polygon(PolygonChain::Amoy) => "polygon-amoy".into(),
+        Network::Polygon(PolygonChain::Mainnet) => "polygon-mainnet".into(),
+        Network::Ethereum(_) => "ethereum-unsupported".into(),
+    }
 }
 
 /// Format a `FeeEstimate` for the human-readable (non-`--json`) path.
