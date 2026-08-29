@@ -86,7 +86,7 @@ pub(crate) fn build_provider(
 /// hostile RPC at the `fee` boundary can hang the CLI indefinitely —
 /// `fee` is typically the first non-write RPC call a user hits, so a
 /// silent hang there blocks every downstream `wallet send`.
-const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+pub(super) const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub async fn fetch_fee_estimate(rpc_url: Option<&str>, network: Network) -> Result<FeeEstimate> {
     let provider = build_provider(rpc_url, network)?;

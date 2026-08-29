@@ -17,6 +17,7 @@ path = "src/main.rs"
 # of `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md` §2.5.
 # T6c: also re-exports WalletManager (additive — `pub use evm_wallet_core::WalletManager`).
 polygon-wallet-core    = { path = "../polygon-wallet-core" }
+evm-wallet-core        = { path = "../evm-wallet-core" }
 
 # T6b (clap tree + dispatch per L25 sub-task split). Issue #426 / design §3.4.
 # `clap = { workspace = true }` carries the `derive` + `env` features per

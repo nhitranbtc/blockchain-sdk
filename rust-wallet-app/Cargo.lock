@@ -4138,6 +4138,7 @@ dependencies = [
  "bitcoin-wallet-core",
  "clap",
  "directories",
+ "evm-wallet-core",
  "polygon-wallet-core",
  "reqwest 0.12.28",
  "serde",

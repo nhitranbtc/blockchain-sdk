@@ -328,6 +328,8 @@ pub enum Erc20Action {
         #[arg(long)]
         name: String,
         #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
         token: String,
         #[arg(long, value_parser = parse_address)]
         spender: String,
