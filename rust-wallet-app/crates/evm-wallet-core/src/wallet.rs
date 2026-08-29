@@ -90,7 +90,7 @@ pub struct WalletMeta {
 
 /// Summary returned by `list_wallets`. Mirrors `WalletMeta` so the CLI
 /// doesn't need to deserialize `WalletMeta` directly.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletInfo {
     pub wallet_id: Uuid,
     pub name: String,

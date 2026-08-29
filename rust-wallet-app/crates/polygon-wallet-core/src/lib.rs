@@ -28,6 +28,7 @@ pub use evm_wallet_core::{Error, Result};
 // Re-exporting here lets the polygon CLI consume it through the
 // single-import-surface (Q1 Option A) without depending on `evm-wallet-core`
 // directly — per design doc Drift #5 + §10.3 (Q1 Option A thin wrapper).
+pub use evm_wallet_core::wallet::WalletInfo;
 pub use evm_wallet_core::wallet::WalletManager;
 
 // T6c1 re-export: provider constructors (added by Phase 2 PR #424 / #431)

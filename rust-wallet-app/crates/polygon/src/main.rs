@@ -189,7 +189,37 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 }
                 Ok(())
             }
-            WalletAction::Show { .. } => stub("wallet show"),
+            WalletAction::Show {
+                network,
+                id,
+                name: _,
+                addresses: _,
+                export: _,
+                json,
+            } => {
+                // T6c3 follow-up: dispatch to the real `wallet_show`
+                // handler (reads .meta.json plaintext — encrypted blob
+                // inspection deferred to T6d when rpassword + AES-GCM
+                // decryption wires up). --id required (--name look-up
+                // deferred).
+                let net = handlers::parse_network(&network)?;
+                let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let wallet_id =
+                    id.ok_or_else(|| Error::InvalidInput("--id required for wallet show".into()))?;
+                let info = handlers::wallet::wallet_show(&data_dir, net, wallet_id.as_str())?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&info).unwrap_or_else(|_| "{}".into())
+                    );
+                } else {
+                    println!("wallet: {}", info.name);
+                    println!("id: {wallet_id}");
+                    // addresses / export deferred to T6c3 follow-up
+                    // (requires decrypt + Zeroizing wrap).
+                }
+                Ok(())
+            }
             WalletAction::Delete {
                 network,
                 id,

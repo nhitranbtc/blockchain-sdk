@@ -4,15 +4,17 @@
 //! §3.3 (handlers/{mod,wallet,tx,erc20,fee,config,faucet,sign}.rs split)
 //! + §5.4 (per-command signatures).
 //!
-//! T6c3 partial (this commit) = real `wallet_delete` impl. Real
-//! `wallet_show` + `wallet_sync` deferred to T6c3 follow-up; `wallet_create`
-//! + `wallet_import` to T6c4; `wallet_send_*` to T6c5 per L25 sub-task split.
+//! T6c3 follow-up: real `wallet_show` impl (Story 9 — `wallet show`).
+//! Reads `.meta.json` (plaintext metadata; no decrypt — encrypted blob
+//! inspection deferred to T6d when rpassword + AES-GCM decryption
+//! wires up). Real `wallet_create` + `wallet_import` deferred to T6c4;
+//! `wallet_send_*` to T6c5 per L25 sub-task split.
 
 use alloy_primitives::{Address, U256};
 use alloy_provider::Provider;
 use std::str::FromStr;
 
-use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Result};
+use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Result, WalletInfo};
 
 /// Query native POL balance for `address` (Story 3 — `wallet balance`).
 ///
@@ -44,7 +46,7 @@ pub async fn wallet_balance(rpc_url: Option<&str>, address: &str) -> Result<U256
         .map_err(|e| Error::Rpc(format!("get_balance: {e}")))
 }
 
-/// Real `wallet list` impl (Story 9) — T6c2 (merged earlier).
+/// Real `wallet list` impl (Story 9 — `wallet list`) — T6c2 (merged earlier).
 #[allow(dead_code)] // wired in main.rs::run() (T6c2 follow-up merged)
 pub fn wallet_list(
     data_dir: &std::path::Path,
@@ -69,26 +71,25 @@ pub fn wallet_list(
     Ok(names)
 }
 
-/// T6c3 partial — only `wallet_delete` has a real impl in this commit.
-/// Remaining wallet commands deferred to subsequent T6c3 follow-up /
-/// T6c4 / T6c5 per L25.
-#[allow(dead_code)]
-pub fn wallet_create(_name: &str) -> Result<()> {
-    Err(Error::Rpc(
-        "wallet create: deferred past T6c3 (lands in T6c4)".into(),
-    ))
-}
-#[allow(dead_code)]
-pub fn wallet_import(_name: &str) -> Result<()> {
-    Err(Error::Rpc(
-        "wallet import: deferred past T6c3 (lands in T6c4)".into(),
-    ))
-}
-#[allow(dead_code)]
-pub fn wallet_show(_name: &str) -> Result<()> {
-    Err(Error::Rpc(
-        "wallet show: deferred past T6c3 (lands in T6c3 follow-up)".into(),
-    ))
+/// Real `wallet show` impl (Story 9 — `wallet show`) — T6c3 follow-up.
+///
+/// Reads `.meta.json` (plaintext metadata; no decrypt — encrypted
+/// `.enc` blob inspection deferred to T6d when rpassword + AES-GCM
+/// decryption wires up). Returns `Error::InvalidInput` if wallet_id
+/// is not UUID format. Returns `Error::Rpc` on filesystem / parse errors.
+pub fn wallet_show(
+    data_dir: &std::path::Path,
+    network: polygon_wallet_core::Network,
+    wallet_id: &str,
+) -> Result<WalletInfo> {
+    let uuid = uuid::Uuid::from_str(wallet_id)
+        .map_err(|e| Error::InvalidInput(format!("invalid wallet_id (expected UUID): {e}")))?;
+    let path = data_dir
+        .join(network.as_dir_name())
+        .join(format!("{uuid}.meta.json"));
+    let bytes = std::fs::read(&path)
+        .map_err(|e| Error::Rpc(format!("read_file {}: {e}", path.display())))?;
+    serde_json::from_slice(&bytes).map_err(|e| Error::Rpc(format!("parse meta.json: {e}")))
 }
 
 /// Real `wallet delete` impl (Story 9 — `wallet delete`) — T6c3.
@@ -122,21 +123,33 @@ pub fn wallet_delete(
 }
 
 #[allow(dead_code)]
+pub fn wallet_create(_name: &str) -> Result<()> {
+    Err(Error::Rpc(
+        "wallet create: deferred past T6c3 follow-up (lands in T6c4)".into(),
+    ))
+}
+#[allow(dead_code)]
+pub fn wallet_import(_name: &str) -> Result<()> {
+    Err(Error::Rpc(
+        "wallet import: deferred past T6c3 follow-up (lands in T6c4)".into(),
+    ))
+}
+#[allow(dead_code)]
 pub async fn wallet_sync(_address: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet sync: deferred past T6c3 (lands in T6c3 follow-up)".into(),
+        "wallet sync: deferred past T6c3 follow-up (lands in T6d)".into(),
     ))
 }
 #[allow(dead_code)]
 pub async fn wallet_send_native(_to: &str, _amount: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet send: deferred past T6c3 (lands in T6c5)".into(),
+        "wallet send: deferred past T6c3 follow-up (lands in T6c5)".into(),
     ))
 }
 #[allow(dead_code)]
 pub async fn wallet_send_speedup(_tx_hash: &str) -> Result<()> {
     Err(Error::Rpc(
-        "wallet send speed-up: deferred past T6c3 (lands in T6c5)".into(),
+        "wallet send speed-up: deferred past T6c3 follow-up (lands in T6c5)".into(),
     ))
 }
 
@@ -204,6 +217,36 @@ mod tests {
         assert!(
             r.is_ok(),
             "nonexistent dir should be Ok(idempotent), not Err; got {r:?}"
+        );
+    }
+
+    /// T6c3 follow-up test: `wallet_show` rejects invalid wallet_id.
+    #[test]
+    fn wallet_show_rejects_invalid_wallet_id() {
+        use super::wallet_show;
+        let r = wallet_show(
+            &PathBuf::from("/tmp/polygon-cli-test"),
+            Network::Polygon(PolygonChain::Amoy),
+            "not-a-uuid",
+        );
+        assert!(
+            matches!(r, Err(polygon_wallet_core::Error::InvalidInput(_))),
+            "non-UUID wallet_id must surface as Error::InvalidInput; got {r:?}"
+        );
+    }
+
+    /// T6c3 follow-up test: `wallet_show` on nonexistent path is Ok (file not found).
+    #[test]
+    fn wallet_show_nonexistent_path_is_error() {
+        use super::wallet_show;
+        let r = wallet_show(
+            &PathBuf::from("/nonexistent/path/polygon-cli-test-xyz"),
+            Network::Polygon(PolygonChain::Amoy),
+            "00000000-0000-0000-0000-000000000000",
+        );
+        assert!(
+            matches!(r, Err(polygon_wallet_core::Error::Rpc(_))),
+            "nonexistent wallet_id file should be Err (Rpc), not Ok; got {r:?}"
         );
     }
 }
