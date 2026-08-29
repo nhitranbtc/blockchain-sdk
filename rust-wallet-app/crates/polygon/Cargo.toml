@@ -33,7 +33,7 @@ alloy-network        = { workspace = true }
 alloy-transport-http = { workspace = true }
 alloy-rpc-types      = { workspace = true }
 alloy-signer-local   = { workspace = true }
-alloy-consensus      = { workspace = true }
+alloy-consensus      = { workspace = true, features = ["k256"] }
 
 # bitcoin-wallet-core for SpkiPin (T6c wiring — design §3.1, §5.1, §9).
 bitcoin-wallet-core  = { workspace = true }

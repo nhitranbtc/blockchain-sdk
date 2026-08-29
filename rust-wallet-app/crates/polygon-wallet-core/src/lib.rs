@@ -53,6 +53,14 @@ pub use evm_wallet_core::provider::{
 pub use evm_wallet_core::wallet::WalletCreated;
 pub use evm_wallet_core::wallet::WalletError;
 
+// T6c5: re-export `sign_native_eth_tx` + `encoded_envelope` so the
+// polygon CLI's `wallet_send_native_v2` + `wallet_send_speedup_v2`
+// can build EIP-1559 envelopes + broadcast via the single-import-
+// surface invariant (Q1 Option A — no direct `evm-wallet-core`
+// dependency in the CLI crate). Mirrors the `eth` CLI's pattern at
+// `eth/src/handlers.rs:680, 934`. Additive, backward-compatible.
+pub use evm_wallet_core::signer::{encoded_envelope, sign_native_eth_tx};
+
 // T6c3 follow-up #3: `TxSummary` is the Transfer-event summary type
 // returned by the `polygon wallet sync` handler. Lives here (not in
 // the polygon binary crate, which is `publish = false` and effectively
