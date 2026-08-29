@@ -21,13 +21,6 @@ pub mod tokens;
 // alone. The `Network` enum is two-level (family + instance) per Phase 0
 // of the polygon plan; `EthereumChain` / `PolygonChain` are the per-family
 // instance enums.
-//
-// Issue #426 T6 / Drift #5 in
-// `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md` §2.5:
-// `Error` + `Result` re-exported so the `polygon` CLI binary can mirror
-// the ETH CLI's single-import-surface pattern (`use eth_wallet_core::*`)
-// without depending on `evm-wallet-core` directly. Backward-compatible
-// additive re-export.
 pub use evm_wallet_core::network::{EthereumChain, Network, PolygonChain};
 pub use evm_wallet_core::{Error, Result};
 
@@ -36,3 +29,13 @@ pub use evm_wallet_core::{Error, Result};
 // single-import-surface (Q1 Option A) without depending on `evm-wallet-core`
 // directly — per design doc Drift #5 + §10.3 (Q1 Option A thin wrapper).
 pub use evm_wallet_core::wallet::WalletManager;
+
+// T6c1 re-export: provider constructors (added by Phase 2 PR #424 / #431)
+// — `new_http`, `new_http_insecure`, `new_http_polygon_mainnet`,
+// `new_http_polygon_amoy`. These return `RootProvider<Ethereum>`
+// directly (no ProviderBuilder transport inference rough edges that
+// block real `wallet_balance` impl). Re-exporting preserves the
+// Q1 Option A single-import-surface invariant.
+pub use evm_wallet_core::provider::{
+    new_http, new_http_insecure, new_http_polygon_amoy, new_http_polygon_mainnet,
+};
