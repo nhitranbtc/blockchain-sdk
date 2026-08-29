@@ -67,3 +67,19 @@ zeroize              = { workspace = true }
 # (mirrors `evm-wallet-core/src/wallet.rs:845`). Pinned at 3.x; the
 # workspace's existing `tempfile` constraint (if any) takes precedence.
 tempfile             = "3"
+# Issue #438 (T7 prep) — spawn a local Anvil node in-process so the
+# polygon wallet scenario can run end-to-end against a deterministic
+# chain. Pinned to the same `=1.8.3` as `alloy-provider` to avoid
+# pulling a second alloy version into the dep graph. Mirror of
+# `crates/evm-wallet-core/Cargo.toml` `[dev-dependencies]`.
+alloy-node-bindings  = { version = "=1.8.3" }
+# Same workspace-pinned alloy + reqwest for the in-test
+# `ProviderBuilder::connect_http` / `raw_request` plumbing
+# (`anvil_setBalance` to fund the freshly-created wallet).
+alloy-provider       = { workspace = true }
+alloy-transport-http = { workspace = true }
+reqwest              = { workspace = true }
+# serde_json for parsing `<uuid>.meta.json` after `wallet_create`.
+serde_json           = { workspace = true }
+# tokio test runtime (the integration test fns are `#[tokio::test]`).
+tokio                = { workspace = true, features = ["macros", "rt-multi-thread"] }

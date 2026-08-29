@@ -271,3 +271,15 @@ jobs:
           # `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1`, find their
           # var unset, return early → PASS (their bodies never execute).
           cargo test -p polygon-v1-spike -- --ignored
+      - name: Polygon CLI wallet scenario (Issue #438 / T7 prep)
+        # End-to-end exercise of `polygon wallet {create,list,balance,send}`
+        # against a local Anvil node. The integration test spawns Anvil
+        # in-process via `alloy-node-bindings` so no external `anvil`
+        # binary is required beyond the one Foundry toolchain provides.
+        # Per #438 acceptance: Anvil path MUST run in CI; Amoy-fork path
+        # is operator-driven (`scripts/polygon-wallet-scenario.sh
+        # --env=amoy-fork` per L29).
+        # Scope `-p polygon` only — never `--workspace` (L55: bitcoin-wallet-core
+        # FFI tests dominate workspace runtime).
+        working-directory: rust-wallet-app
+        run: cargo test -p polygon --test polygon_wallet_scenario

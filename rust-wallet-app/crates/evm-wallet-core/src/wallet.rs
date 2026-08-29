@@ -758,13 +758,16 @@ fn scan_disk_into(base_dir: &Path, wallets: &mut HashMap<Uuid, EncryptedBlob>) -
         if !p.is_dir() {
             continue;
         }
-        let dir_name = match p.file_name().and_then(|s| s.to_str()) {
-            Some(n) => n,
-            None => continue,
-        };
-        if !matches!(dir_name, "mainnet" | "sepolia" | "anvil") {
-            continue;
-        }
+        // Scan EVERY subdirectory — `Network::as_dir_name()` is the
+        // single source of truth for network dir naming and now
+        // includes `polygon_amoy` / `polygon_mainnet` (Q1 Option A
+        // refactor #416 Phase 0). The legacy ethereum-only allowlist
+        // (`mainnet` / `sepolia` / `anvil`) silently excluded polygon
+        // wallets, leaving the in-memory cache empty after every CLI
+        // restart — `unlock_signer` then returned `NotFound` even
+        // though the .enc blob was on disk. Bug surfaced by the #438
+        // polygon wallet scenario. Per-network filters should be a
+        // separate concern (when the operator opts in to scope).
         let wallet_files = match fs::read_dir(&p) {
             Ok(w) => w,
             Err(_) => continue,

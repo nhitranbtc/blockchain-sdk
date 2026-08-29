@@ -124,10 +124,34 @@ pub fn wallet_list(
     for entry in entries {
         let entry = entry.map_err(|e| Error::Rpc(format!("dir entry: {e}")))?;
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("meta.json") {
-            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                names.push(stem.to_string());
+        // Match full filename suffix `.meta.json` — `Path::extension`
+        // returns only the LAST component (`json` for `xxx.meta.json`)
+        // so it never equals `"meta.json"`. Bug surfaced by #438
+        // integration scenario. Same fix the lib applies at
+        // `evm-wallet-core/src/wallet.rs:list_wallets` via
+        // `.ends_with(META_EXT)`.
+        let is_meta = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.ends_with(".meta.json"));
+        if !is_meta {
+            continue;
+        }
+        // Return the persisted `name` from meta.json (not the UUID
+        // file stem) so callers see the operator-supplied identifier
+        // — matches `wallet list` story intent ("enumerate wallets
+        // under a keystore dir" → friendly name, not UUID).
+        let bytes = std::fs::read(&path)
+            .map_err(|e| Error::Rpc(format!("read_file {}: {e}", path.display())))?;
+        if let Ok(meta) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+            if let Some(name) = meta.get("name").and_then(|n| n.as_str()) {
+                names.push(name.to_string());
+                continue;
             }
+        }
+        // Fallback to UUID stem if meta.json is missing/malformed.
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            names.push(stem.to_string());
         }
     }
     Ok(names)

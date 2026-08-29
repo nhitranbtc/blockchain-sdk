@@ -146,7 +146,7 @@ pub enum WalletAction {
     },
     Balance {
         #[arg(long, value_parser = parse_address)]
-        address: String,
+        address: Address,
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
         network: String,
         #[arg(long, default_value = "pol")]
@@ -158,7 +158,7 @@ pub enum WalletAction {
     },
     Sync {
         #[arg(long, value_parser = parse_address)]
-        address: String,
+        address: Address,
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
         network: String,
         #[arg(long)]
@@ -184,7 +184,7 @@ pub struct SendArgs {
     #[arg(long)]
     pub password: Option<String>,
     #[arg(long, value_parser = parse_address)]
-    pub to: String,
+    pub to: Address,
     #[arg(long)]
     pub amount: String,
     #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]

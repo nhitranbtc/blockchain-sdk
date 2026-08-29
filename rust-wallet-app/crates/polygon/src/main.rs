@@ -166,8 +166,68 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             Ok(())
         }
         Command::Wallet { action } => match action {
-            WalletAction::Create { .. } => stub("wallet create"),
-            WalletAction::Import { .. } => stub("wallet import"),
+            WalletAction::Create {
+                name,
+                password,
+                network,
+                derivation_path: _,
+                account_index: _,
+                legacy_token_symbol: _,
+                rpc_url: _,
+            } => {
+                // T6c4 follow-up: dispatch `wallet create` to the real
+                // `handlers::wallet::wallet_create` (PR #451). Password
+                // is read via `resolve_password` (env / argv / TTY
+                // priority chain per L54 defense-in-depth) and wrapped
+                // in `Zeroizing<Vec<u8>>` before crossing the FFI
+                // boundary. Address + wallet_id are echoed to stdout so
+                // operators (and the integration test #438) can copy
+                // the address into subsequent commands.
+                let net = handlers::parse_network(&network)?;
+                let pw_string = resolve_password(password.as_deref())?;
+                let password = Zeroizing::new(pw_string.into_bytes());
+                let data_dir: std::path::PathBuf =
+                    cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let created = handlers::wallet::wallet_create(&data_dir, &name, &password, net)?;
+                println!(
+                    "wallet created: name={name} id={} address=0x{}",
+                    created.wallet_id,
+                    alloy_primitives::hex::encode(created.address.as_slice()),
+                );
+                Ok(())
+            }
+            WalletAction::Import {
+                name,
+                password,
+                network,
+                mnemonic,
+                private_key: _,
+                account_index: _,
+                legacy_token_symbol: _,
+                rpc_url: _,
+            } => {
+                // T6c4 follow-up: dispatch `wallet import` to the real
+                // `handlers::wallet::wallet_import` (PR #451). Mnemonic
+                // phrase comes from `--mnemonic` (private-key import
+                // deferred per the lib's hardcoded
+                // `Network::default_v0_2()` gap).
+                let net = handlers::parse_network(&network)?;
+                let phrase = mnemonic.ok_or_else(|| {
+                    Error::InvalidInput("--mnemonic required (--private-key deferred)".into())
+                })?;
+                let pw_string = resolve_password(password.as_deref())?;
+                let password = Zeroizing::new(pw_string.into_bytes());
+                let data_dir: std::path::PathBuf =
+                    cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let created =
+                    handlers::wallet::wallet_import(&data_dir, &name, &password, net, &phrase)?;
+                println!(
+                    "wallet imported: name={name} id={} address=0x{}",
+                    created.wallet_id,
+                    alloy_primitives::hex::encode(created.address.as_slice()),
+                );
+                Ok(())
+            }
             WalletAction::Sync {
                 network,
                 rpc_url,
@@ -181,8 +241,13 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // `Error::Rpc("deferred to T7")` until then. --json
                 // formatter wired here for when T7 lands.
                 let net = handlers::parse_network(&network)?;
+                // cli.rs WalletAction::Sync.address is `Address` (parsed
+                // via `parse_address`); handler expects &str. Convert to
+                // EIP-55 checksum so any downstream receipt matches the
+                // canonical on-chain encoding.
+                let addr_str = format!("{:#x}", address);
                 let summaries =
-                    handlers::wallet::wallet_sync(rpc_url.as_deref(), net, &address).await?;
+                    handlers::wallet::wallet_sync(rpc_url.as_deref(), net, &addr_str).await?;
                 if json {
                     println!(
                         "{}",
@@ -284,8 +349,11 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // (`--unit pol`) lands in a subsequent commit once
                 // operator UX testing surfaces the right format (wei is
                 // the canonical unit; POL = wei / 1e18 is the conversion).
-                let balance =
-                    handlers::wallet::wallet_balance(rpc_url.as_deref(), &address).await?;
+                let balance = handlers::wallet::wallet_balance(
+                    rpc_url.as_deref(),
+                    &format!("{:#x}", address),
+                )
+                .await?;
                 println!("{}", format_balance(balance, &unit));
                 Ok(())
             }
@@ -340,7 +408,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                     network,
                     &name,
                     &password,
-                    &to,
+                    &format!("{:#x}", to),
                     &amount_wei_string,
                     "wei",
                     nonce,
