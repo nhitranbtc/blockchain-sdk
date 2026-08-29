@@ -150,7 +150,7 @@ fn default_data_dir() -> std::path::PathBuf {
 /// tokio current-thread runtime via `block_on` (mirrors `eth/src/main.rs:487-491`).
 async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
     use alloy_primitives::{utils::parse_units, Address, U256};
-    use cli::{Command, Erc20Action, TxAction, WalletAction};
+    use cli::{Command, ConfigAction, Erc20Action, TxAction, WalletAction};
     use polygon_wallet_core::Error;
     use std::str::FromStr;
     use zeroize::Zeroizing;
@@ -467,8 +467,33 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             }
         },
         Command::Tx { action } => match action {
-            TxAction::List { .. } => stub("tx list"),
-            TxAction::Get { .. } => stub("tx get"),
+            TxAction::List {
+                address,
+                network: _,
+                since_block,
+                limit,
+                json,
+            } => {
+                // T6d-3 (Issue #426 / Story 7): dispatch to the real
+                // `handlers::tx::tx_list` handler. Pure arg validation
+                // lives in the handler; live `provider.get_logs` scan
+                // deferred to T7 operator-driven Amoy smoke per L29.
+                handlers::tx::tx_list(&address, since_block, limit, json).await?;
+                Ok(())
+            }
+            TxAction::Get {
+                tx_hash,
+                network: _,
+                json,
+                rpc_url: _,
+            } => {
+                // T6d-3 (Issue #426 / Story 7): dispatch to the real
+                // `handlers::tx::tx_get` handler. Defensive B256 parse
+                // in the handler; live `provider.get_transaction_by_hash`
+                // deferred to T7 operator-driven Amoy smoke per L29.
+                handlers::tx::tx_get(&tx_hash, json).await?;
+                Ok(())
+            }
         },
         Command::Erc20 { action } => match action {
             Erc20Action::Send {
@@ -620,10 +645,48 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             }
             Ok(())
         }
-        Command::Config { .. } => stub("config"),
+        Command::Config { action } => match action {
+            ConfigAction::Show { json } => {
+                // T6d-3 (Issue #426 / Story 11): dispatch to the real
+                // `handlers::config::config_show` handler. Pure
+                // resolution — no RPC, no signing. RPC URL credentials
+                // redacted via `handlers::config::redact_rpc_url`.
+                let out = handlers::config::config_show(
+                    cli.rpc_url.as_deref(),
+                    cli.data_dir.as_ref(),
+                    json,
+                )?;
+                print!("{out}");
+                Ok(())
+            }
+        },
         Command::Faucet(_) => stub("faucet"),
-        Command::SignMessage(_) => stub("sign-message"),
-        Command::SignTyped(_) => stub("sign-typed"),
+        Command::SignMessage(_) => {
+            // T6d-3 (Issue #426 / Story 18): handler
+            // `handlers::sign::sign_message` is implemented (pure EIP-191
+            // crypto via `polygon_wallet_core::sign_message`). Dispatch
+            // wiring requires `WalletManager::unlock` to derive the
+            // `PrivateKeySigner` — deferred to T6 follow-up PR alongside
+            // the sign-typed dispatch wiring (single WalletManager
+            // unlock helper covers both).
+            Err(Error::Rpc(
+                "sign-message dispatch deferred to T6 follow-up (WalletManager::unlock wiring)"
+                    .into(),
+            ))
+        }
+        Command::SignTyped(_) => {
+            // T6d-3 (Issue #426 / Story 27 + Q7): handler
+            // `handlers::sign::sign_typed_data` is implemented (Q7
+            // chain_id gate at type level). Dispatch wiring requires
+            // `WalletManager::unlock` — deferred to T6 follow-up PR.
+            // The Q7 gate is testable via `handlers::sign` unit tests;
+            // CLI wiring is a 5-line dispatcher addition once the
+            // unlock helper lands.
+            Err(Error::Rpc(
+                "sign-typed dispatch deferred to T6 follow-up (WalletManager::unlock wiring)"
+                    .into(),
+            ))
+        }
     }
 }
 
