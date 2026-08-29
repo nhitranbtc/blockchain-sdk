@@ -36,6 +36,32 @@ const TRANSFER_TOPIC: [u8; 32] = [
 // `polygon_wallet_core::*` import above; the local `use` of
 // `polygon_wallet_core::TxSummary` happens at the call site.
 
+/// Guard: only allow `https` RPC URLs and `http` to loopback hosts.
+///
+/// Closes the transport-security finding from the automated push
+/// sweep on commit `8f34994`: the prior `wallet_balance` /
+/// `wallet_sync` match arms accepted any URL scheme, including
+/// `file://` and `ftp://`. `http` to a non-loopback host is also
+/// rejected — cleartext RPC credentials + signed payloads must not
+/// cross the wire. Returns `Error::InvalidInput` naming the rejected
+/// scheme so operators see exactly what to fix.
+fn validate_rpc_scheme(url: &url::Url) -> Result<()> {
+    match url.scheme() {
+        "https" => Ok(()),
+        "http"
+            if matches!(
+                url.host_str(),
+                Some("localhost") | Some("127.0.0.1") | Some("::1")
+            ) =>
+        {
+            Ok(())
+        }
+        other => Err(Error::InvalidInput(format!(
+            "rpc url scheme not allowed: {other}; use https (or http for localhost)"
+        ))),
+    }
+}
+
 /// Query native POL balance for `address` (Story 3 — `wallet balance`).
 ///
 /// Uses `new_http_polygon_amoy()` (PR #424 Phase 2 convenience
@@ -55,6 +81,7 @@ pub async fn wallet_balance(rpc_url: Option<&str>, address: &str) -> Result<U256
         Some(url_str) => {
             let url = url::Url::parse(url_str)
                 .map_err(|e| Error::Rpc(format!("rpc url parse failed: {e}")))?;
+            validate_rpc_scheme(&url)?;
             new_http(url).map_err(|e| Error::Rpc(format!("provider new_http: {e}")))?
         }
         None => new_http_polygon_amoy()
@@ -184,6 +211,7 @@ pub async fn wallet_sync(
         Some(url_str) => {
             let url = url::Url::parse(url_str)
                 .map_err(|e| Error::Rpc(format!("rpc url parse failed: {e}")))?;
+            validate_rpc_scheme(&url)?;
             new_http(url).map_err(|e| Error::Rpc(format!("provider new_http: {e}")))?
         }
         None => new_http_polygon_amoy()
@@ -355,6 +383,70 @@ mod tests {
             matches!(r, Err(polygon_wallet_core::Error::Rpc(_))),
             "invalid --rpc-url must surface as Error::Rpc; got {r:?}"
         );
+    }
+
+    /// Security fix #2 (transport-security): `wallet_balance` rejects
+    /// cleartext HTTP RPC URLs to non-loopback hosts. Localhost / 127.0.0.1
+    /// / ::1 remain allowed for Anvil-regtest per design doc §9.
+    #[test]
+    fn wallet_balance_rejects_http_rpc_to_remote_host() {
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_balance(
+                Some("http://example.com"),
+                "0x0000000000000000000000000000000000000001",
+            ));
+        match r {
+            Err(polygon_wallet_core::Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("scheme not allowed"),
+                    "InvalidInput must mention rejected scheme; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// Security fix #2 (transport-security): `wallet_sync` rejects
+    /// cleartext HTTP RPC URLs to non-loopback hosts.
+    #[test]
+    fn wallet_sync_rejects_http_rpc_to_remote_host() {
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_sync(
+                Some("http://example.com"),
+                Network::Polygon(PolygonChain::Amoy),
+                "0x0000000000000000000000000000000000000001",
+            ));
+        match r {
+            Err(polygon_wallet_core::Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("scheme not allowed"),
+                    "InvalidInput must mention rejected scheme; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// Security fix #2 positive path: `http://localhost` is allowed
+    /// (Anvil-regtest use case per design doc §9). The handler still
+    /// fails because no live RPC, but with `Error::Rpc` — NOT
+    /// `Error::InvalidInput`. Verifies the loopback exemption.
+    #[test]
+    fn validate_rpc_scheme_allows_http_to_localhost() {
+        let url = url::Url::parse("http://localhost:8545").expect("parses");
+        assert!(super::validate_rpc_scheme(&url).is_ok());
+        let url = url::Url::parse("http://127.0.0.1:8545").expect("parses");
+        assert!(super::validate_rpc_scheme(&url).is_ok());
+        let url = url::Url::parse("https://polygon-rpc.com").expect("parses");
+        assert!(super::validate_rpc_scheme(&url).is_ok());
+        let url = url::Url::parse("http://example.com").expect("parses");
+        assert!(super::validate_rpc_scheme(&url).is_err());
     }
 
     /// T6c3 follow-up #3 test: `TxSummary` survives a JSON
