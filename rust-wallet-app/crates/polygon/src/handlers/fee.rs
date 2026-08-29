@@ -1,4 +1,4 @@
-//! Fee-tier resolution for `wallet send` + `wallet send speed-up`.
+//! Fee-tier resolution + `polygon fee` handler — Issue #426 / T6d-1.
 //!
 //! Per `docs/superpowers/plans/2026-08-28-polygon-cli-interface-design.md`
 //! §5.7: maps the four CLI-facing tier names
@@ -6,17 +6,217 @@
 //! `(max_fee_per_gas, max_priority_fee_per_gas)` multipliers over the
 //! per-call `provider.estimate_eip1559_fees()` baseline.
 //!
-//! Pure: no RPC, no I/O. Lives in its own module so the per-tier table is
-//! testable in isolation and so future fee-tier additions (e.g. a
-//! `custom` tier) land in one file rather than spreading across the
-//! send + speedup handler bodies.
+//! `fetch_fee_estimate` (T6d-1 / Story 8 — `polygon fee`) calls
+//! `provider.estimate_eip1559_fees()` once per invocation — no cache
+//! because Polygon's 2-second block time (plan §Q5) makes cached
+//! values stale in <3s.
 //!
-//! T6c5 (Issue #426 sub-task): the `resolve_fee_tier` fn is consumed by
-//! `wallet_send_native` + `wallet_send_speedup`. The handler layer is
-//! responsible for fetching the baseline estimate; this module only
-//! applies the multiplier table.
+//! Tier helpers (parse_fee_tier, resolve_fee_tier) are pure RPC-free;
+//! `fetch_fee_estimate` + `build_provider` are the only RPC-touching
+//! fns. Lives in its own module so the per-tier table stays
+//! testable in isolation.
 
-use polygon_wallet_core::{Error, Result};
+use alloy_network::Ethereum;
+use alloy_provider::{Provider, RootProvider};
+use serde::Serialize;
+
+use polygon_wallet_core::{
+    new_http, new_http_polygon_amoy, new_http_polygon_mainnet, Error, Network, PolygonChain, Result,
+};
+
+use crate::handlers::validate_rpc_scheme;
+
+/// EIP-1559 fee estimate plus the chain_id of the responding RPC.
+///
+/// `wei` fields carry the raw u128 from `provider.estimate_eip1559_fees()`;
+/// `gwei` fields are the same value as `f64 / 1e9` for human-readable
+/// display (Polygon mainnet max_fee_per_gas is typically 30-300 gwei).
+/// Both representations travel together in `--json` output so consumers
+/// don't have to redo the conversion.
+#[derive(Debug, Clone, Serialize)]
+pub struct FeeEstimate {
+    pub network: String,
+    pub chain_id: u64,
+    pub max_fee_per_gas_wei: u128,
+    pub max_priority_fee_per_gas_wei: u128,
+    pub max_fee_per_gas_gwei: f64,
+    pub max_priority_fee_per_gas_gwei: f64,
+}
+
+/// Build an `RootProvider<Ethereum>` from the per-network default RPC
+/// (Amoy / mainnet) or an operator-supplied `--rpc-url`. Reuses the
+/// same scheme guard as the wallet handlers (moved to
+/// `super::validate_rpc_scheme` so future handlers don't duplicate
+/// the policy). Returns `Error::InvalidInput` for non-https / non-
+/// loopback-http URLs so the operator sees the fix at exit 2.
+pub(crate) fn build_provider(
+    rpc_url: Option<&str>,
+    network: Network,
+) -> Result<RootProvider<Ethereum>> {
+    if let Some(url_str) = rpc_url {
+        let url = url::Url::parse(url_str)
+            .map_err(|e| Error::Rpc(format!("rpc url parse failed: {e}")))?;
+        validate_rpc_scheme(&url)?;
+        return new_http(url).map_err(|e| Error::Rpc(format!("provider new_http: {e}")));
+    }
+    match network {
+        Network::Polygon(PolygonChain::Amoy) => {
+            new_http_polygon_amoy().map_err(|e| Error::Rpc(format!("provider amoy: {e}")))
+        }
+        Network::Polygon(PolygonChain::Mainnet) => {
+            new_http_polygon_mainnet().map_err(|e| Error::Rpc(format!("provider mainnet: {e}")))
+        }
+        // Polygon CLI never imports an Ethereum-network wallet; an
+        // Ethereum-flavored Network enum passed here is an upstream
+        // routing bug, not an operator error — surface it loudly.
+        Network::Ethereum(_) => Err(Error::Rpc(format!(
+            "polygon fee: unsupported network {network:?} (Polygon CLI)"
+        ))),
+    }
+}
+
+/// Fetch the live EIP-1559 fee estimate for `network`.
+///
+/// `rpc_url` overrides the per-network default when `Some`. The chain_id
+/// returned by the RPC must equal `network.chain_id()` — a hostile or
+/// misconfigured RPC that reports a different chain is rejected as
+/// `Error::InvalidInput` (exit 2) so operators see the mismatch at
+/// the boundary, not as a silently-signed transaction.
+pub async fn fetch_fee_estimate(rpc_url: Option<&str>, network: Network) -> Result<FeeEstimate> {
+    let provider = build_provider(rpc_url, network)?;
+    let actual_chain_id = provider
+        .get_chain_id()
+        .await
+        .map_err(|e| Error::Rpc(format!("get_chain_id: {e}")))?;
+    let expected_chain_id = network.chain_id();
+    if actual_chain_id != expected_chain_id {
+        return Err(Error::InvalidInput(format!(
+            "rpc chain_id {actual_chain_id} does not match network {network:?} (expected {expected_chain_id})"
+        )));
+    }
+    let est = provider
+        .estimate_eip1559_fees()
+        .await
+        .map_err(|e| Error::Rpc(format!("estimate_eip1559_fees: {e}")))?;
+    let max_fee_per_gas_wei = est.max_fee_per_gas;
+    let max_priority_fee_per_gas_wei = est.max_priority_fee_per_gas;
+    Ok(FeeEstimate {
+        network: format!("{network:?}"),
+        chain_id: actual_chain_id,
+        max_fee_per_gas_wei,
+        max_priority_fee_per_gas_wei,
+        max_fee_per_gas_gwei: max_fee_per_gas_wei as f64 / 1e9,
+        max_priority_fee_per_gas_gwei: max_priority_fee_per_gas_wei as f64 / 1e9,
+    })
+}
+
+/// Format a `FeeEstimate` for the human-readable (non-`--json`) path.
+pub fn format_fee_human(est: &FeeEstimate) -> String {
+    format!(
+        "network: {}\nchain_id: {}\nmax_fee_per_gas: {:.3} gwei ({} wei)\nmax_priority_fee_per_gas: {:.3} gwei ({} wei)",
+        est.network,
+        est.chain_id,
+        est.max_fee_per_gas_gwei,
+        est.max_fee_per_gas_wei,
+        est.max_priority_fee_per_gas_gwei,
+        est.max_priority_fee_per_gas_wei,
+    )
+}
+
+#[cfg(test)]
+mod handler_tests {
+    //! T6d-1 tests for the `polygon fee` handler. Pure (no live RPC):
+    //! the RPC-touching `fetch_fee_estimate` path is exercised by the
+    //! L29 operator-driven smoke in T7.
+
+    use super::*;
+
+    /// S7a (failing seed): FeeEstimate JSON output carries both wei and
+    /// gwei representations so `--json` consumers don't have to redo
+    /// the conversion. Field order matches serde's derive order.
+    #[test]
+    fn fee_estimate_serializes_with_wei_and_gwei_fields() {
+        let est = FeeEstimate {
+            network: "Polygon(Amoy)".into(),
+            chain_id: 80_002,
+            max_fee_per_gas_wei: 30_000_000_000,
+            max_priority_fee_per_gas_wei: 30_000_000_000,
+            max_fee_per_gas_gwei: 30.0,
+            max_priority_fee_per_gas_gwei: 30.0,
+        };
+        let json = serde_json::to_string(&est).expect("serialize");
+        assert!(json.contains("\"max_fee_per_gas_wei\":30000000000"));
+        assert!(json.contains("\"max_fee_per_gas_gwei\":30"));
+        assert!(json.contains("\"chain_id\":80002"));
+    }
+
+    /// S7b: format_fee_human surfaces both gwei and wei so operators
+    /// can copy-paste either representation. chain_id present so
+    /// operators spot mismatches at the boundary.
+    #[test]
+    fn format_fee_human_includes_both_units_and_chain_id() {
+        let est = FeeEstimate {
+            network: "Polygon(Mainnet)".into(),
+            chain_id: 137,
+            max_fee_per_gas_wei: 50_000_000_000,
+            max_priority_fee_per_gas_wei: 30_000_000_000,
+            max_fee_per_gas_gwei: 50.0,
+            max_priority_fee_per_gas_gwei: 30.0,
+        };
+        let s = format_fee_human(&est);
+        assert!(s.contains("chain_id: 137"));
+        assert!(s.contains("50.000 gwei"));
+        assert!(s.contains("50000000000 wei"));
+        assert!(s.contains("30.000 gwei"));
+        assert!(s.contains("30000000000 wei"));
+    }
+
+    /// S7c: build_provider rejects `http://evil.example` (cleartext
+    /// RPC must not cross the wire — L12 transport-security mirror).
+    #[test]
+    fn build_provider_rejects_non_https_non_loopback_url() {
+        let r = build_provider(
+            Some("http://evil.example/rpc"),
+            Network::Polygon(PolygonChain::Amoy),
+        );
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("not allowed"),
+                    "InvalidInput must name the rejected scheme; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// S7d: build_provider accepts `https://...` URLs (happy path) —
+    /// fails only at the RPC connect, which we don't reach without a
+    /// real server, so we expect a `new_http` Ok result (provider
+    /// construction is lazy; no network call yet).
+    #[test]
+    fn build_provider_accepts_https_url() {
+        let r = build_provider(
+            Some("https://polygon-rpc.example/"),
+            Network::Polygon(PolygonChain::Mainnet),
+        );
+        assert!(
+            r.is_ok(),
+            "https URL must build a provider (lazy connection); got {r:?}"
+        );
+    }
+
+    /// S7e: build_provider accepts `http://localhost` (regtest case)
+    /// — L12 transport-security carve-out for local development.
+    #[test]
+    fn build_provider_accepts_loopback_http() {
+        let r = build_provider(
+            Some("http://127.0.0.1:8545/"),
+            Network::Polygon(PolygonChain::Amoy),
+        );
+        assert!(r.is_ok(), "loopback http must build a provider");
+    }
+}
 
 /// Four CLI-facing fee tiers per design §3.4 (Story 5 + 6 AC) + user
 /// stories doc. Ordered fastest → economy. Multipliers below.

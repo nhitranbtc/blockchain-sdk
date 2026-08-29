@@ -13,6 +13,38 @@ pub mod fee;
 pub mod sign;
 pub mod wallet;
 
+/// Guard: only allow `https` RPC URLs and `http` to loopback hosts.
+///
+/// Closes the transport-security finding from the automated push
+/// sweep on commit `8f34994`: the prior `wallet_balance` /
+/// `wallet_sync` match arms accepted any URL scheme, including
+/// `file://` and `ftp://`. `http` to a non-loopback host is also
+/// rejected — cleartext RPC credentials + signed payloads must not
+/// cross the wire. Returns `Error::InvalidInput` naming the rejected
+/// scheme so operators see exactly what to fix.
+///
+/// **T6d-1 (Issue #426 / PR in flight):** moved here from
+/// `handlers/wallet.rs` so future handlers (fee, tx, erc20, ...)
+/// share the same scheme policy. Centralizing prevents
+/// per-handler drift — each new RPC call site gets the guard by
+/// default rather than remembering to inline a copy.
+pub(crate) fn validate_rpc_scheme(url: &url::Url) -> polygon_wallet_core::Result<()> {
+    match url.scheme() {
+        "https" => Ok(()),
+        "http"
+            if matches!(
+                url.host_str(),
+                Some("localhost") | Some("127.0.0.1") | Some("::1")
+            ) =>
+        {
+            Ok(())
+        }
+        other => Err(Error::InvalidInput(format!(
+            "rpc url scheme not allowed: {other}; use https (or http for localhost)"
+        ))),
+    }
+}
+
 /// Map `WalletError` (lib-level) onto `polygon_wallet_core::Error`
 /// (CLI-canonical). Called by every handler that touches `WalletManager`
 /// so the CLI's `Error::exit_code()` table applies (design §3.5 cross-

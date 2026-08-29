@@ -51,6 +51,10 @@ directories          = { workspace = true }
 
 # `serde_json` for the `wallet list --json` formatter (T6c2 follow-up).
 serde_json           = { workspace = true }
+# T6d-1 (Issue #426): `serde` direct dep for `FeeEstimate`'s
+# `#[derive(Serialize)]` (the `serde_json` re-export covers `to_string`
+# but not the derive macro).
+serde                = { workspace = true }
 
 # `uuid` for `wallet_delete --id <UUID>` parsing (T6c3). Wallet IDs are
 # UUIDs per WalletManager convention (PR #424 Phase 1 wallet storage).

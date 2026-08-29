@@ -476,7 +476,30 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             Erc20Action::Register { .. } => stub("erc20 register"),
             Erc20Action::Approve { .. } => stub("erc20 approve"),
         },
-        Command::Fee(_) => stub("fee"),
+        Command::Fee(args) => {
+            // T6d-1 (Issue #426 / Story 8): dispatch to the real
+            // `handlers::fee::fetch_fee_estimate` async handler. Per-call
+            // estimate (no cache) per plan §Q5 — Polygon's 2-second block
+            // time makes cached values stale in <3s. --json formatter
+            // wired here so operators + T7 smoke can pipe the result.
+            let cli::FeeArgs {
+                network,
+                json,
+                rpc_url: action_rpc_url,
+            } = args;
+            let net = handlers::parse_network(&network)?;
+            let rpc_url = action_rpc_url.as_deref();
+            let est = handlers::fee::fetch_fee_estimate(rpc_url, net).await?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string(&est).unwrap_or_else(|_| "{}".into())
+                );
+            } else {
+                println!("{}", handlers::fee::format_fee_human(&est));
+            }
+            Ok(())
+        }
         Command::Config { .. } => stub("config"),
         Command::Faucet(_) => stub("faucet"),
         Command::SignMessage(_) => stub("sign-message"),

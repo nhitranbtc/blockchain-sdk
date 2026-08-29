@@ -26,6 +26,8 @@ use alloy_signer_local::PrivateKeySigner;
 use std::str::FromStr;
 use zeroize::Zeroizing;
 
+use crate::handlers::validate_rpc_scheme;
+
 use polygon_wallet_core::{
     encoded_envelope, new_http, new_http_polygon_amoy, new_http_polygon_mainnet,
     sign_native_eth_tx, Error, Network, PolygonChain, Result, WalletCreated, WalletInfo,
@@ -51,31 +53,11 @@ const TRANSFER_TOPIC: [u8; 32] = [
 // `polygon_wallet_core::*` import above; the local `use` of
 // `polygon_wallet_core::TxSummary` happens at the call site.
 
-/// Guard: only allow `https` RPC URLs and `http` to loopback hosts.
-///
-/// Closes the transport-security finding from the automated push
-/// sweep on commit `8f34994`: the prior `wallet_balance` /
-/// `wallet_sync` match arms accepted any URL scheme, including
-/// `file://` and `ftp://`. `http` to a non-loopback host is also
-/// rejected — cleartext RPC credentials + signed payloads must not
-/// cross the wire. Returns `Error::InvalidInput` naming the rejected
-/// scheme so operators see exactly what to fix.
-fn validate_rpc_scheme(url: &url::Url) -> Result<()> {
-    match url.scheme() {
-        "https" => Ok(()),
-        "http"
-            if matches!(
-                url.host_str(),
-                Some("localhost") | Some("127.0.0.1") | Some("::1")
-            ) =>
-        {
-            Ok(())
-        }
-        other => Err(Error::InvalidInput(format!(
-            "rpc url scheme not allowed: {other}; use https (or http for localhost)"
-        ))),
-    }
-}
+// T6d-1 (Issue #426): `validate_rpc_scheme` moved to
+// `super::validate_rpc_scheme` (handlers/mod.rs) so all future
+// RPC-touching handlers share the same scheme policy without
+// per-handler duplication. The unprefixed call sites below resolve
+// via the module scope chain.
 
 /// Query native POL balance for `address` (Story 3 — `wallet balance`).
 ///
