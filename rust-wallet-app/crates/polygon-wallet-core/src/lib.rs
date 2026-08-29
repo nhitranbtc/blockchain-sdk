@@ -40,3 +40,34 @@ pub use evm_wallet_core::wallet::WalletManager;
 pub use evm_wallet_core::provider::{
     new_http, new_http_insecure, new_http_polygon_amoy, new_http_polygon_mainnet,
 };
+
+// T6c3 follow-up #3: `TxSummary` is the Transfer-event summary type
+// returned by the `polygon wallet sync` handler. Lives here (not in
+// the polygon binary crate, which is `publish = false` and effectively
+// private to that crate) so downstream consumers (future `--export`
+// writer, integration tests, sister CLIs) share one canonical type.
+// Derives mirror alloy's `B256` / `Address` / `U256` serde defaults
+// (0x-prefixed hex for the fixed-size types, decimal for U256).
+use alloy_primitives::{Address, B256, U256};
+use serde::{Deserialize, Serialize};
+
+/// Lightweight Transfer-event summary.
+///
+/// Per design doc §5.4 (amended T6c3 follow-up #3) the full
+/// `Vec<Transaction>` payload is too heavy for the CLI summary path;
+/// this minimal subset is what operator UX displays in `--json`
+/// output and the eventual `--export` Zeroizing payload. Field names
+/// match Etherscan-style labels so operators recognize them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TxSummary {
+    /// Block number containing the Transfer log (0 if pending / unknown).
+    pub block_number: u64,
+    /// Transaction hash emitting the Transfer log.
+    pub tx_hash: B256,
+    /// Sender address (topics[1] in ERC-20 Transfer).
+    pub from: Address,
+    /// Recipient address (topics[2] in ERC-20 Transfer).
+    pub to: Address,
+    /// Transfer amount in token base units (decoded from log data).
+    pub value: U256,
+}

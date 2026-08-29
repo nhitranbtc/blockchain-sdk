@@ -170,15 +170,33 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 network,
                 rpc_url,
                 address,
+                json,
             } => {
-                // T6c3 follow-up #2: dispatch to the real `wallet_sync`
-                // async handler. Body returns Error::Rpc until T7
-                // operator-driven integration per L29 (live
-                // `provider.watch_logs()` for `eth_getLogs` matching
-                // the address).
+                // T6c3 follow-up #3: dispatch to the real `wallet_sync`
+                // async handler returning `Vec<TxSummary>`. Live RPC
+                // body (the `provider.get_logs` call) deferred to T7
+                // operator-driven integration per L29 — handler returns
+                // `Error::Rpc("deferred to T7")` until then. --json
+                // formatter wired here for when T7 lands.
                 let net = handlers::parse_network(&network)?;
-                handlers::wallet::wallet_sync(rpc_url.as_deref(), net, &address).await?;
-                println!("(wallet sync: live RPC deferred to T7; signature wired, body returns Error::Rpc)");
+                let summaries =
+                    handlers::wallet::wallet_sync(rpc_url.as_deref(), net, &address).await?;
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".into())
+                    );
+                } else {
+                    for s in &summaries {
+                        println!(
+                            "block {} tx {} from {} to {} value {}",
+                            s.block_number, s.tx_hash, s.from, s.to, s.value
+                        );
+                    }
+                    if summaries.is_empty() {
+                        println!("(no transfers found)");
+                    }
+                }
                 Ok(())
             }
             WalletAction::List {

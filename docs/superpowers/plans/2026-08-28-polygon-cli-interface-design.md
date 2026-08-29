@@ -502,7 +502,7 @@ pub fn wallet_list(mgr: &WalletManager, all: bool, json: bool) -> Result<()>;  /
 pub fn wallet_show(mgr, name, id, network, addresses, export, json) -> Result<()>;  // Stories 9, 19
 pub fn wallet_delete(mgr, name, id, network) -> Result<()>;    // Story 9
 pub async fn wallet_balance(provider, address, unit, network, legacy, rpc) -> Result<()>;  // Stories 3, 31
-pub async fn wallet_sync(provider, address, network) -> Result<()>;  // Story 4
+pub async fn wallet_sync(provider, address, network) -> Result<Vec<TxSummary>>;  // Story 4 — AMENDED T6c3 follow-up #3: was `Result<()>` + internal print; now returns `Vec<polygon_wallet_core::TxSummary>` for `--json` formatter + future `--export` Zeroizing payload. Matches the `wallet_balance` (returns U256, main.rs formats) split.
 pub async fn wallet_send_native(...) -> Result<B256>;          // Stories 5, 6, 13-16
 pub async fn wallet_send_speedup(...) -> Result<B256>;         // Story 17
 ```
