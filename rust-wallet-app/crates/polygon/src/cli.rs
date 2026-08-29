@@ -328,6 +328,8 @@ pub enum Erc20Action {
         #[arg(long)]
         name: String,
         #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
         token: String,
         #[arg(long, value_parser = parse_address)]
         spender: String,
@@ -365,6 +367,12 @@ pub struct FeeArgs {
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
     Show {
+        /// Network label to display in the resolved config (default: amoy).
+        /// Honors `POLYGON_NETWORK` env var per the global convention.
+        /// Reported value reflects this arg, not RPC-side chain_id
+        /// (which would need a live `eth_chainId` call — out of scope).
+        #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
+        network: String,
         #[arg(long)]
         json: bool,
     },

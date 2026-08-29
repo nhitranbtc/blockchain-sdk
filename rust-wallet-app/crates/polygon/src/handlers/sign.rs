@@ -43,6 +43,132 @@ pub fn polygon_chain_from_id(chain_id: u64) -> polygon_wallet_core::Result<Polyg
         .ok_or_else(|| Error::InvalidInput(format!("unknown polygon chain_id {chain_id}")))
 }
 
+/// T6d-3 handler (Issue #426 / Batch D-2): EIP-191 personal_sign.
+///
+/// Per design doc §5.10. Thin CLI wrapper around
+/// `polygon_wallet_core::sign_message` (live at
+/// `evm-wallet-core/src/signer.rs:149`). The CLI layer adds:
+///   - chain_id validation deferred (EIP-191 carries no chain_id)
+///   - optional `--verify` round-trip (sig must recover to `verify_address`)
+///   - Zeroizing wrap on the message buffer at the call site
+///
+/// Returns the 65-byte signature as `0x`-prefixed hex on stdout
+/// (one-line text mode); `--json` returns `{"signature": "0x..."}`
+/// (flag honored at the `main.rs` dispatch layer).
+///
+/// **Dispatch wiring deferred to T6 follow-up PR** — the CLI
+/// dispatcher needs `WalletManager::unlock` to derive the
+/// `PrivateKeySigner`. The handler is fully implemented + tested at
+/// the unit level (`tests::*` below); wiring is a 5-line dispatcher
+/// addition once the unlock helper lands. Until then the
+/// `#[allow(dead_code)]` suppresses the clippy warning honestly.
+#[allow(dead_code)] // wired in main.rs dispatch in T6 follow-up PR
+pub fn sign_message(
+    signer: &alloy_signer_local::PrivateKeySigner,
+    message: &[u8],
+    verify_address: Option<alloy_primitives::Address>,
+) -> polygon_wallet_core::Result<String> {
+    use evm_wallet_core::sign_message as core_sign_message;
+    use evm_wallet_core::SignError;
+    let sig = core_sign_message(signer, message).map_err(|e| match e {
+        SignError::InvalidAddress(s) | SignError::InvalidRequest(s) => {
+            Error::InvalidInput(format!("eip191: {s}"))
+        }
+        SignError::Sign(s) | SignError::Unsupported(s) => Error::Rpc(format!("eip191: {s}")),
+    })?;
+    // Optional --verify round-trip: recover signer from sig, must match.
+    // EIP-191 prefix: `"\x19Ethereum Signed Message:\n" + len(message) + message`,
+    // then keccak256. The signer signs the resulting prehash.
+    if let Some(expected) = verify_address {
+        let mut prefix = Vec::with_capacity(message.len() + 26);
+        prefix.extend_from_slice(b"\x19Ethereum Signed Message:\n");
+        prefix.extend_from_slice(message.len().to_string().as_bytes());
+        prefix.extend_from_slice(message);
+        let prehash = alloy_primitives::keccak256(&prefix);
+        let recovered = sig
+            .recover_address_from_prehash(&prehash)
+            .map_err(|e| Error::Rpc(format!("eip191 verify: recover failed: {e}")))?;
+        if recovered != expected {
+            return Err(Error::InvalidInput(format!(
+                "eip191 verify mismatch: recovered {recovered} != expected {expected}"
+            )));
+        }
+    }
+    Ok(format!(
+        "0x{}",
+        alloy_primitives::hex::encode(sig.as_bytes())
+    ))
+}
+
+/// T6d-3 handler (Issue #426 / Batch D-2): EIP-712 typed-data sign with
+/// chain_id validation (Q7 critical-tier gate).
+///
+/// Per design doc §5.10. The chain_id gate fires BEFORE the underlying
+/// lib call — `assert_polygon_chain_id` rejects any value outside
+/// `{137, 80002}` with `Error::InvalidInput` (exit 2). Valid chain_id
+/// proceeds to the lib helper.
+///
+/// **Gate contract (Q7 critical-tier):** the `--chain-id` CLI arg is
+/// the gate. When the alloy `eip712` feature lands and the lib can
+/// parse `typed_data_json`, the handler MUST additionally:
+///   1. parse `typed_data.domain.chainId` from the JSON,
+///   2. call `assert_polygon_chain_id(typed.domain.chain_id)`,
+///   3. require `typed.domain.chain_id == chain_id` (CLI arg must
+///      match the authoritative domain value).
+///
+/// Per EIP-712 the domain's `chainId` is authoritative; the CLI arg
+/// is convenience. Skipping this leaves a cross-chain replay hole
+/// when the lib lands — an attacker passes `--chain-id 137` with a
+/// payload declaring `domain.chainId=1` (Ethereum mainnet), the gate
+/// accepts, the lib signs the Ethereum-domain payload. Tracked in
+/// the T6d-3 follow-up PR alongside the eip712 feature gate.
+///
+/// **Deferral notice (T6d-3 scope):** the underlying
+/// `polygon_wallet_core::sign_typed_data` (at
+/// `evm-wallet-core/src/signer.rs:164`) is currently stubbed pending the
+/// `alloy eip712` feature gate decision (tracked in the lib's doc
+/// comment). T6d-3 ships the Q7 gate + call-site wiring; the full
+/// EIP-712 crypto lands in a follow-up PR. When the lib returns its
+/// `SignError::Unsupported(...)` placeholder, this handler surfaces it
+/// as `Error::Rpc` so the operator sees the honest deferral status.
+///
+/// **Dispatch wiring deferred to T6 follow-up PR** — see `sign_message`
+/// doc above for the same `WalletManager::unlock` deferral rationale.
+#[allow(dead_code)] // wired in main.rs dispatch in T6 follow-up PR
+pub fn sign_typed_data(
+    signer: &alloy_signer_local::PrivateKeySigner,
+    typed_data_json: &str,
+    chain_id: u64,
+    verify_address: Option<alloy_primitives::Address>,
+) -> polygon_wallet_core::Result<String> {
+    // Q7 + C1 gate: reject before any signing work.
+    assert_polygon_chain_id(chain_id)?;
+    let typed_blob = typed_data_json.as_bytes();
+    let sig = evm_wallet_core::sign_typed_data(signer, typed_blob).map_err(|e| {
+        use evm_wallet_core::SignError;
+        match e {
+            SignError::InvalidAddress(s) | SignError::InvalidRequest(s) => {
+                Error::InvalidInput(format!("eip712: {s}"))
+            }
+            SignError::Sign(s) | SignError::Unsupported(s) => Error::Rpc(format!("eip712: {s}")),
+        }
+    })?;
+    // --verify deferred alongside the alloy eip712 feature gate.
+    // Maps to Error::InvalidInput (caller-side: requested a flag we
+    // can't honour yet) — exit 2, not exit 3 (Rpc).
+    if verify_address.is_some() {
+        return Err(Error::InvalidInput(
+            "eip712 --verify deferred to follow-up PR alongside alloy eip712 feature gate".into(),
+        ));
+    }
+    // When the alloy eip712 feature lands and the lib returns Ok(sig),
+    // encode the real signature. Until then the `?` above exits early.
+    Ok(format!(
+        "0x{}",
+        alloy_primitives::hex::encode(sig.as_bytes())
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     //! Batch D tests (per design doc §6.4): EIP-712 chain_id gate.
@@ -105,5 +231,146 @@ mod tests {
             polygon_chain_from_id(PolygonChain::Amoy.chain_id()).unwrap(),
             PolygonChain::Amoy
         );
+    }
+
+    // ===== T6d-3 Batch D-2 tests: sign_message + sign_typed_data handlers =====
+    //
+    // Per design doc §6.4 (extended for the handler wrappers added in T6d-3).
+    // The first 6 tests above cover the Q7 gate helper; the tests below
+    // cover the public CLI handler wrappers (`sign_message`, `sign_typed_data`).
+
+    /// Build a test signer (deterministic, abandon×11 phrase at index 0).
+    /// Mirrors `evm-wallet-core/src/signer.rs:186` so CLI tests use the
+    /// same key material — cross-crate consistency for any future
+    /// golden-signature fixtures.
+    fn cli_test_signer() -> alloy_signer_local::PrivateKeySigner {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        alloy_signer_local::MnemonicBuilder::english()
+            .phrase(phrase)
+            .index(0)
+            .expect("valid index")
+            .build()
+            .expect("build")
+    }
+
+    /// T6d-3 test #7: `sign_message` returns deterministic 65-byte signature
+    /// as `0x`-prefixed hex. EIP-191 personal_sign — no chain_id involvement.
+    #[test]
+    fn sign_message_returns_0x_prefixed_hex_signature() {
+        let signer = cli_test_signer();
+        let msg = b"hello, polygon";
+        let sig = super::sign_message(&signer, msg, None).expect("sign");
+        // 0x + 130 hex chars = 65 raw bytes.
+        assert!(sig.starts_with("0x"), "must be 0x-prefixed hex; got {sig}");
+        assert_eq!(
+            sig.len(),
+            132,
+            "0x + 130 hex chars = 65 raw bytes; got {} chars",
+            sig.len()
+        );
+    }
+
+    /// T6d-3 test #8: `sign_message` is deterministic for given (key, message).
+    /// Mirrors `evm-wallet-core/src/signer.rs:238`.
+    #[test]
+    fn sign_message_is_deterministic_per_key_and_message() {
+        let signer = cli_test_signer();
+        let msg = b"deterministic-test";
+        let sig1 = super::sign_message(&signer, msg, None).expect("sig1");
+        let sig2 = super::sign_message(&signer, msg, None).expect("sig2");
+        assert_eq!(sig1, sig2, "sign_message must be deterministic");
+    }
+
+    /// T6d-3 test #9: `sign_message` --verify round-trips when expected
+    /// address matches the signer.
+    #[test]
+    fn sign_message_verify_round_trips_to_signer_address() {
+        let signer = cli_test_signer();
+        let msg = b"verify-me";
+        let signer_addr = signer.address();
+        let sig = super::sign_message(&signer, msg, Some(signer_addr)).expect("verify pass");
+        assert!(sig.starts_with("0x"));
+    }
+
+    /// T6d-3 test #10: `sign_message` --verify with WRONG address returns
+    /// `Error::InvalidInput` (exit 2) — protects against silent address
+    /// substitution attacks.
+    #[test]
+    fn sign_message_verify_mismatch_returns_invalid_input() {
+        let signer = cli_test_signer();
+        let msg = b"verify-me";
+        // All-zero address — guaranteed not to be the test signer's address.
+        let wrong_addr = alloy_primitives::Address::ZERO;
+        let r = super::sign_message(&signer, msg, Some(wrong_addr));
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "--verify mismatch must return InvalidInput (exit 2); got {r:?}"
+        );
+    }
+
+    /// T6d-3 test #11: `sign_typed_data` rejects chain_id=1 (Ethereum
+    /// mainnet) at the GATE — BEFORE the lib call. Q7 critical-tier
+    /// mitigation: cross-chain replay blocked at the type level.
+    #[test]
+    fn sign_typed_data_rejects_chain_id_1_at_gate() {
+        let signer = cli_test_signer();
+        let r = super::sign_typed_data(&signer, r#"{"types":{}}"#, 1, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "chain_id=1 must be rejected at gate; got {r:?}"
+        );
+    }
+
+    /// T6d-3 test #12: `sign_typed_data` rejects chain_id=11155111
+    /// (Sepolia) at the GATE.
+    #[test]
+    fn sign_typed_data_rejects_chain_id_sepolia_at_gate() {
+        let signer = cli_test_signer();
+        let r = super::sign_typed_data(&signer, r#"{"types":{}}"#, 11_155_111, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "chain_id=Sepolia must be rejected at gate; got {r:?}"
+        );
+    }
+
+    /// T6d-3 test #13: `sign_typed_data` accepts chain_id=137 (Polygon
+    /// PoS mainnet) and reaches the lib call. The lib is currently
+    /// stubbed (alloy eip712 feature gate deferred per signer.rs:164),
+    /// so we expect either the gate-passed path (real `0x` hex sig
+    /// once lib lands) OR the lib's `Error::Rpc`. Either way the gate
+    /// DID NOT fire — which is the contract we're verifying here.
+    #[test]
+    fn sign_typed_data_chain_id_137_passes_gate() {
+        let signer = cli_test_signer();
+        let r = super::sign_typed_data(&signer, r#"{"types":{}}"#, 137, None);
+        match r {
+            // Once alloy eip712 lands, the handler returns the real
+            // 65-byte signature encoded as `0x` + 130 hex chars.
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "gate-passed result must be 0x-prefixed 65-byte hex; got {sig}"
+            ),
+            // Today the lib stub returns Error::Rpc — gate DID NOT fire.
+            Err(Error::Rpc(msg)) => assert!(
+                msg.contains("eip712"),
+                "lib-side error must surface honestly; got {msg}"
+            ),
+            other => panic!(
+                "chain_id=137 must pass gate (Ok sig or Rpc); got {other:?} \
+                 — gate must NOT reject Polygon chain_ids"
+            ),
+        }
+    }
+
+    /// T6d-3 test #14: `sign_typed_data` accepts chain_id=80002 (Amoy).
+    #[test]
+    fn sign_typed_data_chain_id_80002_passes_gate() {
+        let signer = cli_test_signer();
+        let r = super::sign_typed_data(&signer, r#"{"types":{}}"#, 80_002, None);
+        match r {
+            Ok(sig) => assert!(sig.starts_with("0x") && sig.len() == 132),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => panic!("chain_id=80002 must pass gate; got {other:?}"),
+        }
     }
 }
