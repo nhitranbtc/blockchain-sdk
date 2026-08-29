@@ -112,6 +112,29 @@ fn main() -> std::process::ExitCode {
 /// T6b dispatch scaffold: match on `Command`, route to per-handler
 /// stub. Handler bodies land in T6c (wallet/tx/erc20/send/speedup)
 /// and T6d (sign/fee/config/faucet).
+/// Format a balance (U256 wei) as a human-readable string per the
+/// `--unit` flag. `wei` (default per design §3.4) returns the raw U256.
+/// `pol` converts via 1e18 wei with 18-decimal precision and trims
+/// trailing zeros. Unknown units fall back to wei.
+fn format_balance(balance: alloy_primitives::U256, unit: &str) -> String {
+    match unit {
+        "pol" => {
+            // 1 POL = 1e18 wei. Convert with full 18-decimal precision.
+            let one_e18 =
+                alloy_primitives::U256::from(10u128).pow(alloy_primitives::U256::from(18u8));
+            let whole = balance / one_e18;
+            let frac = balance % one_e18;
+            let mut s = format!("{}.{:018}", whole, frac.to_string());
+            // Trim trailing zeros (but keep at least one decimal digit).
+            while s.ends_with('0') && s.contains('.') && !s.ends_with(".0") {
+                s.pop();
+            }
+            format!("{s} POL")
+        }
+        _ => format!("{balance} wei"),
+    }
+}
+
 /// Resolve the default wallet data directory: `$XDG_DATA_HOME/polygon/`
 /// (Linux) / platform-equivalent via the `directories` crate. Used when
 /// `--data-dir` is not provided on the CLI.
@@ -171,7 +194,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             WalletAction::Balance {
                 address,
                 network: _,
-                unit: _,
+                unit,
                 legacy_token_symbol: _,
                 rpc_url,
             } => {
@@ -182,7 +205,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // the canonical unit; POL = wei / 1e18 is the conversion).
                 let balance =
                     handlers::wallet::wallet_balance(rpc_url.as_deref(), &address).await?;
-                println!("balance: {balance} wei");
+                println!("{}", format_balance(balance, &unit));
                 Ok(())
             }
             WalletAction::Sync { .. } => stub("wallet sync"),
