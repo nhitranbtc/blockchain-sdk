@@ -149,8 +149,10 @@ fn default_data_dir() -> std::path::PathBuf {
 /// `wallet_sync`, T6c5 `wallet_send_*`). `main()` wraps `run()` in a
 /// tokio current-thread runtime via `block_on` (mirrors `eth/src/main.rs:487-491`).
 async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
+    use alloy_primitives::utils::parse_units;
     use cli::{Command, Erc20Action, TxAction, WalletAction};
     use polygon_wallet_core::Error;
+    use zeroize::Zeroizing;
 
     let stub = |cmd: &'static str| -> polygon_wallet_core::Result<()> {
         Err(Error::Rpc(format!(
@@ -287,8 +289,113 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 println!("{}", format_balance(balance, &unit));
                 Ok(())
             }
-            WalletAction::Send(_) => stub("wallet send"),
-            WalletAction::SendSpeedup(_) => stub("wallet send speed-up"),
+            WalletAction::Send(args) => {
+                // T6c5: dispatch to real `wallet_send_native_v2`.
+                // Per-action --rpc-url overrides global --rpc-url flag;
+                // --data-dir defaults to platform XDG dir when absent.
+                // Pattern-destructure accesses the cli::SendArgs fields
+                // (private — destructure works without `pub`).
+                let cli::SendArgs {
+                    name,
+                    password,
+                    to,
+                    amount,
+                    network,
+                    unit,
+                    batch: _,
+                    drain,
+                    nonce,
+                    gas_limit,
+                    fee,
+                    max_fee_gwei,
+                    priority_fee_gwei,
+                    dry_run,
+                    wait,
+                    rpc_url: action_rpc_url,
+                } = args;
+                let network = handlers::parse_network(&network)?;
+                handlers::validate_wallet_name(&name)?;
+                let pw_string = resolve_password(password.as_deref())?;
+                let password = Zeroizing::new(pw_string.into_bytes());
+                let amount_wei_string = match unit.as_str() {
+                    "wei" => amount.clone(),
+                    "pol" => {
+                        let u = parse_units(&amount, 18).map_err(|e| {
+                            Error::InvalidInput(format!("invalid --amount (pol): {e}"))
+                        })?;
+                        format!("{u}")
+                    }
+                    other => {
+                        return Err(Error::InvalidInput(format!(
+                            "unsupported --unit '{other}'; expected 'wei' or 'pol'"
+                        )));
+                    }
+                };
+                let data_dir: std::path::PathBuf =
+                    cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let rpc_url = action_rpc_url.as_deref().or(cli.rpc_url.as_deref());
+                let tx_hash = handlers::wallet::wallet_send_native_v2(
+                    &data_dir,
+                    rpc_url,
+                    network,
+                    &name,
+                    &password,
+                    &to,
+                    &amount_wei_string,
+                    "wei",
+                    nonce,
+                    gas_limit,
+                    &fee,
+                    max_fee_gwei,
+                    priority_fee_gwei,
+                    drain,
+                    dry_run,
+                    wait,
+                )
+                .await?;
+                println!(
+                    "tx_hash: 0x{}",
+                    alloy_primitives::hex::encode(tx_hash.as_slice())
+                );
+                Ok(())
+            }
+            WalletAction::SendSpeedup(args) => {
+                let cli::SendSpeedupArgs {
+                    tx_hash,
+                    max_fee_gwei,
+                    priority_fee_gwei,
+                    name,
+                    password,
+                    network,
+                    rpc_url: action_rpc_url,
+                } = args;
+                let network = handlers::parse_network(&network)?;
+                handlers::validate_wallet_name(&name)?;
+                let pw_string = resolve_password(password.as_deref())?;
+                let password = Zeroizing::new(pw_string.into_bytes());
+                let data_dir: std::path::PathBuf =
+                    cli.data_dir.clone().unwrap_or_else(default_data_dir);
+                let rpc_url = action_rpc_url.as_deref().or(cli.rpc_url.as_deref());
+                // CLI inputs are gwei floats → convert to wei u128.
+                let new_max_fee_per_gas = (max_fee_gwei * 1e9) as u128;
+                let new_max_priority_fee_per_gas = (priority_fee_gwei * 1e9) as u128;
+                let tx_hash = handlers::wallet::wallet_send_speedup_v2(
+                    &data_dir,
+                    rpc_url,
+                    network,
+                    &name,
+                    &password,
+                    &tx_hash,
+                    new_max_fee_per_gas,
+                    new_max_priority_fee_per_gas,
+                )
+                .await?;
+                println!(
+                    "tx_hash: 0x{}",
+                    alloy_primitives::hex::encode(tx_hash.as_slice())
+                );
+                Ok(())
+            }
         },
         Command::Tx { action } => match action {
             TxAction::List { .. } => stub("tx list"),
