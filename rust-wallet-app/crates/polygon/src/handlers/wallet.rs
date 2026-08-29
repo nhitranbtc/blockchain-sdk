@@ -32,7 +32,6 @@ use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Result};
 ///
 /// Returns the balance in wei (U256). Caller formats with `--unit pol|wei`
 /// (T6c1 follow-up wires the unit-aware formatter + dispatch).
-#[allow(dead_code)] // wired in main.rs::run() WalletAction::Balance in T6c1 follow-up
 pub async fn wallet_balance(rpc_url: Option<&str>, address: &str) -> Result<U256> {
     let addr = Address::from_str(address)
         .map_err(|e| Error::InvalidInput(format!("invalid --address: {e}")))?;

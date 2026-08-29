@@ -86,14 +86,18 @@ fn prompt_password(_prompt: &str) -> polygon_wallet_core::Result<String> {
 }
 
 fn main() -> std::process::ExitCode {
-    // T6b (L25 sub-task split): parse + dispatch scaffold.
-    // `Cli::parse()` is sync; per-handler stubs return `Error::Rpc("deferred
-    // past T6b — landing in T6c/T6d")` so the binary exits with a clear
-    // operator-facing message until real impls land. tokio runtime lands in
-    // T6c when async handlers (send/balance/sync) wire up.
+    // T6c1 follow-up: wrap `run()` (async) in a tokio current-thread
+    // runtime via `block_on` (mirrors `eth/src/main.rs:487-491`). Sync
+    // commands (list / show / delete / create / import) also route
+    // through `block_on` — a no-op for sync fns. Async commands
+    // (wallet_balance / future send / sync) drive real work.
     use clap::Parser;
     let cli = cli::Cli::parse();
-    match run(cli) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime (single-threaded, full-featured)");
+    match rt.block_on(run(cli)) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
@@ -117,7 +121,11 @@ fn default_data_dir() -> std::path::PathBuf {
         .unwrap_or_default()
 }
 
-fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
+/// T6c1 follow-up: `run()` is now `async fn` so it can drive the
+/// `wallet_balance` async handler (and future async handlers — T6c3
+/// `wallet_sync`, T6c5 `wallet_send_*`). `main()` wraps `run()` in a
+/// tokio current-thread runtime via `block_on` (mirrors `eth/src/main.rs:487-491`).
+async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
     use cli::{Command, Erc20Action, TxAction, WalletAction};
     use polygon_wallet_core::Error;
 
@@ -160,7 +168,23 @@ fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             }
             WalletAction::Show { .. } => stub("wallet show"),
             WalletAction::Delete { .. } => stub("wallet delete"),
-            WalletAction::Balance { .. } => stub("wallet balance"),
+            WalletAction::Balance {
+                address,
+                network: _,
+                unit: _,
+                legacy_token_symbol: _,
+                rpc_url,
+            } => {
+                // T6c1 follow-up: dispatch to the real async
+                // `wallet_balance` handler (PR #439). Unit-aware formatter
+                // (`--unit pol`) lands in a subsequent commit once
+                // operator UX testing surfaces the right format (wei is
+                // the canonical unit; POL = wei / 1e18 is the conversion).
+                let balance =
+                    handlers::wallet::wallet_balance(rpc_url.as_deref(), &address).await?;
+                println!("balance: {balance} wei");
+                Ok(())
+            }
             WalletAction::Sync { .. } => stub("wallet sync"),
             WalletAction::Send(_) => stub("wallet send"),
             WalletAction::SendSpeedup(_) => stub("wallet send speed-up"),
