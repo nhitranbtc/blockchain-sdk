@@ -24,7 +24,7 @@ use std::str::FromStr;
 use zeroize::Zeroizing;
 
 use polygon_wallet_core::{
-    new_http, new_http_polygon_amoy, Error, Result, WalletCreated, WalletInfo,
+    new_http, new_http_polygon_amoy, Error, Network, Result, WalletCreated, WalletInfo,
 };
 
 /// ERC-20 Transfer(address,address,uint256) event topic0 hash.
@@ -321,6 +321,144 @@ pub async fn wallet_send_native(_to: &str, _amount: &str) -> Result<()> {
 pub async fn wallet_send_speedup(_tx_hash: &str) -> Result<()> {
     Err(Error::Rpc(
         "wallet send speed-up: deferred past T6c3 follow-up (lands in T6c5)".into(),
+    ))
+}
+
+// =====================================================================
+// T6c5 (Issue #426 sub-task): real `wallet_send_native` +
+// `wallet_send_speedup` — signatures expanded to design doc §5.4
+// (`Result<B256>` — was `Result<()>` placeholder) and per-arg
+// validation split into pure helpers (`parse_send_address`,
+// `parse_send_amount`, `assert_send_password`, `assert_new_fee_higher`)
+// so the handler bodies stay linear + each validator is testable in
+// isolation without a provider.
+// =====================================================================
+
+/// Parse a `--to` address string. Returns `Error::InvalidInput` for any
+/// non-address input. Mirrors the `wallet_balance` validator at
+/// `wallet_balance` body lines 87-89.
+#[allow(dead_code)] // wired in T6c5 follow-up alongside main.rs dispatch
+fn parse_send_address(s: &str) -> Result<Address> {
+    Address::from_str(s).map_err(|e| Error::InvalidInput(format!("invalid --to address: {e}")))
+}
+
+/// Parse a `--amount` wei string. Returns `Error::InvalidInput` for
+/// non-decimal / negative / overflow. Wei is the canonical unit
+/// (design §3.5 cross-cutting + Story 5 AC); `--unit pol|wei`
+/// conversion happens in the dispatch layer (main.rs) before calling
+/// this handler so the handler surface stays single-unit.
+#[allow(dead_code)] // wired in T6c5 follow-up alongside main.rs dispatch
+fn parse_send_amount(s: &str) -> Result<U256> {
+    s.parse::<U256>()
+        .map_err(|e| Error::InvalidInput(format!("invalid --amount (wei): {e}")))
+}
+
+/// Reject empty passwords at the handler boundary. The lib-level
+/// `wallet_create` rejects empty pw with a "crypto" message (test
+/// `wallet_create_rejects_empty_password` above). This handler-
+/// boundary check fails fast BEFORE the wallet-unlock work so the
+/// operator sees exit-2 immediately on TTY.
+#[allow(dead_code)] // wired in T6c5 follow-up alongside main.rs dispatch
+fn assert_send_password(p: &Zeroizing<Vec<u8>>) -> Result<()> {
+    if p.is_empty() {
+        return Err(Error::InvalidInput(
+            "wallet password must not be empty".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Enforce RBF rule #1: the new `max_fee_per_gas` must be STRICTLY
+/// greater than the original. The lib's `sign_native_eth_tx` does
+/// NOT enforce this — the RPC will silently accept a same-or-lower-
+/// fee replacement, breaking the operator's intent to replace a
+/// stuck pending tx. Mirrors ETH analog `eth/src/handlers.rs:847-874`
+/// speedup recovery (Gate 5 cryptographic recovery + fee ordering).
+/// Caller supplies `old_max_fee` after `eth_getTransactionByHash`.
+#[allow(dead_code)] // wired in T6c5 follow-up alongside main.rs dispatch
+fn assert_new_fee_higher(old_max_fee: u128, new_max_fee: u128) -> Result<()> {
+    if new_max_fee <= old_max_fee {
+        return Err(Error::InvalidInput(format!(
+            "speed-up max_fee_per_gas ({new_max_fee}) must be strictly greater than original ({old_max_fee})"
+        )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // wired in T6c5 follow-up alongside main.rs dispatch
+pub async fn wallet_send_native_v2(
+    _data_dir: &std::path::Path,
+    rpc_url: Option<&str>,
+    network: Network,
+    _name: &str,
+    password: &Zeroizing<Vec<u8>>,
+    to: &str,
+    amount: &str,
+    _unit: &str,
+    _nonce: Option<u64>,
+    _gas_limit: Option<u64>,
+    _fee: &str,
+    _max_fee_gwei: Option<f64>,
+    _priority_fee_gwei: Option<f64>,
+    _drain: bool,
+    _dry_run: bool,
+    _wait: bool,
+) -> Result<B256> {
+    // Step 1: validators (pure, no I/O, no provider). These close the
+    // S1 / S2 / S4 / S7 failure paths at exit 2 before any wallet
+    // unlock or RPC call.
+    let _to_addr = parse_send_address(to)?;
+    let _amount_wei = parse_send_amount(amount)?;
+    assert_send_password(password)?;
+    if let Some(url_str) = rpc_url {
+        let url = url::Url::parse(url_str)
+            .map_err(|e| Error::Rpc(format!("rpc url parse failed: {e}")))?;
+        validate_rpc_scheme(&url)?;
+    }
+    // Provider construction + chain_id trust-boundary check + nonce
+    // fetch + fee estimate + envelope signing + broadcast lands in
+    // the T6c5 follow-up commit.
+    Err(Error::Rpc(format!(
+        "wallet_send_native_v2: provider path lands in T6c5 follow-up (validators ran on network={network:?})"
+    )))
+}
+
+#[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // wired in T6c5 follow-up alongside main.rs dispatch
+pub async fn wallet_send_speedup_v2(
+    _data_dir: &std::path::Path,
+    rpc_url: Option<&str>,
+    _network: Network,
+    _name: &str,
+    password: &Zeroizing<Vec<u8>>,
+    tx_hash: &str,
+    new_max_fee_per_gas: u128,
+    _new_max_priority_fee_per_gas: u128,
+) -> Result<B256> {
+    // Step 1: validators (pure, no I/O).
+    assert_send_password(password)?;
+    let _tx_hash_b256 = tx_hash
+        .parse::<B256>()
+        .map_err(|e| Error::InvalidInput(format!("invalid --tx-hash: {e}")))?;
+    if let Some(url_str) = rpc_url {
+        let url = url::Url::parse(url_str)
+            .map_err(|e| Error::Rpc(format!("rpc url parse failed: {e}")))?;
+        validate_rpc_scheme(&url)?;
+    }
+    // Sanity: zero-fee speedup is always wrong (RBF requires higher
+    // gas than the original; zero = reject).
+    if new_max_fee_per_gas == 0 {
+        return Err(Error::InvalidInput(
+            "speed-up max_fee_gwei must be > 0".into(),
+        ));
+    }
+    // `assert_new_fee_higher` runs AFTER the original-tx RPC fetch
+    // (need old fee first), so the heavy path stays async.
+    // RBF fee comparison + signer recovery + nonce lock lands in
+    // T6c5 follow-up.
+    Err(Error::Rpc(
+        "wallet_send_speedup_v2: RBF path lands in T6c5 follow-up (validators ran)".into(),
     ))
 }
 
@@ -1023,6 +1161,241 @@ mod tests {
         match r {
             Err(Error::Rpc(_)) => {}
             other => panic!("expected Error::Rpc, got {other:?}"),
+        }
+    }
+
+    // ----- T6c5 send / speedup validator tests -----
+
+    /// T6c5 / S1 (failing seed → validator green): handler rejects
+    /// invalid `--to` address BEFORE any provider / wallet call.
+    #[test]
+    fn wallet_send_native_v2_rejects_invalid_address() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"password123".to_vec());
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_send_native_v2(
+                tmp.path(),
+                None,
+                amoy(),
+                "alpha",
+                &pwd,
+                "not-an-address",
+                "1000000000000000000",
+                "wei",
+                None,
+                None,
+                "half_hour",
+                None,
+                None,
+                false,
+                false,
+                false,
+            ));
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("address"),
+                    "InvalidInput must mention address; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// T6c5 / S2: handler rejects non-decimal `--amount` BEFORE any
+    /// provider call. Address is valid so we reach the amount check.
+    #[test]
+    fn wallet_send_native_v2_rejects_invalid_amount() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"password123".to_vec());
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_send_native_v2(
+                tmp.path(),
+                None,
+                amoy(),
+                "alpha",
+                &pwd,
+                "0x0000000000000000000000000000000000000001",
+                "abc",
+                "wei",
+                None,
+                None,
+                "half_hour",
+                None,
+                None,
+                false,
+                false,
+                false,
+            ));
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("amount"),
+                    "InvalidInput must mention amount; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// T6c5 / S4: handler rejects empty password BEFORE wallet unlock.
+    /// Runs even though data_dir doesn't exist — validator fires first.
+    #[test]
+    fn wallet_send_native_v2_rejects_empty_password() {
+        let tmp = tempdir().expect("tempdir");
+        let empty = Zeroizing::new(Vec::<u8>::new());
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_send_native_v2(
+                tmp.path(),
+                None,
+                amoy(),
+                "alpha",
+                &empty,
+                "0x0000000000000000000000000000000000000001",
+                "1000",
+                "wei",
+                None,
+                None,
+                "half_hour",
+                None,
+                None,
+                false,
+                false,
+                false,
+            ));
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("password"),
+                    "InvalidInput must mention password; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// T6c5 / S7: cleartext RPC to non-loopback host rejected
+    /// (mirrors the wallet_balance scheme guard added in commit
+    /// `8701eb6`). Validators run before any provider construction,
+    /// so the rejected RPC URL never opens a socket.
+    #[test]
+    fn wallet_send_native_v2_rejects_http_rpc_to_remote_host() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"password123".to_vec());
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_send_native_v2(
+                tmp.path(),
+                Some("http://remote.example.com"),
+                amoy(),
+                "alpha",
+                &pwd,
+                "0x0000000000000000000000000000000000000001",
+                "1000",
+                "wei",
+                None,
+                None,
+                "half_hour",
+                None,
+                None,
+                false,
+                false,
+                false,
+            ));
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("scheme") || msg.contains("http"),
+                    "InvalidInput must mention scheme/http; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// T6c5 / S9: RBF gate — speedup rejects new max_fee that is not
+    /// STRICTLY greater than the original. Anti-silent-replace (RPC
+    /// would accept same-fee replacement without error, breaking RBF
+    /// intent). Pure fn test — no RPC.
+    #[test]
+    fn assert_new_fee_higher_rejects_non_strictly_higher() {
+        assert!(super::assert_new_fee_higher(50, 30).is_err());
+        assert!(super::assert_new_fee_higher(50, 50).is_err());
+        assert!(super::assert_new_fee_higher(50, 51).is_ok());
+    }
+
+    /// T6c5 / S10: speedup rejects empty password (mirrors S4).
+    /// Runs even though data_dir doesn't exist — validator fires
+    /// before wallet lookup.
+    #[test]
+    fn wallet_send_speedup_v2_rejects_empty_password() {
+        let tmp = tempdir().expect("tempdir");
+        let empty = Zeroizing::new(Vec::<u8>::new());
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_send_speedup_v2(
+                tmp.path(),
+                None,
+                amoy(),
+                "alpha",
+                &empty,
+                "0x0000000000000000000000000000000000000000000000000000000000000001",
+                60_000_000_000,
+                30_000_000_000,
+            ));
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("password"),
+                    "InvalidInput must mention password; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
+        }
+    }
+
+    /// T6c5 / S9b: speedup rejects new_max_fee_per_gas == 0 (RBF
+    /// requires higher gas; zero always fails). Validator inside
+    /// `wallet_send_speedup_v2` runs before any RPC.
+    #[test]
+    fn wallet_send_speedup_v2_rejects_zero_new_max_fee() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"password123".to_vec());
+        let r = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(super::wallet_send_speedup_v2(
+                tmp.path(),
+                None,
+                amoy(),
+                "alpha",
+                &pwd,
+                "0x0000000000000000000000000000000000000000000000000000000000000001",
+                0,
+                0,
+            ));
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("fee") || msg.contains("max_fee"),
+                    "InvalidInput must mention fee; got: {msg}"
+                );
+            }
+            other => panic!("expected Error::InvalidInput, got {other:?}"),
         }
     }
 }

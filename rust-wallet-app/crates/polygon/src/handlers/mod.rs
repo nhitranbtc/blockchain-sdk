@@ -9,6 +9,7 @@ use polygon_wallet_core::{Error, Network};
 // Re-export submodules so callers (main.rs) can write `use handlers::*`
 // instead of reaching into individual files. Mirrors design doc §5.3.
 pub mod erc20;
+pub mod fee;
 pub mod sign;
 pub mod wallet;
 
