@@ -134,10 +134,27 @@ pub fn wallet_import(_name: &str) -> Result<()> {
         "wallet import: deferred past T6c3 follow-up (lands in T6c4)".into(),
     ))
 }
+/// Real `wallet_sync` async signature — T6c3 follow-up #2.
+///
+/// `async fn` with full signature (rpc_url, network, address) so
+/// `main.rs::run()` can dispatch to it. Body returns `Error::Rpc`
+/// until T7 operator-driven integration per L29 (live
+/// `provider.watch_logs()` for `eth_getLogs` matching the address).
+///
+/// The actual implementation (per design doc §5.4): call
+/// `provider.watch_logs(filter)` for `Transfer` + `0x...` topic0 events
+/// matching the address, deserialize each log entry into a `Transaction`
+/// summary, return `Vec<Transaction>`.
 #[allow(dead_code)]
-pub async fn wallet_sync(_address: &str) -> Result<()> {
+pub async fn wallet_sync(
+    _rpc_url: Option<&str>,
+    _network: polygon_wallet_core::Network,
+    _address: &str,
+) -> Result<()> {
     Err(Error::Rpc(
-        "wallet sync: deferred past T6c3 follow-up (lands in T6d)".into(),
+        "wallet sync: live RPC deferred to T7 (operator-driven per L29); \
+         async signature wired, body returns Error::Rpc until T7 integration"
+            .into(),
     ))
 }
 #[allow(dead_code)]

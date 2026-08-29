@@ -166,6 +166,21 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
         Command::Wallet { action } => match action {
             WalletAction::Create { .. } => stub("wallet create"),
             WalletAction::Import { .. } => stub("wallet import"),
+            WalletAction::Sync {
+                network,
+                rpc_url,
+                address,
+            } => {
+                // T6c3 follow-up #2: dispatch to the real `wallet_sync`
+                // async handler. Body returns Error::Rpc until T7
+                // operator-driven integration per L29 (live
+                // `provider.watch_logs()` for `eth_getLogs` matching
+                // the address).
+                let net = handlers::parse_network(&network)?;
+                handlers::wallet::wallet_sync(rpc_url.as_deref(), net, &address).await?;
+                println!("(wallet sync: live RPC deferred to T7; signature wired, body returns Error::Rpc)");
+                Ok(())
+            }
             WalletAction::List {
                 network,
                 all: _,
@@ -254,7 +269,6 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 println!("{}", format_balance(balance, &unit));
                 Ok(())
             }
-            WalletAction::Sync { .. } => stub("wallet sync"),
             WalletAction::Send(_) => stub("wallet send"),
             WalletAction::SendSpeedup(_) => stub("wallet send speed-up"),
         },
