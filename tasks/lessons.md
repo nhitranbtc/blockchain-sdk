@@ -1513,6 +1513,18 @@ The Mutex is necessary because `cargo test` runs tests in parallel by default; w
 - Job scoped to `--ignored` / `if: success()` — defeats the permanent-block intent.
 - Generic `grep` for `format!` or `Rpc` — too broad, causes false positives in unrelated code. Anchor on the specific leaky pattern (`Error::Rpc(format`).
 
+### L57 — Security-auditor fallback for critical-tier (2026-08-30, PR #462 application)
+
+**Trigger**: `pr-review-toolkit:security-auditor` not in active harness's agent registry during L13 step 10 critical-tier review of #459 (sign dispatch wiring). Existing L53 amendment (2026-08-26) permits substituting the closest equivalent but requires the deviation be documented in PR body AND lessons.md.
+
+**Rule**: When `pr-review-toolkit:security-auditor` is absent, substitute `compass:security-auditor` (closest lens match — description names "trust boundaries, crypto, secrets, authz"). Alternatives: `ecc:security-reviewer` (OWASP-flavored) or `voltagent-qa-sec:security-auditor`. Pick the one whose description explicitly mentions the lens needed (for key-material / signing surfaces: crypto + secrets + trust boundaries). Document the substitution in the PR body alongside the fallback attribution, AND append a per-instance note here with the PR# / tier / outcome. Do NOT skip the security lens entirely per L13 Q4 carve-out — the fallback is mandatory.
+
+**Why**: Critical-tier surfaces (key material / signing / encryption / network / persistence) MUST get the security lens. Skipping it leaves gaps TDD + type-design + code-review cameras don't see. PR #462 application: `compass:security-auditor` caught (a) the `from_slice` error-category fix (keystore corruption → `Error::Rpc`, NOT `InvalidInput` — operator retry-trap), and (b) confirmed 6/7 lenses clean (zeroizing, password chain, wrong-password exit code, Q7 gate, verify round-trip, signer construction error). Two pre-existing gaps (L54 threading invariant, empty `POLYGON_PASSWORD` env) flagged but not regressed by #459 — deferred to separate small-PR follow-ups per L13 surgical.
+
+**Apply**: When `pr-review-toolkit:security-auditor` (or `type-design-analyzer`, `code-reviewer`) is unavailable, substitute the closest equivalent and document the fallback in (a) PR body "L12 review" section + (b) `tasks/lessons.md` with PR# / tier / outcome / lenses-covered. Never silently skip a lens; if no equivalent exists, surface the gap to the user and PAUSE before proceeding (per L13 Q4 budget).
+
+---
+
 ### L13 amendment 2026-08-28 — `cancel-in-progress: true` cascade-cancels cargo test in workspace-wide CI
 
 Trigger: PR #430 (Phase 1 `polygon-wallet-core` thin wrapper, issue #423) on `feat/polygon-phase-1-423` against `rust-evm-core`. Three substantive commits in 17 minutes (feature scaffold, L24 CHANGELOG bullet, [ci-skip] lessons amendment) cascade-cancelled the in-flight `Rust test` job twice — Run 7 cancelled at 13m20s, Run 8 cancelled at 14m — before `cargo test --workspace --all-targets` could finish. The 40m `timeout-minutes` was never reached. The cancel signal came from the workflow's `concurrency.cancel-in-progress: true` setting, NOT from the timeout.
