@@ -23,6 +23,7 @@ use alloy_primitives::{Address, B256, U256};
 use alloy_provider::Provider;
 use alloy_rpc_types::{Filter, TransactionRequest};
 use alloy_signer_local::PrivateKeySigner;
+use std::path::Path;
 use std::str::FromStr;
 use zeroize::Zeroizing;
 
@@ -323,6 +324,110 @@ pub fn wallet_import(
     // Bounded lifetime: the `&str` lives only for the synchronous
     // `import_wallet_for_network` call; the lib encrypts then drops.
     mgr.import_wallet_for_network(name, phrase.expose().as_str(), password.as_slice(), network)
+        .map_err(crate::handlers::map_wallet_err)
+}
+
+// =====================================================================
+// T7 follow-up (Issue #469): --private-key-file flag support.
+// =====================================================================
+//
+// #464 partial land — T7 Amoy smoke harness shrunk from 5 to 2 tests
+// after automated security review flagged `--private-key` argv as a
+// HIGH sensitive-data-exposure-via-argv finding (L12 H-1 sister class
+// to the `--mnemonic` argv finding closed by PR #456 / `SecretMnemonic`).
+// The follow-up #469 closes the argv hole by accepting a mode-0600 file
+// path whose contents are read into a `Zeroizing<Vec<u8>>` wrapper and
+// passed to the new `WalletManager::import_private_key_for_network`
+// lib method (also added in this PR; hardcoded-network gap in the
+// pre-existing `import_private_key` was the drift-scan finding that
+// forced the lib extension).
+//
+// Critical-tier (per L13 Q4): touches key material + AES-GCM password
+// wrap + AtomicFile write. L12 review cluster
+// (type-design-analyzer + code-reviewer + security-auditor) +
+// standalone `security-review` gate this code.
+
+/// Read the contents of a `--private-key-file` path into a
+/// `Zeroizing<Vec<u8>>` wrapper.
+///
+/// Invariants enforced (per #469 AC + L12 H-1 sister finding from
+/// PR #456):
+/// - File must exist; missing → `Error::InvalidInput` (exit 2).
+/// - File mode must be `0o600` (owner-only); any other mode on Unix →
+///   `Error::InvalidInput` naming the actual mode so the operator
+///   can `chmod 600` without re-reading the source. On non-Unix
+///   (Windows) mode check is skipped — Windows ACLs are out of scope.
+/// - File contents wrapped in `Zeroizing<Vec<u8>>` so the heap buffer
+///   zeroizes on drop (sister invariant to `SecretMnemonic`'s
+///   `Zeroizing<String>` at `cli.rs:64`). The clap-side `&str` borrow
+///   that survives to `Cli::drop` is documented at that call site and
+///   is a pre-existing footgun class — not introduced here.
+///
+/// The returned wrapper derefs to `&[u8]`, so the caller passes
+/// `bytes.as_slice()` directly to
+/// `WalletManager::import_private_key_for_network` without any
+/// hex-encoding round-trip.
+#[cfg_attr(not(unix), allow(unused_variables))]
+pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        Error::InvalidInput(format!(
+            "--private-key-file not found or unreadable: {}: {e}",
+            path.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .map_err(|e| {
+                Error::InvalidInput(format!(
+                    "--private-key-file metadata: {}: {e}",
+                    path.display()
+                ))
+            })?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode != 0o600 {
+            return Err(Error::InvalidInput(format!(
+                "--private-key-file must have mode 0o600 (owner-only); got 0o{mode:o}: {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(Zeroizing::new(bytes))
+}
+
+/// Real `wallet_import_private_key_for_network` impl (Issue #469) — the
+/// PK-import counterpart of the mnemonic-based `wallet_import` above.
+/// Takes `&Zeroizing<Vec<u8>>` directly (the file-read + hex-decode
+/// lives in the dispatch layer so this handler stays a thin wrapper
+/// over `WalletManager::import_private_key_for_network`). The lib's
+/// `_for_network` variant is the network-aware sister of the
+/// hardcoded-network `import_private_key` — the missing variant was
+/// the drift-scan finding that forced this lib extension.
+///
+/// Per L13 Q4 critical-tier: key material + signing surface.
+/// Sister invariants to `wallet_import`:
+/// - Name validated via `handlers::validate_wallet_name`.
+/// - Empty-password defense-in-depth: lib rejects via
+///   `WalletError::Crypto(Argon2)` (mapped to `Error::InvalidInput` by
+///   `handlers::map_wallet_err`).
+/// - Duplicate-name defense: lib rejects via `WalletError::AlreadyExists`.
+/// - Disk perms: lib writes 0o600 blob (sister test in
+///   evm-wallet-core pins this; handler-level test re-pins it for
+///   defense-in-depth).
+pub fn wallet_import_private_key_for_network(
+    data_dir: &Path,
+    name: &str,
+    password: &Zeroizing<Vec<u8>>,
+    network: polygon_wallet_core::Network,
+    pk_bytes: &Zeroizing<Vec<u8>>,
+) -> Result<WalletCreated> {
+    crate::handlers::validate_wallet_name(name)?;
+    let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.to_path_buf())
+        .map_err(crate::handlers::map_wallet_err)?;
+    mgr.import_private_key_for_network(name, pk_bytes.as_slice(), password.as_slice(), network)
         .map_err(crate::handlers::map_wallet_err)
 }
 
@@ -973,6 +1078,7 @@ mod tests {
     // wrong-password side + the Argon2id-derive-key path on the
     // correct-password side.
 
+    use alloy_primitives::hex;
     use polygon_wallet_core::{Error, WalletCreated, WalletError};
     use tempfile::tempdir;
     use zeroize::Zeroizing;
@@ -1704,6 +1810,7 @@ mod tests {
             network: "amoy".to_string(),
             mnemonic: Some(SecretMnemonic::new(mnemonic_phrase.to_string())),
             private_key: None,
+            private_key_file: None,
             account_index: 0,
             legacy_token_symbol: false,
             rpc_url: None,
@@ -1849,5 +1956,182 @@ mod tests {
         };
         assert_eq!(m.expose().as_str().split_whitespace().count(), 12);
         assert_eq!(format!("{m:?}"), "SecretMnemonic([redacted])");
+    }
+
+    // ============================================================
+    // #469 tests: --private-key-file flag (mode-0600 + Zeroizing wrap)
+    // + wired --private-key + handler dispatch to
+    // WalletManager::import_private_key_for_network.
+    // ============================================================
+
+    /// 32-byte secp256k1 PK (Anvil default account #0) — hex encoded so
+    /// each test can pick its preferred input shape (raw bytes for the
+    /// new file path, hex for the wired `--private-key` path).
+    const ANVIL_PK_HEX: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    fn anvil_pk_bytes() -> [u8; 32] {
+        let mut out = [0u8; 32];
+        hex::decode(ANVIL_PK_HEX)
+            .expect("hardcoded hex is valid")
+            .into_iter()
+            .enumerate()
+            .for_each(|(i, b)| out[i] = b);
+        out
+    }
+
+    /// Write `bytes` to `<tmpdir>/<name>` with the requested mode. Unix
+    /// only — Windows lacks `PermissionsExt::set_permissions`.
+    #[cfg(unix)]
+    fn write_pk_file(
+        dir: &std::path::Path,
+        name: &str,
+        bytes: &[u8],
+        mode: u32,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).expect("write pk file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .expect("set pk file mode");
+        path
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_pk_file_accepts_mode_0600_file() {
+        // Happy path: mode 0600 + valid bytes → `Zeroizing<Vec<u8>>`
+        // wrapper. Type assertion (`Zeroizing<Vec<u8>>` return) is the
+        // contract — caller can `as_slice()` and pass to lib.
+        let tmp = tempdir().expect("tempdir");
+        let path = write_pk_file(tmp.path(), "pk.hex", &anvil_pk_bytes(), 0o600);
+        let got: Zeroizing<Vec<u8>> = super::read_pk_file(&path).expect("read ok");
+        assert_eq!(got.as_slice(), &anvil_pk_bytes());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_pk_file_rejects_mode_0644_file() {
+        // Mode != 0600 must surface `Error::InvalidInput` with the
+        // actual mode in the message so the operator can chmod it
+        // without re-reading the source.
+        let tmp = tempdir().expect("tempdir");
+        let path = write_pk_file(tmp.path(), "pk.hex", &anvil_pk_bytes(), 0o644);
+        let err = super::read_pk_file(&path).expect_err("mode 0o644 must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("0o644"),
+            "error must name the bad mode (0o644); got: {msg}"
+        );
+        assert!(
+            msg.contains("0o600"),
+            "error must mention required mode (0o600); got: {msg}"
+        );
+    }
+
+    #[test]
+    fn read_pk_file_rejects_missing_file() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("does-not-exist.hex");
+        let err = super::read_pk_file(&path).expect_err("missing file must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("not found") || msg.contains("No such file"),
+            "error must indicate missing file; got: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_pk_file_returns_zeroizing_wrapper() {
+        // Type contract: must bind to `Zeroizing<Vec<u8>>` so the
+        // caller-side lifecycle zeros the buffer on drop (sister
+        // invariant to `SecretMnemonic(Zeroizing<String>)`).
+        let tmp = tempdir().expect("tempdir");
+        let path = write_pk_file(tmp.path(), "pk.hex", &anvil_pk_bytes(), 0o600);
+        let got: Zeroizing<Vec<u8>> = super::read_pk_file(&path).expect("read ok");
+        // Zeroizing<Vec<u8>> deref to &[u8].
+        assert_eq!(got.len(), 32);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn wallet_import_private_key_for_network_writes_blob_and_meta_json() {
+        // End-to-end handler test: pass a `Zeroizing<Vec<u8>>` PK to
+        // the handler (the file-read + Zeroizing wrap is `read_pk_file`,
+        // tested separately above; this test focuses on the handler's
+        // pure-crypto path), assert a wallet is created under
+        // polygon_amoy/<uuid>.enc + .meta.json (sister invariant to
+        // wallet_import_writes_encrypted_blob_and_meta_json for the
+        // mnemonic path).
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempdir().expect("tempdir");
+
+        let password = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let pk_bytes = Zeroizing::new(anvil_pk_bytes().to_vec());
+        let created = super::wallet_import_private_key_for_network(
+            tmp.path(),
+            "pk-file-alpha",
+            &password,
+            amoy(),
+            &pk_bytes,
+        )
+        .expect("handler must accept mode-0600 file");
+        assert_eq!(created.network, amoy());
+
+        let enc = tmp
+            .path()
+            .join("polygon_amoy")
+            .join(format!("{}.enc", created.wallet_id));
+        let meta = tmp
+            .path()
+            .join("polygon_amoy")
+            .join(format!("{}.meta.json", created.wallet_id));
+        assert!(
+            enc.exists(),
+            "encrypted blob must exist under polygon_amoy/"
+        );
+        assert!(meta.exists(), "meta.json must exist alongside .enc");
+
+        // Defense-in-depth: blob mode must be 0o600 (the lib already
+        // enforces this for `import_private_key_for_network` per
+        // evm-wallet-core test; pin it here too so a future refactor
+        // that bypasses the lib doesn't silently regress).
+        let mode = std::fs::metadata(&enc)
+            .expect("enc exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "encrypted PK blob must be owner-only (0o600); got 0o{mode:o}"
+        );
+    }
+
+    #[test]
+    fn cli_rejects_private_key_with_private_key_file() {
+        // `clap` `conflicts_with` enforcement: passing both flags in
+        // one invocation must error at parse time (no dispatch).
+        // Sister invariant to the existing `mnemonic` vs `private_key`
+        // conflict at `cli.rs:183`.
+        use crate::cli::Cli;
+        use clap::Parser;
+        let result = Cli::try_parse_from([
+            "polygon",
+            "wallet",
+            "import",
+            "--name",
+            "x",
+            "--password",
+            "pw",
+            "--private-key",
+            "0xdeadbeef",
+            "--private-key-file",
+            "/tmp/pk.hex",
+        ]);
+        let err = result.expect_err("--private-key + --private-key-file must conflict");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--private-key") && msg.contains("--private-key-file"),
+            "clap error must name both flags; got: {msg}"
+        );
     }
 }

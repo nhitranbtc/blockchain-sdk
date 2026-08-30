@@ -152,7 +152,8 @@ Cross-check: every use case that alloy provides natively (per the deep-dive §Cr
 **Acceptance criteria (Polygon-specific delta in bold):**
 
 - `polygon wallet import --name recovered --mnemonic "word1 word2 ... word12" --network amoy` accepts a valid mnemonic.
-- `polygon wallet import --name dev --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` imports a raw secp256k1 key.
+- `polygon wallet import --name dev --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 --network amoy` imports a raw secp256k1 key (CLI hex-decode + `Zeroizing<Vec<u8>>` wrap). **Argv-exposure warning**: `--private-key <hex>` puts the PK in `/proc/<pid>/cmdline` — sibling processes on the host can read it. Prefer `--private-key-file <mode-0600-path>` for any operator-supplied secret.
+- `polygon wallet import --name dev --private-key-file /path/to/pk.hex --network amoy` accepts a mode-0600 file containing the raw 32-byte PK (no `0x` prefix). File contents read into `Zeroizing<Vec<u8>>` and zeroized on drop. Mode != 0o600 → `Error::InvalidInput` (exit 2) with the actual mode in the message. **Recommended for production / automation** — closes the L12 H-1 argv-exposure finding (sister class to the `--mnemonic` argv finding closed by PR #456). Per #469.
 - **Imported wallet produces the same first address as the source** (verified by deterministic derivation; same mnemonic → same ETH + Polygon address because SLIP-44 coin type 60 is shared).
 - BIP39 passphrase supported.
 - Output does **not** echo the mnemonic.

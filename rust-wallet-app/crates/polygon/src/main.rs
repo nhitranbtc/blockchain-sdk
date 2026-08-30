@@ -13,6 +13,7 @@ mod cli;
 mod handlers;
 
 use handlers::map_wallet_err;
+use handlers::wallet::read_pk_file;
 use zeroize::Zeroizing;
 
 /// Resolution kernel: argv → env → TTY prompt priority chain.
@@ -360,26 +361,79 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 password,
                 network,
                 mnemonic,
-                private_key: _,
+                private_key,
+                private_key_file,
                 account_index: _,
                 legacy_token_symbol: _,
                 rpc_url: _,
             } => {
-                // T6c4 follow-up: dispatch `wallet import` to the real
-                // `handlers::wallet::wallet_import` (PR #451). Mnemonic
-                // phrase comes from `--mnemonic` (private-key import
-                // deferred per the lib's hardcoded
-                // `Network::default_v0_2()` gap).
+                // #469 dispatch — three import sources (mutually
+                // exclusive via clap `conflicts_with`, enforced at parse
+                // time):
+                //   1. `--mnemonic` (existing path)        → wallet_import
+                //   2. `--private-key <hex>` (newly wired) → wallet_import_private_key_for_network
+                //   3. `--private-key-file <path>` (new)   → wallet_import_private_key_for_network
+                //      via handlers::wallet::read_pk_file (mode-0600
+                //      + Zeroizing<Vec<u8>> wrap; mode check skipped
+                //      on non-Unix).
+                //
+                // clap already rejects combinations, so the match here
+                // is an exhaustive single-Some guard (with the
+                // none-of-the-above error as the negative case).
+                // Sister invariant to L12 H-1 finding closed by PR
+                // #456 for `--mnemonic`.
                 let net = handlers::parse_network(&network)?;
-                let phrase = mnemonic.ok_or_else(|| {
-                    Error::InvalidInput("--mnemonic required (--private-key deferred)".into())
-                })?;
                 let pw_string = resolve_password(password.as_deref())?;
                 let password = Zeroizing::new(pw_string.into_bytes());
                 let data_dir: std::path::PathBuf =
                     cli.data_dir.clone().unwrap_or_else(default_data_dir);
-                let created =
-                    handlers::wallet::wallet_import(&data_dir, &name, &password, net, &phrase)?;
+                let created = match (mnemonic, private_key, private_key_file) {
+                    (Some(_), _, _) => {
+                        // Unreachable under clap conflict enforcement;
+                        // defense-in-depth if a programmatic caller
+                        // bypasses clap.
+                        return Err(Error::InvalidInput(
+                            "--mnemonic conflicts with PK flags".into(),
+                        ));
+                    }
+                    (None, Some(hex), None) => {
+                        // Wired path (was dead pre-#469 per the T6c4
+                        // follow-up comment). Hex-decode + Zeroizing
+                        // wrap matches the file variant's invariants.
+                        let bytes = alloy_primitives::hex::decode(hex.trim_start_matches("0x"))
+                            .map_err(|e| {
+                                Error::InvalidInput(format!("--private-key hex decode failed: {e}"))
+                            })?;
+                        let pk_bytes = Zeroizing::new(bytes);
+                        handlers::wallet::wallet_import_private_key_for_network(
+                            &data_dir, &name, &password, net, &pk_bytes,
+                        )?
+                    }
+                    (None, None, Some(path)) => {
+                        handlers::wallet::wallet_import_private_key_for_network(
+                            &data_dir,
+                            &name,
+                            &password,
+                            net,
+                            &read_pk_file(&path)?,
+                        )?
+                    }
+                    (None, None, None) => {
+                        return Err(Error::InvalidInput(
+                            "one of --mnemonic, --private-key, --private-key-file required".into(),
+                        ));
+                    }
+                    // clap `conflicts_with` already rejects every other
+                    // (mnemonic × private_key × private_key_file)
+                    // combination at parse time; the single `_` catch-
+                    // all is the defense-in-depth net for programmatic
+                    // callers that bypass clap.
+                    _ => {
+                        return Err(Error::InvalidInput(
+                            "exactly one of --mnemonic / --private-key / --private-key-file allowed".into(),
+                        ));
+                    }
+                };
                 println!(
                     "wallet imported: name={name} id={} address=0x{}",
                     created.wallet_id,

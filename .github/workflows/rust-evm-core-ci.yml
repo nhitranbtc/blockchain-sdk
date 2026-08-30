@@ -101,6 +101,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: Install Foundry (anvil)
+        # `crates/polygon/tests/polygon_wallet_scenario.rs` spawns `anvil`
+        # in-process via `alloy-node-bindings` (per #438 acceptance). Run
+        # 33293946213 failed with `SpawnError(Os { code: 2, kind: NotFound })`
+        # because this job lacked the Foundry install step that the
+        # sibling `Polygon Anvil e2e` job already has.
+        uses: foundry-rs/foundry-toolchain@v1
       - name: cargo build
         working-directory: rust-wallet-app
         run: cargo build --workspace

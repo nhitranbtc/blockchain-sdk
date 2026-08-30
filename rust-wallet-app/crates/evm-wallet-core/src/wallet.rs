@@ -403,6 +403,94 @@ impl WalletManager {
         })
     }
 
+    /// Import a raw secp256k1 private key (32 bytes) onto a caller-chosen
+    /// network. Sister to `import_wallet_for_network` (the mnemonic
+    /// counterpart) and `import_private_key` (which hardcodes
+    /// `Network::default_v0_2()`, retained for backwards compat).
+    ///
+    /// Per #469 / T7 follow-up to #464: the polygon CLI's
+    /// `--private-key-file` flag needs network-aware routing because the
+    /// CLI exposes `--network amoy` as the default and the pre-existing
+    /// `import_private_key` would silently land every imported PK on the
+    /// lib's default chain. Taking raw `&[u8]` (vs the hex `&str` shape
+    /// of `import_private_key`) lets the caller Zeroizing-wrap the
+    /// PK-bytes source (e.g. a mode-0600 file) before crossing this
+    /// seam — no re-encoding round-trip, single Zeroizing-owned buffer.
+    ///
+    /// Invariants:
+    /// - `key_bytes.len() == 32`; other lengths surface `WalletError::PrivateKey`
+    ///   (matches the `from_slice` rejection surfaced by `import_private_key`).
+    /// - `password` non-empty; empty → `WalletError::Crypto(Argon2)`.
+    /// - `(name, network)` unique; collision → `WalletError::AlreadyExists`.
+    /// - On-disk blob mode = 0o600 (sister defense-in-depth to `open_at` 0o700).
+    ///
+    /// Critical-tier (per L13 Q4): touches key material + AES-GCM password
+    /// wrap + AtomicFile write. L12 review cluster
+    /// (type-design-analyzer + code-reviewer + security-auditor) +
+    /// standalone `security-review` gate this code.
+    pub fn import_private_key_for_network(
+        &self,
+        name: &str,
+        key_bytes: &[u8],
+        password: &[u8],
+        network: Network,
+    ) -> Result<WalletCreated> {
+        if password.is_empty() {
+            return Err(WalletError::Crypto(CryptoError::Argon2(
+                "password must be non-empty".to_string(),
+            )));
+        }
+        if self.name_exists_on_network(name, network) {
+            return Err(WalletError::AlreadyExists {
+                name: name.to_string(),
+                network,
+            });
+        }
+        let signer = PrivateKeySigner::from_slice(key_bytes)
+            .map_err(|e| WalletError::PrivateKey(format!("from_slice: {e}")))?;
+
+        // Store hex of private key bytes (cannot reverse to mnemonic).
+        let plaintext_bytes = format!("0x{}", hex::encode(key_bytes));
+
+        let salt = crypto::random_salt();
+        let nonce = crypto::random_nonce();
+        let key = crypto::derive_key(password, &salt)?;
+        let key_arr: [u8; KEY_LEN] = key.as_slice()[..KEY_LEN].try_into().expect("KEY_LEN");
+        let ciphertext = crypto::encrypt(&key_arr, &nonce, plaintext_bytes.as_bytes())?;
+        let blob = EncryptedBlob::new(salt, nonce, ciphertext);
+
+        let wallet_id = Uuid::new_v4();
+        let address = signer.address();
+        let network_dir = self.base_dir.join(network.as_dir_name());
+        fs::create_dir_all(&network_dir)?;
+        let enc_path = wallet_path(&network_dir, wallet_id);
+        let meta_path = meta_path(&network_dir, wallet_id);
+        write_atomic(&enc_path, &serde_json::to_vec(&blob)?)?;
+        let meta = WalletMeta {
+            wallet_id,
+            name: name.to_string(),
+            network,
+            address,
+            derivation_path: "m/44'/60'/0'/0/0".to_string(),
+            created_at_secs: now_secs(),
+        };
+        write_atomic(&meta_path, &serde_json::to_vec(&meta)?)?;
+
+        self.wallets
+            .write()
+            .map_err(|_| WalletError::Path("store poisoned".into()))?
+            .insert(wallet_id, blob);
+
+        drop(signer);
+
+        Ok(WalletCreated {
+            wallet_id,
+            name: name.to_string(),
+            network,
+            address,
+        })
+    }
+
     /// List all wallets under the base_dir. Reads `<wallet_id>.meta.json`
     /// files for plaintext metadata so the CLI can render identity without
     /// unlocking. Falls back to placeholder metadata for legacy wallets
@@ -1029,6 +1117,213 @@ mod tests {
             .join("anvil")
             .join(format!("{}.meta.json", created.wallet_id))
             .exists());
+    }
+
+    #[test]
+    fn import_private_key_for_network_polygon_amoy_creates_wallet_under_amoy_dir() {
+        // #469 (Issue #469 / T7 follow-up to #464): the polygon CLI's
+        // `--private-key-file` flag needs an `_for_network` variant so
+        // the network argument is honored (the existing
+        // `import_private_key` hardcodes `Network::default_v0_2()` per
+        // #469 drift-scan). Mirror of `import_wallet_for_network` shape
+        // but with raw `&[u8]` PK input (CLI Zeroizing-wraps the file
+        // contents before calling).
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        // Anvil default account #0 — same PK used by
+        // `unlock_signer_works_for_private_key_wallet` (line 943).
+        let pk_bytes: [u8; 32] = [
+            0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38,
+            0xff, 0x94, 0x4b, 0xac, 0xb4, 0x78, 0xcb, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b,
+            0xf4, 0xf2, 0xff, 0x80,
+        ];
+        let created = mgr
+            .import_private_key_for_network(
+                "polygon-amoy-pk",
+                &pk_bytes,
+                &password(),
+                Network::Polygon(PolygonChain::Amoy),
+            )
+            .expect("import_private_key_for_network should succeed for Polygon(Amoy)");
+        assert_eq!(created.network, Network::Polygon(PolygonChain::Amoy));
+        assert_eq!(
+            created.address,
+            "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+                .parse::<Address>()
+                .expect("parse canonical address")
+        );
+        // Filesystem layout: <base>/<network-as-dir>/<uuid>.enc + .meta.json.
+        // PolygonChain::Amoy.as_dir_name() == "polygon_amoy" (per
+        // network.rs:240).
+        assert!(tmp
+            .path()
+            .join("polygon_amoy")
+            .join(format!("{}.enc", created.wallet_id))
+            .exists());
+        assert!(tmp
+            .path()
+            .join("polygon_amoy")
+            .join(format!("{}.meta.json", created.wallet_id))
+            .exists());
+    }
+
+    #[test]
+    fn import_private_key_for_network_allows_same_name_different_network() {
+        // Per-network name uniqueness: the CLI's `--name` flag must NOT
+        // collide across networks (e.g. "alpha" on sepolia + "alpha" on
+        // amoy is legal). Sister invariant to `import_wallet_for_network`.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let pk_bytes: [u8; 32] = [0x42; 32];
+        mgr.import_private_key_for_network(
+            "shared-name",
+            &pk_bytes,
+            &password(),
+            Network::Ethereum(EthereumChain::Sepolia),
+        )
+        .expect("first network ok");
+        mgr.import_private_key_for_network(
+            "shared-name",
+            &pk_bytes,
+            &password(),
+            Network::Polygon(PolygonChain::Amoy),
+        )
+        .expect("same name on different network must succeed");
+    }
+
+    #[test]
+    fn import_private_key_for_network_rejects_duplicate_name_same_network() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let pk_bytes: [u8; 32] = [0x42; 32];
+        mgr.import_private_key_for_network(
+            "dupe",
+            &pk_bytes,
+            &password(),
+            Network::Ethereum(EthereumChain::Sepolia),
+        )
+        .expect("first import ok");
+        let err = mgr
+            .import_private_key_for_network(
+                "dupe",
+                &pk_bytes,
+                &password(),
+                Network::Ethereum(EthereumChain::Sepolia),
+            )
+            .expect_err("duplicate name on same network must error");
+        let already = matches!(err, WalletError::AlreadyExists { .. });
+        assert!(already, "expected AlreadyExists, got: {err:?}");
+    }
+
+    #[test]
+    fn import_private_key_for_network_rejects_empty_password() {
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let pk_bytes: [u8; 32] = [0x42; 32];
+        let err = mgr
+            .import_private_key_for_network(
+                "empty-pw",
+                &pk_bytes,
+                b"",
+                Network::Ethereum(EthereumChain::Sepolia),
+            )
+            .expect_err("empty password must error");
+        let empty_pw = matches!(err, WalletError::Crypto(CryptoError::Argon2(_)));
+        assert!(
+            empty_pw,
+            "expected Crypto(Argon2) for empty password, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn import_private_key_for_network_rejects_out_of_range_scalar() {
+        // `k256::SigningKey::from_slice` (used internally by alloy's
+        // `PrivateKeySigner::from_slice`) accepts ANY byte slice length
+        // and parses it as a big-endian scalar — so "wrong length" is
+        // not a rejection criterion. What IS rejected: scalars >= the
+        // secp256k1 curve order (N). 32 bytes of 0xFF exceeds N and
+        // must surface as `WalletError::PrivateKey`. Sister invariant
+        // to `decode_signer_bytes_rejects_wrong_length_hex` (which
+        // tests the hex-string entry point; this tests the raw-bytes
+        // entry point that #469 introduces).
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let bad_pk = [0xFFu8; 32]; // > secp256k1 N
+        let err = mgr
+            .import_private_key_for_network(
+                "bad-scalar",
+                &bad_pk,
+                &password(),
+                Network::Ethereum(EthereumChain::Sepolia),
+            )
+            .expect_err("out-of-range scalar must error");
+        let is_pk_err = matches!(err, WalletError::PrivateKey(_));
+        assert!(
+            is_pk_err,
+            "expected PrivateKey error for out-of-range scalar, got: {err:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn import_private_key_for_network_writes_blob_with_mode_0600() {
+        // Defense-in-depth (L12 sister to `open_at` 0o700 tightening):
+        // encrypted PK blobs must be owner-only on disk. If umask leaks
+        // during `write_atomic`, the on-disk PK is readable by sibling
+        // users — exactly the class the `--private-key-file` flag exists
+        // to prevent at the file-arg level.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let pk_bytes: [u8; 32] = [0x42; 32];
+        let created = mgr
+            .import_private_key_for_network(
+                "mode-0600-pk",
+                &pk_bytes,
+                &password(),
+                Network::Ethereum(EthereumChain::Sepolia),
+            )
+            .expect("import ok");
+        let enc_path = tmp
+            .path()
+            .join("sepolia")
+            .join(format!("{}.enc", created.wallet_id));
+        let mode = std::fs::metadata(&enc_path)
+            .expect("enc exists")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "encrypted PK blob must be owner-only (0o600); got 0o{mode:o}"
+        );
+    }
+
+    #[test]
+    fn import_private_key_for_network_unlock_signer_returns_same_address() {
+        // Round-trip: import a PK, then unlock_signer must yield the same
+        // address (proves the bytes round-tripped through the encrypted
+        // blob correctly). Sister invariant to
+        // `unlock_signer_works_for_private_key_wallet`.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let pk_bytes: [u8; 32] = [
+            0xac, 0x09, 0x74, 0xbe, 0xc3, 0x9a, 0x17, 0xe3, 0x6b, 0xa4, 0xa6, 0xb4, 0xd2, 0x38,
+            0xff, 0x94, 0x4b, 0xac, 0xb4, 0x78, 0xed, 0x5e, 0xfc, 0xae, 0x78, 0x4d, 0x7b, 0xf4,
+            0xf2, 0xff, 0x80, 0x99,
+        ];
+        let created = mgr
+            .import_private_key_for_network(
+                "roundtrip-pk",
+                &pk_bytes,
+                &password(),
+                Network::Polygon(PolygonChain::Amoy),
+            )
+            .expect("import ok");
+        let secret: Zeroizing<[u8; 32]> =
+            mgr.unlock_signer(created.wallet_id, &password()).unwrap();
+        let signer = PrivateKeySigner::from_slice(secret.as_ref())
+            .expect("unlock_signer bytes must parse as PrivateKeySigner");
+        assert_eq!(signer.address(), created.address);
     }
 
     #[test]

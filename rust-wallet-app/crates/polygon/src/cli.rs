@@ -180,10 +180,27 @@ pub enum WalletAction {
         password: Option<String>,
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
         network: String,
-        #[arg(long, conflicts_with = "private_key")]
+        #[arg(
+            long,
+            conflicts_with = "private_key",
+            conflicts_with = "private_key_file"
+        )]
         mnemonic: Option<SecretMnemonic>,
-        #[arg(long, conflicts_with = "mnemonic")]
+        /// Hex private key (0x-prefixed or bare). Visible to sibling
+        /// processes via `/proc/<pid>/cmdline` — prefer `--private-key-file`
+        /// for operator-supplied secrets. Wired in #469; was a dead
+        /// field per the T6c4 follow-up ("`--private-key` import path
+        /// is deferred"). Conflict-class: same as `--private-key-file`
+        /// per L12 H-1 sister finding from PR #456.
+        #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key_file")]
         private_key: Option<String>,
+        /// Mode-0600 file path containing the raw PK bytes (no `0x`
+        /// prefix). Closes the L12 H-1 argv-exposure hole for PK import
+        /// (sister class to the `--mnemonic` argv finding closed by
+        /// PR #456). File contents read into `Zeroizing<Vec<u8>>` and
+        /// zeroized on drop; path is not zeroized. Per #469.
+        #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key")]
+        private_key_file: Option<PathBuf>,
         #[arg(long, default_value_t = 0)]
         account_index: u32,
         #[arg(long)]
