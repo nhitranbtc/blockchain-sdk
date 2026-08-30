@@ -1041,7 +1041,8 @@ mod tests {
         assert!(super::validate_rpc_scheme(&url).is_ok());
         let url = url::Url::parse("http://127.0.0.1:8545").expect("parses");
         assert!(super::validate_rpc_scheme(&url).is_ok());
-        let url = url::Url::parse("https://polygon-bor-rpc.publicnode.com").expect("parses");
+        let url =
+            url::Url::parse(Network::Polygon(PolygonChain::Mainnet).rpc_url()).expect("parses");
         assert!(super::validate_rpc_scheme(&url).is_ok());
         let url = url::Url::parse("http://example.com").expect("parses");
         assert!(super::validate_rpc_scheme(&url).is_err());

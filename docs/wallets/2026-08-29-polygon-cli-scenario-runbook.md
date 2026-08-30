@@ -61,7 +61,7 @@ Pre-flight:
 3. Export the signer private key as hex without `0x` prefix:
    `export POLYGON_AMOY_PK=<64-hex-chars>`.
 4. (Optional) Override the default Amoy RPC:
-   `export POLYGON_AMOY_RPC=https://polygon-amoy.drpc.org`.
+   `export POLYGON_AMOY_RPC=https://polygon-amoy-bor-rpc.publicnode.com` (per Issue #474; was `polygon-amoy.drpc.org` before 2025-Q3 keyless-tier tightening; any working RPC accepted — `POLYGON_RPC_URL` env override honored by the smoke harness).
 
 Run:
 ```bash
