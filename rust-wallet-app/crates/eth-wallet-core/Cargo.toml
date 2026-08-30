@@ -13,3 +13,9 @@ publish = false
 
 [dependencies]
 evm-wallet-core = { path = "../evm-wallet-core" }
+
+[dev-dependencies]
+# T8 ETH regression smoke (#458): `tempfile::tempdir()` for hermetic
+# `--data-dir` fixtures mirroring `crates/polygon/tests/amoy_smoke.rs:91`.
+# Pinned at 3.x to match the workspace convention (`polygon/Cargo.toml:74`).
+tempfile = "3"
