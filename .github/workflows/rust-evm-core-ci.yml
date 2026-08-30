@@ -202,17 +202,24 @@ jobs:
         working-directory: rust-wallet-app
         # `cargo geiger --workspace` rejects virtual manifests (CI run 33290091878).
         # Per-crate scan: cd into each crate dir so geiger treats it as the package
-        # root. Use a dedicated CARGO_TARGET_DIR to keep this job's build artifacts
-        # out of the shared rust-cache target (other parallel jobs rely on it) and
-        # to avoid stale-artifact Io errors from `spikes/` test renames.
-        # Geiger exits non-zero when it finds unsafe code — per the workflow comment
-        # ("trend over time is the signal"), treat that as a report, not a gate.
+        # root. Dedicated CARGO_TARGET_DIR keeps this job's build artifacts out of
+        # the shared rust-cache target (other parallel jobs rely on it) and sidesteps
+        # stale target/ Io errors from spikes/ test renames.
+        # Audit is advisory (trend monitoring) per the original workflow comment.
+        # Crates/* report transitive unsafe counts (ring/aws-lc-rs/etc.) that drown
+        # the first-party signal — follow-up issue tracks `--forbid-only` migration
+        # to make the audit meaningful.
+        # Sink-arg hygiene (push security review for run 33290091878): sanitize
+        # $crate_dir for ::group:: title, [[ -d ]] guard, no ::warning:: injection
+        # surface.
         run: |
-          set +e
           for crate_dir in crates/*/; do
-            echo "::group::geiger $crate_dir"
-            (cd "$crate_dir" && CARGO_TARGET_DIR=/tmp/geiger-target cargo geiger) \
-              || echo "::warning::geiger reported unsafe usage in $crate_dir"
+            [[ -d "$crate_dir" ]] || continue
+            safe="${crate_dir//$'\n'/ }"
+            safe="${safe//$'\r'/ }"
+            safe="${safe//::/:}"
+            echo "::group::$safe"
+            (cd "$crate_dir" && CARGO_TARGET_DIR=/tmp/geiger-target cargo geiger) || true
             echo "::endgroup::"
           done
 
