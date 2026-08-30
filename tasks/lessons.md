@@ -1576,3 +1576,68 @@ jobs:
 
 `Rust test` (the only required-check that takes >5 min) never had a chance to finish a single cargo test cycle. Fix landed in commit `45d0669` on `feat/polygon-phase-1-423` (folded into squash `92256ad` on `rust-evm-core`).
 
+
+## L58 — `k256::SigningKey::from_slice` accepts variable-length byte slices (parses as big-endian scalar mod N)
+
+**Trigger**: 2026-08-30, PR #470 (Issue #469). Initial test wrote `vec![0x42u8; 31]` expecting `PrivateKeySigner::from_slice` to reject non-32-byte input. Test failed (impl returned `Ok`). Re-read the alloy-signer-local source at `~/.cargo/registry/.../alloy-signer-local-1.8.3/src/private_key.rs:fn from_slice` — it delegates to `k256::SigningKey::from_slice(bytes)`, which accepts ANY byte slice and interprets it as a big-endian integer mod curve order N. "Wrong length" is not a rejection criterion; "scalar ≥ N" is.
+
+**Rule**: When writing a unit test that asserts `PrivateKeySigner::from_slice` rejects malformed input, use 32 bytes of `0xFF` (which exceeds the secp256k1 curve order N) to trigger scalar rejection — NOT a short or long slice. 31 bytes of `0x42` silently parses as a valid (but unusual) private key. Apply to any test against the alloy signer stack, the `k256::ecdsa` crate directly, or any sister crate built on it.
+
+**Why**: The sister invariant `decode_signer_bytes_rejects_wrong_length_hex` at `evm-wallet-core/src/wallet.rs:1034` only catches malformed HEX STRING length — it doesn't catch malformed BYTE length on the raw-bytes entry point that #469 introduces (`import_private_key_for_network(name, key_bytes: &[u8], ...)`). The byte-length test gap is invisible to TDD cameras focused on the hex entry point. Without this lesson, future contributors will write the same wrong test and either (a) silently pass with bogus coverage, or (b) defensively add a length check to the lib that breaks the sister `from_slice` semantics.
+
+**Apply**:
+- When the surface is `from_slice(&[u8])` (raw bytes), test rejection with `0xFF * 32` (scalar ≥ N).
+- When the surface is `from_slice(&str)` (hex), test rejection with `&str` of wrong length (existing sister test).
+- When the surface is `from_slice(&SecretKey)` (typed), the lib does its own validation; trust the type.
+
+**Anti-patterns**:
+- Assuming `from_slice` enforces a fixed 32-byte input. It does not.
+- Adding an explicit `key_bytes.len() != 32` check in a new wrapper around `from_slice` without first confirming the wrapped caller doesn't expect variable-length scalar semantics (e.g. hardware-wallet keys that use a different curve).
+- Naming a test `rejects_wrong_key_length` when the actual rejection criterion is scalar range, not length — pin the rejection mechanism in the test name (e.g. `rejects_out_of_range_scalar`).
+
+**Apply — example** (from PR #470 commit `b4194e7`):
+
+```rust
+let bad_pk = [0xFFu8; 32]; // > secp256k1 N → triggers from_slice scalar rejection
+let err = mgr.import_private_key_for_network("bad-scalar", &bad_pk, &pw, net)
+    .expect_err("out-of-range scalar must error");
+assert!(matches!(err, WalletError::PrivateKey(_)));
+```
+
+PR #470 evidence: commit `b4194e7` + 7 new lib tests (this one + 6 sister tests for polygon-amoy happy path, same-name-different-network uniqueness, dup-name rejection, empty-password rejection, 0o600 blob persistence, `unlock_signer` round-trip).
+
+---
+
+## L59 — clap `#[arg(long, conflicts_with = "...")]` uses the FIELD-NAME-derived arg ID, not the long-flag string
+
+**Trigger**: 2026-08-30, PR #470 (Issue #469). Adding a new `--private-key-file` flag to `WalletAction::Import` (which already had `--private-key` and `--mnemonic`). Initial naive write: `#[arg(long, conflicts_with = "private_key_file")]` on the existing `private_key` field — silently did nothing because clap's `conflicts_with` takes the ARG ID, not the literal flag string. The arg ID for `#[arg(long)]` on a Rust field is the field name (snake_case) — so the right string is `"private_key_file"` (matches the field name) NOT `"--private-key-file"` (the user-facing flag).
+
+**Rule**: When adding a new clap field that must conflict with one or more existing fields, append `conflicts_with = "<other_field_name>"` to BOTH sides of the relationship (the new field + every existing field it conflicts with). Arg IDs are derived from field names automatically (snake_case from Rust convention). User-facing flag strings (`--private-key-file`) are irrelevant to `conflicts_with`. To check an arg ID: `clap_derive` exposes it via `#[arg(id = "explicit")]`; without that override, the field name is the ID.
+
+**Why**: Sister-flag conflicts are critical for security (closing argv-exposure holes, preventing dual-secret paths). If `conflicts_with` is silent no-op because of a wrong reference, the conflict check never fires and the user can pass both flags. TDD tests for the clap parse surface (`Cli::try_parse_from`) DO catch this — that's exactly the role of `cli_rejects_private_key_with_private_key_file` in PR #470 — but only if the test author knows to write the test. Without the test, the silent no-op ships.
+
+**Apply**:
+- Adding a new conflicting field: enumerate ALL existing fields that should conflict with it; append `conflicts_with = "<their_field_name>"` to the new field; append `conflicts_with = "<new_field_name>"` to every existing field.
+- Use `Cli::try_parse_from(["binary", "sub", ...])` in a unit test to confirm the conflict fires — don't rely on docstring or manual smoke.
+- The conflict message should mention BOTH flag names (`msg.contains("--private-key") && msg.contains("--private-key-file")` per the PR #470 test) so the operator sees the full conflict.
+
+**Anti-patterns**:
+- `conflicts_with = "--private-key-file"` (with leading `--`) — clap treats it as a literal string match against the arg ID; doesn't match; silent no-op.
+- Adding `conflicts_with` on only the NEW field, not the existing ones — clap enforces conflicts only one directionally; both sides needed.
+- Assuming `conflicts_with` works for long-flag strings — it doesn't; clap's arg ID system is documented but easy to miss.
+
+**Apply — example** (from PR #470 commit `b4194e7`):
+
+```rust
+Import {
+    #[arg(long, conflicts_with = "private_key", conflicts_with = "private_key_file")]
+    mnemonic: Option<SecretMnemonic>,
+    #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key_file")]
+    private_key: Option<String>,
+    #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key")]
+    private_key_file: Option<PathBuf>,
+    // ...
+}
+```
+
+Every pair appears on both sides. Tested via `cli_rejects_private_key_with_private_key_file` (`polygon/src/handlers/wallet.rs:2098`).
