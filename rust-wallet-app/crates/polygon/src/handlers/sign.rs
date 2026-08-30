@@ -103,46 +103,109 @@ pub fn sign_message(
 /// T6d-3 handler (Issue #426 / Batch D-2): EIP-712 typed-data sign with
 /// chain_id validation (Q7 critical-tier gate).
 ///
-/// Per design doc §5.10. The chain_id gate fires BEFORE the underlying
-/// lib call — `assert_polygon_chain_id` rejects any value outside
-/// `{137, 80002}` with `Error::InvalidInput` (exit 2). Valid chain_id
-/// proceeds to the lib helper.
+/// Per design doc §5.10. **Dual-source chain_id gate (Issue #463)** —
+/// two stages, both fire BEFORE the lib call:
 ///
-/// **Gate contract (Q7 critical-tier):** the `--chain-id` CLI arg is
-/// the gate. When the alloy `eip712` feature lands and the lib can
-/// parse `typed_data_json`, the handler MUST additionally:
-///   1. parse `typed_data.domain.chainId` from the JSON,
-///   2. call `assert_polygon_chain_id(typed.domain.chain_id)`,
-///   3. require `typed.domain.chain_id == chain_id` (CLI arg must
-///      match the authoritative domain value).
+/// 1. **CLI gate** — `assert_polygon_chain_id(chain_id)` rejects any
+///    `--chain-id` value outside `{137, 80002}` with `Error::InvalidInput`
+///    (exit 2). Validates operator intent.
 ///
-/// Per EIP-712 the domain's `chainId` is authoritative; the CLI arg
-/// is convenience. Skipping this leaves a cross-chain replay hole
-/// when the lib lands — an attacker passes `--chain-id 137` with a
-/// payload declaring `domain.chainId=1` (Ethereum mainnet), the gate
-/// accepts, the lib signs the Ethereum-domain payload. Tracked in
-/// the T6d-3 follow-up PR alongside the eip712 feature gate.
+/// 2. **Domain gate** — `assert_domain_chain_id_consistency` (helper
+///    below) parses `typed_data.domain.chainId` if present and runs it
+///    through the same `assert_polygon_chain_id` predicate, then
+///    requires `domain.chainId == chain_id` to close the
+///    cross-chain-replay hole (an attacker passes `--chain-id 137` with
+///    `domain.chainId=1` — CLI gate accepts, lib signs the Ethereum
+///    payload). Per EIP-712 §7 the domain's `chainId` is authoritative;
+///    the CLI arg is convenience. This handler-tier implementation
+///    ships in #463 as defense-in-depth BEFORE the alloy `eip712`
+///    feature gate lands; the lib-tier gate is the deferred F1 CRITICAL
+///    follow-up (move gate into `evm_wallet_core::sign_typed_data`).
 ///
-/// **Deferral notice (T6d-3 scope):** the underlying
+/// **Deferral notice (T6d-3 + #463 scope):** the underlying
 /// `polygon_wallet_core::sign_typed_data` (at
 /// `evm-wallet-core/src/signer.rs:164`) is currently stubbed pending the
 /// `alloy eip712` feature gate decision (tracked in the lib's doc
-/// comment). T6d-3 ships the Q7 gate + call-site wiring; the full
-/// EIP-712 crypto lands in a follow-up PR. When the lib returns its
-/// `SignError::Unsupported(...)` placeholder, this handler surfaces it
-/// as `Error::Rpc` so the operator sees the honest deferral status.
+/// comment). The CLI-tier dual-source gate (#463) fires regardless of
+/// lib state — defense-in-depth at the boundary. When the lib returns
+/// its `SignError::Unsupported(...)` placeholder, this handler surfaces
+/// it as `Error::Rpc` so the operator sees the honest deferral status.
+/// Full EIP-712 crypto lands in a follow-up PR.
 ///
+/// Q7 + #463 dual-source chainId gate (CLI handler tier, defense-in-depth).
+///
+/// Validates that `typed_data.domain.chainId`, if present, is a
+/// non-negative integer u64 ∈ {137, 80002} (Polygon PoS) AND matches
+/// `cli_chain_id`. Returns `Ok(())` (fallthrough to CLI gate) when:
+///
+/// - `domain` field absent entirely — CLI gate is authoritative
+/// - `domain` is non-object (`null` / string / number / array) —
+///   `Value::get` cannot extract a sub-key, so chainId sub-gate is
+///   silently skipped; CLI gate still applies
+/// - `domain.chainId` absent — loosest documented behavior per #463
+///
+/// Strict integer decode: `serde_json::Value::as_u64()` rejects strings,
+/// floats (incl. `137.0`), negatives, null, arrays, bools, and nested
+/// objects. EIP-712 §7 specifies `chainId` as `uint256` — float-encoded
+/// values from non-strict encoders (some ethers.js / viem paths) are
+/// rejected with a clear static error message. Both gate surfaces
+/// reuse `assert_polygon_chain_id` so the v0.2 `PolygonChain::ZkEvm`
+/// addition lands without CLI-side churn.
+fn assert_domain_chain_id_consistency(
+    parsed: &serde_json::Value,
+    cli_chain_id: u64,
+) -> polygon_wallet_core::Result<()> {
+    // `parsed.get("domain")` returns Some(&Value) even for non-object
+    // values (null, string, array, etc.) — guard with `is_object()` so
+    // the chainId sub-gate only fires for legitimate domain objects.
+    let domain = match parsed.get("domain") {
+        Some(d) if d.is_object() => d,
+        _ => return Ok(()),
+    };
+    let chain_id_value = match domain.get("chainId") {
+        Some(c) => c,
+        None => return Ok(()),
+    };
+    // Strict u64 decode. Static error message — never echoes the
+    // attacker-controlled `Value` (which could carry arbitrary bytes
+    // for log-injection / DoS volume).
+    let domain_chain_id = chain_id_value.as_u64().ok_or_else(|| {
+        Error::InvalidInput(
+            "eip712: domain.chainId must be a non-negative integer per EIP-712 uint256; \
+             got string, float, negative, or non-integer value"
+                .into(),
+        )
+    })?;
+    // Domain gate: domain.chainId must be Polygon PoS.
+    assert_polygon_chain_id(domain_chain_id)?;
+    // Match check: CLI arg must equal authoritative domain value.
+    if domain_chain_id != cli_chain_id {
+        return Err(Error::InvalidInput(format!(
+            "eip712: CLI --chain-id ({cli_chain_id}) must match \
+             typed.domain.chainId ({domain_chain_id})"
+        )));
+    }
+    Ok(())
+}
+
 /// **Dispatch wiring deferred to T6 follow-up PR** — see `sign_message`
 /// doc above for the same `WalletManager::unlock` deferral rationale.
-#[allow(dead_code)] // wired in main.rs dispatch in T6 follow-up PR
 pub fn sign_typed_data(
     signer: &alloy_signer_local::PrivateKeySigner,
     typed_data_json: &str,
     chain_id: u64,
     verify_address: Option<alloy_primitives::Address>,
 ) -> polygon_wallet_core::Result<String> {
-    // Q7 + C1 gate: reject before any signing work.
+    // Q7 + C1 gate (step 1): CLI --chain-id must be Polygon PoS.
     assert_polygon_chain_id(chain_id)?;
+    // Q7 + #463 gate (step 2): parse typed_data_json, gate domain.chainId.
+    // Deliberately `InvalidInput` (exit 2), not the lib-side `WalletCorrupt`
+    // (exit 5) that `From<serde_json::Error>` would yield — malformed
+    // typed-data JSON from the CLI is operator input error, not wallet
+    // file corruption. (Behavior reclassification flagged in PR body.)
+    let parsed: serde_json::Value = serde_json::from_str(typed_data_json)
+        .map_err(|e| Error::InvalidInput(format!("eip712: typed_data_json parse: {e}")))?;
+    assert_domain_chain_id_consistency(&parsed, chain_id)?;
     let typed_blob = typed_data_json.as_bytes();
     let sig = evm_wallet_core::sign_typed_data(signer, typed_blob).map_err(|e| {
         use evm_wallet_core::SignError;
@@ -371,6 +434,227 @@ mod tests {
             Ok(sig) => assert!(sig.starts_with("0x") && sig.len() == 132),
             Err(Error::Rpc(_)) => {} // honest lib-side deferral
             other => panic!("chain_id=80002 must pass gate; got {other:?}"),
+        }
+    }
+
+    // ===== #463 follow-up tests: domain.chainId gate =====
+    //
+    // EIP-712 §7: `typed.domain.chainId` is authoritative; the CLI
+    // `--chain-id` arg is convenience metadata. Without this gate an
+    // attacker (or careless operator) can pass `--chain-id 137` with a
+    // payload declaring `domain.chainId=1` (Ethereum mainnet) — current
+    // CLI gate accepts (137 ∈ {137, 80002}), lib signs the Ethereum
+    // payload, cross-chain replay hole.
+    //
+    // These tests enforce the #463 mitigation BEFORE the alloy `eip712`
+    // feature lands (lib is currently stubbed at signer.rs:164). Gate
+    // fires regardless of lib state — defense-in-depth.
+
+    /// #463 test #1 (bypass scenario): CLI `--chain-id 137` passes the
+    /// CLI gate, BUT `typed.domain.chainId=1` (Ethereum mainnet) MUST
+    /// be rejected with `Error::InvalidInput`. The dual-source gate is
+    /// what closes the cross-chain replay hole.
+    #[test]
+    fn sign_typed_data_with_domain_chain_id_1_rejected_even_if_cli_says_137() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":1,"name":"Ether Mail"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "domain.chainId=1 must be rejected even when CLI --chain-id=137 \
+             (cross-chain replay blocked); got {r:?}"
+        );
+    }
+
+    /// #463 test #2 (mismatch scenario): domain.chainId is a valid
+    /// Polygon chain_id (80002 = Amoy), but the CLI arg is 137
+    /// (mainnet). Domain is authoritative — must reject with
+    /// `Error::InvalidInput` and surface the mismatch.
+    #[test]
+    fn sign_typed_data_cli_and_domain_chain_ids_must_match() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":80002,"name":"X"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "CLI --chain-id=137 with domain.chainId=80002 must be rejected \
+             as a mismatch; got {r:?}"
+        );
+    }
+
+    /// #463 test #3 (fallthrough scenario, loosest documented behavior):
+    /// domain field exists but has NO `chainId` key. CLI gate (137)
+    /// passes → domain gate skipped (no authoritative value to check)
+    /// → lib call. Lib stub returns `Error::Rpc` today; once alloy
+    /// `eip712` lands it returns the real `Ok(sig)`. Both are valid
+    /// outcomes — the contract is "don't reject just because domain
+    /// omits chainId; CLI arg becomes authoritative in that case".
+    #[test]
+    fn sign_typed_data_domain_without_chain_id_falls_through_to_cli_gate() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"name":"X"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        match r {
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "fallthrough to CLI gate must yield a 0x-prefixed 65-byte hex sig; got {sig}"
+            ),
+            Err(Error::Rpc(msg)) => assert!(
+                msg.contains("eip712"),
+                "lib-side deferral must surface honestly; got {msg}"
+            ),
+            other => panic!(
+                "domain without chainId + CLI --chain-id=137 must NOT reject \
+                 (fallthrough to CLI gate); got {other:?}"
+            ),
+        }
+    }
+
+    /// #463 positive pass-through: CLI=137 + `domain.chainId=137` (matching
+    /// Polygon PoS mainnet) MUST reach the lib call, not be rejected by
+    /// the domain gate. Pins the "valid match" arm — a future regression
+    /// that over-rejects all domain values would fail this test even
+    /// though tests 15-17 (reject + mismatch + fallthrough) pass.
+    /// Sister test for chain_id=80002 below.
+    #[test]
+    fn sign_typed_data_domain_chain_id_137_matching_cli_passes_gate() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":137,"name":"X"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        match r {
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "matching Polygon domain.chainId must yield 0x-prefixed 65-byte hex; got {sig}"
+            ),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => {
+                panic!("CLI=137 + domain.chainId=137 must NOT reject (valid match); got {other:?}")
+            }
+        }
+    }
+
+    /// #463 positive pass-through (Amoy): CLI=80002 + `domain.chainId=80002`
+    /// MUST reach the lib call. Sister to mainnet test above.
+    #[test]
+    fn sign_typed_data_domain_chain_id_80002_matching_cli_passes_gate() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":80002,"name":"X"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 80_002, None);
+        match r {
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "matching Polygon Amoy domain.chainId must yield 0x-prefixed 65-byte hex; got {sig}"
+            ),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => panic!(
+                "CLI=80002 + domain.chainId=80002 must NOT reject (valid match); got {other:?}"
+            ),
+        }
+    }
+
+    // ===== #463 edge-case tests: domain.chainId type/shape rejection =====
+    //
+    // Pins `assert_domain_chain_id_consistency` strict-integer decode.
+    // If serde_json ever changes its integer-vs-float representation
+    // (e.g. `arbitrary_precision` feature), these tests fail loudly
+    // instead of silently widening the accepted set. EIP-712 §7
+    // specifies `chainId` as `uint256` (integer-only); float / string /
+    // negative / null / array / bool / overflow are all non-conformant.
+
+    /// chainId is JSON string `"137"` — rejected by `as_u64()`.
+    #[test]
+    fn sign_typed_data_rejects_string_domain_chain_id() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":"137"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "string domain.chainId must be rejected (EIP-712 uint256 is integer-only); got {r:?}"
+        );
+    }
+
+    /// chainId is float `137.0` — strict EIP-712 rejects (uint256).
+    /// Per security audit: no float leniency; operator must re-encode.
+    #[test]
+    fn sign_typed_data_rejects_float_domain_chain_id() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":137.0},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "float domain.chainId (137.0) must be rejected per EIP-712 uint256 conformance; got {r:?}"
+        );
+    }
+
+    /// chainId is negative `-1` — rejected by `as_u64()`.
+    #[test]
+    fn sign_typed_data_rejects_negative_domain_chain_id() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":-1},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "negative domain.chainId must be rejected; got {r:?}"
+        );
+    }
+
+    /// chainId is JSON `null` — rejected by `as_u64()`.
+    #[test]
+    fn sign_typed_data_rejects_null_domain_chain_id() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":null},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "null domain.chainId must be rejected; got {r:?}"
+        );
+    }
+
+    /// chainId is array `[137]` — rejected by `as_u64()`.
+    #[test]
+    fn sign_typed_data_rejects_array_domain_chain_id() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":[137]},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "array domain.chainId must be rejected; got {r:?}"
+        );
+    }
+
+    /// domain is `null` — `get("chainId")` returns None on non-object,
+    /// so the chainId sub-gate is silently skipped and execution
+    /// falls through to the CLI gate. Pins the silent-skips
+    /// non-object-domain behavior.
+    #[test]
+    fn sign_typed_data_null_domain_falls_through_to_cli_gate() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":null,"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        match r {
+            Ok(sig) => assert!(sig.starts_with("0x") && sig.len() == 132),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => panic!(
+                "null domain + CLI --chain-id=137 must NOT reject \
+                 (non-object domain → fall through to CLI gate); got {other:?}"
+            ),
+        }
+    }
+
+    /// Malformed JSON — parse error maps to `InvalidInput` (exit 2),
+    /// NOT `WalletCorrupt` (exit 5). Operator input error class.
+    #[test]
+    fn sign_typed_data_rejects_malformed_json_as_invalid_input() {
+        let signer = cli_test_signer();
+        let r = super::sign_typed_data(&signer, "not-json", 137, None);
+        match &r {
+            Err(Error::InvalidInput(msg)) => assert!(
+                msg.contains("parse"),
+                "parse error must mention 'parse'; got {msg}"
+            ),
+            other => panic!(
+                "malformed JSON must map to InvalidInput (exit 2), not WalletCorrupt; got {other:?}"
+            ),
         }
     }
 }
