@@ -66,6 +66,11 @@ pub fn new_http_insecure(rpc_url: Url) -> Result<RootProvider<Ethereum>> {
 /// chain_id 137). Issue #424 / Task 3 of #416. Drift from original
 /// `polygon-rpc.com` default per Issue #474 (2025-Q3 keyless-tier tightening).
 ///
+/// URL is derived from `PolygonChain::Mainnet.rpc_url()` — single source
+/// of truth (Issue #477 refactor; sister to #461.1 Network::all()
+/// exhaustiveness). The match arm at `network.rs::PolygonChain::rpc_url`
+/// is the only URL source for this constructor.
+///
 /// Thin wrapper over `new_http` — no SPKI pin is applied (see module
 /// docs for why the ETH-side verifier was removed in F20 M-2). Relies
 /// on rustls default system CAs.
@@ -81,6 +86,10 @@ pub fn new_http_polygon_mainnet() -> Result<RootProvider<Ethereum>> {
 /// public Polygon Amoy testnet RPC (`https://polygon-amoy-bor-rpc.publicnode.com`,
 /// EIP-155 chain_id 80_002). Issue #424 / Task 3 of #416. Drift from
 /// original `polygon-amoy.drpc.org` default per Issue #474.
+///
+/// URL is derived from `PolygonChain::Amoy.rpc_url()` — single source
+/// of truth (Issue #477 refactor; sister to #461.1 Network::all()
+/// exhaustiveness).
 ///
 /// Thin wrapper over `new_http` — no SPKI pin is applied (see module
 /// docs for why the ETH-side verifier was removed in F20 M-2). Relies
