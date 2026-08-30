@@ -496,7 +496,11 @@ pub struct SignTypedArgs {
     /// REQUIRED. Validated against {137, 80002} before signing (Q7 gate).
     #[arg(long)]
     pub chain_id: u64,
-    #[arg(long, conflicts_with = "typed_data_file")]
+    #[arg(
+        long,
+        conflicts_with = "typed_data_file",
+        required_unless_present = "typed_data_file"
+    )]
     pub typed_data: Option<String>,
     #[arg(long, conflicts_with = "typed_data")]
     pub typed_data_file: Option<PathBuf>,
