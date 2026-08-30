@@ -33,8 +33,9 @@
 //! **Sister tests:**
 //! - `crates/polygon/tests/amoy_smoke.rs` (T7 — operator-driven Amoy live RPC)
 //! - `crates/eth-wallet-core/tests/regression_post_refactor.rs` (T8 ETH regression)
-//! - `crates/polygon-spike-v1/tests/v{2,3,4,5,6}_*.rs` (the V1-V10 acceptance suite
-//!   that this T8 smoke complements — V3 already passes offline per plan).
+//! - `rust-wallet-app/spikes/polygon-v1/tests/v{2,3,4,5,6}_*.rs` (the V1-V10
+//!   acceptance suite that this T8 smoke complements — V3 already passes
+//!   offline per plan).
 
 #![cfg(test)]
 
@@ -149,7 +150,7 @@ fn mainnet_wallet_balance_returns_real_value() {
 /// which is shared by every EVM chain — so a single mnemonic yields the same
 /// address on every EVM chain, no per-chain derivation needed.
 ///
-/// Sister proof lives at `crates/polygon-spike-v1/tests/v3_derivation.rs`
+/// Sister proof lives at `rust-wallet-app/spikes/polygon-v1/tests/v3_derivation.rs`
 /// (offline, always green). This test re-states the invariant against the
 /// `polygon-wallet-core` public API surface as the in-tree acceptance item.
 #[test]
@@ -173,25 +174,22 @@ fn cross_chain_identity_same_address_eth_polygon() {
         "deterministic derive_address invariant broken"
     );
 
-    // The address must be a valid 20-byte EVM address (alloy's Address is
-    // 20 bytes by construction; this is a compile-time guarantee, but we
-    // also confirm the EIP-55 checksum is non-trivial by asserting the
-    // hex contains both upper + lower-case A-F characters — a zero address
-    // or an all-lowercase address would not).
-    let hex = format!("{addr}");
-    let has_upper = hex.chars().any(|c| c.is_ascii_uppercase());
-    let has_lower = hex.chars().any(|c| c.is_ascii_lowercase());
-    assert!(
-        has_upper || has_lower,
-        "derived address hex shape unexpected: {hex}"
-    );
+    // The address must be a valid 20-byte EVM address — alloy's `Address` type
+    // enforces this at compile time. We do NOT assert EIP-55 mixed case here
+    // because the EIP-55 checksum can legitimately produce all-lowercase or
+    // all-uppercase hex for some address inputs; pinning mixed-case would
+    // introduce a 1-in-N flake for `generate_12_word()` over many runs.
+    // Sister test `rust-wallet-app/spikes/polygon-v1/tests/v3_derivation.rs`
+    // pins the V3 cross-chain-identity invariant against a known BIP-39
+    // mnemonic + known-good address — this test re-asserts the deterministic
+    // invariant against the `polygon-wallet-core` public API surface.
 }
 
 /// AC4 / V4 — EIP-1559 cadence proof. Two `polygon fee --network mainnet`
 /// calls 3 seconds apart must show different `max_fee_per_gas` values —
 /// proves both:
 /// (a) no caching between invocations (per-call `provider.estimate_eip1559_fees()`
-/// per `polygon-wallet-core/src/handlers/fee.rs:91`),
+/// per `polygon/src/handlers/fee.rs:91`),
 /// (b) 2-second-block volatility means at least one block has been mined
 /// between the two calls (a frozen estimate would mean cached).
 ///
@@ -249,8 +247,9 @@ struct FeeEstimateJson {
 /// AC5 / V5 — `new_http_polygon_mainnet().get_block_number()` returns a sane
 /// value. Sanity = non-zero + greater than Polygon mainnet launch height
 /// (~5,258,000 in June 2023) + below 2^63. Sister to
-/// `polygon-spike-v1/tests/v5_rpc_connectivity.rs` (the spike is gated by
-/// `RUN_POLYGON_MAINNET=1` too; both run on the same env opt-in).
+/// `rust-wallet-app/spikes/polygon-v1/tests/v5_rpc_connectivity.rs` (the
+/// spike is gated by `RUN_POLYGON_MAINNET=1` too; both run on the same env
+/// opt-in).
 #[test]
 #[ignore]
 fn mainnet_rpc_block_number_is_sane() {
@@ -281,8 +280,8 @@ fn mainnet_rpc_block_number_is_sane() {
 /// (USDC, USDT, DAI per `tokens/mainnet.json`); USDC decimals = 6; DAI
 /// decimals = 18. This test is OFFLINE (parses bundled JSON) — runs in
 /// default `cargo test` (NOT marked `#[ignore]`). Sister to
-/// `polygon-spike-v1/tests/v6_token_registry.rs` which runs against the
-/// live file too.
+/// `rust-wallet-app/spikes/polygon-v1/tests/v6_token_registry.rs` which runs
+/// against the live file too.
 ///
 /// Note: per Q6 design, Polygon uses the chain-specific `load_mainnet()`
 /// (NOT the generic `evm_wallet_core::tokens::load_chain(137)`) to prevent
