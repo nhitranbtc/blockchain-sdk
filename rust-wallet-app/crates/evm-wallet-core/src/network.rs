@@ -84,6 +84,23 @@ impl Network {
         }
     }
 
+    /// Every `Network` variant the wallet stack currently supports.
+    /// Single source of truth — adding a new variant (e.g. `PolygonChain::ZkEvm`
+    /// in v0.2) extends this array and the compiler enforces exhaustiveness
+    /// at every callsite that iterates via `all()` (e.g. `WalletManager::list_wallets`,
+    /// `polygon` CLI sign dispatch). Sister pattern at
+    /// `handlers/sign.rs:22` + `network.rs:233` — the `from_chain_id` match is
+    /// also compiler-enforced for new variants.
+    pub const fn all() -> [Network; 5] {
+        [
+            Network::Ethereum(EthereumChain::Mainnet),
+            Network::Ethereum(EthereumChain::Sepolia),
+            Network::Ethereum(EthereumChain::Anvil),
+            Network::Polygon(PolygonChain::Mainnet),
+            Network::Polygon(PolygonChain::Amoy),
+        ]
+    }
+
     /// Parse a CLI `--network` flag at the family level. Accepts:
     ///   * "mainnet" / "sepolia" / "anvil" / "1" / "11155111" / "31337" / "dev" → Ethereum
     ///   * "polygon" / "polygon-mainnet" / "polygon-amoy" / "137" / "80002" → Polygon

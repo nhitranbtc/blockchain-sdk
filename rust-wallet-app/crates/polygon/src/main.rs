@@ -12,6 +12,9 @@
 mod cli;
 mod handlers;
 
+use handlers::map_wallet_err;
+use zeroize::Zeroizing;
+
 /// Resolution kernel: argv → env → TTY prompt priority chain.
 ///
 /// Production callers go through `resolve_password` (which removes
@@ -142,6 +145,161 @@ fn default_data_dir() -> std::path::PathBuf {
     directories::ProjectDirs::from("io", "polygon-cli", "polygon")
         .map(|d| d.data_dir().to_path_buf())
         .unwrap_or_default()
+}
+
+/// Resolve a wallet name to (wallet_id, network). Sign dispatch takes
+/// no `--network`; same name may exist across networks — surface
+/// ambiguity as `InvalidInput` (exit 2) rather than silently picking.
+///
+/// Implementation: iterate every known `Network` variant and call
+/// `WalletManager::lookup_by_name(name, network)`. Per-network lookup
+/// is the canonical helper at `evm-wallet-core/src/wallet.rs:456`.
+/// (`WalletManager::list_wallets` is a known lib gap — it only
+/// iterates Ethereum variants, missing Polygon wallets; tracked
+/// separately as a small-deferred follow-up issue.)
+fn resolve_wallet_by_name(
+    wm: &evm_wallet_core::WalletManager,
+    name: &str,
+) -> polygon_wallet_core::Result<(uuid::Uuid, evm_wallet_core::Network)> {
+    use evm_wallet_core::WalletError;
+    use polygon_wallet_core::Error;
+    let mut found: Vec<(uuid::Uuid, evm_wallet_core::Network)> = Vec::new();
+    for network in evm_wallet_core::Network::all() {
+        match wm.lookup_by_name(name, network) {
+            Ok(wallet_id) => found.push((wallet_id, network)),
+            Err(WalletError::NotFoundByName { .. }) => continue,
+            Err(e) => return Err(map_wallet_err(e)),
+        }
+    }
+    match found.len() {
+        0 => Err(Error::InvalidInput(format!(
+            "wallet '{name}' not found in any network"
+        ))),
+        1 => Ok(found[0]),
+        _ => {
+            // List colliding networks so the operator can pass --network explicitly.
+            let nets: Vec<String> = found.iter().map(|(_, n)| format!("{n:?}")).collect();
+            Err(Error::InvalidInput(format!(
+                "wallet '{name}' exists in {} networks: [{}]; pass --network explicitly to disambiguate",
+                found.len(),
+                nets.join(", "),
+            )))
+        }
+    }
+}
+
+/// Common unlock path for both sign dispatchers (EIP-191 + EIP-712).
+/// Kills the 13-line duplication between `dispatch_sign_message` and
+/// `dispatch_sign_typed` flagged by L12 cluster (type-design + code-review).
+///
+/// Pipeline: name validation → L54 password chain → keystore open →
+/// `WalletManager::lookup_by_name` → `unlock_signer` (returns
+/// `Zeroizing<[u8;32]>`) → `PrivateKeySigner::from_slice`.
+///
+/// Returns the already-scoped `PrivateKeySigner` (drops at fn exit,
+/// zeroizing the raw secret via the wrapper) + the resolved `Network`
+/// (unused today; reserved for v0.2 EIP-712 domain-chainId cross-check
+/// per `handlers/sign.rs:113-124` deferred work).
+fn unlock_wallet_by_name(
+    name: &str,
+    password: Option<&str>,
+    data_dir: &std::path::Path,
+) -> polygon_wallet_core::Result<(
+    alloy_signer_local::PrivateKeySigner,
+    evm_wallet_core::Network,
+)> {
+    use polygon_wallet_core::Error;
+    handlers::validate_wallet_name(name)?;
+    let pw_string = resolve_password(password)?;
+    let password = Zeroizing::new(pw_string.into_bytes());
+    let wm =
+        evm_wallet_core::WalletManager::open_at(data_dir.to_path_buf()).map_err(map_wallet_err)?;
+    let (wallet_id, network) = resolve_wallet_by_name(&wm, name)?;
+    let secret = wm
+        .unlock_signer(wallet_id, &password)
+        .map_err(map_wallet_err)?;
+    // `PrivateKeySigner::from_slice` fails iff the unlocked 32 bytes
+    // aren't a valid k256 scalar (all-zero, >= curve order) — that is
+    // **keystore corruption**, not a caller-input error. Map to
+    // `Error::Rpc` per the exit-code table at `handlers/mod.rs:53-58`
+    // (filesystem/serialization/corruption → Rpc exit 3). L12 type-design
+    // nit finding — `InvalidInput` (exit 2) would mislead the operator
+    // into "wrong password" retries when the actual problem is a bad
+    // keystore file.
+    let signer =
+        alloy_signer_local::PrivateKeySigner::from_slice(secret.as_ref()).map_err(|e| {
+            Error::Rpc(format!(
+                "keystore corruption: PrivateKeySigner::from_slice failed: {e}"
+            ))
+        })?;
+    Ok((signer, network))
+}
+
+/// Parse the optional `--verify` Address flag into a typed `Address`.
+/// Errors → `Error::InvalidInput` (exit 2, caller-side flag format).
+fn parse_verify_flag(
+    verify: Option<&str>,
+) -> polygon_wallet_core::Result<Option<alloy_primitives::Address>> {
+    use polygon_wallet_core::Error;
+    match verify {
+        Some(s) => Ok(Some(s.parse::<alloy_primitives::Address>().map_err(
+            |e| Error::InvalidInput(format!("invalid --verify address: {e}")),
+        )?)),
+        None => Ok(None),
+    }
+}
+
+/// CLI dispatch helper for `polygon sign-message` (Story 18, EIP-191).
+/// Returns the 65-byte signature as `0x`-prefixed hex.
+fn dispatch_sign_message(
+    args: &cli::SignMessageArgs,
+    data_dir: &std::path::Path,
+) -> polygon_wallet_core::Result<String> {
+    let (signer, _network) = unlock_wallet_by_name(&args.name, args.password.as_deref(), data_dir)?;
+    let verify = parse_verify_flag(args.verify.as_deref())?;
+    handlers::sign::sign_message(&signer, args.message.as_bytes(), verify)
+}
+
+/// CLI dispatch helper for `polygon sign-typed` (Story 27, EIP-712 +
+/// Q7 critical-tier chain_id gate).
+///
+/// Q7 gate fires FIRST (before any unlock / parse) so a bad `--chain-id`
+/// surfaces immediately, not after a successful unlock. L12 code-review
+/// finding: original order had `--verify` parse failure masking the
+/// Q7 rejection when both flags were wrong.
+fn dispatch_sign_typed(
+    args: &cli::SignTypedArgs,
+    data_dir: &std::path::Path,
+) -> polygon_wallet_core::Result<String> {
+    use polygon_wallet_core::Error;
+    // Q7 gate first (cross-chain replay defense — must precede all other work).
+    handlers::sign::assert_polygon_chain_id(args.chain_id)?;
+    let (signer, _network) = unlock_wallet_by_name(&args.name, args.password.as_deref(), data_dir)?;
+    let verify = parse_verify_flag(args.verify.as_deref())?;
+    // typed-data source: inline JSON (`--typed-data`) OR file
+    // (`--typed-data-file`). clap `conflicts_with` enforces mutual
+    // exclusion; `required_unless_present` (cli.rs) enforces at-least-one.
+    // L12 convergent finding: previous dispatch silently dropped the
+    // file-path arm even though the CLI flag was declared.
+    let typed_data_json: String =
+        match (args.typed_data.as_deref(), args.typed_data_file.as_deref()) {
+            (Some(s), _) => s.to_string(),
+            (None, Some(p)) => std::fs::read_to_string(p).map_err(|e| {
+                Error::InvalidInput(format!("read --typed-data-file {}: {e}", p.display()))
+            })?,
+            (None, None) => {
+                return Err(Error::InvalidInput(
+                    "--typed-data or --typed-data-file required".into(),
+                ));
+            }
+        };
+    // Empty string slips past `Option<String>` clap validation; lib-side
+    // rejection then surfaces as `Error::Rpc` instead of caller-side
+    // `InvalidInput` the CLI contract promises.
+    if typed_data_json.trim().is_empty() {
+        return Err(Error::InvalidInput("--typed-data must not be empty".into()));
+    }
+    handlers::sign::sign_typed_data(&signer, &typed_data_json, args.chain_id, verify)
 }
 
 /// T6c1 follow-up: `run()` is now `async fn` so it can drive the
@@ -662,23 +820,25 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             }
         },
         Command::Faucet(_) => stub("faucet"),
-        Command::SignMessage(_) => {
-            // T6d-3 (Issue #426 / Story 18): handler
-            // `handlers::sign::sign_message` is implemented (pure EIP-191
-            // crypto via `polygon_wallet_core::sign_message`). Dispatch
-            // wiring requires the wallet-unlock helper to derive the
-            // `PrivateKeySigner` — see follow-up PR.
-            Err(Error::Rpc("sign message: not yet implemented".into()))
+        Command::SignMessage(args) => {
+            // T6d-3 follow-up (Issue #459): wire dispatch via
+            // `dispatch_sign_message`. Sister pattern at
+            // `eth/src/main.rs::Command::Sign` per #350/#351.
+            let data_dir: std::path::PathBuf =
+                cli.data_dir.clone().unwrap_or_else(default_data_dir);
+            let sig = dispatch_sign_message(&args, &data_dir)?;
+            println!("{sig}");
+            Ok(())
         }
-        Command::SignTyped(_) => {
-            // T6d-3 (Issue #426 / Story 27 + Q7): handler
-            // `handlers::sign::sign_typed_data` is implemented (Q7
-            // chain_id gate at type level). Dispatch wiring requires
-            // the wallet-unlock helper — see follow-up PR. The Q7 gate
-            // is testable via `handlers::sign` unit tests; CLI wiring
-            // is a 5-line dispatcher addition once the unlock helper
-            // lands.
-            Err(Error::Rpc("sign typed: not yet implemented".into()))
+        Command::SignTyped(args) => {
+            // T6d-3 follow-up (Issue #459): wire dispatch via
+            // `dispatch_sign_typed`. Q7 chain_id gate fires inside
+            // `handlers::sign::sign_typed_data` before any signing.
+            let data_dir: std::path::PathBuf =
+                cli.data_dir.clone().unwrap_or_else(default_data_dir);
+            let sig = dispatch_sign_typed(&args, &data_dir)?;
+            println!("{sig}");
+            Ok(())
         }
     }
 }
@@ -803,5 +963,379 @@ mod password_resolution_tests {
             std::env::var("POLYGON_PASSWORD").is_err(),
             "POLYGON_PASSWORD must be removed from process env after read"
         );
+    }
+}
+
+#[cfg(test)]
+mod sign_dispatch_tests {
+    //! Issue #459 (T6d-3 follow-up): wire `polygon sign-message` + `polygon
+    //! sign-typed` dispatch via `WalletManager::unlock_signer` (sister
+    //! pattern at `evm-wallet-core/src/wallet.rs:600` per #350).
+    //!
+    //! Lock-down coverage:
+    //! 1. Happy path: SignMessage round-trip (create wallet, dispatch returns signature)
+    //! 2. Sad path: SignMessage wrong password returns InvalidPassword
+    //! 3. Happy path: SignTyped chain_id=137 passes Q7 gate
+    //! 4. Sad path: SignTyped chain_id=1 rejected at Q7 gate
+
+    use super::{dispatch_sign_message, dispatch_sign_typed};
+    use crate::cli;
+    use polygon_wallet_core::Error;
+
+    /// Unique tempdir under $TMPDIR — avoids the lifetime-managed
+    /// `tempfile::TempDir` to keep main.rs dev-dep surface minimal.
+    fn unique_tempdir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("polygon-test-{}-{}", tag, uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create tempdir");
+        dir
+    }
+
+    /// Create a fresh keystore at `data_dir` with one wallet named `name`
+    /// under the given `Network`. Drops the `WalletManager` so dispatch
+    /// opens it fresh (mirrors real CLI invocation).
+    fn fixture_wallet(
+        name: &str,
+        password: &str,
+        network: evm_wallet_core::Network,
+        tag: &str,
+    ) -> std::path::PathBuf {
+        let data_dir = unique_tempdir(tag);
+        let wm = evm_wallet_core::WalletManager::open_at(data_dir.clone()).expect("open_at");
+        let created = wm
+            .create_wallet_for_network(name, password.as_bytes(), network)
+            .expect("create_wallet_for_network");
+        assert_eq!(created.name, name);
+        assert_eq!(created.network, network);
+        drop(wm);
+        data_dir
+    }
+
+    /// Test #1 (failing seed per L13 step 9 TDD red): dispatch returns
+    /// `0x`-prefixed 65-byte hex signature for a valid wallet + password.
+    /// Sister test at `handlers/sign.rs:259` covers the handler in
+    /// isolation; this test exercises the full dispatch chain
+    /// (resolve_wallet_by_name → unlock_signer → signer scope → handler).
+    #[test]
+    fn dispatch_sign_message_returns_signature_for_valid_wallet() {
+        let password = "correct-horse-battery-staple";
+        let data_dir = fixture_wallet(
+            "w",
+            password,
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Amoy),
+            "happy",
+        );
+        let args = cli::SignMessageArgs {
+            name: "w".into(),
+            password: Some(password.into()),
+            message: "hello, polygon".into(),
+            address: None,
+            verify: None,
+            rpc_url: None,
+        };
+        let sig = dispatch_sign_message(&args, &data_dir).expect("dispatch ok");
+        assert!(sig.starts_with("0x"), "must be 0x-prefixed; got {sig}");
+        assert_eq!(
+            sig.len(),
+            132,
+            "0x + 130 hex chars = 65 raw bytes; got {} chars",
+            sig.len()
+        );
+    }
+
+    /// Test #2: wrong password surfaces as a caller-side error (exit 2).
+    /// `unlock_signer` re-derives the keystore key and AEAD-decrypts with
+    /// the supplied password; tag mismatch → `WalletError::Crypto(...)`.
+    /// `map_wallet_err` (handlers/mod.rs:66) translates Crypto →
+    /// `Error::InvalidInput` (exit 2, per #455 L12 cluster mapping:
+    /// caller-side errors → InvalidInput). Assert the variant + that
+    /// the message names the crypto path so a future swap to a generic
+    /// `Error::Rpc` doesn't silently mask auth-tag failures.
+    #[test]
+    fn dispatch_sign_message_wrong_password_returns_invalid_input() {
+        let data_dir = fixture_wallet(
+            "w",
+            "correct-horse-battery-staple",
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Amoy),
+            "wrong-pw",
+        );
+        let args = cli::SignMessageArgs {
+            name: "w".into(),
+            password: Some("bogus-password".into()),
+            message: "anything".into(),
+            address: None,
+            verify: None,
+            rpc_url: None,
+        };
+        let r = dispatch_sign_message(&args, &data_dir);
+        match r {
+            Err(Error::InvalidInput(msg)) => assert!(
+                msg.contains("crypto") || msg.contains("AES"),
+                "wrong-password message must name the crypto path (no silent \
+                 masking to Rpc); got {msg:?}"
+            ),
+            other => panic!("wrong password must surface as InvalidInput (exit 2); got {other:?}"),
+        }
+    }
+
+    /// Test #3: SignTyped with chain_id=137 passes the Q7 gate.
+    /// Result is `Ok(sig)` once the alloy `eip712` feature lands, OR
+    /// `Err(Error::Rpc(_))` while the lib is stubbed (per signer.rs:164
+    /// deferral notice). Either way the Q7 gate MUST NOT fire.
+    #[test]
+    fn dispatch_sign_typed_chain_id_137_passes_gate() {
+        let password = "correct-horse-battery-staple";
+        let data_dir = fixture_wallet(
+            "w",
+            password,
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Mainnet),
+            "typed-ok",
+        );
+        let args = cli::SignTypedArgs {
+            chain_id: 137,
+            typed_data: Some(r#"{"types":{}}"#.into()),
+            typed_data_file: None,
+            name: "w".into(),
+            password: Some(password.into()),
+            address: None,
+            verify: None,
+            rpc_url: None,
+        };
+        match dispatch_sign_typed(&args, &data_dir) {
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "gate-passed result must be 0x + 130 hex chars; got {sig}"
+            ),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => panic!("chain_id=137 must pass Q7 gate; got {other:?}"),
+        }
+    }
+
+    /// Test #4: SignTyped with chain_id=1 (Ethereum mainnet) rejected
+    /// at the Q7 gate — cross-chain replay defense. Mirrors the
+    /// handler-level test at `handlers/sign.rs:315` but exercises the
+    /// full dispatch chain (no shortcut through the handler).
+    #[test]
+    fn dispatch_sign_typed_chain_id_1_rejected_at_gate() {
+        let password = "correct-horse-battery-staple";
+        let data_dir = fixture_wallet(
+            "w",
+            password,
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Amoy),
+            "typed-1",
+        );
+        let args = cli::SignTypedArgs {
+            chain_id: 1,
+            typed_data: Some(r#"{"types":{}}"#.into()),
+            typed_data_file: None,
+            name: "w".into(),
+            password: Some(password.into()),
+            address: None,
+            verify: None,
+            rpc_url: None,
+        };
+        let r = dispatch_sign_typed(&args, &data_dir);
+        assert!(
+            matches!(r, Err(Error::InvalidInput(_))),
+            "chain_id=1 must be rejected at Q7 gate; got {r:?}"
+        );
+    }
+
+    /// Test #5 (L12 code-review finding #2): resolve_wallet_by_name
+    /// surfaces cross-network ambiguity as `InvalidInput` AND lists the
+    /// colliding networks so the operator can pass `--network` explicitly.
+    /// Two wallets named "dup" under Sepolia + Amoy.
+    #[test]
+    fn resolve_wallet_by_name_ambiguous_returns_invalid_input_with_networks() {
+        use super::resolve_wallet_by_name;
+        let data_dir = unique_tempdir("ambiguous");
+        let wm = evm_wallet_core::WalletManager::open_at(data_dir.clone()).expect("open_at");
+        wm.create_wallet_for_network(
+            "dup",
+            b"pw-eth",
+            evm_wallet_core::Network::Ethereum(evm_wallet_core::EthereumChain::Sepolia),
+        )
+        .expect("create eth");
+        wm.create_wallet_for_network(
+            "dup",
+            b"pw-poly",
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Amoy),
+        )
+        .expect("create polygon");
+        drop(wm);
+        let wm2 = evm_wallet_core::WalletManager::open_at(data_dir).expect("reopen");
+        let r = resolve_wallet_by_name(&wm2, "dup");
+        match r {
+            Err(Error::InvalidInput(msg)) => {
+                assert!(
+                    msg.contains("2 networks"),
+                    "ambiguity msg must state the count; got {msg}"
+                );
+                assert!(
+                    msg.contains("Sepolia") || msg.contains("Ethereum"),
+                    "ambiguity msg must list the colliding networks (Sepolia); got {msg}"
+                );
+                assert!(
+                    msg.contains("Amoy") || msg.contains("Polygon"),
+                    "ambiguity msg must list the colliding networks (Amoy); got {msg}"
+                );
+            }
+            other => panic!("expected InvalidInput ambiguity error; got {other:?}"),
+        }
+    }
+
+    /// Test #6 (L12 code-review finding #3 part A): `dispatch_sign_message`
+    /// `--verify` happy round-trip — caller passes the signer's own
+    /// address, dispatch returns the signature without error.
+    #[test]
+    fn dispatch_sign_message_verify_happy_round_trips() {
+        let password = "correct-horse-battery-staple";
+        let data_dir = fixture_wallet(
+            "w",
+            password,
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Amoy),
+            "verify-happy",
+        );
+        // Recover the signer address via unlock_signer round-trip.
+        let wm = evm_wallet_core::WalletManager::open_at(data_dir.clone())
+            .expect("open_at to look up addr");
+        let (wallet_id, _net) = super::resolve_wallet_by_name(&wm, "w").expect("resolve");
+        let password_z = zeroize::Zeroizing::new(password.as_bytes().to_vec());
+        let secret = wm
+            .unlock_signer(wallet_id, &password_z)
+            .expect("unlock signer for addr");
+        let signer = alloy_signer_local::PrivateKeySigner::from_slice(secret.as_ref())
+            .expect("signer from slice");
+        let signer_addr = format!("{:#x}", signer.address());
+        drop(wm);
+        drop(signer);
+
+        let args = cli::SignMessageArgs {
+            name: "w".into(),
+            password: Some(password.into()),
+            message: "verify-happy-test".into(),
+            address: None,
+            verify: Some(signer_addr),
+            rpc_url: None,
+        };
+        let sig = dispatch_sign_message(&args, &data_dir).expect("--verify happy round-trip");
+        assert!(sig.starts_with("0x"));
+        assert_eq!(sig.len(), 132);
+    }
+
+    /// Test #7 (L12 code-review finding #3 part B): `--verify` mismatch
+    /// surfaces as `Error::InvalidInput` (exit 2, caller-side). Sister
+    /// test at `handlers/sign.rs:299-309` covers the handler in
+    /// isolation; this exercises the dispatch path end-to-end.
+    #[test]
+    fn dispatch_sign_message_verify_mismatch_returns_invalid_input() {
+        let data_dir = fixture_wallet(
+            "w",
+            "correct-horse-battery-staple",
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Amoy),
+            "verify-mismatch",
+        );
+        let args = cli::SignMessageArgs {
+            name: "w".into(),
+            password: Some("correct-horse-battery-staple".into()),
+            message: "verify-mismatch-test".into(),
+            address: None,
+            verify: Some("0x0000000000000000000000000000000000000000".into()),
+            rpc_url: None,
+        };
+        let r = dispatch_sign_message(&args, &data_dir);
+        match r {
+            Err(Error::InvalidInput(msg)) => assert!(
+                msg.contains("verify") || msg.contains("mismatch"),
+                "--verify mismatch must surface as InvalidInput naming the verify path; got {msg:?}"
+            ),
+            other => panic!("--verify mismatch must return InvalidInput (exit 2); got {other:?}"),
+        }
+    }
+
+    /// Test #8 (L12 code-review finding #4): `polygon sign-typed --verify`
+    /// returns `InvalidInput` per the handler deferral notice at
+    /// `handlers/sign.rs:159-163`. Pinning the contract so a future
+    /// refactor that drops the `verify_address.is_some()` short-circuit
+    /// doesn't silently change exit code from 2 to 3.
+    #[test]
+    fn dispatch_sign_typed_verify_returns_invalid_input() {
+        let password = "correct-horse-battery-staple";
+        let data_dir = fixture_wallet(
+            "w",
+            password,
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Mainnet),
+            "typed-verify",
+        );
+        let args = cli::SignTypedArgs {
+            chain_id: 137,
+            typed_data: Some(r#"{"types":{}}"#.into()),
+            typed_data_file: None,
+            name: "w".into(),
+            password: Some(password.into()),
+            address: None,
+            verify: Some("0x0000000000000000000000000000000000000000".into()),
+            rpc_url: None,
+        };
+        let r = dispatch_sign_typed(&args, &data_dir);
+        match r {
+            // Lib is real: short-circuit returns InvalidInput naming the
+            // deferred state.
+            Err(Error::InvalidInput(msg)) => assert!(
+                msg.contains("deferred") || msg.contains("verify"),
+                "sign-typed --verify deferral must name the deferred state; got {msg:?}"
+            ),
+            // Lib is stubbed (current state per signer.rs:164): lib-side
+            // deferral surfaces as Rpc with eip712 prefix. Q7 gate DID
+            // NOT fire — that's the contract we're verifying here.
+            Err(Error::Rpc(msg)) => assert!(
+                msg.contains("eip712"),
+                "lib-side deferral must name the eip712 path; got {msg}"
+            ),
+            other => panic!(
+                "sign-typed --verify must surface deferral (InvalidInput or Rpc); got {other:?}"
+            ),
+        }
+    }
+
+    /// Test #9 (L12 HIGH fix): `polygon sign-typed --typed-data-file`
+    /// reads the file and proceeds through the dispatch chain. The
+    /// previous dispatch silently dropped this CLI flag — operators who
+    /// passed `--typed-data-file path/to/permit2.json` (canonical way to
+    /// ship large EIP-712 payloads exceeding argv limits) hit a
+    /// misleading `--typed-data or --typed-data-file required` error.
+    #[test]
+    fn dispatch_sign_typed_typed_data_file_path() {
+        let password = "correct-horse-battery-staple";
+        let data_dir = fixture_wallet(
+            "w",
+            password,
+            evm_wallet_core::Network::Polygon(evm_wallet_core::PolygonChain::Amoy),
+            "typed-file",
+        );
+        let td_path =
+            std::env::temp_dir().join(format!("polygon-test-typed-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(&td_path, r#"{"types":{}}"#).expect("write typed-data file");
+        let args = cli::SignTypedArgs {
+            chain_id: 137,
+            typed_data: None,
+            typed_data_file: Some(td_path.clone()),
+            name: "w".into(),
+            password: Some(password.into()),
+            address: None,
+            verify: None,
+            rpc_url: None,
+        };
+        let result = dispatch_sign_typed(&args, &data_dir);
+        // Cleanup (best-effort — tempdirs leak; tracked in L12 code-review #6).
+        let _ = std::fs::remove_file(&td_path);
+        match result {
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "file-path dispatch must produce a 0x+130-hex sig; got {sig}"
+            ),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => panic!("typed-data-file dispatch must pass Q7 gate; got {other:?}"),
+        }
     }
 }
