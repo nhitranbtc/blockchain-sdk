@@ -19,7 +19,7 @@
 //! only test NOT marked `#[ignore]`.
 //!
 //! **Drift from plan §T8 step 4:** the SPKI pin against
-//! `pinned://<spki>@polygon-rpc.com` was REMOVED in PR #304 / commit `36ff115`
+//! `pinned://<spki>@polygon-bor-rpc.publicnode.com` was REMOVED in PR #304 / commit `36ff115`
 //! per F20 M-2 (unsafe-by-design pending webpki composition with
 //! `rustls::client::WebPkiServerVerifier`). For this T8 mainnet smoke,
 //! `evm_wallet_core::provider::new_http_polygon_mainnet()` uses rustls default
@@ -58,10 +58,11 @@ fn require_run_polygon_mainnet() {
 }
 
 /// Resolve Polygon mainnet RPC URL — operator can override via `POLYGON_RPC_URL`
-/// env var when the default (`polygon-rpc.com`) is rate-limited or
+/// env var when the default (`polygon-bor-rpc.publicnode.com`) is rate-limited or
 /// requires an API key. Drift from plan §T2: `polygon-rpc.com` tightened
 /// keyless-tier access circa 2025-Q3 (`HTTP 401 "API key disabled"` on
-/// `estimate_eip1559_fees` + `get_block_number`). Filed as #458.1.
+/// `estimate_eip1559_fees` + `get_block_number`). Fixed by Issue #474
+/// (switched to publicnode keyless tier, verified 2025-Q4).
 fn polygon_mainnet_rpc_url() -> String {
     if let Ok(override_url) = std::env::var("POLYGON_RPC_URL") {
         if !override_url.is_empty() {

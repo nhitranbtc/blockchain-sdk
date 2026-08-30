@@ -177,7 +177,7 @@ impl EthereumChain {
 
     pub fn rpc_url(&self) -> &'static str {
         match self {
-            EthereumChain::Mainnet => "https://cloudflare-eth.com",
+            EthereumChain::Mainnet => "https://ethereum-rpc.publicnode.com",
             EthereumChain::Sepolia => "https://ethereum-sepolia-rpc.publicnode.com",
             EthereumChain::Anvil => "http://127.0.0.1:8545",
         }
@@ -225,8 +225,8 @@ impl PolygonChain {
 
     pub fn rpc_url(&self) -> &'static str {
         match self {
-            PolygonChain::Mainnet => "https://polygon-rpc.com",
-            PolygonChain::Amoy => "https://polygon-amoy.drpc.org",
+            PolygonChain::Mainnet => "https://polygon-bor-rpc.publicnode.com",
+            PolygonChain::Amoy => "https://polygon-amoy-bor-rpc.publicnode.com",
         }
     }
 

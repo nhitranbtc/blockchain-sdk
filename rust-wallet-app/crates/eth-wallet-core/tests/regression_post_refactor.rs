@@ -60,9 +60,11 @@ fn require_run_eth_mainnet() {
 }
 
 /// Resolve ETH mainnet RPC URL — operator can override via `ETH_RPC_URL`
-/// env var when the default (`cloudflare-eth.com`) is rate-limited or
+/// env var when the default (`ethereum-rpc.publicnode.com`) is rate-limited or
 /// requires an API key. Sister to the `POLYGON_RPC_URL` override in
-/// `polygon/tests/mainnet_smoke.rs` (drift from plan §T2).
+/// `polygon/tests/mainnet_smoke.rs`. Issue #474 (drift from plan §T2):
+/// both ETH + Polygon defaults switched to publicnode keyless tier
+/// (was cloudflare-eth.com / polygon-rpc.com until 2025-Q3).
 fn eth_mainnet_rpc_url() -> String {
     if let Ok(override_url) = std::env::var("ETH_RPC_URL") {
         if !override_url.is_empty() {

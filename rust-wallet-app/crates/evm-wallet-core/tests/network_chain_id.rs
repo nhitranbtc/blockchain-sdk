@@ -33,21 +33,21 @@ fn family_level_chain_id_dispatches_to_inner() {
 
 #[test]
 fn family_level_rpc_url_matches_plan_defaults() {
-    // Plan Phase 0 + Phase 2 defaults:
-    //   ETH Mainnet → cloudflare-eth.com (per ETH v0.2 plan)
-    //   Polygon Mainnet → polygon-rpc.com (Q4)
-    //   Polygon Amoy → polygon-amoy.drpc.org (Q4)
+    // Plan Phase 0 + Phase 2 defaults (Issue #474, 2025-Q4 update):
+    //   ETH Mainnet   → ethereum-rpc.publicnode.com (was cloudflare-eth.com)
+    //   Polygon Mnet  → polygon-bor-rpc.publicnode.com (was polygon-rpc.com)
+    //   Polygon Amoy  → polygon-amoy-bor-rpc.publicnode.com (was polygon-amoy.drpc.org)
     assert_eq!(
         Network::Ethereum(EthereumChain::Mainnet).rpc_url(),
-        "https://cloudflare-eth.com"
+        "https://ethereum-rpc.publicnode.com"
     );
     assert_eq!(
         Network::Polygon(PolygonChain::Mainnet).rpc_url(),
-        "https://polygon-rpc.com"
+        "https://polygon-bor-rpc.publicnode.com"
     );
     assert_eq!(
         Network::Polygon(PolygonChain::Amoy).rpc_url(),
-        "https://polygon-amoy.drpc.org"
+        "https://polygon-amoy-bor-rpc.publicnode.com"
     );
 }
 
