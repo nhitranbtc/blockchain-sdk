@@ -33,7 +33,7 @@ use zeroize::Zeroizing;
 
 use crate::crypto::{self, CryptoError, KEY_LEN, NONCE_LEN, SALT_LEN};
 use crate::mnemonic;
-use crate::network::{EthereumChain, Network};
+use crate::network::Network;
 
 /// Default XDG layout (operator-side). Overridable via `open_at` (tests).
 const PROJECT_QUALIFIER: &str = "btc";
@@ -495,13 +495,22 @@ impl WalletManager {
     /// files for plaintext metadata so the CLI can render identity without
     /// unlocking. Falls back to placeholder metadata for legacy wallets
     /// created before meta.json persistence shipped.
+    ///
+    /// Iterates every `Network::all()` directory; missing on-disk network
+    /// dirs are silently skipped (a fresh install with no wallets returns
+    /// an empty vec, not an error). Per #461, all chain families are
+    /// enumerated — Polygon Mainnet + Amoy are included alongside the
+    /// Ethereum variants (sister fix to PR #438's `scan_disk_into`).
     pub fn list_wallets(&self) -> Result<Vec<WalletInfo>> {
         let mut out: Vec<WalletInfo> = Vec::new();
-        for network in [
-            Network::Ethereum(EthereumChain::Mainnet),
-            Network::Ethereum(EthereumChain::Sepolia),
-            Network::Ethereum(EthereumChain::Anvil),
-        ] {
+        // Single source of truth — `Network::all()` enumerates every
+        // supported family + instance. Adding a new `Network` variant
+        // (e.g. an EVM L2 in v0.2) extends the array literal at
+        // `network.rs:94` and the compiler enforces exhaustiveness
+        // here. Pre-fix this hardcoded the 3 Ethereum variants, so
+        // Polygon wallets on disk were silently dropped
+        // (issue #461, sister fix to PR #438's `scan_disk_into`).
+        for network in Network::all() {
             let network_dir = self.base_dir.join(network.as_dir_name());
             let entries = match fs::read_dir(&network_dir) {
                 Ok(e) => e,
@@ -932,7 +941,7 @@ pub fn now_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::network::PolygonChain;
+    use crate::network::{EthereumChain, PolygonChain};
     use tempfile::tempdir;
 
     fn password() -> Vec<u8> {
@@ -997,6 +1006,99 @@ mod tests {
             assert_ne!(w.address, Address::ZERO, "address leaked ZERO");
             assert_eq!(w.network, Network::Ethereum(EthereumChain::Sepolia));
             assert_eq!(w.derivation_path, "m/44'/60'/0'/0/0");
+        }
+    }
+
+    #[test]
+    fn list_wallets_returns_polygon_mainnet_wallet() {
+        // Sister test to `list_wallets_returns_real_name_after_meta_write` for
+        // the Polygon family — issue #461 surfaced that `list_wallets`
+        // iterated only the 3 Ethereum variants. Drives the fix to swap the
+        // hardcoded array for `Network::all()`.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        mgr.create_wallet_for_network(
+            "poly-main",
+            &password(),
+            Network::Polygon(PolygonChain::Mainnet),
+        )
+        .unwrap();
+
+        let listed = mgr.list_wallets().unwrap();
+        assert_eq!(listed.len(), 1, "Polygon mainnet wallet must be listed");
+        assert_eq!(listed[0].name, "poly-main");
+        assert_eq!(listed[0].network, Network::Polygon(PolygonChain::Mainnet));
+        assert_eq!(listed[0].derivation_path, "m/44'/60'/0'/0/0");
+        assert_ne!(listed[0].address, Address::ZERO);
+    }
+
+    #[test]
+    fn list_wallets_returns_polygon_amoy_wallet() {
+        // Sister test for Polygon Amoy (testnet, chain id 80002). Pre-fix
+        // this fails: list_wallets returned 0 even though the wallet was
+        // created on disk and `scan_disk_into` (post PR #438) would load it.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        mgr.create_wallet_for_network(
+            "poly-amoy",
+            &password(),
+            Network::Polygon(PolygonChain::Amoy),
+        )
+        .unwrap();
+
+        let listed = mgr.list_wallets().unwrap();
+        assert_eq!(listed.len(), 1, "Polygon amoy wallet must be listed");
+        assert_eq!(listed[0].name, "poly-amoy");
+        assert_eq!(listed[0].network, Network::Polygon(PolygonChain::Amoy));
+        assert_eq!(listed[0].derivation_path, "m/44'/60'/0'/0/0");
+        assert_ne!(listed[0].address, Address::ZERO);
+    }
+
+    #[test]
+    fn list_wallets_returns_empty_when_no_network_dirs() {
+        // Pin the silent-skip contract: a fresh install (no <network>/
+        // subdirs under base_dir) must return `Ok(vec![])` not `Err`. The
+        // per-network `Err(_) => continue` branch in `list_wallets` is
+        // what makes first-run + post-#438 cross-family installs work
+        // without surfacing ENOENT.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let listed = mgr.list_wallets().unwrap();
+        assert!(
+            listed.is_empty(),
+            "fresh install must list 0 wallets, got {listed:?}"
+        );
+    }
+
+    #[test]
+    fn list_wallets_enumerates_all_five_networks() {
+        // Pin the variant-coverage invariant the #461 fix exists to
+        // guarantee: `Network::all()` is the canonical iterator source,
+        // and `list_wallets` visits every directory. A future change that
+        // adds a new `Network` variant must extend both `Network::all()`
+        // AND this test (compile error otherwise) — together they lock in
+        // that no variant can be silently dropped.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+
+        for (i, network) in Network::all().iter().enumerate() {
+            mgr.create_wallet_for_network(&format!("wallet-{i}"), &password(), *network)
+                .unwrap();
+        }
+
+        let listed = mgr.list_wallets().unwrap();
+        assert_eq!(
+            listed.len(),
+            Network::all().len(),
+            "every Network::all() variant must yield one listed wallet"
+        );
+        // Every variant must appear exactly once with the correct network tag.
+        for network in Network::all().iter() {
+            let count = listed.iter().filter(|w| w.network == *network).count();
+            assert_eq!(
+                count, 1,
+                "network {network:?} must appear exactly once in listed, got {count}"
+            );
         }
     }
 
