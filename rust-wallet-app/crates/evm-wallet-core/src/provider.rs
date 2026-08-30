@@ -42,6 +42,7 @@ use alloy_provider::RootProvider;
 use alloy_transport_http::reqwest::Url;
 
 use crate::error::Result;
+use crate::network::PolygonChain;
 
 /// Open the default-TLS-backed `RootProvider<Ethereum>` for Anvil regtest,
 /// private chains, or non-pinned environments. Per Q4: no auto-fillers —
@@ -69,7 +70,8 @@ pub fn new_http_insecure(rpc_url: Url) -> Result<RootProvider<Ethereum>> {
 /// docs for why the ETH-side verifier was removed in F20 M-2). Relies
 /// on rustls default system CAs.
 pub fn new_http_polygon_mainnet() -> Result<RootProvider<Ethereum>> {
-    let url: Url = "https://polygon-bor-rpc.publicnode.com"
+    let url: Url = PolygonChain::Mainnet
+        .rpc_url()
         .parse()
         .expect("polygon mainnet RPC URL is a known-valid literal");
     new_http(url)
@@ -84,7 +86,8 @@ pub fn new_http_polygon_mainnet() -> Result<RootProvider<Ethereum>> {
 /// docs for why the ETH-side verifier was removed in F20 M-2). Relies
 /// on rustls default system CAs.
 pub fn new_http_polygon_amoy() -> Result<RootProvider<Ethereum>> {
-    let url: Url = "https://polygon-amoy-bor-rpc.publicnode.com"
+    let url: Url = PolygonChain::Amoy
+        .rpc_url()
         .parse()
         .expect("polygon amoy RPC URL is a known-valid literal");
     new_http(url)

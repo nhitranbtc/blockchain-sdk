@@ -14,7 +14,6 @@
 //! RPC constructors) · #425 (Phase 3 token registry) · #426 (Phase 4 CLI).
 
 pub mod disambig;
-pub mod network;
 pub mod tokens;
 
 // Re-export shared EVM types so callers can depend on `polygon-wallet-core`

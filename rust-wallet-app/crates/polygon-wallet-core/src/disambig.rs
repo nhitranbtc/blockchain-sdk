@@ -22,6 +22,7 @@
 //! any layer (CLI handler, library consumer, tests).
 
 use alloy_primitives::Address;
+use evm_wallet_core::network::{Network, PolygonChain};
 use evm_wallet_core::{Error, Result};
 
 /// Canonical bridged USDC.e address on Polygon mainnet (historical
@@ -68,10 +69,18 @@ const _: () = assert!(
 ///   pre-date the rebrand and for explicit operator opt-in via
 ///   `--legacy-token-symbol` in the Phase 4 `polygon` CLI).
 pub fn gas_token_label(use_legacy: bool) -> &'static str {
+    // Single source of truth: `PolygonChain::Mainnet.gas_token_label()` for
+    // the canonical POL label + `Network::Polygon(..).legacy_gas_token_label()`
+    // for the MATIC alias. Both live on the enum in `evm-wallet-core::network`;
+    // previously this module re-exported them as standalone `pub const`s, which
+    // shadow-sourced the enum match arms (Issue #477 — sister refactor to
+    // #461.1 / Network::all() exhaustiveness).
     if use_legacy {
-        crate::network::LEGACY_GAS_TOKEN_LABEL
+        Network::Polygon(PolygonChain::Mainnet)
+            .legacy_gas_token_label()
+            .expect("polygon family always has a legacy gas-token label")
     } else {
-        crate::network::GAS_TOKEN_LABEL
+        PolygonChain::Mainnet.gas_token_label()
     }
 }
 
