@@ -66,7 +66,8 @@ const TRANSFER_TOPIC: [u8; 32] = [
 ///
 /// Uses `new_http_polygon_amoy()` (PR #424 Phase 2 convenience
 /// constructor) — returns `RootProvider<Ethereum>` directly. Polygon
-/// Amoy testnet default RPC (`https://polygon-amoy.drpc.org`).
+/// Amoy testnet default RPC (`https://polygon-amoy-bor-rpc.publicnode.com`,
+/// per Issue #474 — was `polygon-amoy.drpc.org` until 2025-Q3 keyless-tier tightening).
 ///
 /// When `rpc_url` is `Some`, parses it via `url::Url::parse` and uses
 /// the generic `new_http(url)` constructor (re-exported from
@@ -1040,7 +1041,7 @@ mod tests {
         assert!(super::validate_rpc_scheme(&url).is_ok());
         let url = url::Url::parse("http://127.0.0.1:8545").expect("parses");
         assert!(super::validate_rpc_scheme(&url).is_ok());
-        let url = url::Url::parse("https://polygon-rpc.com").expect("parses");
+        let url = url::Url::parse("https://polygon-bor-rpc.publicnode.com").expect("parses");
         assert!(super::validate_rpc_scheme(&url).is_ok());
         let url = url::Url::parse("http://example.com").expect("parses");
         assert!(super::validate_rpc_scheme(&url).is_err());

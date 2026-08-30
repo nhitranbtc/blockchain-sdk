@@ -4,6 +4,8 @@
 
 **Goal:** Deliver `rust-wallet-app/crates/evm-wallet-core/` (refactor of `eth-wallet-core` with `Network` enum supporting both Ethereum + Polygon) + thin `rust-wallet-app/crates/polygon-wallet-core/` wrapper + `polygon` CLI binary. Mirrors `bitcoin-wallet-core/` (v0.1) + `eth-wallet-core/` (v0.2) + in-flight `tron-wallet-core/` (v0.1) structure. Resolves the 8 open questions from `docs/wallets/2026-08-27-polygon-rust-sdks-deep-dive.md` and issue #416.
 
+**Drift note (2025-Q4, Issue #474):** Q4 RPC defaults drifted. Originally `polygon-rpc.com` (mainnet) + `polygon-amoy.drpc.org` (Amoy). Per #458 / #474 evidence, `polygon-rpc.com` tightened keyless-tier access (HTTP 401 on `estimate_eip1559_fees` + `get_block_number`). `polygon-amoy.drpc.org` showed similar rate-limit signal in PR #473 smoke. Defaults switched to `https://polygon-bor-rpc.publicnode.com` (mainnet) + `https://polygon-amoy-bor-rpc.publicnode.com` (Amoy). ETH mainnet default also drifted from `cloudflare-eth.com` to `https://ethereum-rpc.publicnode.com` for consistency. The `POLYGON_RPC_URL` / `ETH_RPC_URL` env overrides (L29 / L61) remain as defense-in-depth for operators needing paid-tier (Alchemy/Infura) or alternate vendors. This drift note supersedes Q4 + the URL references throughout §1 / §4 / §T2 / §T8 / §Q4 references below; the latter kept for historical fidelity.
+
 **Architecture:** Five phases (Phase 0.0 network-selection pre-step + Phases 0–4).
 - **Phase 0** = refactor `eth-wallet-core` → `evm-wallet-core` (extract `Network` enum + chain config) + canonical mnemonic test (mirrors ETH derivation on both chains).
 - **Phase 1** = add `polygon-wallet-core` thin wrapper (Network::Polygon config + POL display) — ~200 lines, no signing/RPC code.
@@ -219,8 +221,8 @@ End-to-end use case: "alpha → beta 100 USDC on Polygon mainnet" (mirrors TRON'
 - Reuse existing `new_http_pinned(url, spki)` for SPKI pin against `pinned://<spki>@polygon-rpc.com` (Q7)
 
 **Steps:**
-- [ ] Step 1: Add `new_http_polygon_mainnet()` constructor — `Provider::new_http("https://polygon-rpc.com".parse()?)`
-- [ ] Step 2: Add `new_http_polygon_amoy()` constructor — `Provider::new_http("https://polygon-amoy.drpc.org".parse()?)`
+- [ ] Step 1: Add `new_http_polygon_mainnet()` constructor — `Provider::new_http("https://polygon-bor-rpc.publicnode.com".parse()?)` (Issue #474 drift from `polygon-rpc.com`)
+- [ ] Step 2: Add `new_http_polygon_amoy()` constructor — `Provider::new_http("https://polygon-amoy-bor-rpc.publicnode.com".parse()?)` (Issue #474 drift from `polygon-amoy.drpc.org`)
 - [ ] Step 3: Test `tests/polygon_rpc.rs` — `provider.get_chain_id() == 137` (mainnet) and `== 80002` (Amoy). Live test gated behind `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1`.
 - [ ] Step 4: Test `provider.estimate_eip1559_fees()` returns valid `(max_fee_per_gas, max_priority_fee_per_gas)` tuple (V4 — re-estimate cadence proof)
 - [ ] Step 5: Verify gate (cargo fmt + clippy --all-targets -- -D warnings + test per L55)
@@ -322,7 +324,7 @@ End-to-end use case: "alpha → beta 100 USDC on Polygon mainnet" (mirrors TRON'
 - [ ] Step 1: `polygon wallet balance --address 0xAbC... --network mainnet` returns real Polygon mainnet balance (no synthetic data — `RUN_POLYGON_MAINNET=1`)
 - [ ] Step 2: `eth wallet balance --address 0xAbC... --network mainnet` still works post-refactor (regression test — confirms eth-wallet-core functionality preserved)
 - [ ] Step 3: Same mnemonic + derivation path produces same address on ETH + Polygon (cross-chain identity verified)
-- [ ] Step 4: SPKI pin against `pinned://<spki>@polygon-rpc.com` succeeds (Q7 + Q7 = SPKI pin reuse from `bitcoin-wallet-core`)
+- [ ] Step 4: SPKI pin against `pinned://<spki>@polygon-bor-rpc.publicnode.com` succeeds (Q7 + Q7 = SPKI pin reuse from `bitcoin-wallet-core`; Issue #474 URL drift)
 - [ ] Step 5: Verify gate
 - [ ] Step 6: Commit
 

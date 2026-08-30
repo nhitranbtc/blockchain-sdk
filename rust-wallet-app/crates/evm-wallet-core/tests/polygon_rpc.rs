@@ -9,8 +9,9 @@
 //!
 //! Both `new_http_polygon_*` constructors in `provider.rs` are thin
 //! wrappers over the existing `new_http` — they pin the public RPC URL
-//! (Q4: `polygon-rpc.com` mainnet, `polygon-amoy.drpc.org` Amoy) so
-//! downstream callers don't hand-roll URL strings.
+//! (Q4: `polygon-bor-rpc.publicnode.com` mainnet, `polygon-amoy-bor-rpc.publicnode.com` Amoy,
+//! per Issue #474 — was `polygon-rpc.com` / `polygon-amoy.drpc.org` until 2025-Q3
+//! keyless-tier tightening) so downstream callers don't hand-roll URL strings.
 //!
 //! SPKI pinning for ETH/Polygon RPCs is intentionally NOT applied here.
 //! Per `provider.rs` lines 9-32 (F20 M-2 remediation), the ETH-side SPKI
@@ -42,7 +43,7 @@ async fn polygon_mainnet_chain_id_returns_137() {
     let chain_id = provider
         .get_chain_id()
         .await
-        .expect("eth_chainId against polygon-rpc.com should succeed");
+        .expect("eth_chainId against polygon-bor-rpc.publicnode.com should succeed");
 
     assert_eq!(chain_id, 137, "polygon mainnet must report chain_id == 137");
     eprintln!("[Phase 2 V2 PASS] polygon mainnet chain_id = {chain_id}");
@@ -61,7 +62,7 @@ async fn polygon_amoy_chain_id_returns_80002() {
     let chain_id = provider
         .get_chain_id()
         .await
-        .expect("eth_chainId against polygon-amoy.drpc.org should succeed");
+        .expect("eth_chainId against polygon-amoy-bor-rpc.publicnode.com should succeed");
 
     assert_eq!(
         chain_id, 80_002,
