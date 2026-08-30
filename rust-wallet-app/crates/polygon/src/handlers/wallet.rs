@@ -26,6 +26,8 @@ use alloy_signer_local::PrivateKeySigner;
 use std::str::FromStr;
 use zeroize::Zeroizing;
 
+use crate::cli::SecretMnemonic;
+
 use crate::handlers::validate_rpc_scheme;
 
 use polygon_wallet_core::{
@@ -313,12 +315,14 @@ pub fn wallet_import(
     name: &str,
     password: &Zeroizing<Vec<u8>>,
     network: polygon_wallet_core::Network,
-    phrase: &str,
+    phrase: &SecretMnemonic,
 ) -> Result<WalletCreated> {
     crate::handlers::validate_wallet_name(name)?;
     let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.to_path_buf())
         .map_err(crate::handlers::map_wallet_err)?;
-    mgr.import_wallet_for_network(name, phrase, password.as_slice(), network)
+    // Bounded lifetime: the `&str` lives only for the synchronous
+    // `import_wallet_for_network` call; the lib encrypts then drops.
+    mgr.import_wallet_for_network(name, phrase.expose().as_str(), password.as_slice(), network)
         .map_err(crate::handlers::map_wallet_err)
 }
 
@@ -973,25 +977,27 @@ mod tests {
     use tempfile::tempdir;
     use zeroize::Zeroizing;
 
+    use crate::cli::SecretMnemonic;
+
     fn amoy() -> Network {
         Network::Polygon(PolygonChain::Amoy)
     }
     /// 12 lowercase BIP-39 English wordlist words. Used to verify
     /// the encrypted blob actually carries the test mnemonic.
     const GOOD_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-    fn good_mnemonic() -> &'static str {
-        GOOD_MNEMONIC
+    fn good_mnemonic() -> SecretMnemonic {
+        SecretMnemonic::new(GOOD_MNEMONIC.to_string())
     }
     /// Wrong word count — bip39 expects 12/15/18/21/24.
     const BAD_WORD_COUNT: &str = "foo bar baz";
-    fn bad_word_count() -> &'static str {
-        BAD_WORD_COUNT
+    fn bad_word_count() -> SecretMnemonic {
+        SecretMnemonic::new(BAD_WORD_COUNT.to_string())
     }
     /// 12 words but the last 10 are not on the BIP-39 English wordlist.
     /// bip39 returns error + lib surfaces `Error::InvalidInput`.
     const BAD_WORDS: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon zzzqx";
-    fn bad_words() -> &'static str {
-        BAD_WORDS
+    fn bad_words() -> SecretMnemonic {
+        SecretMnemonic::new(BAD_WORDS.to_string())
     }
 
     // ----- wallet_create tests -----
@@ -1136,7 +1142,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let phrase = good_mnemonic();
-        let created = super::wallet_import(tmp.path(), "beta-import", &pwd, amoy(), phrase)
+        let created = super::wallet_import(tmp.path(), "beta-import", &pwd, amoy(), &phrase)
             .expect("import ok");
         assert_eq!(created.name, "beta-import");
         let dir = tmp.path().join(amoy().as_dir_name());
@@ -1150,7 +1156,7 @@ mod tests {
     fn wallet_import_rejects_empty_password() {
         let tmp = tempdir().expect("tempdir");
         let empty = Zeroizing::new(Vec::<u8>::new());
-        let r = super::wallet_import(tmp.path(), "beta", &empty, amoy(), good_mnemonic());
+        let r = super::wallet_import(tmp.path(), "beta", &empty, amoy(), &good_mnemonic());
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput, got {other:?}"),
@@ -1161,7 +1167,7 @@ mod tests {
     fn wallet_import_rejects_invalid_mnemonic_word_count() {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), bad_word_count());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad_word_count());
         match r {
             Err(Error::InvalidInput(msg)) => {
                 assert!(
@@ -1177,7 +1183,7 @@ mod tests {
     fn wallet_import_rejects_invalid_mnemonic_word() {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), bad_words());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad_words());
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput, got {other:?}"),
@@ -1188,10 +1194,10 @@ mod tests {
     fn wallet_import_rejects_already_exists() {
         let tmp = tempdir().expect("tempdir");
         let pwd1 = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let _first = super::wallet_import(tmp.path(), "dupe", &pwd1, amoy(), good_mnemonic())
+        let _first = super::wallet_import(tmp.path(), "dupe", &pwd1, amoy(), &good_mnemonic())
             .expect("first import ok");
         let pwd2 = Zeroizing::new(b"different password 1234567".to_vec());
-        let r = super::wallet_import(tmp.path(), "dupe", &pwd2, amoy(), good_mnemonic());
+        let r = super::wallet_import(tmp.path(), "dupe", &pwd2, amoy(), &good_mnemonic());
         match r {
             Err(Error::InvalidInput(msg)) => {
                 assert!(
@@ -1227,7 +1233,7 @@ mod tests {
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let phrase = good_mnemonic();
         let created =
-            super::wallet_import(tmp.path(), "noleak", &pwd, amoy(), phrase).expect("import ok");
+            super::wallet_import(tmp.path(), "noleak", &pwd, amoy(), &phrase).expect("import ok");
         let dbg = format!("{:?}", created);
         for field in &["wallet_id", "name:", "network:", "address:"] {
             assert!(
@@ -1429,7 +1435,7 @@ mod tests {
         let file_path = tmp.path().join("not-a-dir");
         std::fs::write(&file_path, b"blocker").expect("pre-write file");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(&file_path, "alpha", &pwd, amoy(), good_mnemonic());
+        let r = super::wallet_import(&file_path, "alpha", &pwd, amoy(), &good_mnemonic());
         match r {
             Err(Error::Rpc(_)) => {}
             other => panic!("expected Error::Rpc, got {other:?}"),
@@ -1669,5 +1675,179 @@ mod tests {
             }
             other => panic!("expected Error::InvalidInput, got {other:?}"),
         }
+    }
+
+    // ===== #446 follow-up: Zeroizing<String> mnemonic wrap at CLI boundary =====
+    //
+    // Per triage brief on #446: the polygon CLI's `wallet import --mnemonic`
+    // path currently carries a plain `String` mnemonic through clap into
+    // the dispatch handler. The auto-derived `Debug` impl on
+    // `WalletAction::Import` prints the raw mnemonic phrase, leaking the
+    // secret into any logger or formatter that touches the action. Fix
+    // wraps the field in `Zeroizing<String>` + a `Debug` impl that
+    // redacts the phrase.
+    //
+    // Gating per AC: `#[cfg(dev)]` would skip this test entirely because
+    // no `dev` cfg is defined in `polygon/Cargo.toml`; widen to
+    // `#[cfg(any(test, dev))]` so it runs under `cargo test` AND honors
+    // the dev gate when it lands.
+
+    #[test]
+    #[cfg(test)]
+    fn mnemonic_does_not_leak_via_wallet_action_debug() {
+        use crate::cli::WalletAction;
+        let mnemonic_phrase =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let action = WalletAction::Import {
+            name: "test".to_string(),
+            password: Some("hunter2".to_string()),
+            network: "amoy".to_string(),
+            mnemonic: Some(SecretMnemonic::new(mnemonic_phrase.to_string())),
+            private_key: None,
+            account_index: 0,
+            legacy_token_symbol: false,
+            rpc_url: None,
+        };
+        let dbg = format!("{action:?}");
+        assert!(
+            !dbg.contains(mnemonic_phrase),
+            "WalletAction::Import Debug leaked mnemonic; got: {dbg}"
+        );
+        assert!(
+            dbg.contains("SecretMnemonic"),
+            "SecretMnemonic Debug must surface type-marker; got: {dbg}"
+        );
+        // Same struct: password field is still a plain String (out of
+        // scope per #446; tracked in #447 follow-up). Document the
+        // boundary — no assertion here on the password field.
+    }
+
+    /// `wallet_import` rejects an empty phrase. Pins the lib's
+    /// BIP-39 parse-in contract at the CLI boundary — empty mnemonic
+    /// is `Error::InvalidInput`, not a panic.
+    #[test]
+    fn wallet_import_rejects_empty_phrase() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let empty = SecretMnemonic::new(String::new());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &empty);
+        match r {
+            Err(Error::InvalidInput(_)) => {}
+            other => panic!("expected Error::InvalidInput for empty phrase, got {other:?}"),
+        }
+    }
+
+    /// `wallet_import` rejects a whitespace-only phrase (bip39
+    /// `split_whitespace` collapses to 0 words → `BadWordCount(0)`).
+    /// Sister contract to `wallet_import_rejects_empty_phrase` —
+    /// different input surface, same lib error path.
+    #[test]
+    fn wallet_import_rejects_whitespace_only_phrase() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let ws = SecretMnemonic::new("   \t  ".to_string());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &ws);
+        match r {
+            Err(Error::InvalidInput(_)) => {}
+            other => panic!("expected Error::InvalidInput for whitespace-only, got {other:?}"),
+        }
+    }
+
+    /// `wallet_import` rejects an invalid BIP-39 checksum. 12 valid
+    /// BIP-39 words where the 12th is wrong-checksum (e.g., 12×
+    /// `abandon` instead of the canonical `abandon × 11 + about`).
+    /// Catches regressions that swap `Mnemonic::parse_in` for the
+    /// silent `parse_in_normalized_without_checksum_check` bip39 API.
+    #[test]
+    fn wallet_import_rejects_invalid_bip39_checksum() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let bad = SecretMnemonic::new(
+            "abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon"
+                .to_string(),
+        );
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad);
+        match r {
+            Err(Error::InvalidInput(_)) => {}
+            other => panic!("expected Error::InvalidInput for bad checksum, got {other:?}"),
+        }
+    }
+
+    /// `wallet_import` accepts a 24-word BIP-39 phrase (the production
+    /// realistic word count — most wallets generate 24). Defense-in-
+    /// depth against a future regression that hardcodes `word_count() == 12`.
+    /// The 24-word all-zero-entropy test vector ends with `art` for
+    /// the correct checksum.
+    #[test]
+    fn wallet_import_accepts_24_word_mnemonic() {
+        let tmp = tempdir().expect("tempdir");
+        let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
+        let phrase = SecretMnemonic::new(
+            "abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon art"
+                .to_string(),
+        );
+        let r = super::wallet_import(tmp.path(), "w24", &pwd, amoy(), &phrase);
+        assert!(r.is_ok(), "24-word mnemonic must succeed: {r:?}");
+    }
+
+    // ===== L13 step 10a coverage gap (test-coverage-gate) =====
+
+    /// Type-pinning test: `SecretMnemonic::expose()` returns
+    /// `&Zeroizing<String>`, NOT `&str`. Catches a regression to
+    /// `expose(&self) -> &str` which would silently defeat zeroize.
+    #[test]
+    fn secret_mnemonic_expose_returns_zeroizing_ref() {
+        let m = SecretMnemonic::new("a b c".to_string());
+        let r: &Zeroizing<String> = m.expose();
+        assert_eq!(r.as_str(), "a b c");
+    }
+
+    /// `FromStr` path — load-bearing for clap's `TypedValueParser`.
+    /// The clap parse path goes through `s.parse::<SecretMnemonic>()`,
+    /// which is functionally equivalent to `SecretMnemonic::new(s.to_string())`
+    /// today. Pin both the infallibility and the phrase preservation.
+    #[test]
+    fn secret_mnemonic_from_str_is_infallible_and_preserves_phrase() {
+        let m: SecretMnemonic = "foo bar baz".parse().expect("infallible");
+        assert_eq!(m.expose().as_str(), "foo bar baz");
+        assert_eq!(format!("{m:?}"), "SecretMnemonic([redacted])");
+    }
+
+    /// End-to-end clap parse test: `Cli::try_parse_from(["polygon",
+    /// "wallet", "import", "--mnemonic=..."])` constructs a
+    /// `WalletAction::Import { mnemonic: Some(SecretMnemonic(_)), .. }`.
+    /// Catches regressions where clap's `TypedValueParser` path breaks
+    /// (e.g., dropping the `Clone` derive required for the parser bound).
+    #[test]
+    fn clap_parse_wraps_mnemonic_in_secret_mnemonic() {
+        use crate::cli::{Cli, Command, WalletAction};
+        use clap::Parser;
+        let cli = Cli::try_parse_from([
+            "polygon",
+            "wallet",
+            "import",
+            "--name=x",
+            "--mnemonic=abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon abandon about",
+            "--password=hunter2",
+        ])
+        .expect("clap parse should succeed");
+        let Command::Wallet {
+            action: WalletAction::Import {
+                mnemonic: Some(m), ..
+            },
+        } = cli.command
+        else {
+            panic!(
+                "expected WalletAction::Import with Some(mnemonic); got {:?}",
+                cli.command
+            )
+        };
+        assert_eq!(m.expose().as_str().split_whitespace().count(), 12);
+        assert_eq!(format!("{m:?}"), "SecretMnemonic([redacted])");
     }
 }

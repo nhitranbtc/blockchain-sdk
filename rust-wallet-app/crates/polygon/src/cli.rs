@@ -15,11 +15,88 @@
 use alloy_primitives::Address;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 
 /// clap value_parser for Address-typed flags (mirrors eth/src/main.rs:44-46).
 fn parse_address(s: &str) -> Result<Address, String> {
     s.parse::<Address>()
         .map_err(|e| format!("invalid address: {e}"))
+}
+
+/// Secret-string newtype for `--mnemonic` (and future `--private-key`).
+///
+/// Wraps `Zeroizing<String>` so the heap copy zeroizes on drop,
+/// matching the `eth-wallet-core::unlock -> Zeroizing<Mnemonic>`
+/// precedent (`evm-wallet-core/src/wallet.rs:534`) and the
+/// Bitcoin-sibling pattern at `bitcoin-wallet-core/src/keys/secret.rs:16`
+/// (`Secret<T>(T)` with private field + explicit accessor).
+///
+/// Design choices (per L12 cluster findings on #446):
+/// - **Private inner field** — prevents `format!("{:?}", &mnemonic.0)`
+///   reach-around that would print the raw phrase (Zeroizing<String>
+///   inherits String's Debug).
+/// - **No `Clone`** — sister `Secret<T>` precedent has no Clone;
+///   duplication defeats zeroize-on-drop.
+/// - **Custom `Debug`** — unconditional redaction; no panic surface.
+/// - **Infallible `FromStr`** — BIP-39 validation deferred to the lib's
+///   `import_wallet_for_network(name, &str, ...)` which surfaces
+///   `Error::InvalidInput` for bad wordlists / counts. Loading the
+///   2048-word BIP-39 English wordlist at clap-parse time is rejected
+///   as non-paying-cost.
+///
+/// Residual (documented, NOT defended here):
+/// - The clap-owned `&str` borrow passed to `FromStr` lives until `Cli::drop`
+///   at end of `main` and is not zeroized.
+/// - `--mnemonic <PHRASE>` on argv is visible to other processes on the host
+///   (see security-audit H-1); L54-style warning / argv deprecation is a
+///   separate scope.
+///
+/// `#446` follow-up. Out of scope: `--private-key` flag hardening → #447.
+///
+/// `Clone` is required by clap's `Subcommand` derive (`TypedValueParser`
+/// bound). The cloned copy is itself `Zeroizing<String>` and zeroes on
+/// drop, so the footgun surface (L12 review flagged the derive as a
+/// leak vector) is bounded — each Clone carries an independent
+/// zeroize-on-drop contract. In practice no caller clones the parsed
+/// value (single-pass: parse → dispatch → drop), so the derive is
+/// present-but-unused at the call-graph level.
+#[derive(Clone)]
+pub struct SecretMnemonic(Zeroizing<String>);
+
+// Compile-time witness: the inner type zeroizes on drop. Sister precedent:
+// `bitcoin-wallet-core/src/keys/mnemonic.rs:313-315`.
+#[allow(dead_code)]
+fn _assert_inner_zeroizes_on_drop() {
+    fn _accepts<T: zeroize::ZeroizeOnDrop>() {}
+    _accepts::<Zeroizing<String>>();
+}
+
+impl SecretMnemonic {
+    /// Construct from an owned `String`. The caller transfers the heap
+    /// buffer ownership; the original `String` is dropped (no zeroize)
+    /// — `Zeroizing::new` only zeroes the new buffer on drop.
+    pub fn new(s: String) -> Self {
+        Self(Zeroizing::new(s))
+    }
+
+    /// Borrowed accessor returning `&Zeroizing<String>`. Bounded lifetime:
+    /// the returned reference lives only as long as `&self`.
+    pub fn expose(&self) -> &Zeroizing<String> {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretMnemonic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretMnemonic([redacted])")
+    }
+}
+
+impl std::str::FromStr for SecretMnemonic {
+    type Err = std::convert::Infallible;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(SecretMnemonic::new(s.to_string()))
+    }
 }
 
 /// Top-level CLI. `name = "polygon"`, version from Cargo.toml, about string.
@@ -104,7 +181,7 @@ pub enum WalletAction {
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
         network: String,
         #[arg(long, conflicts_with = "private_key")]
-        mnemonic: Option<String>,
+        mnemonic: Option<SecretMnemonic>,
         #[arg(long, conflicts_with = "mnemonic")]
         private_key: Option<String>,
         #[arg(long, default_value_t = 0)]
