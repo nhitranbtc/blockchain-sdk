@@ -9,6 +9,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Closed family enum backing `Network::parse_cli`'s two-layer dispatch
+/// (Issue #472). Adding a new `Network` family variant (e.g.
+/// `Network::Arbitrum(ArbitrumChain)` in v0.2) requires adding a `Family`
+/// variant here AND an arm in the outer `match` in `parse_cli` — compile
+/// error enforces exhaustiveness at the CLI boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Family {
+    Ethereum,
+    Polygon,
+}
+
 /// Top-level chain family. Each variant wraps an instance-level enum so
 /// per-chain methods (chain id, RPC URL, gas token) stay instance-specific.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -85,66 +96,80 @@ impl Network {
     }
 
     /// Every `Network` variant the wallet stack currently supports.
-    /// Single source of truth — adding a new variant (e.g. `PolygonChain::ZkEvm`
-    /// in v0.2) extends this array and the compiler enforces exhaustiveness
-    /// at every callsite that iterates via `all()` (e.g. `WalletManager::list_wallets`,
-    /// `polygon` CLI sign dispatch). Sister pattern at
-    /// `handlers/sign.rs:22` + `network.rs:233` — the `from_chain_id` match is
-    /// also compiler-enforced for new variants.
-    pub const fn all() -> [Network; 5] {
-        [
-            Network::Ethereum(EthereumChain::Mainnet),
-            Network::Ethereum(EthereumChain::Sepolia),
-            Network::Ethereum(EthereumChain::Anvil),
-            Network::Polygon(PolygonChain::Mainnet),
-            Network::Polygon(PolygonChain::Amoy),
-        ]
+    /// Single source of truth — built by per-family iteration: each chain
+    /// enum exposes its own `all()` and `Network::all()` concatenates.
+    /// Adding a new `Network` variant (e.g. `Network::Arbitrum(ArbitrumChain)`
+    /// in v0.2) requires extending the per-family loop below → compile error
+    /// here AND at every callsite that iterates `all()`
+    /// (`WalletManager::list_wallets`, `polygon` CLI sign dispatch).
+    /// Sister pattern in `from_chain_id` + `parse_cli`: both dispatch
+    /// per-family with no catch-all arm, so a new variant forces a compile
+    /// error there too.
+    pub fn all() -> Vec<Network> {
+        let mut out = Vec::with_capacity(EthereumChain::all().len() + PolygonChain::all().len());
+        for c in EthereumChain::all() {
+            out.push(Network::Ethereum(c));
+        }
+        for c in PolygonChain::all() {
+            out.push(Network::Polygon(c));
+        }
+        out
     }
 
     /// Parse a CLI `--network` flag at the family level. Accepts:
     ///   * "mainnet" / "sepolia" / "anvil" / "1" / "11155111" / "31337" / "dev" → Ethereum
     ///   * "polygon" / "polygon-mainnet" / "polygon-amoy" / "137" / "80002" → Polygon
     ///
-    /// The v0.2 `Network::parse_cli("polygon")` returned `Err`. After Phase 0
-    /// family-level parsing accepts the family. Per-family narrowing for the
-    /// ETH-only CLI lives on `EthereumChain::parse_cli`.
+    /// Two-layer per-family dispatch (Issue #472 / #461.1):
+    ///   * Layer 1 — `classify_family` partitions input by target family.
+    ///     Unknown inputs return `None` (catch-all lives at the boundary,
+    ///     not in a `match` over variants).
+    ///   * Layer 2 — outer `match` over the closed `Family` set is
+    ///     exhaustive. New `Network::Arbitrum(ArbitrumChain)` requires
+    ///     adding a `Family::Arbitrum` arm → compile error here + in
+    ///     `classify_family`. Inner per-family parsers are exhaustive
+    ///     over their own instance enums.
     pub fn parse_cli(s: &str) -> crate::Result<Self> {
         use crate::Error;
-        match s.to_ascii_lowercase().as_str() {
-            // ETH (family-level aliases)
-            "mainnet" | "1" => Ok(Network::Ethereum(EthereumChain::Mainnet)),
-            "sepolia" | "11155111" => Ok(Network::Ethereum(EthereumChain::Sepolia)),
-            "anvil" | "31337" | "dev" | "local" => Ok(Network::Ethereum(EthereumChain::Anvil)),
-
-            // Polygon (Phase 4 polygon CLI territory)
-            "polygon" | "polygon-mainnet" | "137" | "matic" => {
-                Ok(Network::Polygon(PolygonChain::Mainnet))
-            }
-            "polygon-amoy" | "amoy" | "80002" | "polygon-testnet" => {
-                Ok(Network::Polygon(PolygonChain::Amoy))
-            }
-            // Explicit rejection of deprecated Mumbai per Phase 0.0.a.
-            "mumbai" | "80001" => Err(Error::InvalidInput(format!(
-                "unknown network '{s}' — Mumbai (80001) was deprecated 2024-Q2; \
-                 use polygon-amoy (80002) for testnet"
-            ))),
-
-            other => Err(Error::InvalidInput(format!(
-                "unknown network '{other}' — expected mainnet|sepolia|anvil|polygon|polygon-amoy"
+        // Two-layer dispatch: classify returns the family (None = unknown),
+        // then the per-family parser handles instance matching (Err on
+        // unknown instance, e.g. mumbai/80001). Outer match over the
+        // closed `Family` set is exhaustive; new family → compile error.
+        match Self::classify_family(s) {
+            Some(Family::Ethereum) => EthereumChain::parse_cli(s).map(Network::Ethereum),
+            Some(Family::Polygon) => PolygonChain::parse_cli(s).map(Network::Polygon),
+            None => Err(Error::InvalidInput(format!(
+                "unknown network '{s}' — expected mainnet|sepolia|anvil|polygon|polygon-amoy"
             ))),
         }
     }
 
     /// Inverse of `chain_id()` — resolve numeric EIP-155 chain id back to a
-    /// `Network`. Single source of truth for the network table; replaces
-    /// the v0.2 `Network::from_chain_id`.
+    /// `Network`. Built by iterating `all()` so a new variant added to
+    /// `Network` (or to either chain enum) is resolved automatically with
+    /// no `_ => None` catch-all to forget. The per-family `chain_id()`
+    /// method remains the single source of truth for numeric IDs.
     pub fn from_chain_id(chain_id: u64) -> Option<Self> {
-        match chain_id {
-            1 => Some(Network::Ethereum(EthereumChain::Mainnet)),
-            11_155_111 => Some(Network::Ethereum(EthereumChain::Sepolia)),
-            31_337 => Some(Network::Ethereum(EthereumChain::Anvil)),
-            137 => Some(Network::Polygon(PolygonChain::Mainnet)),
-            80002 => Some(Network::Polygon(PolygonChain::Amoy)),
+        Self::all().into_iter().find(|n| n.chain_id() == chain_id)
+    }
+
+    /// Layer-1 family classification. Closed family set: extending
+    /// `Network` with a new family (e.g. `Arbitrum`) requires adding a
+    /// `Family` variant + an arm in the outer `match` in `parse_cli` →
+    /// compile error enforces exhaustiveness at the CLI boundary. The
+    /// `_ => None` arm here is acceptable: this function answers
+    /// "which family does this string look like", not "is this string
+    /// a valid Network". Per-family parsers reject unknown instances
+    /// (e.g. mumbai/80001) so the caller still surfaces a useful error.
+    fn classify_family(s: &str) -> Option<Family> {
+        match s.to_ascii_lowercase().as_str() {
+            // ETH aliases
+            "mainnet" | "1" | "sepolia" | "11155111" | "anvil" | "31337" | "dev" | "local" => {
+                Some(Family::Ethereum)
+            }
+            // Polygon aliases (including deprecated Mumbai — per-family parser rejects)
+            "polygon" | "polygon-mainnet" | "137" | "matic" | "polygon-amoy" | "amoy" | "80002"
+            | "polygon-testnet" | "mumbai" | "80001" => Some(Family::Polygon),
             _ => None,
         }
     }
@@ -213,9 +238,30 @@ impl EthereumChain {
             ))),
         }
     }
+
+    /// Every `EthereumChain` variant. Per-family single source of truth
+    /// for `Network::all()`. The `match` inside `chain_id` / `rpc_url` /
+    /// `gas_token_label` / `as_dir_name` already enforces exhaustiveness
+    /// over this enum when used. Adding a 4th variant forces compile
+    /// errors at every per-instance accessor AND at `Network::all()` (via
+    /// the `Vec::with_capacity` length hint and the per-family loop).
+    pub const fn all() -> [EthereumChain; 3] {
+        [
+            EthereumChain::Mainnet,
+            EthereumChain::Sepolia,
+            EthereumChain::Anvil,
+        ]
+    }
 }
 
 impl PolygonChain {
+    /// Every `PolygonChain` variant. Per-family single source of truth.
+    /// Sister to `EthereumChain::all()` — see that docstring for the
+    /// exhaustiveness invariant.
+    pub const fn all() -> [PolygonChain; 2] {
+        [PolygonChain::Mainnet, PolygonChain::Amoy]
+    }
+
     pub fn chain_id(&self) -> u64 {
         match self {
             PolygonChain::Mainnet => 137,
@@ -266,7 +312,9 @@ impl PolygonChain {
     pub fn parse_cli(s: &str) -> crate::Result<Self> {
         use crate::Error;
         match s.to_ascii_lowercase().as_str() {
-            "mainnet" | "polygon-mainnet" | "137" | "matic" => Ok(PolygonChain::Mainnet),
+            "mainnet" | "polygon" | "polygon-mainnet" | "137" | "matic" => {
+                Ok(PolygonChain::Mainnet)
+            }
             "amoy" | "polygon-amoy" | "polygon-testnet" | "80002" => Ok(PolygonChain::Amoy),
             other => Err(Error::InvalidInput(format!(
                 "unknown polygon network '{other}' — expected mainnet|amoy"

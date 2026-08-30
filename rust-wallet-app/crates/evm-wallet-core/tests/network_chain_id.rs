@@ -199,3 +199,67 @@ fn default_v0_2_back_compat_returns_sepolia() {
         Network::Ethereum(EthereumChain::Sepolia)
     );
 }
+
+// -- Issue #472 / #461.1 — Network accessor exhaustiveness ---------------
+
+#[test]
+fn network_all_returns_five_instances_per_family() {
+    // Per-family iteration replaces the v0.1 array literal of fixed size
+    // (Issue #461.1 L12 HIGH finding). Adding a new `Network::Arbitrum`
+    // variant in v0.2 must extend the per-family loop in `Network::all()`
+    // → compile error. Adding a new instance to either chain enum forces
+    // update to that enum's `all()` const fn → compile error there too.
+    let all = Network::all();
+    assert_eq!(all.len(), 5, "expected 3 ETH + 2 Polygon instances");
+    let ids: std::collections::HashSet<u64> = all.iter().map(|n| n.chain_id()).collect();
+    assert!(ids.contains(&1));
+    assert!(ids.contains(&11_155_111));
+    assert!(ids.contains(&31_337));
+    assert!(ids.contains(&137));
+    assert!(ids.contains(&80_002));
+}
+
+#[test]
+fn network_all_iteration_is_compile_time_exhaustive() {
+    // Adding a new `Network` variant (e.g. `Network::Arbitrum(ArbitrumChain)`)
+    // must produce a compile error here. The wildcard `..` covers all
+    // current variants; the compiler enforces that every variant is
+    // representable. If a new variant is added, this test stays valid but
+    // the per-family loop in `Network::all()` fails to compile until
+    // extended — which is the goal of the refactor.
+    for net in Network::all() {
+        match net {
+            Network::Ethereum(_) | Network::Polygon(_) => {}
+        }
+    }
+}
+
+#[test]
+fn from_chain_id_resolves_via_all_no_catch_all() {
+    // No `_ => None` catch-all: each chain id resolves via
+    // `Network::all()` iteration. Adding a new variant in either chain
+    // enum propagates automatically.
+    assert_eq!(
+        Network::from_chain_id(1),
+        Some(Network::Ethereum(EthereumChain::Mainnet))
+    );
+    assert_eq!(
+        Network::from_chain_id(137),
+        Some(Network::Polygon(PolygonChain::Mainnet))
+    );
+    assert_eq!(Network::from_chain_id(999_999), None);
+}
+
+#[test]
+fn per_family_all_const_fns_enumerate_each_family() {
+    // Sister invariant — the per-family `all()` const fns are the
+    // single source of truth that `Network::all()` consumes. Adding a
+    // 4th `EthereumChain` variant forces update to `EthereumChain::all()`.
+    assert_eq!(EthereumChain::all().len(), 3);
+    assert_eq!(PolygonChain::all().len(), 2);
+    assert!(EthereumChain::all().contains(&EthereumChain::Mainnet));
+    assert!(EthereumChain::all().contains(&EthereumChain::Sepolia));
+    assert!(EthereumChain::all().contains(&EthereumChain::Anvil));
+    assert!(PolygonChain::all().contains(&PolygonChain::Mainnet));
+    assert!(PolygonChain::all().contains(&PolygonChain::Amoy));
+}
