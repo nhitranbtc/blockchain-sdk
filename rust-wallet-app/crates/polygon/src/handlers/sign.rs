@@ -103,34 +103,34 @@ pub fn sign_message(
 /// T6d-3 handler (Issue #426 / Batch D-2): EIP-712 typed-data sign with
 /// chain_id validation (Q7 critical-tier gate).
 ///
-/// Per design doc §5.10. The chain_id gate fires BEFORE the underlying
-/// lib call — `assert_polygon_chain_id` rejects any value outside
-/// `{137, 80002}` with `Error::InvalidInput` (exit 2). Valid chain_id
-/// proceeds to the lib helper.
+/// Per design doc §5.10. **Dual-source chain_id gate (Issue #463)** —
+/// two stages, both fire BEFORE the lib call:
 ///
-/// **Gate contract (Q7 critical-tier):** the `--chain-id` CLI arg is
-/// the gate. When the alloy `eip712` feature lands and the lib can
-/// parse `typed_data_json`, the handler MUST additionally:
-///   1. parse `typed_data.domain.chainId` from the JSON,
-///   2. call `assert_polygon_chain_id(typed.domain.chain_id)`,
-///   3. require `typed.domain.chain_id == chain_id` (CLI arg must
-///      match the authoritative domain value).
+/// 1. **CLI gate** — `assert_polygon_chain_id(chain_id)` rejects any
+///    `--chain-id` value outside `{137, 80002}` with `Error::InvalidInput`
+///    (exit 2). Validates operator intent.
 ///
-/// Per EIP-712 the domain's `chainId` is authoritative; the CLI arg
-/// is convenience. Skipping this leaves a cross-chain replay hole
-/// when the lib lands — an attacker passes `--chain-id 137` with a
-/// payload declaring `domain.chainId=1` (Ethereum mainnet), the gate
-/// accepts, the lib signs the Ethereum-domain payload. Tracked in
-/// the T6d-3 follow-up PR alongside the eip712 feature gate.
+/// 2. **Domain gate** — `assert_domain_chain_id_consistency` (helper
+///    below) parses `typed_data.domain.chainId` if present and runs it
+///    through the same `assert_polygon_chain_id` predicate, then
+///    requires `domain.chainId == chain_id` to close the
+///    cross-chain-replay hole (an attacker passes `--chain-id 137` with
+///    `domain.chainId=1` — CLI gate accepts, lib signs the Ethereum
+///    payload). Per EIP-712 §7 the domain's `chainId` is authoritative;
+///    the CLI arg is convenience. This handler-tier implementation
+///    ships in #463 as defense-in-depth BEFORE the alloy `eip712`
+///    feature gate lands; the lib-tier gate is the deferred F1 CRITICAL
+///    follow-up (move gate into `evm_wallet_core::sign_typed_data`).
 ///
-/// **Deferral notice (T6d-3 scope):** the underlying
+/// **Deferral notice (T6d-3 + #463 scope):** the underlying
 /// `polygon_wallet_core::sign_typed_data` (at
 /// `evm-wallet-core/src/signer.rs:164`) is currently stubbed pending the
 /// `alloy eip712` feature gate decision (tracked in the lib's doc
-/// comment). T6d-3 ships the Q7 gate + call-site wiring; the full
-/// EIP-712 crypto lands in a follow-up PR. When the lib returns its
-/// `SignError::Unsupported(...)` placeholder, this handler surfaces it
-/// as `Error::Rpc` so the operator sees the honest deferral status.
+/// comment). The CLI-tier dual-source gate (#463) fires regardless of
+/// lib state — defense-in-depth at the boundary. When the lib returns
+/// its `SignError::Unsupported(...)` placeholder, this handler surfaces
+/// it as `Error::Rpc` so the operator sees the honest deferral status.
+/// Full EIP-712 crypto lands in a follow-up PR.
 ///
 /// Q7 + #463 dual-source chainId gate (CLI handler tier, defense-in-depth).
 ///
@@ -190,7 +190,6 @@ fn assert_domain_chain_id_consistency(
 
 /// **Dispatch wiring deferred to T6 follow-up PR** — see `sign_message`
 /// doc above for the same `WalletManager::unlock` deferral rationale.
-#[allow(dead_code)] // wired in main.rs dispatch in T6 follow-up PR
 pub fn sign_typed_data(
     signer: &alloy_signer_local::PrivateKeySigner,
     typed_data_json: &str,
@@ -507,6 +506,48 @@ mod tests {
             other => panic!(
                 "domain without chainId + CLI --chain-id=137 must NOT reject \
                  (fallthrough to CLI gate); got {other:?}"
+            ),
+        }
+    }
+
+    /// #463 positive pass-through: CLI=137 + `domain.chainId=137` (matching
+    /// Polygon PoS mainnet) MUST reach the lib call, not be rejected by
+    /// the domain gate. Pins the "valid match" arm — a future regression
+    /// that over-rejects all domain values would fail this test even
+    /// though tests 15-17 (reject + mismatch + fallthrough) pass.
+    /// Sister test for chain_id=80002 below.
+    #[test]
+    fn sign_typed_data_domain_chain_id_137_matching_cli_passes_gate() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":137,"name":"X"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 137, None);
+        match r {
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "matching Polygon domain.chainId must yield 0x-prefixed 65-byte hex; got {sig}"
+            ),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => {
+                panic!("CLI=137 + domain.chainId=137 must NOT reject (valid match); got {other:?}")
+            }
+        }
+    }
+
+    /// #463 positive pass-through (Amoy): CLI=80002 + `domain.chainId=80002`
+    /// MUST reach the lib call. Sister to mainnet test above.
+    #[test]
+    fn sign_typed_data_domain_chain_id_80002_matching_cli_passes_gate() {
+        let signer = cli_test_signer();
+        let json = r#"{"domain":{"chainId":80002,"name":"X"},"types":{}}"#;
+        let r = super::sign_typed_data(&signer, json, 80_002, None);
+        match r {
+            Ok(sig) => assert!(
+                sig.starts_with("0x") && sig.len() == 132,
+                "matching Polygon Amoy domain.chainId must yield 0x-prefixed 65-byte hex; got {sig}"
+            ),
+            Err(Error::Rpc(_)) => {} // honest lib-side deferral
+            other => panic!(
+                "CLI=80002 + domain.chainId=80002 must NOT reject (valid match); got {other:?}"
             ),
         }
     }
