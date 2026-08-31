@@ -65,7 +65,7 @@ trap cleanup EXIT
 
 # -------- start Anvil (Polygon-Amoy hardfork, chain_id 80002) ------------------
 start_anvil() {
-    anvil --chain-id 80002 --balance 1000 --silent &
+    anvil --chain-id 80002 --balance 1000 --silent &   # --balance is in ETH (unused — tests fund via anvil_setBalance)
     ANVIL_PID=$!
     # Anvil binds 127.0.0.1:8545 by default; wait for it to come up.
     for _ in $(seq 1 20); do
@@ -84,9 +84,11 @@ RPC_URL="http://127.0.0.1:8545"
 echo "==> anvil up at $RPC_URL (chain_id 80002)"
 
 # -------- helpers --------------------------------------------------------------
-STDOUT=""
-STDERR=""
-STATUS=0
+# Script-globals are populated by `run_polygon` (declaration below).
+# `local` declarations would scope to the function call — but
+# `assert_exit_0` / `assert_exit_nonzero` need to read STDOUT/STDERR/STATUS
+# in the caller's scope, so we use script-globals (per-bash dynamic
+# scoping). See review finding #8.
 
 run_polygon() {
     local label="$1"; shift

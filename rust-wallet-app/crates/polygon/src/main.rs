@@ -236,18 +236,15 @@ fn unlock_wallet_by_name(
     Ok((signer, network))
 }
 
-/// Parse the optional `--verify` Address flag into a typed `Address`.
-/// Errors → `Error::InvalidInput` (exit 2, caller-side flag format).
+/// Pass through the optional `--verify` Address flag.
+///
+/// The CLI flag is already typed `Option<Address>` via clap's
+/// `value_parser = parse_address` (see `cli.rs:498-499,500-501`), so
+/// the legacy string-reparse helper is a no-op pass-through.
 fn parse_verify_flag(
-    verify: Option<&str>,
+    verify: Option<alloy_primitives::Address>,
 ) -> polygon_wallet_core::Result<Option<alloy_primitives::Address>> {
-    use polygon_wallet_core::Error;
-    match verify {
-        Some(s) => Ok(Some(s.parse::<alloy_primitives::Address>().map_err(
-            |e| Error::InvalidInput(format!("invalid --verify address: {e}")),
-        )?)),
-        None => Ok(None),
-    }
+    Ok(verify)
 }
 
 /// CLI dispatch helper for `polygon sign-message` (Story 18, EIP-191).
@@ -257,7 +254,7 @@ fn dispatch_sign_message(
     data_dir: &std::path::Path,
 ) -> polygon_wallet_core::Result<String> {
     let (signer, _network) = unlock_wallet_by_name(&args.name, args.password.as_deref(), data_dir)?;
-    let verify = parse_verify_flag(args.verify.as_deref())?;
+    let verify = parse_verify_flag(args.verify)?;
     handlers::sign::sign_message(&signer, args.message.as_bytes(), verify)
 }
 
@@ -276,7 +273,7 @@ fn dispatch_sign_typed(
     // Q7 gate first (cross-chain replay defense — must precede all other work).
     handlers::sign::assert_polygon_chain_id(args.chain_id)?;
     let (signer, _network) = unlock_wallet_by_name(&args.name, args.password.as_deref(), data_dir)?;
-    let verify = parse_verify_flag(args.verify.as_deref())?;
+    let verify = parse_verify_flag(args.verify)?;
     // typed-data source: inline JSON (`--typed-data`) OR file
     // (`--typed-data-file`). clap `conflicts_with` enforces mutual
     // exclusion; `required_unless_present` (cli.rs) enforces at-least-one.
@@ -308,10 +305,9 @@ fn dispatch_sign_typed(
 /// `wallet_sync`, T6c5 `wallet_send_*`). `main()` wraps `run()` in a
 /// tokio current-thread runtime via `block_on` (mirrors `eth/src/main.rs:487-491`).
 async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
-    use alloy_primitives::{utils::parse_units, Address, U256};
+    use alloy_primitives::{utils::parse_units, U256};
     use cli::{Command, ConfigAction, Erc20Action, TxAction, WalletAction};
     use polygon_wallet_core::Error;
-    use std::str::FromStr;
     use zeroize::Zeroizing;
 
     let stub = |cmd: &'static str| -> polygon_wallet_core::Result<()> {
@@ -690,7 +686,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // `handlers::tx::tx_list` handler. Pure arg validation
                 // lives in the handler; live `provider.get_logs` scan
                 // deferred to T7 operator-driven Amoy smoke per L29.
-                handlers::tx::tx_list(&address, since_block, limit, json).await?;
+                handlers::tx::tx_list(&address.to_string(), since_block, limit, json).await?;
                 Ok(())
             }
             TxAction::Get {
@@ -724,11 +720,10 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             } => {
                 let network = handlers::parse_network(&network)?;
                 let token_addr = match token_address {
-                    Some(a) => handlers::erc20::resolve_token_address(&a, network)?,
+                    Some(a) => handlers::erc20::resolve_token_address(&a.to_string(), network)?,
                     None => handlers::erc20::resolve_token_address(&token, network)?,
                 };
-                let to_addr = Address::from_str(&to)
-                    .map_err(|e| Error::InvalidInput(format!("invalid --to: {e}")))?;
+                let to_addr = to;
                 let amount_raw = U256::from_str_radix(&amount, 10).map_err(|e| {
                     Error::InvalidInput(format!("invalid --amount (erc20, base units wei): {e}"))
                 })?;
@@ -797,8 +792,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             } => {
                 let network = handlers::parse_network(&network)?;
                 let token_addr = handlers::erc20::resolve_token_address(&token, network)?;
-                let spender_addr = Address::from_str(&spender)
-                    .map_err(|e| Error::InvalidInput(format!("invalid --spender: {e}")))?;
+                let spender_addr = spender;
                 let amount_raw = U256::from_str_radix(&amount, 10).map_err(|e| {
                     Error::InvalidInput(format!(
                         "invalid --amount (erc20 approve, base units wei): {e}"

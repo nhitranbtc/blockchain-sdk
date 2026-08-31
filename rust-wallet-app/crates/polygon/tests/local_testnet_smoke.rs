@@ -123,6 +123,21 @@ fn read_first_address(data_dir: &std::path::Path, name: &str) -> String {
         .expect("address field in meta.json")
 }
 
+/// Strict EIP-191 signature finder.
+///
+/// Returns the FIRST whitespace-delimited token in `stdout` that is
+/// exactly `0x` + 130 hex chars (the r || s || v 65-byte personal_sign
+/// signature). Avoids the previously-fragile `0x-containing line with
+/// ≥ 130 hex chars total` pattern, which would false-positive on
+/// `0x{address}+0x{sig}+…` concatenation.
+///
+/// Returns `None` if no such token is present.
+fn find_signature_token(stdout: &str) -> Option<&str> {
+    stdout.split_whitespace().find(|tok| {
+        tok.len() == 132 && tok.starts_with("0x") && tok[2..].chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
 /// Spawn Anvil + temp data dir, returning a fixture the caller can use
 /// to compose individual subcommand tests. Each test owns its fixture so
 /// a partial failure isolates one CLI surface.
@@ -466,9 +481,13 @@ fn local_testnet_fee_json_parses() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let v: serde_json::Value =
         serde_json::from_str(&stdout).expect("fee --json should parse as JSON");
+    let max_fee_wei = v
+        .get("max_fee_per_gas_wei")
+        .and_then(|x| x.as_u64())
+        .unwrap_or_else(|| panic!("fee JSON max_fee_per_gas_wei should be u64; got: {stdout}"));
     assert!(
-        v.get("max_fee_per_gas_wei").is_some(),
-        "fee JSON should include max_fee_per_gas_wei; got: {stdout}"
+        max_fee_wei > 0,
+        "fee max_fee_per_gas_wei should be > 0 (Anvil default base fee = 1 gwei); got: {max_fee_wei}"
     );
 }
 
@@ -554,15 +573,22 @@ async fn local_testnet_sign_message_returns_signature() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let sig_line = stdout
-        .lines()
-        .find(|l| l.contains("0x") && l.chars().filter(|c| c.is_ascii_hexdigit()).count() >= 130)
-        .unwrap_or_else(|| {
-            panic!("sign-message stdout should include 0x + 130-hex sig; got: {stdout}")
-        });
+    // Strict signature parse: a token that is exactly `0x` + 130 hex chars
+    // (65-byte EIP-191 personal_sign sig: r || s || v). Avoids the previous
+    // fragile `>= 130 hex chars AND 0x` pattern which would false-positive
+    // on `0x{address}+0x{sig}+…` concatenation. See review finding #6.
+    let sig_hex = find_signature_token(&stdout).unwrap_or_else(|| {
+        panic!("sign-message stdout should include 0x + 130-hex sig; got: {stdout}")
+    });
+    assert_eq!(
+        sig_hex.len(),
+        130 + 2,
+        "signature token must be exactly 0x + 130 hex chars; got len={}",
+        sig_hex.len()
+    );
     assert!(
-        sig_line.contains("0x"),
-        "sign-message stdout should include 0x-prefixed sig; got: {sig_line}"
+        sig_hex.chars().skip(2).all(|c| c.is_ascii_hexdigit()),
+        "signature body must be hex; got: {sig_hex}"
     );
 }
 
@@ -757,4 +783,248 @@ async fn local_testnet_sign_typed_rejects_invalid_chain_id() {
             || stderr.contains("80002"),
         "stderr should mention chain_id gate; got: {stderr}"
     );
+}
+
+// =============================================================================
+// Regression coverage for the e99c0ab + retype-batch sister-class fixes:
+// each of these CLI surfaces accepts a `parse_address` flag that previously
+// downcast-panicked because the field type was `String` / `Option<String>`.
+// Sister to the FaucetArgs.address fix in cli.rs:478-479.
+// =============================================================================
+
+/// `polygon sign-message --address <addr>` (clap downcast regression).
+///
+/// Pre-fix: `SignMessageArgs.address` was `Option<String>`; passing
+/// `--address 0x…` panicked with "Could not downcast to …String".
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_sign_message_accepts_address_flag() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let _ = run_polygon(
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "iris",
+            "--password",
+            "test-pw-ignore-leak",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let iris_addr = read_first_address(fx.data_dir.path(), "iris");
+
+    let out = run_polygon(
+        &[
+            "sign-message",
+            "--name",
+            "iris",
+            "--password",
+            "test-pw-ignore-leak",
+            "--message",
+            "regression",
+            "--address",
+            &iris_addr,
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "sign-message --address must NOT downcast-panic; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        find_signature_token(&stdout).is_some(),
+        "sign-message stdout should include 0x + 130-hex sig; got: {stdout}"
+    );
+}
+
+/// `polygon sign-message --verify <same-addr>` round-trip (positive).
+///
+/// After signing, the handler recovers the signer from the signature
+/// and compares against `--verify`. With `--verify == signer's address`,
+/// stdout must contain a verification-success indicator.
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_sign_message_verify_round_trips_positive() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let _ = run_polygon(
+        &[
+            "wallet",
+            "create",
+            "--name",
+            "jack",
+            "--password",
+            "test-pw-ignore-leak",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let jack_addr = read_first_address(fx.data_dir.path(), "jack");
+
+    let out = run_polygon(
+        &[
+            "sign-message",
+            "--name",
+            "jack",
+            "--password",
+            "test-pw-ignore-leak",
+            "--message",
+            "verify me",
+            "--verify",
+            &jack_addr,
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "sign-message --verify (same addr) must succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // On `--verify` success, the CLI prints the signature (the recovery
+    // round-trip passed silently — no separate "verified" word emitted).
+    // The proof of success is: signature present + no panic + exit 0.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        find_signature_token(&stdout).is_some(),
+        "sign-message --verify (positive) stdout should include 0x + 130-hex sig; got: {stdout}"
+    );
+}
+
+/// `polygon tx list --address <addr>` (clap downcast regression).
+///
+/// Pre-fix: `TxAction::List.address` was `String`; this test would
+/// have panicked on the parse mismatch.
+/// Live RPC still returns "not yet implemented" — same SKIP pattern as
+/// `tx get`.
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario; KNOWN GAP: live RPC"]
+async fn local_testnet_tx_list_with_address_reaches_handler() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let addr = "0x0000000000000000000000000000000000000042";
+    let out = run_polygon(
+        &[
+            "tx",
+            "list",
+            "--address",
+            addr,
+            "--limit",
+            "1",
+            "--json",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    if out.status.success() {
+        // Live RPC landed — assert parseable JSON array.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let _: serde_json::Value =
+            serde_json::from_str(&stdout).expect("tx list --json should parse as JSON");
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("not yet implemented") || stderr.contains("tx list"),
+            "tx list stderr should mention deferral OR live result; got: {stderr}"
+        );
+        eprintln!(
+            "SKIP: tx list live RPC not yet implemented — \
+             per polygon/src/handlers/tx.rs:42. Re-run when live RPC lands."
+        );
+    }
+}
+
+/// `polygon erc20 balance --address <addr> --token USDC` (clap downcast regression).
+///
+/// Pre-fix: `Erc20Action::Balance.address` was `String`; this would
+/// have panicked.
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_erc20_balance_address_flag() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let addr = "0x0000000000000000000000000000000000000042";
+    let out = run_polygon(
+        &[
+            "erc20",
+            "balance",
+            "--address",
+            addr,
+            "--token",
+            "USDC",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    if out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // Amoy USDC contract is `0x41e94eb019c0762f9bfcf9fb1e58725bfb0e7582`.
+        // Either stdout contains a decimal balance, or the handler returns
+        // a clear "no balance" line. The regression we're guarding against
+        // is the panic itself — assertion is just "didn't crash".
+        assert!(
+            !stdout.is_empty() || !out.stderr.is_empty(),
+            "erc20 balance should produce some output; got empty stdout+stderr"
+        );
+    } else {
+        // Handler deferred to T6d-2.1 follow-up (cli.rs Balance.address type
+        // conflict). The CLI args parsed cleanly — no downcast panic, which
+        // is the regression we guard.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("deferred") || stderr.contains("T6d"),
+            "erc20 balance stderr should mention deferral; got: {stderr}"
+        );
+        eprintln!(
+            "SKIP: erc20 balance handler deferred to T6d-2.1 — arg-parse regress guard verified."
+        );
+    }
+}
+
+/// `polygon erc20 register --address <addr> --list` (clap downcast regression).
+///
+/// Pre-fix: `Erc20Action::Register.address` was `String`; this would
+/// have panicked.
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_erc20_register_address_flag() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let addr = "0x0000000000000000000000000000000000000042";
+    let out = run_polygon(
+        &[
+            "erc20",
+            "register",
+            "--address",
+            addr,
+            "--list",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    if out.status.success() {
+        // Handler landed — assert success path.
+    } else {
+        // Handler deferred to T6d-2.2 follow-up (XDG-persisted user registry).
+        // The CLI args parsed cleanly (no downcast panic).
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("deferred") || stderr.contains("T6d"),
+            "erc20 register stderr should mention deferral; got: {stderr}"
+        );
+        eprintln!(
+            "SKIP: erc20 register handler deferred to T6d-2.2 — arg-parse regress guard verified."
+        );
+    }
 }
