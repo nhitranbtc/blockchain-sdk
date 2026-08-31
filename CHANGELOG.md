@@ -106,6 +106,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 - **`[user-facing]`** `rust-wallet-app/crates/polygon/{Cargo.toml, src/cli.rs, src/main.rs}` (Issue #426, parent #416, T6b sub-task of polygon-wallet-core plan, commit `87585ab`, branch `task/426b-clap-tree`, PR #434) — **T6b clap tree + per-handler dispatch scaffold landed (handler bodies deferred to T6c/T6d per L25 sub-task split)**. (a) `polygon/src/cli.rs` (421 lines) — full clap derive types per design doc §3.4: `Cli` (top-level with global `--rpc-url` + `--data-dir` flags + `POLYGON_RPC_URL` / `POLYGON_DATA_DIR` env), `Command` enum (9 variants: Wallet / Tx / Erc20 / Fee / Config / Faucet / SignMessage / SignTyped / Version), `WalletAction` (9 variants: Create / Import / List / Show / Delete / Balance / Sync / Send / SendSpeedup), `SendArgs` (13 fields per design), `SendSpeedupArgs`, `TxAction`, `Erc20Action` (5 variants: Send / Balance / List / Register / Approve), `FeeArgs`, `ConfigAction::Show`, `FaucetArgs`, `SignMessageArgs`, `SignTypedArgs` (with REQUIRED `--chain-id u64` per Q7 EIP-712 cross-chain replay gate). (b) `polygon/Cargo.toml` gains `clap = { workspace = true }` + `tokio = { workspace = true }` (clap brings derive + env features; tokio for future async dispatch in T6c). (c) `polygon/src/main.rs::run()` matches each `Command` variant → per-action stub returning `Error::Rpc("deferred past T6b — landing in T6c/T6d")`. Binary exits with a clear operator-facing message until real impls land; `--help` and `--version` work today. **Tests**: 22/22 pass (no test churn from this commit — T6a critical-tier tests still green: 7 password + 5 parse_network + 6 EIP-712 chain_id + 4 USDC.e guard). `cargo fmt --check` + `cargo clippy -p polygon --all-targets -- -D warnings` clean. **Out of scope for T6b**: handler bodies (T6c wallet/tx/erc20/send/speedup, T6d sign/fee/config/faucet), parse-layer tests (lands with T6c when real handlers exist), Round 2 fixes (Q7 second-layer provider check + edition 2024 unsafe migration + `prompt_password` real impl — deferred to T6d when rpassword dep + async handlers wire up). **Closes #426 boxes 2, 3, 4, 5** (clap subcommands + default network = Amoy + `--rpc-url` flag + `--legacy-token-symbol` flag). Sibling commits per L25: T6a (scaffold, PR #433, commit `809f771`), T6c (per-handler impls), T6d (sign/fee/config/faucet impls + tokio runtime + rpassword dep), T7 (Amoy operator smoke per L29), T8 (mainnet + ETH regression per L29), T9 (release cut + L21/L24 cascade + #416 close).
 
+## [v0.1.0] — 2026-08-31
+
+**polygon-wallet-core v0.1.0** + **evm-wallet-core v0.1.0** + **polygon CLI v0.1.0** — initial EVM release cut per issue #460 / plan `docs/superpowers/plans/2026-08-27-polygon-wallet-core.md` §T9. Closes issue #416. This is the 3rd `v0.1.0` in CHANGELOG (naming drift noted; v0.2 follow-up).
+
+Initial release. evm-wallet-core extracted from eth-wallet-core (Q1 Option A refactor); polygon-wallet-core thin wrapper added (chain-id 137 mainnet + 80002 Amoy); POL native gas token display with MATIC legacy alias; EIP-1559 gas estimation with 2-second-block re-estimate cadence; native Circle USDC support (NOT bridged USDC.e); EIP-712 chain_id replay protection; SPKI pin reuse from bitcoin-wallet-core.
+
+### Added
+
+- **`[internal]`** `evm-wallet-core` extracted from `eth-wallet-core` (Q1 Option A refactor, MSRV 1.94, edition 2021) — PR #427
+- **`[internal]`** `polygon-wallet-core` thin wrapper (chain-id 137 mainnet + 80002 Amoy, POL + MATIC legacy gas token display, bundled token registry) — PR #430
+- **`[internal]`** Polygon RPC constructors + chain-id tests (chain 137 + 80002) — PR #431
+- **`[internal]`** Phase 3 Polygon config: native Circle USDC support + bridged USDC.e footgun flag — PR #432
+- **`[internal]`** EIP-1559 dynamic gas estimation (Polygon-aware, 2-second-block re-estimate cadence via V4 acceptance test) — PR #427, #431, #453
+- **`[user-facing]`** `polygon` CLI binary (Amoy testnet smoke + mainnet smoke, V1–V10 + use_case verification harness) — PR #420, #433, #468, #473
+- **`[internal]`** RPC URL defaults switched to publicnode.com keyless tier (polygon-bor-rpc + polygon-amoy-bor-rpc + ethereum-rpc); `POLYGON_RPC_URL` / `ETH_RRPC_URL` env overrides preserved per L29/L61 — PR #476
+- **`[internal]`** SPKI pin `pin_spki: <reserved>` config field on polygon CLI (deferred to v0.2; ETH-side verifier removed per PR #330 + module docs in `evm-wallet-core/src/provider.rs`) — PR #455
+
+### Security
+
+- **`[internal]`** EIP-712 `chain_id` domain binding blocks cross-chain replay (Q7 mitigation; `polygon sign-typed` rejects signatures with `typed.domain.chainId` mismatching the active network) — PR #478
+
+### Test coverage
+
+- **`[internal]`** V1–V10 + use_case verification harness (Rust integration tests against Anvil Polygon-fork) — PR #420
+- **`[internal]`** Mainnet smoke (T8) + ETH regression on Polygon edge cases — PR #473
+
 ## [v0.3.0] - 2026-08-24
 
 **eth-wallet-core v0.3.0** — Ethereum (ETH + ERC-20 stablecoin) wallet library + `eth` CLI scaffold on alloy v1.8.x. Closes the 9 open questions from `docs/wallets/2026-08-23-ethereum-rust-sdks-deep-dive.md` (PR #290) + 11 task issues (#295, #301-#311). ETH begins at v0.3.0 because `v0.2.0` Git tag was already claimed by `df170c0` wallet-desktop BTC FFI migration (PR #250).
