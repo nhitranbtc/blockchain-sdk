@@ -26,7 +26,7 @@ use alloy_node_bindings::Anvil;
 use alloy_primitives::{Address, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::{SolCall, SolConstructor};
+use alloy_sol_types::{SolCall, SolValue};
 
 use polygon_v1_spike::erc20::{usdc_to_raw, MockUSDC};
 
@@ -57,10 +57,22 @@ async fn v9_deploy_mock_usdc_and_transfer_on_anvil_polygon_fork() {
         .expect("anvil_setBalance must succeed");
 
     // ----- 1. Deploy MockUSDC -----
-    let ctor_calldata = MockUSDC::constructorCall {
-        initialSupply: usdc_to_raw(10_000_000),
-    }
-    .abi_encode();
+    // Issue #419 fix: prepend the compiled runtime bytecode (from the
+    // `#[sol(bytecode = "0x...")]` attribute on `MockUSDC`) to the
+    // constructor args. Without the bytecode, Anvil receives only the
+    // constructor args and deploys an empty-code "contract" that returns
+    // `0x` from any eth_call.
+    //
+    // EVM contract-creation input is: creation_bytecode ++ abi_encoded_args
+    // (NO 4-byte selector — selectors are EVM CALL dispatches, the deploy
+    // path's init code reads constructor args directly). Encoding the
+    // constructor args via `U256::abi_encode()` skips the selector that
+    // `MockUSDC::constructorCall::abi_encode()` would prepend.
+    let initial_supply = usdc_to_raw(10_000_000);
+    let ctor_args = initial_supply.abi_encode();
+    let mut deploy_input: Vec<u8> = MockUSDC::BYTECODE.to_vec();
+    deploy_input.extend_from_slice(&ctor_args);
+    let deploy_input: alloy_primitives::Bytes = deploy_input.into();
     let mut deploy_tx = TxEip1559 {
         chain_id: anvil.chain_id(),
         nonce: 0,
@@ -69,7 +81,7 @@ async fn v9_deploy_mock_usdc_and_transfer_on_anvil_polygon_fork() {
         max_priority_fee_per_gas: 1_000_000_000,
         to: alloy_primitives::TxKind::Create,
         value: U256::ZERO,
-        input: ctor_calldata.into(),
+        input: deploy_input,
         access_list: Default::default(),
     };
     let sig = signer
@@ -95,6 +107,18 @@ async fn v9_deploy_mock_usdc_and_transfer_on_anvil_polygon_fork() {
     assert!(
         deploy_receipt.status(),
         "deploy tx must have status = true (success)"
+    );
+
+    // Defense-in-depth — confirm the deployed contract actually has runtime
+    // bytecode (regression guard for the #419 root cause: empty-code contract
+    // that returns 0x from any eth_call).
+    let deployed_code = provider
+        .get_code_at(token_addr)
+        .await
+        .expect("eth_getCode must succeed");
+    assert!(
+        !deployed_code.is_empty(),
+        "deployed contract must have non-empty runtime bytecode (Issue #419 regression)"
     );
 
     // ----- 2. transfer(beta, 100 USDC) -----
@@ -145,7 +169,30 @@ async fn v9_deploy_mock_usdc_and_transfer_on_anvil_polygon_fork() {
         "transfer tx must have status = true (success)"
     );
 
+    // ----- 3. balanceOf(recipient) round-trip (Issue #419 acceptance) -----
+    use alloy_rpc_types::TransactionRequest;
+    let balance_calldata = MockUSDC::balanceOfCall { account: recipient }.abi_encode();
+    let req = TransactionRequest::default()
+        .to(token_addr)
+        .input(balance_calldata.into());
+    let result_bytes = provider
+        .call(req)
+        .await
+        .expect("eth_call balanceOf must succeed");
+    assert_eq!(
+        result_bytes.len(),
+        32,
+        "balanceOf must return 32 bytes (got {} bytes = 0x{} = no deployed bytecode — see Issue #419)",
+        result_bytes.len(),
+        hex::encode(&result_bytes)
+    );
+    let balance = U256::from_be_slice(&result_bytes);
+    assert_eq!(
+        balance, amount,
+        "balanceOf(recipient) should equal transfer amount (100 USDC raw)"
+    );
+
     eprintln!(
-        "[V9] PASS — MockUSDC deployed at {token_addr:?}; transfer of 100 USDC raw broadcast + mined (tx_hash={tx_hash}); balanceOf deferred per #419"
+        "[V9] PASS — MockUSDC deployed at {token_addr:?}; transfer of 100 USDC raw broadcast + mined (tx_hash={tx_hash}); balanceOf(recipient) = {balance}"
     );
 }
