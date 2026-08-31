@@ -132,6 +132,42 @@ Initial release. evm-wallet-core extracted from eth-wallet-core (Q1 Option A ref
 - **`[internal]`** V1–V10 + use_case verification harness (Rust integration tests against Anvil Polygon-fork) — PR #420
 - **`[internal]`** Mainnet smoke (T8) + ETH regression on Polygon edge cases — PR #473
 
+### User Stories (Polygon scope, per L24 4-column format)
+
+| # | Story | Status | Try it |
+|---|-------|--------|--------|
+| 1 | Create a new wallet | done (PR #451 squash `2d15e7f`, T6c4 wallet_create + wallet_import) | `polygon wallet create --words 12 --network amoy` |
+| 2 | Import an existing wallet | done (PR #451 squash `2d15e7f`, T6c4) | `polygon wallet import --mnemonic-file <path> --network mainnet` |
+| 3 | Check POL balance | done (PR #439 squash `40c2371`, T6c1 wallet_balance) | `polygon wallet balance --wallet-id <id> --network amoy` |
+| 4 | Sync chain state | done (PR #445 squash `9614905`, T6c3 wallet_sync body) | `polygon wallet sync --wallet-id <id> --network amoy` |
+| 5 | Send native POL | done (PR #452 squash `ba7b7ad`, T6c5 wallet_send) | `polygon wallet send --wallet-id <id> --to <addr> --amount 0.01 --network amoy` |
+| 6 | Send with custom EIP-1559 fee | done (PR #452 T6c5 + PR #453 T6d-1 fee handler; V4 cadence test in #420) | `polygon wallet send --wallet-id <id> --to <addr> --amount 0.01 --max-fee-per-gas 50 --max-priority-fee-per-gas 30 --network amoy` |
+| 7 | Inspect transaction history | done (PR #445 squash `9614905`, T6c3 sync receipts) | `polygon wallet show <wallet_id> --network amoy` (includes tx list) |
+| 8 | Get current gas estimates (2-second-block re-estimate) | done (PR #453 squash `f96a6e6` parent #468, T6d-1 fee handler; V4 acceptance in #420) | `polygon fee --network amoy` |
+| 9 | List / show / delete / rename wallets | done (PR #436 squash `6cff04a` list + #443 squash `b8531e6` show + #442 squash `124eedf` delete) | `polygon wallet list --network amoy` |
+| 10 | Use mainnet explicitly (chain-id 137) | done (PR #471 squash `96e0d65`, list_wallets enumerates all `Network::all()` variants) | `polygon --network mainnet wallet list` (asserts chain-id 137) |
+| 11 | Show config + debug info | done (PR #455 squash `275a7c5`, T6d-3 config) | `polygon config show` |
+| 12 | Persist wallet across CLI invocations | done (PR #451 squash `2d15e7f`, T6c4 wallet_create persistence) | `polygon wallet create --words 12 --network amoy && polygon wallet list --network amoy` (second call sees first) |
+| 13 | Send to multiple recipients (sequential txs) | done (PR #452 squash `ba7b7ad`, T6c5; EVM is single-recipient per tx) | repeat `polygon wallet send ...` for each recipient |
+| 14 | Sweep / drain wallet to one address | done (PR #452 squash `ba7b7ad`, T6c5; balance - gas_estimate in handler) | `polygon wallet send --wallet-id <id> --to <drain-addr> --drain --network amoy` |
+| 15 | Choose nonce strategy (auto vs manual) | done (PR #452 squash `ba7b7ad`, T6c5; auto via `get_transaction_count`) | `polygon wallet send ... --nonce <n> --network amoy` (manual) or omit (auto) |
+| 16 | Manual nonce + gas limit override | done (PR #452 squash `ba7b7ad`, T6c5) | `polygon wallet send ... --nonce <n> --gas-limit 100000 --network amoy` |
+| 17 | Replace / speed-up tx (same nonce, higher fee) | done (PR #452 squash `ba7b7ad`, T6c5 wallet_send_speedup) | `polygon wallet send-speedup --wallet-id <id> --tx-hash <hash> --new-fee-rate 100 --network amoy` |
+| 18 | Sign EIP-191 personal message | done (PR #462 squash `10275b8`, sign-message dispatch via WalletManager::unlock_signer) | `polygon sign-message --wallet-id <id> "hello" --network amoy` |
+| 19 | Export the wallet xpub + first addresses | done (PR #443 squash `b8531e6`, wallet_show) | `polygon wallet show <wallet_id> --json --network amoy` (returns xpub + 5 receive addrs) |
+| 20 | Pick derivation path (Ledger vs MetaMask) | done (PR #451 squash `2d15e7f`, T6c4; coin type 60 shared with ETH) | `polygon wallet create --words 12 --derivation-path "m/44'/60'/0'/0/0" --network amoy` |
+| 21 | Send ERC-20 stablecoin (USDT/USDC/DAI) | done (PR #432 squash `b723766`, Phase 3 token registry + PR #454 T6d-2 erc20 send) | `polygon erc20 send --wallet-id <id> --token USDC --to <addr> --amount 100 --network amoy` |
+| 22 | Check ERC-20 token balance | done (PR #454 T6d-2 erc20 balance) | `polygon erc20 balance --wallet-id <id> --token USDC --network amoy` |
+| 23 | List registered stablecoins / tokens | done (PR #432 squash `b723766`, Phase 3 bundled `polygon-wallet-core/tokens/{mainnet,amoy}.json`) | `polygon erc20 list --network amoy` |
+| 24 | Add custom ERC-20 token by contract address | done (PR #454 T6d-2 erc20 register) | `polygon erc20 register --token CUSTOM --address <addr> --decimals 6 --network amoy` |
+| 25 | Approve ERC-20 spending (for QuickSwap) | done (PR #454 T6d-2 erc20 approve) | `polygon erc20 approve --wallet-id <id> --token USDC --spender <addr> --amount 1000 --network amoy` |
+| 26 | Use Anvil local node for testing | done (PR #420 squash `2039389`, V1-V10 + use_case verification harness) | `anvil --fork-url https://polygon-bor-rpc.publicnode.com --fork-block-number <n> &` then `polygon --rpc-url http://localhost:8545 wallet balance ...` |
+| 27 | Sign EIP-712 typed data (Q7 chain_id replay protection) | done (PR #462 squash `10275b8` sign-typed dispatch + PR #478 squash `74849f1` chain_id validation; V10 acceptance in #420) | `polygon sign-typed --wallet-id <id> --chain-id 80002 --message <json> --network amoy` |
+| 28 | Connect to RPC endpoint with SPKI pin | deferred to v0.2 (PR #455 `pin_spki: <reserved>` field; ETH-side verifier removed per PR #330 + `evm-wallet-core/src/provider.rs` doc comments) | n/a (placeholder) |
+| 29 | Connect to RPC endpoint without SPKI pin (system CAs) | done (PR #431 squash `2298c4a`, default `RootProvider::new_http(rpc_url)`) | `polygon --rpc-url https://polygon-bor-rpc.publicnode.com wallet list --network mainnet` |
+| 30 | Request Amoy testnet POL from faucet | done (PR #455 squash `275a7c5`, T6d-3 faucet; T7 V7 acceptance in PR #468 squash `f96a6e6`) | `polygon faucet --address <addr> --network amoy` |
+| 31 | Display POL gas-token balance with MATIC legacy alias | done (PR #432 squash `b723766`, Phase 3 `GAS_TOKEN_LABEL="POL"` + `LEGACY_GAS_TOKEN_LABEL="MATIC"`; PR #455 T6d-3 `--legacy-token-symbol` flag) | `polygon wallet balance ... --unit pol --network amoy` (default POL) or `--legacy-token-symbol --unit matic` |
+
 ## [v0.3.0] - 2026-08-24
 
 **eth-wallet-core v0.3.0** — Ethereum (ETH + ERC-20 stablecoin) wallet library + `eth` CLI scaffold on alloy v1.8.x. Closes the 9 open questions from `docs/wallets/2026-08-23-ethereum-rust-sdks-deep-dive.md` (PR #290) + 11 task issues (#295, #301-#311). ETH begins at v0.3.0 because `v0.2.0` Git tag was already claimed by `df170c0` wallet-desktop BTC FFI migration (PR #250).
