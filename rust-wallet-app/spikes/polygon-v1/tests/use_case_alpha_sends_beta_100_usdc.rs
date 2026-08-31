@@ -26,7 +26,7 @@ use alloy_node_bindings::Anvil;
 use alloy_primitives::U256;
 use alloy_provider::{Provider, ProviderBuilder};
 // use_case no longer needs alloy_rpc_types::TransactionRequest after #419 deferred
-use alloy_sol_types::{SolCall, SolConstructor};
+use alloy_sol_types::{SolCall, SolValue};
 use polygon_v1_spike::address::build_signer;
 use polygon_v1_spike::config::Network;
 use polygon_v1_spike::erc20::{usdc_to_raw, MockUSDC};
@@ -73,10 +73,16 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         .expect("anvil_setBalance must succeed");
 
     // ----- 1. Deploy MockUSDC -----
-    let ctor_calldata = MockUSDC::constructorCall {
-        initialSupply: usdc_to_raw(1_000_000),
-    }
-    .abi_encode();
+    // Issue #419 fix: prepend the compiled runtime bytecode (from the
+    // `#[sol(bytecode = "0x...")]` attribute on `MockUSDC`) to the
+    // constructor calldata. Without the bytecode, Anvil receives only the
+    // constructor-args payload and deploys an empty-code "contract" that
+    // returns `0x` from any eth_call.
+    let initial_supply = usdc_to_raw(1_000_000);
+    let ctor_args = initial_supply.abi_encode();
+    let mut deploy_input: Vec<u8> = MockUSDC::BYTECODE.to_vec();
+    deploy_input.extend_from_slice(&ctor_args);
+    let deploy_input: alloy_primitives::Bytes = deploy_input.into();
     let mut deploy_tx = TxEip1559 {
         chain_id: anvil.chain_id(),
         nonce: 0,
@@ -85,7 +91,7 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         max_priority_fee_per_gas: 1_000_000_000,
         to: alloy_primitives::TxKind::Create,
         value: U256::ZERO,
-        input: ctor_calldata.into(),
+        input: deploy_input,
         access_list: Default::default(),
     };
     let sig = alpha
@@ -162,9 +168,57 @@ async fn use_case_alpha_sends_beta_100_usdc_on_anvil() {
         "transfer tx must have status = true (success)"
     );
 
-    // balanceOf post-transfer round-trip — DEFERRED per Issue #419 (see v9).
+    // ----- 3. balanceOf round-trip — both sides (Issue #419 acceptance) -----
+    use alloy_rpc_types::TransactionRequest;
+
+    // beta (recipient) — should hold the transferred amount.
+    let beta_calldata = MockUSDC::balanceOfCall { account: beta_addr }.abi_encode();
+    let beta_req = TransactionRequest::default()
+        .to(token_addr)
+        .input(beta_calldata.into());
+    let beta_bytes = provider
+        .call(beta_req)
+        .await
+        .expect("eth_call balanceOf(beta) must succeed");
+    assert_eq!(
+        beta_bytes.len(),
+        32,
+        "balanceOf(beta) must return 32 bytes (got {} bytes = 0x{} = no bytecode — Issue #419)",
+        beta_bytes.len(),
+        hex::encode(&beta_bytes)
+    );
+    let beta_balance = U256::from_be_slice(&beta_bytes);
+    assert_eq!(
+        beta_balance, amount,
+        "balanceOf(beta) should equal transfer amount (100 USDC raw)"
+    );
+
+    // alpha (deployer/sender) — should hold initialSupply - amount.
+    let alpha_expected = usdc_to_raw(1_000_000) - amount;
+    let alpha_calldata = MockUSDC::balanceOfCall {
+        account: alpha_addr,
+    }
+    .abi_encode();
+    let alpha_req = TransactionRequest::default()
+        .to(token_addr)
+        .input(alpha_calldata.into());
+    let alpha_bytes = provider
+        .call(alpha_req)
+        .await
+        .expect("eth_call balanceOf(alpha) must succeed");
+    assert_eq!(
+        alpha_bytes.len(),
+        32,
+        "balanceOf(alpha) must return 32 bytes (got {} bytes)",
+        alpha_bytes.len()
+    );
+    let alpha_balance = U256::from_be_slice(&alpha_bytes);
+    assert_eq!(
+        alpha_balance, alpha_expected,
+        "balanceOf(alpha) should equal initialSupply - transfer amount (1M - 100 USDC raw)"
+    );
 
     eprintln!(
-        "[use_case/offline] PASS — alpha={alpha_addr} → beta={beta_addr} transfer of 100 USDC raw broadcast + mined on Anvil Polygon-fork (token={token_addr:?}); balanceOf deferred per #419"
+        "[use_case/offline] PASS — alpha={alpha_addr} → beta={beta_addr} transfer of 100 USDC raw mined (token={token_addr:?}); balanceOf(beta) = {beta_balance}, balanceOf(alpha) = {alpha_balance}"
     );
 }
