@@ -1254,7 +1254,7 @@ mod sign_dispatch_tests {
             .expect("unlock signer for addr");
         let signer = alloy_signer_local::PrivateKeySigner::from_slice(secret.as_ref())
             .expect("signer from slice");
-        let signer_addr = format!("{:#x}", signer.address());
+        let signer_addr = signer.address();
         drop(wm);
         drop(signer);
 
@@ -1288,7 +1288,11 @@ mod sign_dispatch_tests {
             password: Some("correct-horse-battery-staple".into()),
             message: "verify-mismatch-test".into(),
             address: None,
-            verify: Some("0x0000000000000000000000000000000000000000".into()),
+            verify: Some(
+                "0x0000000000000000000000000000000000000000"
+                    .parse::<alloy_primitives::Address>()
+                    .expect("hard-coded verify addr should parse"),
+            ),
             rpc_url: None,
         };
         let r = dispatch_sign_message(&args, &data_dir);
@@ -1322,7 +1326,11 @@ mod sign_dispatch_tests {
             name: "w".into(),
             password: Some(password.into()),
             address: None,
-            verify: Some("0x0000000000000000000000000000000000000000".into()),
+            verify: Some(
+                "0x0000000000000000000000000000000000000000"
+                    .parse::<alloy_primitives::Address>()
+                    .expect("hard-coded verify addr should parse"),
+            ),
             rpc_url: None,
         };
         let r = dispatch_sign_typed(&args, &data_dir);
