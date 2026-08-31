@@ -38,6 +38,8 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L53] Critical-tier L12 cluster (3 sub-agents + security-review standalone) catches bugs TDD alone misses on key-encryption surfaces
 - [L54] Defense-in-depth for env-var secrets: read + immediate `std::env::remove_var()` + Mutex-serialized test
 - [L55] Step 11 verify gate: scope `cargo test -p <crate>`>` — never `--workspace` (bitcoin-wallet-core FFI tests dominate)
+- [L60] `sol!` macro `bytecode` attribute expects **creation (init) bytecode** from `solc --bin`, NOT runtime bytecode from `--bin-runtime` (Issue #419, PR #485)
+- [L61] EVM contract-creation input = `creation_bytecode ++ abi_encoded_args` — NO 4-byte selector; constructor args are appended to init code, not invoked via CALL dispatch (Issue #419)
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -1641,3 +1643,71 @@ Import {
 ```
 
 Every pair appears on both sides. Tested via `cli_rejects_private_key_with_private_key_file` (`polygon/src/handlers/wallet.rs:2098`).
+
+---
+
+## L60 — `sol!` macro `bytecode` attribute expects creation (init) bytecode, NOT runtime bytecode
+
+**Trigger**: Issue #419 / PR #485 (2026-08-31). The `sol!` macro in alloy 1.8.x emits `MockUSDC::BYTECODE` const + `deploy()` helper when `#[sol(bytecode = "0x...")]` is set. The macro expects **creation (init) bytecode** from `solc --bin` — the constructor logic + runtime appended after the `fe` INVALID split, NOT the deployed-only bytecode from `--bin-runtime`. Embedding runtime bytecode deploys but reverts in the constructor (~71K gas consumed, empty code on-chain).
+
+**Rule**: When using `sol! { #[sol(bytecode = "0x...")] contract Foo {} }` to make a contract deployable from the macro, compile via `solc 0.8.X --bin` (creation code), NOT `--bin-runtime` (deployed code). The two differ by ~25% (1223-byte runtime vs 2908-byte creation in the MockUSDC example — creation includes constructor dispatch + runtime).
+
+**Why**: Without this distinction, the deploy succeeds (tx mined, `contract_address` populated) but the constructor reverts silently — Anvil returns `status = false` + `gas_used = ~71K` (early revert), no runtime code ends up at the address, and any `eth_call` returns `0x` empty bytes. The wire-format symptom (empty `eth_call` response) is the same as if you'd forgotten the attribute entirely — root-cause diagnosis via receipt.status + `eth_getCode` is the difference (revert shows `status = false`; missing attribute shows `status = true` + empty code).
+
+**Apply**:
+
+- When wiring a deployable `sol!` contract: compile once via `solc <ver> --bin --optimize-runs <N> --metadata-hash none <Contract>.sol`, paste the `bin` output (NOT `bin-runtime`) into the `bytecode` attribute.
+- Embed Solidity source above the `sol!` block + documented regeneration protocol in a header comment (mock example at `rust-wallet-app/spikes/polygon-v1/src/erc20.rs:13-29`) so future contributors can recompile if the contract changes.
+- For deploy input, concatenate `MockUSDC::BYTECODE` (creation code) ++ `U256(args...).abi_encode()` (raw args, NO selector — see L61).
+- After deploy, assert `eth_getCode(token_addr).len() > 0` as defense-in-depth regression guard against the root cause recurring.
+
+**Anti-patterns**:
+
+- Embedding `bin-runtime` into the `bytecode` attribute — deploy tx mined but constructor reverts silently.
+- Forgetting to embed the `Solidity` source reference next to the `sol!` block — future contributors can't recompile without reverse-engineering the macro's ABI.
+- Skipping the `eth_getCode` post-deploy check — assumes the deploy succeeded because the receipt.status is true, but the runtime can be empty even on success.
+
+---
+
+## L61 — EVM contract-creation input format: `creation_bytecode ++ abi_encoded_args` (NO 4-byte selector)
+
+**Trigger**: Issue #419 / PR #485 (2026-08-31). `MockUSDC::constructorCall { initialSupply }.abi_encode()` returns `selector (4 bytes) ++ abi_encode(initialSupply)` — but for EVM contract-creation input, the selector must NOT be present; constructor args are appended to init code directly (the init code knows its own constructor signature).
+
+**Rule**: For `deploy_tx.input` of an EVM contract-creation transaction, use `[MockUSDC::BYTECODE, SolValue::abi_encode(&ctor_arg)].concat()` where `ctor_arg` is the constructor arg type directly (e.g. `U256` for `constructor(uint256 initialSupply)`). Do NOT use `MockUSDC::constructorCall::abi_encode()` — that prepends the 4-byte function selector (valid for `eth_call` / `eth_sendTransaction` call paths, INVALID for deploy input).
+
+**Why**: If the selector is included, the init code reads 4 bytes it doesn't expect as part of its constructor-arg payload. For MockUSDC's `constructor(uint256 initialSupply)`, the init code reads the next 32 bytes as `initialSupply` — but with the selector prepended, those 32 bytes are the selector (4 bytes) + 28 bytes of garbage from the actual `initialSupply` arg. The `initialSupply` SSTORE writes a nonsense value, the rest of the constructor logic may or may not succeed depending on what the garbage bytes look like — but crucially the contract is deployed (status = true) with `_balances[msg.sender]` set to a wrong value, so subsequent `transfer` + `balanceOf` tests fail with mismatched math. OR — as observed in #419 — the entire constructor reverts because the garbage value fails an internal check (or the gas accounting differs).
+
+**Apply**:
+
+```rust
+// CORRECT — for deploy_tx.input on a contract-creation tx:
+let initial_supply = usdc_to_raw(10_000_000);  // U256
+let ctor_args = initial_supply.abi_encode();     // SolValue::abi_encode on U256
+let deploy_input: alloy_primitives::Bytes = {
+    let mut v: Vec<u8> = MockUSDC::BYTECODE.to_vec();
+    v.extend_from_slice(&ctor_args);
+    v.into()
+};
+
+// WRONG — selector prepended:
+let ctor_calldata = MockUSDC::constructorCall { initialSupply }.abi_encode();  // 4-byte selector ++ args
+let deploy_input: alloy_primitives::Bytes = {
+    let mut v: Vec<u8> = MockUSDC::BYTECODE.to_vec();
+    v.extend_from_slice(&ctor_calldata);  // wrong — selector contaminates init-code's arg read
+    v.into()
+};
+
+// CORRECT — for `eth_call` (NOT deploy):
+let balance_calldata = MockUSDC::balanceOfCall { account: recipient }.abi_encode();  // selector ++ args = correct here
+provider.call(&TransactionRequest::default().to(token_addr).input(balance_calldata.into())).await
+```
+
+- Use `MockUSDC::constructorCall::abi_encode()` ONLY for the eventual full EIP-712 / typed-call dispatch paths (post-deploy), NOT for deploy input.
+- Use `SolValue::abi_encode(&value)` for any single constructor arg type (U256 / Address / bool / bytes / etc.).
+- The mnemonic for selector inclusion vs exclusion: "CALL dispatches via selector (include); CREATE reads args directly from init code (exclude)."
+
+**Anti-patterns**:
+
+- Treating `constructorCall::abi_encode()` as a universal encoding helper — it's specifically for the call path, not deploy.
+- Trying to "strip the selector" by slicing the first 4 bytes off `abi_encode()` output — fragile, breaks if the ABI ever gains overloads or non-standard layouts.
+- Writing deploy input as `ctor_calldata` with no `MockUSDC::BYTECODE` prepended — the original #419 root cause that started this whole investigation.
