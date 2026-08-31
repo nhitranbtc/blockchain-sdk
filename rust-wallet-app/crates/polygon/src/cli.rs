@@ -476,7 +476,7 @@ pub enum ConfigAction {
 #[derive(clap::Args, Debug)]
 pub struct FaucetArgs {
     #[arg(long, value_parser = parse_address)]
-    pub address: String,
+    pub address: Address,
     #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
     pub network: String,
     #[arg(long, default_value = "POL")]
