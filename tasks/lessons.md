@@ -299,7 +299,39 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 ## Per task
 9. TDD red-green cycle. **When spec/tickets already exist** (paired with step 3 triage + step 3 to-tickets, or step 3a to-spec), invoke `mattpocock-skills:implement` as the high-level orchestrator — wraps the red-green cycle around the spec/ticket acceptance criteria. **`superpowers:test-driven-development` stays as the lower-level driver** (failing test first, then GREEN, then refactor). `implement` does NOT replace TDD; it scopes which failing tests matter per ticket. **During the REFACTOR phase, invoke `context-engineering-kit:kaizen:kaizen`** — anti-overengineering discipline, iterative refactor with explicit minimum-change test.
+    - **Skill axis winners** (per `.local/plugins-docs/2026-08-31-mattpocock-vs-superpowers.md` "Step 9 recommendations"):
+        - **High-level orchestration**: `mattpocock-skills:implement` (user-invoked, one-shot driver, calls TDD + code-review).
+        - **Low-level TDD discipline**: `superpowers:test-driven-development` (Iron Law, "delete code, start over", rationalisation table).
+        - **Subagent fan-out**: `superpowers:subagent-driven-development` OR `/dispatching-parallel-agents` (reserve for multi-ticket plans; single-ticket overhead exceeds work).
+        - **Interface design (step 9a)**: `mattpocock-skills:codebase-design` + `domain-modeling` (mattpocock-only; superpowers has no equivalent).
+        - **Refactor discipline**: `context-engineering-kit:kaizen:kaizen` (anti-overengineering, iterative, minimum-change test).
+        - **Code review (post-step 9)**: `mattpocock-skills:code-review` (requestor side, two-axis Standards+Spec) + `superpowers:receiving-code-review` (receiver side, anti-sycophancy).
+    - **Canonical invoke order** (full table + decision tree lives in the comparison doc):
+        ```text
+        step 9a (optional, new module only):
+          → /mattpocock-skills:codebase-design
+            → /mattpocock-skills:domain-modeling
+
+        step 9 (mandatory):
+          → /mattpocock-skills:implement            # if spec + tickets exist
+            OR /superpowers:test-driven-development  # if no spec/tickets yet
+          inside each cycle: RED → GREEN → REFACTOR(/kaizen:kaizen)
+
+        step 10 (after step 9):
+          → /superpowers:requesting-code-review (gate)
+            → /mattpocock-skills:code-review (two-axis review)
+
+        step 11 (verify gate):
+          → cargo fmt + cargo clippy --all-targets -- -D warnings + cargo test
+          → /superpowers:verification-before-completion (claims gate)
+        ```
+    - **Anti-patterns** (top 3, full list in comparison doc):
+        - Invoke `test-driven-development` without invoking `implement` first when spec/tickets exist → agent picks the wrong failing tests.
+        - Invoke `implement` without invoking `test-driven-development` per cycle → writes code first = breaks Iron Law.
+        - Skip step 9a for new modules → interface designed under TDD pressure = scope creep + drift.
+    - **Cross-reference**: full decision tree + axis table + anti-patterns in `.local/plugins-docs/2026-08-31-mattpocock-vs-superpowers.md` "Step 9 recommendations (L13 implementation step)" section.
 9a. **Module interface design (before TDD when new module/struct):** invoke `mattpocock-skills:codebase-design` to author the module's public surface (struct fields, trait bounds, error type, async signature) BEFORE writing the failing test. **If the interface decision warrants durable record** (new error type, breaking public API, cross-crate contract), also invoke `mattpocock-skills:grill-with-docs` — the grill interview sharpens the design while emitting an ADR + glossary entry as byproducts. **Pair with `mattpocock-skills:domain-modeling`** when introducing new domain terms or editing CONTEXT.md/ADR — glossary entries land at first use, preventing naming drift. Pairs with `pr-review-toolkit:type-design-analyzer` (which fires later in step 10 L12 review). Skip for trivial edits to existing modules; mandatory for new public types per L12 module-interface row.
+    - **Cross-reference**: `mattpocock-skills:grill-with-docs` SKILL body in `.local/plugins-docs/2026-08-31-mattpocock-skills-deepdive.md` (states working-dir requirement, side-by-side with `grill-me`, decision-tree mechanics).
 10. L12: pre-PR code review FIRST — `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`
     - Parallel sub-agents: `type-design-analyzer` (encapsulation, invariants) + `code-reviewer` (correctness, security, tests, structure per L11 row scope)
     - **Critical tier** (per Q4 carve-out): add `pr-review-toolkit:security-auditor` as 3rd concurrent sub-agent (max 3 sub-agents per step). triggers for key material / signing / encryption / network / persistence surfaces.
@@ -343,20 +375,22 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **`cargo clippy --workspace --all-targets -- -D warnings` is a hard gate**, not advisory (PR #144, 2026-08-15). Skipping L12 review to ship faster lets clippy debt accumulate — `needless_question_mark` + `unnecessary cast` + `unused import` were all flagged on a single round-1 PR. Run the full triple gate (`fmt` + `clippy --all-targets` + `test`) locally before every commit, even when L12 review is skipped for pace. `cargo clippy --workspace` alone (without `--all-targets`) misses test-code + examples + bench lints.
     - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
-11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task). Sequence: step 11c (systematic-debugging) → step 11a (triage decision) → either fix-and-rerun-11 OR create-backlog-item.
+11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task). Sequence: step 11c (systematic-debugging, conditional — see trigger below) → step 11a (triage decision) → either fix-and-rerun-11 OR create-backlog-item.
+    - **Step 11c trigger condition**: invoke `superpowers:systematic-debugging` BEFORE the triage decision ONLY when (a) root cause is not immediately visible from the error message, OR (b) ≥2 fix attempts have already failed. For obvious errors (typo, missing import, single-line fix), skip step 11c and go straight to the triage taxonomy below. Performance-regression shapes (slow build, OOM, latency spike) → `mattpocock-skills:diagnosing-bugs` instead (per step 11c fallback).
     - **Triage classes** (7, with deterministic decision criteria):
-        - **Fixable now**: ≤10 min + in scope + no new test required → fix in current commit, re-verify, continue
+        - **Fixable now**: ≤10 min + touches only files in the current PR's changed set (verify via `git diff --name-only <base>..HEAD` against the step-4 branch record) + no new test required → fix in current commit, re-verify, continue. "PR-changed-files scope" replaces fuzzy "in scope."
         - **In-PR follow-up**: >10 min OR scope-creep risk → commit in current PR (before merge), not main yet; lands via the feature PR's pipeline
-        - **Small deferred** (cosmetic, follow-up): touches adjacent code OR needs new test but doesn't block → log in current session's backlogs list + L14 progress.md events
-        - **Big task** (multi-PR, multi-week): own PR OR multi-week OR cross-crate → create GitHub issue, label `backlog`, link to parent task
-        - **Code smell / debt** (knip / depcheck / dead-code finding from L12 sub-agent or `refactor-clean` audit): ≤10 min + in scope + no new test → fixable now; touches adjacent code OR scope-creep risk → small deferred with `refactor-clean` audit as acceptance criteria; cross-crate OR multi-PR → big task with backlog issue + parent task ref
-        - **Future milestone** (v0.1.1, v0.2): doesn't ship before parent task's release → log with `priority/p2|p3` tag
+        - **Small deferred** (cosmetic, follow-up): touches adjacent code OR needs new test but doesn't block → log in current session's backlogs list + L14 progress.md events. Sub-classes: `test gap` (missing coverage for existing behavior), `doc follow-up` (docstring, README, or comment drift).
+        - **Big task** (multi-PR, multi-week): own PR OR multi-week OR cross-crate → create GitHub issue, label `backlog`, link to parent task. **Foggy sub-trigger**: when the big task is multi-week AND scope isn't clear, invoke `/mattpocock-skills:wayfinder` first (chart the decision tickets on the tracker), THEN collapse the map at `/to-spec` and create the backlog issue from the spec. Don't create a mega-issue from fog — the maintainer can't pick up a foggy single issue.
+        - **Code smell / debt** (knip / depcheck / dead-code finding from L12 sub-agent or `refactor-clean` audit): ≤10 min + PR-changed-files scope + no new test → fixable now; touches adjacent code OR scope-creep risk → small deferred with `refactor-clean` audit as acceptance criteria; cross-crate OR multi-PR → big task with backlog issue + parent task ref. Sub-class: `dep update` (cargo update / breaking-API triage).
+        - **Future milestone** (v0.1.1, v0.2): doesn't ship before parent task's release → log with `priority/p2` or `priority/p3` tag (see priority decision tree below).
         - **External gate** (operator-driven, L29 manual smoke / L28 Gate B): can't run in CI → mark `[ ]` in PR body with `<!-- TODO: <operator-action> -->` deferral note (per step 14 external-gate discipline)
     - **Decision criteria** (deterministic, not vibes):
-        - ≤10 min + in scope + no new test → fixable now
+        - ≤10 min + PR-changed-files scope + no new test → fixable now
         - >10 min OR scope-creep → in-PR follow-up
         - needs new test OR adjacent code → small deferred
-        - multi-week OR cross-crate → big task
+        - multi-week OR cross-crate AND scope clear → big task (backlog issue)
+        - multi-week AND scope foggy → wayfinder first, then big task (issue from the spec)
         - doesn't ship before parent release → future milestone
         - operator-driven (L29 / L28 Gate B) → external gate
     - **GitHub issue format**:
@@ -364,11 +398,12 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - Body: acceptance criteria + priority + parent task ref + L14 progress.md link
         - Labels: `backlog` + `priority/p0|p1|p2|p3` + `week/N` (current sprint) — canonical reference `docs/agents/triage-labels.md`
         - Milestone: parent task's milestone
-    - **Priority decision tree**:
-        - `priority/p0`: blocks release (ship-stopper)
-        - `priority/p1`: blocks merge (must-fix before parent task closes)
-        - `priority/p2`: current milestone (ships before next minor release)
-        - `priority/p3`: future (v0.1.1, v0.2 backlog)
+    - **Priority decision tree** (aligned with `Future milestone` class, ship-vs-post-cutoff split):
+        - `priority/p0`: blocks release (ship-stopper; surfaces immediately, fix before any merge)
+        - `priority/p1`: blocks merge (must-fix before parent task closes; doesn't block release but blocks the parent PR's merge)
+        - `priority/p2`: current milestone (ships before next minor release; example: v0.1 → v0.1.x patch series)
+        - `priority/p3`: post-current milestone (v0.1.1, v0.2 backlog; doesn't ship before the next minor cut)
+        - **Default when unsure**: `priority/p3`. Lower-priority items are easier to triage out of a sprint than higher; error on the side of "future."
     - **`parent task ref`**: per plan-based work = `#<plan-task-N>` (e.g., #17 for eth-wallet-core task 17); per issue-based work = `#<original-issue>`. State which in the body.
     - **`week/N`**: current sprint number. If sprint unknown, omit label.
     - **L14 ledger cross-ref**: append backlog events to `progress.md` (L14) — `id, decision, class, parent_task_ref, deferred_from_step`. Ephemeral session backlogs list = index; L14 progress.md = durable record.
@@ -380,6 +415,23 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
         - **Orphan link**: backlog issue without `parent task ref` — drift on follow-up
         - **Eternal defer**: same item in backlog across >3 sessions — either ship or escalate to `priority/p0`
     - When in doubt: write the issue. Forgetting backlogs costs more than the 30-60s to file one.
+    - **Cross-reference**: full backlog-issue creation playbook (deterministic decision tree, GitHub issue template, priority ladder, anti-patterns) lives in `tasks/issues-lesson.md` PL26. This step 11a owns the rules; PL26 owns the workflow + `gh issue create` flags + label/milestone format. Read both at pickup: this section for the canonical decision logic, PL26 for the execution template.
+    - **Workflow 1 (Direct) execution discipline** (per `.local/plugins-docs/2026-08-31-gh-issue-creation-guide.md` + `tasks/issues-lesson.md` PL22-PL25): backlog-issue creation is workflow 1 in the GH guide. Apply these lessons at issue-creation time:
+        - **PL22 pause-then-act**: state facts (title, body source, labels, assignee, milestone, parent task ref) → wait explicit approval → run `gh issue create --body-file /tmp/issue-body.md` (use `--body-file` for any destructive-prose body, GateGuard rejects inline `rm`/`rmdir`) → report URL.
+        - **PL23 body template**: feature or bug variant. Always include Context + Goal/Repro + Acceptance criteria + References. Backlog issues = feature template with explicit parent task ref (`Refs #<n>`).
+        - **PL24 two-layer labels**: layer 1 triage role (omit for backlog — backlog issue already triaged) + layer 2 chain (`polygon-core` / `rust-eth-core` / `rust-btc-core` / `rust-tron-core` / `rust-evm-core`) + priority ladder (`priority/p0|p1|p2|p3`) + `week/N` + `backlog` + `task`. Multi-axis filterable.
+        - **PL25 wayfinder mechanics**: irrelevant for backlog issues (backlog ≠ wayfinder decision ticket). Applies only if the big-task class surfaces a foggy multi-week effort that itself needs `/wayfinder` to chart.
+        - **Link to parent + parent milestone**: `Refs #<parent>` in body; `--milestone "<parent task milestone>"` on the create command. Orphan backlog items lose context on follow-up.
+    - **Canonical backlog-issue create command** (synthesised from PL26 + GH guide workflow 1 + PL22-PL24):
+        ```bash
+        gh issue create \
+          --title "Backlog: <short description>" \
+          --label "backlog,priority/p<N>,week/N,<chain>,task" \
+          --milestone "<parent task milestone>" \
+          --body-file /tmp/backlog-body.md
+        ```
+        Body file written via heredoc with `<<'EOF'` per PL22; draft includes Context + Acceptance + Priority + Parent task ref + L14 progress link per PL23 + PL26.
+    - **Cross-reference**: full `gh issue create` workflow + flags + pitfalls + anti-patterns in `.local/plugins-docs/2026-08-31-gh-issue-creation-guide.md` (workflow 1 = direct issue create; workflows 2-5 for higher-effort work, not applicable to single backlog-item creation).
 11b. **L24 cascade on local branch (pre-commit):** before step 12 PAUSE, confirm L24 doc updates have landed in the commits traveling with the feature PR — CHANGELOG `[Unreleased]` bullet cites the PR number; User Stories table checkbox flipped if a story completes; "Try it" command column populated. Per L24, these live WITH the feature commit (not a separate process branch) so squash-merge carries them. If step 15a (tech doc) lands AFTER this check, re-run L24 cross-check before merge.
 11c. **Systematic-debugging fallback (when verify fails non-obviously):** if `cargo test` or `cargo clippy` surfaces a failure whose root cause isn't immediate from the error message, invoke `superpowers:systematic-debugging` BEFORE proposing a fix. Forms hypothesis, proves it, then minimal root-cause change + regression test. Avoid the "guess + cargo test loop" anti-pattern. Conditional — not a per-step add (Q4 cap preserved). **Performance-regression shape** (slow build, OOM, latency spike, throughput cliff): prefer `mattpocock-skills:diagnosing-bugs` as the primary fallback. **Unknown-root-cause needing primary-source facts** (upstream crate bug, framework behavior, protocol interpretation): invoke `mattpocock-skills:research` first to gather authoritative docs before systematic-debugging forms a hypothesis. **Error deep in execution call stack** (bug origin far from symptom): invoke `context-engineering-kit:kaizen:root-cause-tracing` — traces backward, adds instrumentation when needed. **Symptom needing fundamentals drill**: invoke `context-engineering-kit:kaizen:why` — iterative Five Whys. Q4 cap preserved (each skill is a separate invocation, not a sub-agent in the step-10 cluster).
 11d. **Plugin-structure validation (when trigger matches per L49):** if the commit touches any plugin-structure file, invoke `plugin-dev:plugin-validator` BEFORE the step 12 commit PAUSE. Read-only agent; findings feed the same fix loop as L12 review.
@@ -462,6 +514,39 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - Append/replace existing PR body with the full doc
     - Document lives with the commit (audit trail); no separate file to maintain
     - Skill-tag pair (per L11; Document stage of the 6-stage pipeline): `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections), with `mattpocock-skills:grill-with-docs` as ADR-emission shim. **For wallet-desktop PRs** (files in `wallet-desktop/web/` or `wallet-desktop/native/`), also invoke `anthropics/skills:frontend-design` (structural UI patterns lens, sister to taste-skill's `design-taste-frontend`).
+    - **Cross-reference**: `mattpocock-skills:grill-with-docs` SKILL body in `.local/plugins-docs/2026-08-31-mattpocock-skills-deepdive.md` (states Goal/Drift/Tradeoff sharpening + ADR emission contract).
+    - **Verification before claim** (per `superpowers:verification-before-completion`): before declaring the doc done, run `git diff <base>..HEAD` and confirm every claim in the 10 sections is grounded in cited code or docs at the paths shown. Iron Law analog for the doc: NO DOCUMENTATION CLAIMS WITHOUT CITED EVIDENCE. Surface mismatches (claim in doc but no diff match) before merge — the reviewer catches drift; the author prevents it.
+    - **Doc-as-code review gate**: after writing, invoke `mattpocock-skills:code-review` on the doc itself. Standards axis = doc style (clarity, structure, audience-appropriateness); Spec axis = matches the originating issue's intent. Two-axis review treats docs as code. Skip for trivial doc-only commits (single typo, one-line clarification).
+    - **Review/receive split for the doc** (per `superpowers:requesting-code-review` + `superpowers:receiving-code-review`): when the doc receives reviewer feedback, invoke `receiving-code-review` for technical-rigor + verification-not-performance-agreement discipline. Doc review feedback is high-volume and high-bias-prone (reviewers push for brevity, find nits, miss bigger gaps). Verify each piece of feedback against the actual diff before editing.
+    - **Anti-patterns:**
+        - Writing the doc without verifying the diff (no evidence per claim) = verification-before-completion violation.
+        - Skipping `code-review` on the doc = ship doc that's wrong; review is a gate, not a hint.
+        - Agreeing with doc reviewer without verification = anti-sycophancy violation (per `receiving-code-review`).
+        - Designing the PR body in a separate file instead of in the commit message = audit-trail drift (per step 15a "Document lives with the commit").
+    - **Attach research + reference links in PR body**: every PR body MUST include a `## References` section linking every `.local/plugins-docs/` file + `tasks/<topic>-lesson.md` entry + `tasks/lessons.md` amendment whose decisions this PR implements. The PR body is the audit trail; references tie the change to its reasoning. Without references, future readers cannot trace WHY this change was made.
+        - **Plugin deep-dive references** (cite when PR touches the corresponding plugin area):
+            - `.local/plugins-docs/2026-08-31-mattpocock-skills-deepdive.md` — PRs that install/configure `mattpocock-skills` or invoke its skills (grill-with-docs, tdd, code-review, triage, etc.)
+            - `.local/plugins-docs/2026-08-31-superpowers-6.3.0-deepdive.md` — PRs that install/configure `superpowers` plugin or invoke its iron laws (TDD, verification-before-completion, brainstorming)
+            - `.local/plugins-docs/2026-08-31-mattpocock-vs-superpowers.md` — PRs that compare, stack, or migrate between the two plugins
+            - `.local/plugins-docs/2026-08-31-gh-issue-creation-guide.md` — PRs that change `docs/agents/issue-tracker.md`, `triage-labels.md`, or the issue-creation workflow
+        - **Lesson references** (cite when PR changes the corresponding lesson):
+            - `tasks/issues-lesson.md` (PL21-PL26) — PRs that touch backlog triage, issue creation, or any workflow 1-5
+            - `tasks/lessons.md` (L1-L61 + amendments) — PRs that amend pipeline rules (L13, L46, L24, L11, L25, L42, etc.)
+            - `tasks/plan-lesson.md`, `tasks/review-lesson.md`, `tasks/search-lesson.md`, `tasks/task-map-lesson.md` — PRs that amend the corresponding phase rules
+    - **Invoke used plugins + list skill names**: every PR body MUST include a `## Skills invoked` (or `## Plugins used`) section enumerating the skills actually called during this PR's work. Lists audit evidence: `grill-with-docs`, `tdd`, `code-review`, `brainstorming`, `verification-before-completion`, `receiving-code-review`, etc. Reader can reproduce the agent's reasoning by re-invoking the same skills. Empty section = unverified work (per `superpowers:verification-before-completion` iron law).
+    - **Reference format template** (paste into PR body):
+        ```markdown
+        ## References
+
+        - <doc-path-1>: <one-line why>
+        - <doc-path-2>: <one-line why>
+
+        ## Skills invoked
+
+        - `<plugin>:<skill>` — <when invoked + outcome>
+        - `<plugin>:<skill>` — <when invoked + outcome>
+        ```
+15b. **Apply L24**
 15b. **Apply L24** — verify CHANGELOG `[Unreleased]` bullet + User Stories table checkbox flip + "Try it" command landed in the merged code (per step 11b's local-branch rule, they should already be there). At release-cut time: move accumulated `[Unreleased]` entries under `## [vN] — YYYY-MM-DD` and reset `[Unreleased]` empty.
     - **Sub-step 15b.1 — agent-driven verification (per 2026-08-26 amendment)**: tier-gated (`normal` + `critical` only, skip `trivial`). Invoke Explore subagent with PR diff + user-stories.md + active plan + deep-dive.md paths. Agent outputs: (a) checkboxes to flip `[ ]` → `[x]` with file:line evidence, (b) drift findings (impl exists, doc missing or stale), (c) new-issue suggestions (planned-but-not-implemented stories). Human reviews the report + applies edits via separate commit(s). Never auto-merge doc edits from subagent output — the subagent reports, the human edits, the PR review gates the doc commit. Trigger on every `rust-eth-core` PR + every `main` release cut; opt-in elsewhere.
 15c. **Review all L13 steps 1-15b completed** (broader pre-merge gate — widens 15d's PR-body checklist to all L13 steps):

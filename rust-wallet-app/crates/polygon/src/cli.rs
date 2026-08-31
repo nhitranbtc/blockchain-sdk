@@ -332,7 +332,7 @@ pub struct SendSpeedupArgs {
 pub enum TxAction {
     List {
         #[arg(long, value_parser = parse_address)]
-        address: String,
+        address: Address,
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
         network: String,
         #[arg(long)]
@@ -366,9 +366,9 @@ pub enum Erc20Action {
         #[arg(long)]
         token: String,
         #[arg(long, value_parser = parse_address)]
-        token_address: Option<String>,
+        token_address: Option<Address>,
         #[arg(long, value_parser = parse_address)]
-        to: String,
+        to: Address,
         #[arg(long)]
         amount: String,
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
@@ -386,11 +386,11 @@ pub enum Erc20Action {
     },
     Balance {
         #[arg(long, value_parser = parse_address)]
-        address: String,
+        address: Address,
         #[arg(long)]
         token: String,
         #[arg(long, value_parser = parse_address)]
-        token_address: Option<String>,
+        token_address: Option<Address>,
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
         network: String,
         #[arg(long)]
@@ -410,7 +410,7 @@ pub enum Erc20Action {
     },
     Register {
         #[arg(long, value_parser = parse_address)]
-        address: String,
+        address: Address,
         #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
         network: String,
         #[arg(long)]
@@ -426,7 +426,7 @@ pub enum Erc20Action {
         #[arg(long)]
         token: String,
         #[arg(long, value_parser = parse_address)]
-        spender: String,
+        spender: Address,
         #[arg(long, default_value = "0")]
         amount: String,
         #[arg(long)]
@@ -476,7 +476,7 @@ pub enum ConfigAction {
 #[derive(clap::Args, Debug)]
 pub struct FaucetArgs {
     #[arg(long, value_parser = parse_address)]
-    pub address: String,
+    pub address: Address,
     #[arg(long, env = "POLYGON_NETWORK", default_value = "amoy")]
     pub network: String,
     #[arg(long, default_value = "POL")]
@@ -496,9 +496,9 @@ pub struct SignMessageArgs {
     #[arg(long)]
     pub message: String,
     #[arg(long, value_parser = parse_address)]
-    pub address: Option<String>,
+    pub address: Option<Address>,
     #[arg(long, value_parser = parse_address)]
-    pub verify: Option<String>,
+    pub verify: Option<Address>,
     #[arg(long)]
     pub rpc_url: Option<String>,
 }
@@ -526,9 +526,9 @@ pub struct SignTypedArgs {
     #[arg(long)]
     pub password: Option<String>,
     #[arg(long, value_parser = parse_address)]
-    pub address: Option<String>,
+    pub address: Option<Address>,
     #[arg(long, value_parser = parse_address)]
-    pub verify: Option<String>,
+    pub verify: Option<Address>,
     #[arg(long)]
     pub rpc_url: Option<String>,
 }
