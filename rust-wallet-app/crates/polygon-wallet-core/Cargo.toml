@@ -1,0 +1,36 @@
+[package]
+name = "polygon-wallet-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "MIT"
+description = "Polygon (PoS) thin wrapper over evm-wallet-core. Phase 1 of Issue #416 / plan `docs/superpowers/plans/2026-08-27-polygon-wallet-core.md`. Adds Polygon-specific RPC URLs + gas-token label re-exports; no signing/RPC code (all inherited from evm-wallet-core)."
+publish = false
+
+[dependencies]
+evm-wallet-core = { path = "../evm-wallet-core" }
+
+# Re-exports so downstream crates (polygon CLI in Phase 4, tests in this crate)
+# can use alloy primitives + BIP-39 mnemonic without depending on evm-wallet-core
+# directly. Mirrors how eth-wallet-core exposes them.
+alloy-primitives = { workspace = true }
+bip39 = { workspace = true }
+
+# Token registry JSON loader (Task 4 of #425). serde_json needed
+# at the polygon-wallet-core boundary rather than relying on
+# evm-wallet-core's transitive dep — explicit surface for future
+# Phase 4 CLI custom-registry writes (Story 24). `Token` derives
+# Serialize/Deserialize in evm-wallet-core, so the `derive` feature
+# is reachable transitively — no need to declare serde here.
+serde_json = { workspace = true }
+
+# T6c3 follow-up #3: `TxSummary` lives in polygon-wallet-core (not
+# the polygon binary crate, which is `publish = false` and effectively
+# can't be imported by downstream consumers). The derive macros need
+# to be reachable here so the type can be Serialize + Deserialize for
+# the polygon CLI `--json` output + JSON roundtrip tests.
+serde = { workspace = true }
+
+[dev-dependencies]
+# Tests cross-validate derivation against evm-wallet-core's shared mnemonic fn
+# (coin type 60' is chain-agnostic). Same setup as evm-wallet-core/tests/mnemonic.rs.

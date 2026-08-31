@@ -200,6 +200,7 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 | Behavioral discipline (every L13 step)       | `andrej-karpathy-skills:karpathy-guidelines` — wrapper at step 4 (branch checkout) + step 15c (broad L13 audit). Per L13 behavioral discipline section (4 principles: think-first, simplicity, surgical, goal-driven). |
 | Pre-PR code review (comprehensive)          | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10). Scope: correctness, security, tests, structure. |
 | Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
+| Code smell / debt reported (any tier) | `ecc:refactor-clean` (dead-code audit first) → per-language `*-review` (interpret findings) → `ecc:quality-gate` (formatter check) |
 | Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
 | PR review feedback (L13 step 15, 3-round fix loop) | `superpowers:receiving-code-review` wrapped by `pr-review-toolkit:code-review` |
 | Test coverage gap analysis                   | `pr-review-toolkit:pr-test-analyzer`                                                                                                 |
@@ -341,11 +342,12 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - **No hardcode in production; test only**: hardcoded literals (URLs, paths, IPs, credentials) belong in `#[cfg(test)]` blocks only. Production routes through `WalletConfig` (or equivalent named config). Test fixtures are exceptions, not defects.
     - *Note*: L11 recommends also invoking `superpowers:verification-before-completion` at this step. User rejected adding it to L13 (2026-08-07) — L11 mapping still recommends it; L13 spec stays literal. If invoking it, do so as a wrapper around the cargo commands, not as a replacement.
 11a. **Backlog triage** (when verify surfaces an error that can't be fixed in-task). Sequence: step 11c (systematic-debugging) → step 11a (triage decision) → either fix-and-rerun-11 OR create-backlog-item.
-    - **Triage classes** (6, with deterministic decision criteria):
+    - **Triage classes** (7, with deterministic decision criteria):
         - **Fixable now**: ≤10 min + in scope + no new test required → fix in current commit, re-verify, continue
         - **In-PR follow-up**: >10 min OR scope-creep risk → commit in current PR (before merge), not main yet; lands via the feature PR's pipeline
         - **Small deferred** (cosmetic, follow-up): touches adjacent code OR needs new test but doesn't block → log in current session's backlogs list + L14 progress.md events
         - **Big task** (multi-PR, multi-week): own PR OR multi-week OR cross-crate → create GitHub issue, label `backlog`, link to parent task
+        - **Code smell / debt** (knip / depcheck / dead-code finding from L12 sub-agent or `refactor-clean` audit): ≤10 min + in scope + no new test → fixable now; touches adjacent code OR scope-creep risk → small deferred with `refactor-clean` audit as acceptance criteria; cross-crate OR multi-PR → big task with backlog issue + parent task ref
         - **Future milestone** (v0.1.1, v0.2): doesn't ship before parent task's release → log with `priority/p2|p3` tag
         - **External gate** (operator-driven, L29 manual smoke / L28 Gate B): can't run in CI → mark `[ ]` in PR body with `<!-- TODO: <operator-action> -->` deferral note (per step 14 external-gate discipline)
     - **Decision criteria** (deterministic, not vibes):
@@ -386,6 +388,15 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 13. commit-commands:commit-push-pr
     - **L46 — pre-execute destination re-check:** run `git branch --show-current` again immediately before invoking `commit-push-pr`. Even if step 12's check passed, HEAD may have moved (post-merge housekeeping, `git checkout -`, IDE tab switch). Mismatch → STOP, re-checkout expected branch, then proceed. Pair with L42 (`git diff --cached --stat`): L42 audits content, L46 audits destination, both at the same gate.
     - **L51 — resolve merge conflict:** if `git push` (or the step-4 rebase from integration branch) fails with conflicts, STOP commit-push-pr; invoke `mattpocock-skills:resolving-merge-conflicts` (canonical flow: read markers, decide ours/theirs/combine, re-run step 11 triple gate after resolution, resume push). Do NOT manually hand-edit conflict markers without the skill — skipping the flow risks silent content loss and missing test regressions.
+    - **`[skip ci]` for .md-only commits** (added 2026-08-28 per user rule): before invoking `commit-push-pr`, run `git diff --cached --name-only`. If every staged path ends in `.md`, append `[skip ci]` to the commit subject (GitHub Actions treats `[skip ci]`, `[skip ci]`, `[no ci]`, `[ci skip]` as no-op markers — Rust CI gates are irrelevant for markdown diffs). If any staged path is not `.md` (`.rs` / `.toml` / `.yml` / `.json` / etc.), do NOT add `[skip ci]` — CI must run. Pattern:
+        ```bash
+        if git diff --cached --name-only | grep -qv '\.md$'; then
+          git commit -m "<subject>"            # CI runs normally
+        else
+          git commit -m "<subject> [skip ci]"  # doc-only — CI skipped
+        fi
+        ```
+        Pair with L42 (verify staged) + L51 (post-commit `git show --stat` confirms marker + scope). Anti-patterns: adding `[skip ci]` to a non-.md commit (bypasses required checks; PR cannot merge red); omitting `[skip ci]` on a pure .md commit (wastes CI minutes).
 14. **Flip issue checkboxes [ ]→[x] — only after verifying each box is actually completed** (before PR open, after commit-push-pr):
     - **Walk the issue body before flipping** — for every `[ ]` box, confirm the acceptance criterion is actually met in the committed code (test passes, doc landed, dependency merged, etc.). Per L28 (verify-before-claim) + L24 anti-pattern "Flipping the box speculatively before the merge" — every flip must be backed by a verifiable artifact, not intent.
     - **One-by-one audit** — read each checkbox, name the artifact that satisfies it (test name, file:line, commit SHA, PR number), then flip. Bulk-flipping without per-box evidence is the failure mode.
@@ -1502,3 +1513,131 @@ The Mutex is necessary because `cargo test` runs tests in parallel by default; w
 - Job scoped to `--ignored` / `if: success()` — defeats the permanent-block intent.
 - Generic `grep` for `format!` or `Rpc` — too broad, causes false positives in unrelated code. Anchor on the specific leaky pattern (`Error::Rpc(format`).
 
+### L57 — Security-auditor fallback for critical-tier (2026-08-30, PR #462 application)
+
+**Trigger**: `pr-review-toolkit:security-auditor` not in active harness's agent registry during L13 step 10 critical-tier review of #459 (sign dispatch wiring). Existing L53 amendment (2026-08-26) permits substituting the closest equivalent but requires the deviation be documented in PR body AND lessons.md.
+
+**Rule**: When `pr-review-toolkit:security-auditor` is absent, substitute `compass:security-auditor` (closest lens match — description names "trust boundaries, crypto, secrets, authz"). Alternatives: `ecc:security-reviewer` (OWASP-flavored) or `voltagent-qa-sec:security-auditor`. Pick the one whose description explicitly mentions the lens needed (for key-material / signing surfaces: crypto + secrets + trust boundaries). Document the substitution in the PR body alongside the fallback attribution, AND append a per-instance note here with the PR# / tier / outcome. Do NOT skip the security lens entirely per L13 Q4 carve-out — the fallback is mandatory.
+
+**Why**: Critical-tier surfaces (key material / signing / encryption / network / persistence) MUST get the security lens. Skipping it leaves gaps TDD + type-design + code-review cameras don't see. PR #462 application: `compass:security-auditor` caught (a) the `from_slice` error-category fix (keystore corruption → `Error::Rpc`, NOT `InvalidInput` — operator retry-trap), and (b) confirmed 6/7 lenses clean (zeroizing, password chain, wrong-password exit code, Q7 gate, verify round-trip, signer construction error). Two pre-existing gaps (L54 threading invariant, empty `POLYGON_PASSWORD` env) flagged but not regressed by #459 — deferred to separate small-PR follow-ups per L13 surgical.
+
+**Apply**: When `pr-review-toolkit:security-auditor` (or `type-design-analyzer`, `code-reviewer`) is unavailable, substitute the closest equivalent and document the fallback in (a) PR body "L12 review" section + (b) `tasks/lessons.md` with PR# / tier / outcome / lenses-covered. Never silently skip a lens; if no equivalent exists, surface the gap to the user and PAUSE before proceeding (per L13 Q4 budget).
+
+---
+
+### L13 amendment 2026-08-28 — `cancel-in-progress: true` cascade-cancels cargo test in workspace-wide CI
+
+Trigger: PR #430 (Phase 1 `polygon-wallet-core` thin wrapper, issue #423) on `feat/polygon-phase-1-423` against `rust-evm-core`. Three substantive commits in 17 minutes (feature scaffold, L24 CHANGELOG bullet, [ci-skip] lessons amendment) cascade-cancelled the in-flight `Rust test` job twice — Run 7 cancelled at 13m20s, Run 8 cancelled at 14m — before `cargo test --workspace --all-targets` could finish. The 40m `timeout-minutes` was never reached. The cancel signal came from the workflow's `concurrency.cancel-in-progress: true` setting, NOT from the timeout.
+
+**Rule**: When a PR to `rust-evm-core` (or any integration branch) is likely to receive >1 substantive commit during the run of its longest required-check job, either (a) drop `cancel-in-progress: true` from the workflow `concurrency` block, OR (b) bump the relevant job's `timeout-minutes` past `expected_runtime × 2` AND accept that any push during the run kills the in-flight test.
+
+**Why**: `cargo test --workspace --all-targets` against `rust-wallet-app/` includes `bitcoin-wallet-core` FFI tests that deliberately wait for esplora sync timeouts (~60-90s each) plus several FFI tests in the same magnitude. Whole-workspace run takes 30-40 min depending on cache state. The default 40m timeout is tight; a single substantive push mid-run cancels the test, the next push cancels that one too, and the test never gets to complete.
+
+**Apply — pattern**:
+
+```yaml
+# BAD (cascade-cancels in-flight runs on every push):
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# GOOD (let runs queue, each gets full budget):
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+# GOOD (scope cancel-in-progress per-job, only safe jobs):
+jobs:
+  rust-fmt:
+    concurrency:
+      group: fmt-${{ github.ref }}
+      cancel-in-progress: true
+  rust-test:
+    # NO cancel-in-progress here — let it run to completion
+```
+
+**Pair with** the [ci-skip] amendment above: doc-only commits no longer churn the required-check list (saved by [ci-skip]); code-bearing commits no longer cascade-cancel (saved by removing `cancel-in-progress`). Two complementary rules, both shipped via PR #430.
+
+**Pair with** the timeout-bump pattern: when `cargo test --workspace --all-targets` is the required gate, `timeout-minutes` should be ≥ `expected_runtime × 1.5` to absorb cache-miss variance. PR #430 bumped `rust-test` from 40m → 60m on the same edit.
+
+**Anti-patterns**:
+
+- Setting `cancel-in-progress: true` globally on an integration-branch workflow that runs `cargo test --workspace` — every push kills in-flight test runs.
+- Trusting the operator's push cadence ("I'll just push one typo fix") — substantive commits land more often than expected, especially during plan-driven multi-step work.
+- Bumping `timeout-minutes` without also addressing `cancel-in-progress` — if cancel is the killer, more timeout headroom just means more wasted CI minutes per cancelled run.
+- Removing `cancel-in-progress` from a per-push-typo-fix workflow (e.g. a fork-and-fix branch) where it's still useful — this amendment is for integration branches with `cargo test --workspace` as a required check.
+
+**Worked example (PR #430 timeline)**:
+
+| Push | Run | Result | Why |
+|------|-----|--------|-----|
+| 09:17 — `846778b` (feature scaffold) | Run 7 (head `846778b`) | cancelled @ 09:34 | superseded by Run 8 from `17066ba` push at 09:34 |
+| 09:34 — `17066ba` (L24 CHANGELOG bullet) | Run 8 (head `17066ba`) | cancelled @ 09:49 | superseded by Run 9 from `e7f1144` push at 09:48 |
+| 09:48 — `e7f1144` ([ci-skip] lessons amendment) | Run 9 (head `e7f1144`) | in progress @ 09:49 | awaiting Rust test completion |
+
+`Rust test` (the only required-check that takes >5 min) never had a chance to finish a single cargo test cycle. Fix landed in commit `45d0669` on `feat/polygon-phase-1-423` (folded into squash `92256ad` on `rust-evm-core`).
+
+
+## L58 — `k256::SigningKey::from_slice` accepts variable-length byte slices (parses as big-endian scalar mod N)
+
+**Trigger**: 2026-08-30, PR #470 (Issue #469). Initial test wrote `vec![0x42u8; 31]` expecting `PrivateKeySigner::from_slice` to reject non-32-byte input. Test failed (impl returned `Ok`). Re-read the alloy-signer-local source at `~/.cargo/registry/.../alloy-signer-local-1.8.3/src/private_key.rs:fn from_slice` — it delegates to `k256::SigningKey::from_slice(bytes)`, which accepts ANY byte slice and interprets it as a big-endian integer mod curve order N. "Wrong length" is not a rejection criterion; "scalar ≥ N" is.
+
+**Rule**: When writing a unit test that asserts `PrivateKeySigner::from_slice` rejects malformed input, use 32 bytes of `0xFF` (which exceeds the secp256k1 curve order N) to trigger scalar rejection — NOT a short or long slice. 31 bytes of `0x42` silently parses as a valid (but unusual) private key. Apply to any test against the alloy signer stack, the `k256::ecdsa` crate directly, or any sister crate built on it.
+
+**Why**: The sister invariant `decode_signer_bytes_rejects_wrong_length_hex` at `evm-wallet-core/src/wallet.rs:1034` only catches malformed HEX STRING length — it doesn't catch malformed BYTE length on the raw-bytes entry point that #469 introduces (`import_private_key_for_network(name, key_bytes: &[u8], ...)`). The byte-length test gap is invisible to TDD cameras focused on the hex entry point. Without this lesson, future contributors will write the same wrong test and either (a) silently pass with bogus coverage, or (b) defensively add a length check to the lib that breaks the sister `from_slice` semantics.
+
+**Apply**:
+- When the surface is `from_slice(&[u8])` (raw bytes), test rejection with `0xFF * 32` (scalar ≥ N).
+- When the surface is `from_slice(&str)` (hex), test rejection with `&str` of wrong length (existing sister test).
+- When the surface is `from_slice(&SecretKey)` (typed), the lib does its own validation; trust the type.
+
+**Anti-patterns**:
+- Assuming `from_slice` enforces a fixed 32-byte input. It does not.
+- Adding an explicit `key_bytes.len() != 32` check in a new wrapper around `from_slice` without first confirming the wrapped caller doesn't expect variable-length scalar semantics (e.g. hardware-wallet keys that use a different curve).
+- Naming a test `rejects_wrong_key_length` when the actual rejection criterion is scalar range, not length — pin the rejection mechanism in the test name (e.g. `rejects_out_of_range_scalar`).
+
+**Apply — example** (from PR #470 commit `b4194e7`):
+
+```rust
+let bad_pk = [0xFFu8; 32]; // > secp256k1 N → triggers from_slice scalar rejection
+let err = mgr.import_private_key_for_network("bad-scalar", &bad_pk, &pw, net)
+    .expect_err("out-of-range scalar must error");
+assert!(matches!(err, WalletError::PrivateKey(_)));
+```
+
+PR #470 evidence: commit `b4194e7` + 7 new lib tests (this one + 6 sister tests for polygon-amoy happy path, same-name-different-network uniqueness, dup-name rejection, empty-password rejection, 0o600 blob persistence, `unlock_signer` round-trip).
+
+---
+
+## L59 — clap `#[arg(long, conflicts_with = "...")]` uses the FIELD-NAME-derived arg ID, not the long-flag string
+
+**Trigger**: 2026-08-30, PR #470 (Issue #469). Adding a new `--private-key-file` flag to `WalletAction::Import` (which already had `--private-key` and `--mnemonic`). Initial naive write: `#[arg(long, conflicts_with = "private_key_file")]` on the existing `private_key` field — silently did nothing because clap's `conflicts_with` takes the ARG ID, not the literal flag string. The arg ID for `#[arg(long)]` on a Rust field is the field name (snake_case) — so the right string is `"private_key_file"` (matches the field name) NOT `"--private-key-file"` (the user-facing flag).
+
+**Rule**: When adding a new clap field that must conflict with one or more existing fields, append `conflicts_with = "<other_field_name>"` to BOTH sides of the relationship (the new field + every existing field it conflicts with). Arg IDs are derived from field names automatically (snake_case from Rust convention). User-facing flag strings (`--private-key-file`) are irrelevant to `conflicts_with`. To check an arg ID: `clap_derive` exposes it via `#[arg(id = "explicit")]`; without that override, the field name is the ID.
+
+**Why**: Sister-flag conflicts are critical for security (closing argv-exposure holes, preventing dual-secret paths). If `conflicts_with` is silent no-op because of a wrong reference, the conflict check never fires and the user can pass both flags. TDD tests for the clap parse surface (`Cli::try_parse_from`) DO catch this — that's exactly the role of `cli_rejects_private_key_with_private_key_file` in PR #470 — but only if the test author knows to write the test. Without the test, the silent no-op ships.
+
+**Apply**:
+- Adding a new conflicting field: enumerate ALL existing fields that should conflict with it; append `conflicts_with = "<their_field_name>"` to the new field; append `conflicts_with = "<new_field_name>"` to every existing field.
+- Use `Cli::try_parse_from(["binary", "sub", ...])` in a unit test to confirm the conflict fires — don't rely on docstring or manual smoke.
+- The conflict message should mention BOTH flag names (`msg.contains("--private-key") && msg.contains("--private-key-file")` per the PR #470 test) so the operator sees the full conflict.
+
+**Anti-patterns**:
+- `conflicts_with = "--private-key-file"` (with leading `--`) — clap treats it as a literal string match against the arg ID; doesn't match; silent no-op.
+- Adding `conflicts_with` on only the NEW field, not the existing ones — clap enforces conflicts only one directionally; both sides needed.
+- Assuming `conflicts_with` works for long-flag strings — it doesn't; clap's arg ID system is documented but easy to miss.
+
+**Apply — example** (from PR #470 commit `b4194e7`):
+
+```rust
+Import {
+    #[arg(long, conflicts_with = "private_key", conflicts_with = "private_key_file")]
+    mnemonic: Option<SecretMnemonic>,
+    #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key_file")]
+    private_key: Option<String>,
+    #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key")]
+    private_key_file: Option<PathBuf>,
+    // ...
+}
+```
+
+Every pair appears on both sides. Tested via `cli_rejects_private_key_with_private_key_file` (`polygon/src/handlers/wallet.rs:2098`).
