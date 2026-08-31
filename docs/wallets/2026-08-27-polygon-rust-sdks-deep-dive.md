@@ -286,6 +286,19 @@ No `alloy` config changes needed. The `Network` enum (or chain-config struct) on
 
 Identical to ETH. No Polygon-specific changes.
 
+### Local dev testnet (Anvil Polygon-fork)
+
+For v0.1 unit + integration tests, use **Anvil (Foundry) in Polygon-fork mode**.
+Pattern: `AnvilInstance::new().spawn()` via `alloy-node-bindings` (already in
+`evm-wallet-core`'s `[dev-dependencies]`) returns a running node + 10 prefunded
+accounts and preserves Polygon mainnet state at the forked block. Existing
+wiring reference: `rust-wallet-app/crates/evm-wallet-core/tests/erc20_anvil.rs`.
+
+Trade-offs, alternative comparison (Anvil vs `polygon-cli`/`bor` vs
+testcontainers), and the spike V9 use-case validation all live in the plan:
+
+[`docs/superpowers/plans/2026-08-27-polygon-wallet-core.md` §Phase 0.0](../superpowers/plans/2026-08-27-polygon-wallet-core.md)
+
 ## Alternatives considered (and why rejected)
 
 Already covered in §"Why EVM-reuse (Option A)". Consolidated for the at-a-glance view:
