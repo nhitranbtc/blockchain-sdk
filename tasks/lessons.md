@@ -51,7 +51,7 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 |---|---|
 | Build / Cargo hygiene | L1 |
 | Git workflow | L6 (approval gates), L8, L14, L42, L46, L48 |
-| Issue/PR protocol | L9, L24, L47 |
+| Issue/PR protocol | L9, L24, L47, L62 |
 | Skill + review pair | L11, L12, L13 |
 | Post-merge bookkeeping | L21, L24 |
 | Client product | L28 |
@@ -1796,3 +1796,28 @@ provider.call(&TransactionRequest::default().to(token_addr).input(balance_callda
 - Treating `constructorCall::abi_encode()` as a universal encoding helper — it's specifically for the call path, not deploy.
 - Trying to "strip the selector" by slicing the first 4 bytes off `abi_encode()` output — fragile, breaks if the ABI ever gains overloads or non-standard layouts.
 - Writing deploy input as `ctor_calldata` with no `MockUSDC::BYTECODE` prepended — the original #419 root cause that started this whole investigation.
+
+---
+
+## L62 — Phase-completion sweep SHA must be the post-merge HEAD, not the PR head (Issue #502)
+
+**Trigger**: Issue #502 (2026-09-01). PR #497 (Phase 2 of #495) squash-merge at `eb360c1` lost the `(Some(ref phrase), None, None)` mnemonic dispatch arm that existed at the PR head `b461d68`. The PR body recorded `25 passed; 0 failed` against the PR-head SHA. No post-merge sweep ran. Phases 3/4/5 inherited a broken parent branch; the loss went undetected until #501's full-suite sweep on the Phase 5 branch surfaced `30 passed; 3 failed` — three of which are the dead mnemonic arm plus two tests that could not have passed as merged (wrong CLI flag names, wrong PK-file on-disk format).
+
+**Rule**: When recording a phase-completion sweep in a tracker issue or PR body, the cited SHA must be the **post-merge HEAD** of the parent branch (or the squash commit itself), never the PR-head commit. PR-head evidence is unverifiable once squash erases the diff.
+
+**Why**: Squashing discards every commit between `main..PR-head`, including any commits added during review. A green sweep at PR head proves nothing about the merged state. The PR-body sweep claim in #497 was technically true for the cited SHA but false for the merged tree — and because no one re-ran the sweep post-merge, the regression survived across three subsequent phase PRs (#499, #500, #501).
+
+**Apply**:
+
+- Before citing a sweep SHA in a PR body / issue body / progress ledger, verify the SHA is the post-merge parent-branch HEAD, not the PR head:
+
+```bash
+git rev-parse HEAD               # post-merge parent-branch HEAD
+git rev-parse origin/<branch>    # remote parent-branch HEAD
+```
+
+The cited SHA MUST equal one of these, not the PR head SHA (`git rev-parse origin/<branch>~0` is still PR head if the PR is open).
+
+- For `gh pr merge --squash`, the **squash commit itself** is the verifiable evidence for a green sweep, because the PR head commit is discarded.
+- Phase-completion ledger entries should record the SHA + the merge commit SHA + the command (`gh pr merge --squash <N>`) that produced the merge — three points that any future audit can re-verify.
+- This rule covers all sweep-bearing phases (Phase 1 through N of any umbrella issue), not just #495. Audit existing phase-completion claims for similar drift before relying on them.

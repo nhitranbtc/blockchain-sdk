@@ -1297,10 +1297,14 @@ async fn local_testnet_wallet_import_private_key_file_mode_0600() {
     require_run_polygon_local();
     let fx = Fixture::new();
     // Deterministic 32-byte test PK (NOT a real key — fake data for seam coverage).
-    // 0x1111... is a valid secp256k1 scalar (in [1, n-1] for n ≈ 2^256 - 0x1455...).
-    let pk_hex = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    // 0x11 repeated 32 times = a valid secp256k1 scalar (in [1, n-1] for
+    // n ≈ 2^256 - 0x1455...). Written as raw 32 bytes per the
+    // `read_pk_file` contract (no hex decode on the reader side — the
+    // sister unit test at `polygon/src/handlers/wallet.rs:2002` and the
+    // `write_pk_file` helper both write raw bytes too).
+    let pk_bytes = [0x11_u8; 32];
     let pk_path = fx.data_dir.path().join("test-pk.key");
-    std::fs::write(&pk_path, pk_hex.trim_start_matches("0x")).expect("write PK file");
+    std::fs::write(&pk_path, pk_bytes).expect("write PK file");
     std::fs::set_permissions(&pk_path, std::fs::Permissions::from_mode(0o600))
         .expect("set perms 0o600");
     let out = run_polygon(
@@ -1590,9 +1594,9 @@ async fn local_testnet_wallet_send_speedup_invalid_tx_hash_errors() {
             "speedup-validator-test",
             "--tx-hash",
             "not-a-hex-hash",
-            "--new-max-fee-per-gas",
+            "--max-fee-gwei",
             "1",
-            "--new-max-priority-fee-per-gas",
+            "--priority-fee-gwei",
             "1",
         ],
         fx.data_dir.path(),
