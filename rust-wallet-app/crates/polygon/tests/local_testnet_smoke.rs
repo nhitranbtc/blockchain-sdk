@@ -24,7 +24,46 @@
 //! a coverage entry. The polygon CLI is user-facing per Phase 4 of plan
 //! `2026-08-27-polygon-wallet-core.md`; Tier 1 local-testnet coverage keeps
 //! regressions out of every release without paying live-RPC flake cost.
-
+//!
+//! **Coverage table** (Issue #495 Phase 1) — every test fn → CLI surface:
+//!
+//! | # | Test fn | CLI surface |
+//! | --- | --- | --- |
+//! | 1 | `local_testnet_version_exits_zero` | `polygon version` |
+//! | 2 | `local_testnet_config_show_json` | `polygon config show --json` |
+//! | 3 | `local_testnet_wallet_create` | `polygon wallet create --name` |
+//! | 4 | `local_testnet_wallet_list_shows_created` | `polygon wallet list` |
+//! | 5 | `local_testnet_wallet_balance_reflects_funding` | `polygon wallet balance` |
+//! | 6 | `local_testnet_wallet_send_happy_path` | `polygon wallet send` (positive) |
+//! | 7 | `local_testnet_wallet_send_invalid_recipient_errors_cleanly` | `polygon wallet send` (negative — bad `--to`) |
+//! | 8 | `local_testnet_fee_json_parses` | `polygon fee --json` |
+//! | 9 | `local_testnet_faucet_url_print` | `polygon faucet --address` (STUB — skips) |
+//! | 10 | `local_testnet_sign_message_returns_signature` | `polygon sign-message` |
+//! | 11 | `local_testnet_tx_get_returns_json_fields` | `polygon tx get --json` (live-RPC stubbed) |
+//! | 12 | `local_testnet_erc20_list_json_amoy_usdc_six_decimals` | `polygon erc20 list --json` |
+//! | 13 | `local_testnet_sign_typed_rejects_invalid_chain_id` | `polygon sign-typed --chain-id 1` (Q7 negative) |
+//! | R1 | `local_testnet_sign_message_accepts_address_flag` | `polygon sign-message --address` (regress guard, PR `432210c`/`a775af7`) |
+//! | R2 | `local_testnet_sign_message_verify_round_trips_positive` | `polygon sign-message --verify` (positive, G12 sister) |
+//! | R3 | `local_testnet_tx_list_with_address_reaches_handler` | `polygon tx list --address` (regress guard, live-RPC stubbed) |
+//! | R4 | `local_testnet_erc20_balance_address_flag` | `polygon erc20 balance --address --token USDC` (regress guard) |
+//! | R5 | `local_testnet_erc20_register_address_flag` | `polygon erc20 register --address --list` (regress guard) |
+//! | G16 | `local_testnet_derive_address_deterministic_round_trip` | offline `evm_wallet_core::mnemonic::{generate_12_word, derive_address}` (Phase 1, no RPC) |
+//!
+//! **Gap inventory** (Issue #495, NOT yet covered) — to be filled in subsequent
+//! phased PRs under parent `task-polygon-full-scenario`:
+//! G1 wallet import (HIGH), G2-G5 wallet show/delete/sync/send-speedup (MED),
+//! G6 erc20 send (HIGH), G7 erc20 approve (MED), G8-G9 erc20 register/balance (LOW),
+//! G10 tx list (LOW), G11 fee text mode (LOW),
+//! G12 sign-message verify NEGATIVE path (MED, R2 covers positive only),
+//! G13 sign-typed happy path (HIGH), G14 send flag variants (MED),
+//! G15 negative input tests (LOW), G16 derive_address (this PR).
+//!
+//! **Note:** rows R1/R2/R3/R4/R5 above are *partial gap-fillers* (clap-arg-parse
+//! regress guards from PR `432210c`/`a775af7`) — they prove the args parse
+//! cleanly without downcast-panic, but do NOT exercise full happy-path handler
+//! behavior. G8/G9/G10/G12 happy paths remain uncovered until their
+//! respective phases land.
+//!
 #![cfg(test)]
 
 use std::path::PathBuf;
@@ -1027,4 +1066,33 @@ async fn local_testnet_erc20_register_address_flag() {
             "SKIP: erc20 register handler deferred to T6d-2.2 — arg-parse regress guard verified."
         );
     }
+}
+
+// =============================================================================
+// G16 (Issue #495 Phase 1) — offline `derive_address` deterministic round-trip.
+// Sister to `mainnet_smoke.rs:159` `cross_chain_identity_same_address_eth_polygon`
+// (operator-driven, online). This variant is offline, fast, deterministic —
+// green-by-default (no Anvil, no RPC, no `#[ignore]`). Pinned BIP-44 coin_type
+// = 60 invariant: same phrase + same index must yield the same address on
+// every EVM chain. Different index → different address (BIP-44 path sanity).
+// =============================================================================
+
+#[test]
+fn local_testnet_derive_address_deterministic_round_trip() {
+    use evm_wallet_core::mnemonic::{derive_address, generate_12_word};
+
+    let phrase = generate_12_word();
+    let addr_a = derive_address(&phrase, 0);
+    let addr_b = derive_address(&phrase, 0);
+    assert_eq!(
+        addr_a, addr_b,
+        "deterministic derive_address invariant broken: same phrase + index must yield same address"
+    );
+
+    // BIP-44 path sanity: different index → different address.
+    let addr_idx1 = derive_address(&phrase, 1);
+    assert_ne!(
+        addr_a, addr_idx1,
+        "derive_address(phrase, 0) == derive_address(phrase, 1) — BIP-44 path ignored"
+    );
 }
