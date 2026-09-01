@@ -2058,8 +2058,25 @@ async fn local_testnet_sign_message_verify_mismatch_rejected() {
     );
     assert!(
         stderr.contains("recovered") && stderr.contains("!= expected"),
-        "stderr must show the recovered-vs-expected pair, proving the recover \
-         step at handlers/sign.rs:88-90 actually executed; got: {stderr}"
+        "stderr must show the recovered-vs-expected pair; got: {stderr}"
+    );
+    // Pin BOTH concrete addresses. Without these, a vacuous handler that
+    // emits the same format string with a hardcoded placeholder (e.g.
+    // `Address::ZERO`) would satisfy the fragment pins above without ever
+    // calling `recover_address_from_prehash`. Requiring karl's address (the
+    // RECOVERED value, derivable only by actually recovering) plus kara's
+    // (the EXPECTED value) forces the real recover path to have executed.
+    // Case-insensitive: EIP-55 checksum casing differs between the stored
+    // wallet metadata and the `Display` impl used in the error string.
+    let stderr_lc = stderr.to_lowercase();
+    assert!(
+        stderr_lc.contains(&karl_addr.to_lowercase()),
+        "stderr must contain the RECOVERED address {karl_addr} — proves the \
+         recover step at handlers/sign.rs:88-90 actually ran; got: {stderr}"
+    );
+    assert!(
+        stderr_lc.contains(&kara_addr.to_lowercase()),
+        "stderr must contain the EXPECTED address {kara_addr}; got: {stderr}"
     );
     // Guard against a leaked signature on the failure path: a rejected
     // verify must not still hand the caller a usable signature on stdout.
@@ -2071,8 +2088,11 @@ async fn local_testnet_sign_message_verify_mismatch_rejected() {
 }
 
 /// Row 19 (G13a) — `polygon sign-typed --chain-id 80002` with a consistent
-/// `domain.chainId`. Proves the Q7 gate ACCEPTS Amoy, then the failure comes
-/// from the lib-layer deferral, not from chain_id validation.
+/// `domain.chainId`. Proves execution REACHES the lib layer and dies there,
+/// i.e. chain_id 80002 was not rejected on the way. It does not by itself
+/// prove `assert_polygon_chain_id` was evaluated — row 13
+/// (`local_testnet_sign_typed_rejects_invalid_chain_id`) owns the Q7
+/// rejection path; the two rows together bracket the gate.
 ///
 /// TODO[eip712-feature-gate]: when `evm_wallet_core::sign_typed_data` returns
 /// `Ok(sig)`, this test SKIP-accepts exit 0 and the assertion below should be
@@ -2138,6 +2158,9 @@ async fn local_testnet_sign_typed_valid_chain_id_reaches_lib_deferral() {
     // tokens cannot distinguish the two layers. `deferred` / `feature gate` /
     // `Unsupported` come only from the lib stub
     // (`crates/evm-wallet-core/src/signer.rs:168-170`).
+    // `deferred` + `feature gate` match the current lib string; `Unsupported`
+    // (the SignError variant name) does NOT appear in it today and is kept
+    // only as a safety net for a future error-message rewrite.
     assert!(
         stderr.contains("deferred")
             || stderr.contains("feature gate")
