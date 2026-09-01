@@ -162,6 +162,29 @@ fn read_first_address(data_dir: &std::path::Path, name: &str) -> String {
         .expect("address field in meta.json")
 }
 
+/// Extract the wallet_id (UUID) from `polygon wallet create|import` stdout.
+///
+/// Both commands emit `"... id={uuid} address=0x..."` after the wallet is
+/// created/imported. Returns `None` if no parseable UUID follows the
+/// ` id=` marker. Bounds-safe (no fixed-byte slice = no panic on format
+/// drift). Mirrors the seam-test convention of `find_signature_token`.
+fn extract_wallet_id(stdout: &str) -> Option<&str> {
+    let marker = stdout.find(" id=")?;
+    let after = stdout.get(marker + 4..)?;
+    let candidate = after.get(..36)?;
+    if candidate.len() == 36
+        && candidate.chars().enumerate().all(|(i, c)| match (i, c) {
+            (8, '-') | (13, '-') | (18, '-') | (23, '-') => true,
+            (_, c) if c.is_ascii_hexdigit() => true,
+            _ => false,
+        })
+    {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 /// Strict EIP-191 signature finder.
 ///
 /// Returns the FIRST whitespace-delimited token in `stdout` that is
@@ -1094,5 +1117,400 @@ fn local_testnet_derive_address_deterministic_round_trip() {
     assert_ne!(
         addr_a, addr_idx1,
         "derive_address(phrase, 0) == derive_address(phrase, 1) — BIP-44 path ignored"
+    );
+}
+
+// =============================================================================
+// Phase 2 / S1 / G1 — `polygon wallet import --mnemonic <phrase>` round-trip.
+//
+// Sister class to L12 H-1 (PR #456 SecretMnemonic wrap, PR #470 --private-key-file).
+// Mnemonic via argv IS visible to sibling processes via /proc/<pid>/cmdline;
+// design choice per `cli.rs::Command::Wallet(WalletAction::Import)` (the
+// `SecretMnemonic` field wraps `Zeroizing<String>` per `cli.rs:91`).
+// Documents the wired behavior; operator-driven secret entry should prefer
+// --private-key-file (sister test S2).
+//
+// Happy path: 12-word BIP-39 test vector → exit 0 → stdout contains
+// "wallet imported: name=<n> id=<uuid> address=0x...".
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_import_mnemonic_round_trip() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    // BIP-39 test vector: 12-word "abandon...about" (all-zeros entropy, valid checksum).
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    // Password sourced via POLYGON_PASSWORD env (injected by `run_polygon`).
+    let out = run_polygon(
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "imported-mnemonic",
+            "--mnemonic",
+            mnemonic,
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "wallet import --mnemonic must succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("wallet imported: name=imported-mnemonic"),
+        "stdout should confirm import; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("address=0x"),
+        "stdout should contain address=0x...; got: {stdout}"
+    );
+    let uuid = extract_wallet_id(&stdout).expect("stdout should contain parseable id= UUID");
+    // Round-trip: re-show the imported wallet by id to prove the import persisted.
+    let out_show = run_polygon(
+        &["wallet", "show", "--id", uuid, "--json"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out_show.status.success(),
+        "wallet show post-import must succeed; stderr={}",
+        String::from_utf8_lossy(&out_show.stderr)
+    );
+}
+
+// =============================================================================
+// Phase 2 / S2 / G1 — `polygon wallet import --private-key-file <path>` mode-0600.
+//
+// Closes the L12 H-1 argv-exposure hole for PK import (sister class to the
+// `--mnemonic` argv finding closed by PR #456). File contents read into
+// `Zeroizing<Vec<u8>>` and zeroized on drop per `handlers::wallet::read_pk_file`.
+//
+// Security invariant: file perms must be 0o600 BEFORE and AFTER the import
+// (no chmod mutation = no accidental world-readable window).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_import_private_key_file_mode_0600() {
+    use std::os::unix::fs::PermissionsExt;
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    // Deterministic 32-byte test PK (NOT a real key — fake data for seam coverage).
+    // 0x1111... is a valid secp256k1 scalar (in [1, n-1] for n ≈ 2^256 - 0x1455...).
+    let pk_hex = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    let pk_path = fx.data_dir.path().join("test-pk.key");
+    std::fs::write(&pk_path, pk_hex.trim_start_matches("0x")).expect("write PK file");
+    std::fs::set_permissions(&pk_path, std::fs::Permissions::from_mode(0o600))
+        .expect("set perms 0o600");
+    let out = run_polygon(
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "imported-pkfile",
+            "--private-key-file",
+            pk_path.to_str().expect("utf-8 path"),
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "wallet import --private-key-file must succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("wallet imported: name=imported-pkfile"),
+        "stdout should confirm import; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("address=0x"),
+        "stdout should contain address=0x...; got: {stdout}"
+    );
+    // Security invariant: perms remain 0o600 after import (no chmod mutation).
+    let perms_after = std::fs::metadata(&pk_path)
+        .expect("stat pk file")
+        .permissions();
+    assert_eq!(
+        perms_after.mode() & 0o777,
+        0o600,
+        "PK file perms must remain 0o600 after import (mode mutation = leak); got: {:o}",
+        perms_after.mode() & 0o777
+    );
+}
+
+// Sister negative test for S2: handler's `read_pk_file` mode check (0o600 gate)
+// must reject non-conforming perms at parse time. Closes the mode-validator
+// coverage gap (L12 finding).
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_import_private_key_file_wrong_mode_rejected() {
+    use std::os::unix::fs::PermissionsExt;
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let pk_hex = "0x1111111111111111111111111111111111111111111111111111111111111111";
+    let pk_path = fx.data_dir.path().join("test-pk-bad-mode.key");
+    std::fs::write(&pk_path, pk_hex.trim_start_matches("0x")).expect("write PK file");
+    // 0o644 = world-readable — handler must reject per read_pk_file gate.
+    std::fs::set_permissions(&pk_path, std::fs::Permissions::from_mode(0o644))
+        .expect("set perms 0o644");
+    let out = run_polygon(
+        &[
+            "wallet",
+            "import",
+            "--name",
+            "imported-pkfile-bad-mode",
+            "--private-key-file",
+            pk_path.to_str().expect("utf-8 path"),
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "wallet import --private-key-file with mode 0o644 must exit non-zero; got exit 0"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("0o600") || stderr.contains("mode"),
+        "stderr should mention mode-0600 rejection; got: {stderr}"
+    );
+}
+
+// =============================================================================
+// Phase 2 / S3 / G2 — `polygon wallet show --id <uuid> --json` round-trip.
+//
+// Drift from issue #495 body: handler requires `--id` (UUID), not `--name`
+// (look-up by name deferred). `--addresses` and `--export` flags also
+// deferred. Test covers what the handler ships.
+// WalletInfo fields per `evm_wallet_core::WalletInfo`:
+// wallet_id, name, network, address, derivation_path.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_show_id_json_round_trip() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let out_create = run_polygon(
+        &["wallet", "create", "--name", "show-test"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out_create.status.success(),
+        "wallet create must succeed; stderr={}",
+        String::from_utf8_lossy(&out_create.stderr)
+    );
+    let stdout_create = String::from_utf8_lossy(&out_create.stdout);
+    let uuid =
+        extract_wallet_id(&stdout_create).expect("create stdout must contain parseable UUID");
+    let out_show = run_polygon(
+        &["wallet", "show", "--id", uuid, "--json"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out_show.status.success(),
+        "wallet show --id --json must succeed; stderr={}",
+        String::from_utf8_lossy(&out_show.stderr)
+    );
+    let stdout_show = String::from_utf8_lossy(&out_show.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout_show).expect("wallet show --json should parse as JSON");
+    assert_eq!(
+        v.get("wallet_id").and_then(|x| x.as_str()),
+        Some(uuid),
+        "wallet_id mismatch"
+    );
+    assert_eq!(
+        v.get("name").and_then(|x| x.as_str()),
+        Some("show-test"),
+        "name mismatch"
+    );
+    assert!(
+        v.get("address")
+            .and_then(|x| x.as_str())
+            .map(|s| s.starts_with("0x"))
+            .unwrap_or(false),
+        "address should be 0x-hex; got: {}",
+        v.get("address")
+            .map(|x| x.to_string())
+            .unwrap_or_else(|| "<missing>".into())
+    );
+    // Schema pin (L12 finding): all 5 WalletInfo fields must appear.
+    assert!(
+        v.get("network").is_some(),
+        "WalletInfo JSON must include `network` field"
+    );
+    assert!(
+        v.get("derivation_path").is_some(),
+        "WalletInfo JSON must include `derivation_path` field"
+    );
+}
+
+// =============================================================================
+// Phase 2 / S4 / G3 — `polygon wallet delete --id <uuid>` round-trip.
+//
+// Drift from issue #495 body: handler requires `--id` (UUID), not `--name`
+// (look-up by name deferred). After delete, `wallet show --id` must fail
+// (meta.json + .enc files removed).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_delete_id_round_trip() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let out_create = run_polygon(
+        &["wallet", "create", "--name", "delete-test"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out_create.status.success(),
+        "wallet create must succeed; stderr={}",
+        String::from_utf8_lossy(&out_create.stderr)
+    );
+    let stdout_create = String::from_utf8_lossy(&out_create.stdout);
+    let uuid =
+        extract_wallet_id(&stdout_create).expect("create stdout must contain parseable UUID");
+    let out_del = run_polygon(
+        &["wallet", "delete", "--id", uuid],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out_del.status.success(),
+        "wallet delete --id must succeed; stderr={}",
+        String::from_utf8_lossy(&out_del.stderr)
+    );
+    let stdout_del = String::from_utf8_lossy(&out_del.stdout);
+    assert!(
+        stdout_del.contains("wallet deleted:"),
+        "stdout should confirm delete; got: {stdout_del}"
+    );
+    // Post-delete invariant: `wallet show --id` must fail (meta.json + .enc gone).
+    let out_show = run_polygon(
+        &["wallet", "show", "--id", uuid],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out_show.status.success(),
+        "wallet show post-delete must fail (meta.json removed); got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out_show.stdout)
+    );
+    let stderr_show = String::from_utf8_lossy(&out_show.stderr);
+    assert!(
+        stderr_show.contains("not found")
+            || stderr_show.contains("meta.json")
+            || stderr_show.contains("read_file"),
+        "post-delete stderr should mention file-not-found; got: {stderr_show}"
+    );
+}
+
+// =============================================================================
+// Phase 2 / S5 / G4 — `polygon wallet sync --address <addr>` reaches handler.
+//
+// Drift from issue #495 body: live RPC body deferred to T7 (operator-driven
+// per L29) per `handlers::wallet::wallet_sync`. Handler returns
+// `Error::Rpc("wallet sync not yet implemented")` until then. Sister SKIP
+// pattern to `local_testnet_tx_get_returns_json_fields` (line 11 in coverage
+// table) + `local_testnet_tx_list_with_address_reaches_handler` (R3).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario; KNOWN GAP: live RPC deferred to T7 per handlers::wallet::wallet_sync"]
+async fn local_testnet_wallet_sync_address_reaches_handler() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let addr = "0x0000000000000000000000000000000000000042";
+    let out = run_polygon(
+        &["wallet", "sync", "--address", addr, "--network", "amoy"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    if out.status.success() {
+        // Live RPC landed — assert parseable JSON (empty array acceptable).
+        // TODO[T7]: tighten to assert Vec<TxSummary> shape per `polygon_wallet_core::TxSummary`.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let _: serde_json::Value =
+            serde_json::from_str(&stdout).expect("wallet sync should parse as JSON");
+    } else {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("not yet implemented") || stderr.contains("wallet sync"),
+            "wallet sync stderr should mention deferral OR live result; got: {stderr}"
+        );
+        eprintln!(
+            "SKIP: wallet sync live RPC deferred to T7 per handlers::wallet::wallet_sync. \
+             Re-run when live RPC lands."
+        );
+    }
+}
+
+// =============================================================================
+// Phase 2 / S6 / G5 — `polygon wallet send-speedup --tx-hash <bad>` validator.
+//
+// Drift from issue #495 body: happy path requires pending-tx setup (operator-
+// driven per L29 — Anvil auto-mines, no pending tx available offline). This
+// test covers the validator path: bad tx-hash format → handler rejects at
+// `B256::from_str` per `handlers::wallet::wallet_send_speedup_v2`. Happy path
+// belongs in `amoy_smoke.rs` (operator-driven live RPC).
+//
+// L12 fix: wallet-create-first step ensures the test does NOT pass on
+// validator ordering (handler parses tx-hash before wallet lookup).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_speedup_invalid_tx_hash_errors() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    // Wallet must exist first so the validator error path (tx-hash parse)
+    // is the path that trips — not "wallet not found".
+    let out_create = run_polygon(
+        &["wallet", "create", "--name", "speedup-validator-test"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out_create.status.success(),
+        "wallet create must succeed; stderr={}",
+        String::from_utf8_lossy(&out_create.stderr)
+    );
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send-speedup",
+            "--name",
+            "speedup-validator-test",
+            "--tx-hash",
+            "not-a-hex-hash",
+            "--new-max-fee-per-gas",
+            "1",
+            "--new-max-priority-fee-per-gas",
+            "1",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "wallet send-speedup with invalid --tx-hash must exit non-zero; got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // L12 fix: drop `|| "invalid"` disjunct (trivially satisfiable).
+    // Handler emits exactly `Error::InvalidInput(format!("invalid --tx-hash: {e}"))`.
+    assert!(
+        stderr.contains("invalid --tx-hash"),
+        "stderr should mention exact `invalid --tx-hash`; got: {stderr}"
     );
 }
