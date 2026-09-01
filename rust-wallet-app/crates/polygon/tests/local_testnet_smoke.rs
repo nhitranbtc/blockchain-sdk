@@ -45,6 +45,8 @@
 //! | 14  | `local_testnet_erc20_send_amoy_stop_only_round_trip` | `polygon erc20 send` (STOP-only at `AMOY_USDC_ADDR`, see #498) |
 //! | 14b | `local_testnet_erc20_send_amoy_usdce_rejected` | `polygon erc20 send` USDC.e guard negative (rejected before RPC) |
 //! | 15  | `local_testnet_erc20_approve_stop_only_revoke_round_trip` | `polygon erc20 approve` set→revoke (STOP-only, 2 distinct 66-hex tx hashes) |
+//! | 16  | `local_testnet_tx_list_limit_zero_rejected` | `polygon tx list --limit 0` + `--limit 10001` (CLI smoke for handler guard at `handlers/tx.rs:34-40`) |
+//! | 17  | `local_testnet_fee_text_mode_human_readable` | `polygon fee --network amoy` (text mode, no `--json`; sister to row 8 JSON mode) |
 //! | R1 | `local_testnet_sign_message_accepts_address_flag` | `polygon sign-message --address` (regress guard, PR `432210c`/`a775af7`) |
 //! | R2 | `local_testnet_sign_message_verify_round_trips_positive` | `polygon sign-message --verify` (positive, G12 sister) |
 //! | R3 | `local_testnet_tx_list_with_address_reaches_handler` | `polygon tx list --address` (regress guard, live-RPC stubbed) |
@@ -56,10 +58,10 @@
 //! phased PRs under parent `task-polygon-full-scenario`:
 //! G1 wallet import (HIGH), G2-G5 wallet show/delete/sync/send-speedup (MED),
 //! G8-G9 erc20 register/balance (LOW),
-//! G10 tx list (LOW), G11 fee text mode (LOW),
+//! G10 tx list (DONE Phase 4 row 16), G11 fee text mode (DONE Phase 4 row 17),
 //! G12 sign-message verify NEGATIVE path (MED, R2 covers positive only),
 //! G13 sign-typed happy path (HIGH), G14 send flag variants (MED),
-//! G15 negative input tests (LOW), G16 derive_address (this PR).
+//! G15 negative input tests (LOW), G16 derive_address (DONE Phase 1).
 //!
 //! **Note:** rows R1/R2/R3/R4/R5 above are *partial gap-fillers* (clap-arg-parse
 //! regress guards from PR `432210c`/`a775af7`) — they prove the args parse
@@ -1835,5 +1837,137 @@ async fn local_testnet_erc20_approve_stop_only_revoke_round_trip() {
     assert_ne!(
         hash_a, hash_b,
         "approve→revoke must produce 2 distinct tx hashes; got both={hash_a}"
+    );
+}
+
+// =============================================================================
+// Phase 4 / Issue #495 — tx + fee gap fills (G10, G11)
+// =============================================================================
+
+/// `polygon tx list --limit <out-of-range>` (CLI smoke for handler guard).
+///
+/// Sister to handler unit tests `tx_list_rejects_zero_limit` +
+/// `tx_list_rejects_excessive_limit` at `polygon/src/handlers/tx.rs:131-161`.
+/// Validates the CLI surface reaches the `limit ∈ [1, 10000]` guard at
+/// `polygon/src/handlers/tx.rs:34-40` (returns `Error::InvalidInput` BEFORE the
+/// T7 live-RPC gate). Existing R3 stub `local_testnet_tx_list_with_address_reaches_handler`
+/// at line 1058 covers happy-path reach + deferral SKIP — this fn fills the
+/// negative-path-only gap. Issue #495 Phase 4 (LOW, G10).
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_tx_list_limit_zero_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    // Valid 20-byte hex address (handler-level `parse_address_strict` at
+    // `polygon/src/handlers/tx.rs:81-89` accepts canonical EIP-55 hex).
+    let addr = "0x0000000000000000000000000000000000000042";
+
+    // Sub-assert 1: `--limit 0` — below lower boundary, must reject.
+    let out_zero = run_polygon(
+        &[
+            "tx",
+            "list",
+            "--address",
+            addr,
+            "--limit",
+            "0",
+            "--json",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out_zero.status.success(),
+        "tx list --limit 0 must exit non-zero; exit={:?} stderr={}",
+        out_zero.status.code(),
+        String::from_utf8_lossy(&out_zero.stderr)
+    );
+    let stderr_zero = String::from_utf8_lossy(&out_zero.stderr);
+    assert!(
+        stderr_zero.contains("limit")
+            || stderr_zero.contains("[1, 10000]")
+            || stderr_zero.contains("InvalidInput"),
+        "tx list --limit 0 stderr must mention limit guard; got: {stderr_zero}"
+    );
+
+    // Sub-assert 2: `--limit 10001` — above upper boundary, must reject.
+    // Sister to Phase 2 G1 mode-0600 dual-assert (single fn, two asserts).
+    let out_max = run_polygon(
+        &[
+            "tx",
+            "list",
+            "--address",
+            addr,
+            "--limit",
+            "10001",
+            "--json",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out_max.status.success(),
+        "tx list --limit 10001 must exit non-zero; exit={:?} stderr={}",
+        out_max.status.code(),
+        String::from_utf8_lossy(&out_max.stderr)
+    );
+    let stderr_max = String::from_utf8_lossy(&out_max.stderr);
+    assert!(
+        stderr_max.contains("limit")
+            || stderr_max.contains("[1, 10000]")
+            || stderr_max.contains("InvalidInput"),
+        "tx list --limit 10001 stderr must mention limit guard; got: {stderr_max}"
+    );
+}
+
+/// `polygon fee --network amoy` (text-mode happy path, no `--json`).
+///
+/// Sister to Phase 1 test 8 (`local_testnet_fee_json_parses`) which exercises
+/// the `--json` mode. Validates the `format_fee_human` output shape at
+/// `polygon/src/handlers/fee.rs:138-148`. RPC path = `fetch_fee_estimate` at
+/// `handlers/fee.rs:91-122` (read-only `estimate_eip1559_fees`, no signing).
+/// Issue #495 Phase 4 (LOW, G11).
+#[test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+fn local_testnet_fee_text_mode_human_readable() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let out = run_polygon(
+        &["fee", "--network", "amoy"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "polygon fee (text mode) failed: exit={:?} stderr={}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Markers from `format_fee_human` at handlers/fee.rs:138-148.
+    assert!(
+        stdout.contains("network: polygon-amoy"),
+        "fee text-mode stdout must include network label (per network_label at handlers/fee.rs:129-135); got: {stdout}"
+    );
+    assert!(
+        stdout.contains("chain_id: 80002"),
+        "fee text-mode stdout must include chain_id 80002 (Anvil fixture); got: {stdout}"
+    );
+    assert!(
+        stdout.contains("max_fee_per_gas:"),
+        "fee text-mode stdout must include max_fee_per_gas label; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("max_priority_fee_per_gas:"),
+        "fee text-mode stdout must include max_priority_fee_per_gas label; got: {stdout}"
+    );
+    // gwei + wei both present per fee pair (`{:.3} gwei ({} wei)` template).
+    assert!(
+        stdout.contains("gwei") && stdout.contains("wei"),
+        "fee text-mode stdout must include both gwei and wei units; got: {stdout}"
     );
 }
