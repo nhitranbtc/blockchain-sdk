@@ -42,6 +42,9 @@
 //! | 11 | `local_testnet_tx_get_returns_json_fields` | `polygon tx get --json` (live-RPC stubbed) |
 //! | 12 | `local_testnet_erc20_list_json_amoy_usdc_six_decimals` | `polygon erc20 list --json` |
 //! | 13 | `local_testnet_sign_typed_rejects_invalid_chain_id` | `polygon sign-typed --chain-id 1` (Q7 negative) |
+//! | 14  | `local_testnet_erc20_send_amoy_stop_only_round_trip` | `polygon erc20 send` (STOP-only at `AMOY_USDC_ADDR`, see #498) |
+//! | 14b | `local_testnet_erc20_send_amoy_usdce_rejected` | `polygon erc20 send` USDC.e guard negative (rejected before RPC) |
+//! | 15  | `local_testnet_erc20_approve_stop_only_revoke_round_trip` | `polygon erc20 approve` set→revoke (STOP-only, 2 distinct 66-hex tx hashes) |
 //! | R1 | `local_testnet_sign_message_accepts_address_flag` | `polygon sign-message --address` (regress guard, PR `432210c`/`a775af7`) |
 //! | R2 | `local_testnet_sign_message_verify_round_trips_positive` | `polygon sign-message --verify` (positive, G12 sister) |
 //! | R3 | `local_testnet_tx_list_with_address_reaches_handler` | `polygon tx list --address` (regress guard, live-RPC stubbed) |
@@ -52,7 +55,7 @@
 //! **Gap inventory** (Issue #495, NOT yet covered) — to be filled in subsequent
 //! phased PRs under parent `task-polygon-full-scenario`:
 //! G1 wallet import (HIGH), G2-G5 wallet show/delete/sync/send-speedup (MED),
-//! G6 erc20 send (HIGH), G7 erc20 approve (MED), G8-G9 erc20 register/balance (LOW),
+//! G8-G9 erc20 register/balance (LOW),
 //! G10 tx list (LOW), G11 fee text mode (LOW),
 //! G12 sign-message verify NEGATIVE path (MED, R2 covers positive only),
 //! G13 sign-typed happy path (HIGH), G14 send flag variants (MED),
@@ -197,6 +200,92 @@ fn extract_wallet_id(stdout: &str) -> Option<&str> {
 fn find_signature_token(stdout: &str) -> Option<&str> {
     stdout.split_whitespace().find(|tok| {
         tok.len() == 132 && tok.starts_with("0x") && tok[2..].chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+// =============================================================================
+// Phase 3 v1 (Issue #498) — STOP-only ERC-20 fixture.
+//
+// Tier 1 = CLI handler pipeline coverage, NOT token semantics (per ADR 0002).
+// STOP-only bytecode (`0x00`) installed at the real Amoy USDC address via
+// `anvil_set_code`. The contract returns success with empty output on every
+// call, so the broadcast path exercises `unlock_signer` + `sign_erc20_tx_bytes`
+// identically to a real ERC-20. Token state-machine verification is
+// operator-driven (`amoy_smoke.rs` / `mainnet_smoke.rs`), not Tier 1.
+//
+// Sister pattern: `eth/tests/cli_localnet.rs:2928` (`STOP_BYTECODE` + STOP-only
+// at `0x...beef` for negative tests). Sister resolve path:
+// `polygon/src/handlers/erc20.rs:80` (`resolve_token_address` — if input starts
+// with `0x`, parses as Address directly).
+//
+// `anvil_set_code` is explicit overwrite — even if a future Anvil version
+// pre-funds the USDC slot, STOP bytecode wins.
+// =============================================================================
+
+/// Real Amoy USDC native address (lowercase form per #498 Q2 — alloy `address!`
+/// strict EIP-55 may fail on mixed-case checksum; lowercase bypasses). Same
+/// address as `polygon-wallet-core/tokens/amoy.json` (EIP-55 canonical form:
+/// `0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582`).
+const AMOY_USDC_ADDR: alloy_primitives::Address =
+    alloy_primitives::address!("0x41e94eb019c0762f9bfcf9fb1e58725bfb0e7582");
+
+/// Bridged USDC.e address — rejected by `guard_usdc_e` at
+/// `polygon/src/handlers/erc20.rs:36` BEFORE any RPC or broadcast step.
+/// Sister class: `polygon_wallet_core::disambig::reject_bridged_usdc_e`.
+const USDC_E_BRIDGED_ADDR: alloy_primitives::Address =
+    alloy_primitives::address!("0x2791bca1f2de4661ed88a30c99a7a9449aa84174");
+
+/// STOP-only bytecode (single `0x00` opcode). EVM halts with success,
+/// returns empty output. Sister pattern: `eth/tests/cli_localnet.rs:2933`.
+const STOP_BYTECODE: &[u8] = &[0x00];
+
+/// Canonical burn address — used as `polygon erc20 send` recipient in
+/// Phase 3 v1 tests. Sister to existing test pattern (e.g.
+/// `local_testnet_wallet_send_happy_path`).
+const RECIPIENT_ADDR: alloy_primitives::Address =
+    alloy_primitives::address!("0x000000000000000000000000000000000000dEaD");
+
+/// Synthetic spender for Phase 3 v1 approve round-trip tests. NOT a real
+/// contract — STOP-only USDC fixture ignores the call regardless of spender.
+const APPROVE_SPENDER_ADDR: alloy_primitives::Address =
+    alloy_primitives::address!("0x000000000000000000000000000000000000c0ff");
+
+/// 10 ETH in wei (hex) — funds the signer so tx base fee + calldata cost is
+/// covered. STOP contract consumes 0 gas on the call, but the broadcast
+/// itself still requires a funded signer. Replaces the inline magic literal
+/// per L12 cluster code-reviewer finding #2.
+const FUND_TX_GAS_WEI: &str = "0x8AC7230489E80000";
+
+/// Install STOP-only bytecode at `AMOY_USDC_ADDR` on the fixture's Anvil
+/// instance via the raw `anvil_setCode` RPC. Mirrors `anvil_set_balance`
+/// pattern (line 121) — `AnvilApi` trait is gated behind `anvil-api` feature
+/// on `alloy-provider` which the polygon crate does not enable. Raw RPC
+/// avoids the feature dependency.
+async fn install_stop_only_usdc(fx: &Fixture) {
+    let endpoint: alloy_transport_http::reqwest::Url =
+        fx.rpc_url.parse().expect("valid Anvil endpoint");
+    let provider = alloy_provider::ProviderBuilder::new().connect_http(endpoint);
+    provider
+        .raw_request::<_, ()>(
+            "anvil_setCode".into(),
+            (AMOY_USDC_ADDR, alloy_primitives::hex::encode(STOP_BYTECODE)),
+        )
+        .await
+        .expect("install STOP-only bytecode at AMOY_USDC_ADDR must succeed");
+}
+
+/// Strict ERC-20 tx-hash finder — first `0x` + 64 hex chars (32-byte B256).
+/// Mirrors `find_signature_token` shape. Sister to handler stdout format
+/// `tx_hash: 0x{hex}` emitted at `polygon/src/main.rs:751-754` (erc20 send)
+/// and `:823-826` (erc20 approve). After `split_whitespace`, the `0x{64}`
+/// token is its own whitespace-delimited segment — len 66, hex-only.
+///
+/// Returns `None` if handler stdout format drifts — callers `panic!` with
+/// verbatim stdout in the message. Bounds-safe: no fixed-byte slice = no
+/// panic on format drift.
+fn find_tx_hash_token(stdout: &str) -> Option<&str> {
+    stdout.split_whitespace().find(|tok| {
+        tok.len() == 66 && tok.starts_with("0x") && tok[2..].chars().all(|c| c.is_ascii_hexdigit())
     })
 }
 
@@ -1512,5 +1601,239 @@ async fn local_testnet_wallet_send_speedup_invalid_tx_hash_errors() {
     assert!(
         stderr.contains("invalid --tx-hash"),
         "stderr should mention exact `invalid --tx-hash`; got: {stderr}"
+    );
+}
+
+// =============================================================================
+// Phase 3 v1 (Issue #495, sub-task #498) — `polygon erc20 send` Tier 1
+// CLI-pipeline coverage. STOP-only fixture installed at `AMOY_USDC_ADDR`.
+//
+// Per L12 cluster code-reviewer finding #3, split into two fns (one per
+// concern) sister to existing pattern (`local_testnet_erc20_balance_address_flag`
+// vs `local_testnet_erc20_register_address_flag` — separate fns for separate
+// concerns). USDC.e negative sister does NOT need the STOP-only fixture since
+// `guard_usdc_e` rejects BEFORE any RPC call (`polygon/src/handlers/erc20.rs:180`).
+// =============================================================================
+
+/// Happy path — STOP-only contract at `AMOY_USDC_ADDR`; broadcast succeeds;
+/// handler returns 66-hex tx hash. Validates L12 H-1 secret-handling invariant
+/// on the signing path (`unlock_signer` + `sign_erc20_tx_bytes`) without
+/// requiring real ERC-20 semantics. Per #498 + ADR 0002, token semantics
+/// (real ERC-20 transfer state change) is operator-driven scope
+/// (`amoy_smoke.rs` / `mainnet_smoke.rs`).
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_erc20_send_amoy_stop_only_round_trip() {
+    require_run_polygon_local();
+
+    let fx = Fixture::new();
+    install_stop_only_usdc(&fx).await;
+
+    let create = run_polygon(
+        &["wallet", "create", "--name", "g6-sender"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        create.status.success(),
+        "wallet create failed: stderr={}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let sender_addr = read_first_address(fx.data_dir.path(), "g6-sender");
+    anvil_set_balance(&fx.anvil, &sender_addr, FUND_TX_GAS_WEI).await;
+
+    let send = run_polygon(
+        &[
+            "erc20",
+            "send",
+            "--name",
+            "g6-sender",
+            "--token",
+            &format!("{AMOY_USDC_ADDR:#x}"),
+            "--to",
+            &format!("{RECIPIENT_ADDR:#x}"),
+            "--amount",
+            "1000000",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let stdout = String::from_utf8_lossy(&send.stdout);
+    let stderr = String::from_utf8_lossy(&send.stderr);
+    assert!(
+        send.status.success(),
+        "erc20 send STOP-only happy path failed: exit={:?} stderr={}",
+        send.status.code(),
+        stderr
+    );
+    // `find_tx_hash_token` already filters `len() == 66 && starts_with("0x")
+    // && all hex`. The unwrap panic embeds verbatim stdout for diagnosis on
+    // handler-format drift.
+    let _tx_hash = find_tx_hash_token(&stdout).unwrap_or_else(|| {
+        panic!("erc20 send stdout should contain 0x + 64-hex tx hash; got: {stdout}")
+    });
+}
+
+/// USDC.e negative — bridged USDC.e address rejected by `guard_usdc_e`
+/// (`polygon/src/handlers/erc20.rs:36`) BEFORE the broadcast step. No
+/// STOP-only fixture interaction (guard rejects at address resolution,
+/// before any RPC). Sister to existing test at `erc20.rs:351-357` which
+/// asserts `msg.contains("BRIDGED_USDC_REJECTED")` at unit-test level.
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_erc20_send_amoy_usdce_rejected() {
+    require_run_polygon_local();
+
+    let fx = Fixture::new();
+    let create = run_polygon(
+        &["wallet", "create", "--name", "g6-usdce"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        create.status.success(),
+        "wallet create (USDCe neg) failed: stderr={}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+
+    let send_e = run_polygon(
+        &[
+            "erc20",
+            "send",
+            "--name",
+            "g6-usdce",
+            "--token",
+            &format!("{USDC_E_BRIDGED_ADDR:#x}"), // USDC.e bridged
+            "--to",
+            &format!("{RECIPIENT_ADDR:#x}"),
+            "--amount",
+            "1000000",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let stderr_e = String::from_utf8_lossy(&send_e.stderr);
+    assert!(
+        !send_e.status.success(),
+        "erc20 send with USDC.e address should be rejected by guard_usdc_e; \
+         got exit=0 stderr={stderr_e}"
+    );
+    // Pin on semantic class (robust to message drift).
+    assert!(
+        stderr_e.contains("bridged")
+            || stderr_e.contains("USDC.e")
+            || stderr_e.contains("BRIDGED_USDC_REJECTED")
+            || stderr_e.contains("guard"),
+        "USDC.e rejection stderr should mention bridged/USDC.e/guard; got: {stderr_e}"
+    );
+}
+
+// =============================================================================
+// Phase 3 v1 (Issue #495, sub-task #498) — `polygon erc20 approve` Tier 1
+// CLI-pipeline coverage. STOP-only fixture at `AMOY_USDC_ADDR`.
+//
+// Two-step approve → revoke round-trip. Both exit 0; tx hashes differ (proves
+// the broadcast step actually went out for both — no cached response, no
+// handler short-circuit). Canonical revocation = `approve(spender, 0)`
+// zeroes the allowance.
+//
+// Nonce handling: handler calls `provider.get_transaction_count(signer.address())`
+// per invocation (`polygon/src/handlers/erc20.rs:288-291`). Step A broadcasts
+// at nonce N; Step B auto-fetches N+1. No Fixture nonce threading.
+//
+// Per #498 + ADR 0002, real allowance state change verification is
+// operator-driven scope, not Tier 1.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_erc20_approve_stop_only_revoke_round_trip() {
+    require_run_polygon_local();
+
+    let fx = Fixture::new();
+    install_stop_only_usdc(&fx).await;
+
+    let create = run_polygon(
+        &["wallet", "create", "--name", "g7-owner"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        create.status.success(),
+        "wallet create failed: stderr={}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let owner_addr = read_first_address(fx.data_dir.path(), "g7-owner");
+    anvil_set_balance(&fx.anvil, &owner_addr, FUND_TX_GAS_WEI).await;
+
+    // Step A: approve spender for 1_000_000 raw units.
+    let approve_a = run_polygon(
+        &[
+            "erc20",
+            "approve",
+            "--name",
+            "g7-owner",
+            "--token",
+            &format!("{AMOY_USDC_ADDR:#x}"),
+            "--spender",
+            &format!("{APPROVE_SPENDER_ADDR:#x}"),
+            "--amount",
+            "1000000",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let stdout_a = String::from_utf8_lossy(&approve_a.stdout);
+    let stderr_a = String::from_utf8_lossy(&approve_a.stderr);
+    assert!(
+        approve_a.status.success(),
+        "erc20 approve (set) failed: exit={:?} stderr={stderr_a}",
+        approve_a.status.code()
+    );
+    let hash_a = find_tx_hash_token(&stdout_a).unwrap_or_else(|| {
+        panic!("erc20 approve (set) stdout should contain 0x + 64-hex tx hash; got: {stdout_a}")
+    });
+
+    // Step B: revoke (canonical revocation = approve with amount=0).
+    let approve_b = run_polygon(
+        &[
+            "erc20",
+            "approve",
+            "--name",
+            "g7-owner",
+            "--token",
+            &format!("{AMOY_USDC_ADDR:#x}"),
+            "--spender",
+            &format!("{APPROVE_SPENDER_ADDR:#x}"),
+            "--amount",
+            "0",
+            "--network",
+            "amoy",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let stdout_b = String::from_utf8_lossy(&approve_b.stdout);
+    let stderr_b = String::from_utf8_lossy(&approve_b.stderr);
+    assert!(
+        approve_b.status.success(),
+        "erc20 approve (revoke) failed: exit={:?} stderr={stderr_b}",
+        approve_b.status.code()
+    );
+    let hash_b = find_tx_hash_token(&stdout_b).unwrap_or_else(|| {
+        panic!("erc20 approve (revoke) stdout should contain 0x + 64-hex tx hash; got: {stdout_b}")
+    });
+
+    // Distinct hashes proves the broadcast step actually went out for both
+    // (not cached, not a no-op short-circuit).
+    assert_ne!(
+        hash_a, hash_b,
+        "approve→revoke must produce 2 distinct tx hashes; got both={hash_a}"
     );
 }
