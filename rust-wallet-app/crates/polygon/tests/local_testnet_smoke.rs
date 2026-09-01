@@ -47,6 +47,9 @@
 //! | 15  | `local_testnet_erc20_approve_stop_only_revoke_round_trip` | `polygon erc20 approve` set→revoke (STOP-only, 2 distinct 66-hex tx hashes) |
 //! | 16  | `local_testnet_tx_list_limit_zero_rejected` | `polygon tx list --limit 0` + `--limit 10001` (CLI smoke for handler guard at `handlers/tx.rs:34-40`) |
 //! | 17  | `local_testnet_fee_text_mode_human_readable` | `polygon fee --network amoy` (text mode, no `--json`; sister to row 8 JSON mode) |
+//! | 18  | `local_testnet_sign_message_verify_mismatch_rejected` | `polygon sign-message --verify <other-addr>` (G12 negative; sister to R2 positive) |
+//! | 19  | `local_testnet_sign_typed_valid_chain_id_reaches_lib_deferral` | `polygon sign-typed --chain-id 80002` (Q7 gate PASSES, dies at eip712 lib deferral) |
+//! | 19b | `local_testnet_sign_typed_domain_chain_id_mismatch_rejected` | `polygon sign-typed` domain.chainId 137 vs `--chain-id` 80002 (#463 replay guard) |
 //! | R1 | `local_testnet_sign_message_accepts_address_flag` | `polygon sign-message --address` (regress guard, PR `432210c`/`a775af7`) |
 //! | R2 | `local_testnet_sign_message_verify_round_trips_positive` | `polygon sign-message --verify` (positive, G12 sister) |
 //! | R3 | `local_testnet_tx_list_with_address_reaches_handler` | `polygon tx list --address` (regress guard, live-RPC stubbed) |
@@ -59,15 +62,18 @@
 //! G1 wallet import (HIGH), G2-G5 wallet show/delete/sync/send-speedup (MED),
 //! G8-G9 erc20 register/balance (LOW),
 //! G10 tx list (DONE Phase 4 row 16), G11 fee text mode (DONE Phase 4 row 17),
-//! G12 sign-message verify NEGATIVE path (MED, R2 covers positive only),
-//! G13 sign-typed happy path (HIGH), G14 send flag variants (MED),
+//! G12 sign-message verify negative (DONE Phase 5 row 18),
+//! G13 sign-typed gates (DONE Phase 5 rows 19 + 19b — true happy path blocked
+//! by the eip712 lib deferral, see the Phase 5 banner below),
+//! G14 send flag variants (MED),
 //! G15 negative input tests (LOW), G16 derive_address (DONE Phase 1).
 //!
 //! **Note:** rows R1/R2/R3/R4/R5 above are *partial gap-fillers* (clap-arg-parse
 //! regress guards from PR `432210c`/`a775af7`) — they prove the args parse
 //! cleanly without downcast-panic, but do NOT exercise full happy-path handler
 //! behavior. G8/G9/G10/G12 happy paths remain uncovered until their
-//! respective phases land.
+//! respective phases land. G12's positive half is R2; its negative half is
+//! row 18 (Phase 5).
 //!
 #![cfg(test)]
 
@@ -1969,5 +1975,244 @@ fn local_testnet_fee_text_mode_human_readable() {
     assert!(
         stdout.contains("gwei") && stdout.contains("wei"),
         "fee text-mode stdout must include both gwei and wei units; got: {stdout}"
+    );
+}
+
+// =============================================================================
+// Issue #495 Phase 5 — sign gaps (G12 negative + G13 two-layer gates).
+//
+// G12: R2 above covers `--verify` POSITIVE only. Row 18 fills the negative
+// half — a mismatched `--verify` address must be rejected at the recover
+// step (`handlers/sign.rs:88-95`), not silently accepted.
+//
+// G13: the gap inventory originally asked for a `sign-typed` HAPPY path with
+// a real signature. Not reachable — `evm_wallet_core::sign_typed_data`
+// (`crates/evm-wallet-core/src/signer.rs:164-172`) is an unconditional
+// `Err(SignError::Unsupported)` pending the alloy eip712 feature gate. Rows
+// 19 + 19b instead pin the TWO gate layers that DO run today, each with a
+// distinct failure classification:
+//   19  — chain_id 80002 PASSES the Q7 gate, then dies in the lib layer
+//         (`Error::Rpc`, exit 3). SKIP-accepts exit 0 once eip712 lands.
+// Password: env-only via `POLYGON_PASSWORD` (injected by `run_polygon`), NOT
+// `--password` on argv — argv is `/proc/<pid>/cmdline`-visible and the
+// dispatcher emits its own insecurity warning for it (`main.rs:39-42`).
+// Sister to the Phase 3 env-only pattern.
+//
+//   19b — typed-data `domain.chainId` disagreeing with `--chain-id` is
+//         rejected by `assert_domain_chain_id_consistency` (#463 replay
+//         guard) BEFORE the lib call (`Error::InvalidInput`, exit 2).
+// =============================================================================
+
+/// Row 18 (G12 negative) — `polygon sign-message --verify <other-addr>`.
+///
+/// Sister to R2 (positive). The signature recovers to `karl`'s address, but
+/// `--verify` names a different address, so the handler must fail the
+/// round-trip comparison at `handlers/sign.rs:91`.
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_sign_message_verify_mismatch_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    for name in ["karl", "kara"] {
+        let _ = run_polygon(
+            &["wallet", "create", "--name", name],
+            fx.data_dir.path(),
+            &fx.rpc_url,
+        );
+    }
+    let karl_addr = read_first_address(fx.data_dir.path(), "karl");
+    let kara_addr = read_first_address(fx.data_dir.path(), "kara");
+    assert_ne!(
+        karl_addr, kara_addr,
+        "fixture precondition: two wallets must derive distinct addresses"
+    );
+
+    // Sign with karl's key but claim the signer is kara.
+    let out = run_polygon(
+        &[
+            "sign-message",
+            "--name",
+            "karl",
+            "--message",
+            "verify me",
+            "--verify",
+            &kara_addr,
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "sign-message --verify with a MISMATCHED address must exit non-zero; got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Pin the EXACT fragments from the handler's format string at
+    // `handlers/sign.rs:92-94`: `eip191 verify mismatch: recovered {r} !=
+    // expected {e}`. A loose `contains("mismatch")` would also match an
+    // unrelated password/RPC rejection; `recovered` + `!= expected` prove
+    // the recover round-trip itself ran and disagreed.
+    assert!(
+        stderr.contains("eip191 verify mismatch"),
+        "stderr should surface the eip191 verify mismatch (handlers/sign.rs:92-94); got: {stderr}"
+    );
+    assert!(
+        stderr.contains("recovered") && stderr.contains("!= expected"),
+        "stderr must show the recovered-vs-expected pair; got: {stderr}"
+    );
+    // Pin BOTH concrete addresses. Without these, a vacuous handler that
+    // emits the same format string with a hardcoded placeholder (e.g.
+    // `Address::ZERO`) would satisfy the fragment pins above without ever
+    // calling `recover_address_from_prehash`. Requiring karl's address (the
+    // RECOVERED value, derivable only by actually recovering) plus kara's
+    // (the EXPECTED value) forces the real recover path to have executed.
+    // Case-insensitive: EIP-55 checksum casing differs between the stored
+    // wallet metadata and the `Display` impl used in the error string.
+    let stderr_lc = stderr.to_lowercase();
+    assert!(
+        stderr_lc.contains(&karl_addr.to_lowercase()),
+        "stderr must contain the RECOVERED address {karl_addr} — proves the \
+         recover step at handlers/sign.rs:88-90 actually ran; got: {stderr}"
+    );
+    assert!(
+        stderr_lc.contains(&kara_addr.to_lowercase()),
+        "stderr must contain the EXPECTED address {kara_addr}; got: {stderr}"
+    );
+    // Guard against a leaked signature on the failure path: a rejected
+    // verify must not still hand the caller a usable signature on stdout.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        find_signature_token(&stdout).is_none(),
+        "rejected --verify must NOT print a signature to stdout; got: {stdout}"
+    );
+}
+
+/// Row 19 (G13a) — `polygon sign-typed --chain-id 80002` with a consistent
+/// `domain.chainId`. Proves execution REACHES the lib layer and dies there,
+/// i.e. chain_id 80002 was not rejected on the way. It does not by itself
+/// prove `assert_polygon_chain_id` was evaluated — row 13
+/// (`local_testnet_sign_typed_rejects_invalid_chain_id`) owns the Q7
+/// rejection path; the two rows together bracket the gate.
+///
+/// TODO[eip712-feature-gate]: when `evm_wallet_core::sign_typed_data` returns
+/// `Ok(sig)`, this test SKIP-accepts exit 0 and the assertion below should be
+/// tightened to a 132-hex signature pin (sister to R2).
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario; KNOWN GAP: eip712 lib deferral"]
+async fn local_testnet_sign_typed_valid_chain_id_reaches_lib_deferral() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let _ = run_polygon(
+        &["wallet", "create", "--name", "liam"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    // domain.chainId MUST equal --chain-id or the #463 guard fires first
+    // (that path is row 19b's job, not this one).
+    let typed_data = r#"{"types":{"EIP712Domain":[{"name":"chainId","type":"uint256"}]},"primaryType":"EIP712Domain","domain":{"chainId":80002},"message":{}}"#;
+    let out = run_polygon(
+        &[
+            "sign-typed",
+            "--chain-id",
+            "80002",
+            "--typed-data",
+            typed_data,
+            "--name",
+            "liam",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    if out.status.success() {
+        // KNOWN-GAP SKIP branch: the alloy eip712 feature gate landed.
+        // NOT assertion-free — an exit-0 that prints no signature (or a
+        // truncated one) is a regression, not a feature landing, so pin the
+        // signature before returning (sister to R2 at the `--verify` positive).
+        assert!(
+            find_signature_token(&stdout).is_some(),
+            "eip712 feature appears to have landed (exit 0) but stdout carries \
+             no 0x+130-hex signature — regression, not a feature: {stdout}"
+        );
+        eprintln!(
+            "SKIP: eip712 sign-typed now succeeds — tighten this test to a full \
+             signature pin and drop this branch. stdout={stdout}"
+        );
+        return;
+    }
+
+    // The Q7 gate must NOT be the thing that rejected us: chain_id 80002 is
+    // in the allowed {137, 80002} set (handlers/sign.rs:26-39).
+    // Exact lowercase fragment from `handlers/sign.rs:30-31`
+    // (`... is not a polygon PoS chain ...`). The earlier capital-P spelling
+    // could never match, making this pin vacuously true.
+    assert!(
+        !stderr.contains("is not a polygon"),
+        "chain_id 80002 must PASS the Q7 gate; stderr looks like a Q7 rejection: {stderr}"
+    );
+    // Failure must come from the lib-layer eip712 deferral instead.
+    // Do NOT accept a bare `EIP-712` / `eip712` token here: the Q7 rejection
+    // message at `handlers/sign.rs:30-31` also contains `EIP-712`, so those
+    // tokens cannot distinguish the two layers. `deferred` / `feature gate` /
+    // `Unsupported` come only from the lib stub
+    // (`crates/evm-wallet-core/src/signer.rs:168-170`).
+    // `deferred` + `feature gate` match the current lib string; `Unsupported`
+    // (the SignError variant name) does NOT appear in it today and is kept
+    // only as a safety net for a future error-message rewrite.
+    assert!(
+        stderr.contains("deferred")
+            || stderr.contains("feature gate")
+            || stderr.contains("Unsupported"),
+        "expected the lib-layer eip712 deferral (crates/evm-wallet-core/src/signer.rs:164-172), \
+         not a Q7-gate rejection; got: {stderr}"
+    );
+}
+
+/// Row 19b (G13b) — `--chain-id 80002` but typed-data `domain.chainId: 137`.
+///
+/// `assert_domain_chain_id_consistency` (`handlers/sign.rs:180-188`, #463)
+/// must reject the disagreement BEFORE any signing attempt. Distinct layer
+/// from row 19: this is the cross-chain-replay guard, and both values are
+/// individually valid Polygon chain ids — only their disagreement is the bug.
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_sign_typed_domain_chain_id_mismatch_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let _ = run_polygon(
+        &["wallet", "create", "--name", "luna"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    // 137 (Polygon PoS mainnet) is itself a VALID Q7 chain id — the defect
+    // under test is purely the disagreement with --chain-id 80002.
+    let typed_data = r#"{"types":{"EIP712Domain":[{"name":"chainId","type":"uint256"}]},"primaryType":"EIP712Domain","domain":{"chainId":137},"message":{}}"#;
+    let out = run_polygon(
+        &[
+            "sign-typed",
+            "--chain-id",
+            "80002",
+            "--typed-data",
+            typed_data,
+            "--name",
+            "luna",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "domain.chainId 137 vs --chain-id 80002 must be rejected (#463 replay guard); got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Exact fragment from `handlers/sign.rs:183-186`. A `contains("137")`
+    // disjunct would false-pass if any other layer ever echoed a chain id.
+    assert!(
+        stderr.contains("must match") && stderr.contains("typed.domain.chainId"),
+        "stderr should name the domain.chainId disagreement using the #463 guard \
+         message at handlers/sign.rs:183-186; got: {stderr}"
     );
 }
