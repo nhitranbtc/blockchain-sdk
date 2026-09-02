@@ -50,6 +50,15 @@
 //! | 18  | `local_testnet_sign_message_verify_mismatch_rejected` | `polygon sign-message --verify <other-addr>` (G12 negative; sister to R2 positive) |
 //! | 19  | `local_testnet_sign_typed_valid_chain_id_reaches_lib_deferral` | `polygon sign-typed --chain-id 80002` (Q7 gate PASSES, dies at eip712 lib deferral) |
 //! | 19b | `local_testnet_sign_typed_domain_chain_id_mismatch_rejected` | `polygon sign-typed` domain.chainId 137 vs `--chain-id` 80002 (#463 replay guard) |
+//! | 20  | `local_testnet_wallet_send_batch_flag_reaches_handler_no_op` | `polygon wallet send --batch <path>` (deferral SKIP — CLI accepts at `cli.rs:289`, handler drops at `main.rs:582`) |
+//! | 21  | `local_testnet_wallet_send_drain_flag_reaches_handler_no_op` | `polygon wallet send --drain` (deferral SKIP — `_drain: bool` no-op at `handlers/wallet.rs:525`) |
+//! | 22  | `local_testnet_wallet_send_explicit_nonce_happy_path` | `polygon wallet send --nonce 0` (overrides RPC fetch at `handlers/wallet.rs:591-597`) |
+//! | 23  | `local_testnet_wallet_send_explicit_gas_limit_happy_path` | `polygon wallet send --gas-limit 21000` (overrides default at `handlers/wallet.rs:624`) |
+//! | 24  | `local_testnet_wallet_send_fee_tier_fastest_happy_path` | `polygon wallet send --fee fastest` (sister to default `half_hour`; multiplier at `handlers/fee.rs:267` = 1.20) |
+//! | 25  | `local_testnet_wallet_send_eip1559_overrides_happy_path` | `polygon wallet send --max-fee-gwei 50 --priority-fee-gwei 40` (both set → live overrides at `handlers/wallet.rs:603-611`) |
+//! | 25b | `local_testnet_wallet_send_eip1559_partial_override_rejected` | `polygon wallet send --max-fee-gwei 50` (only ONE → exit 2 at `handlers/wallet.rs:604-610`) |
+//! | 26  | `local_testnet_wallet_send_dry_run_returns_synthetic_hash` | `polygon wallet send --dry-run` (short-circuits before broadcast at `handlers/wallet.rs:641-651`, returns `keccak256(encoded_envelope)`) |
+//! | 27  | `local_testnet_wallet_send_wait_blocks_for_receipt` | `polygon wallet send --wait` (blocks until receipt at `handlers/wallet.rs:663-668`) |
 //! | R1 | `local_testnet_sign_message_accepts_address_flag` | `polygon sign-message --address` (regress guard, PR `432210c`/`a775af7`) |
 //! | R2 | `local_testnet_sign_message_verify_round_trips_positive` | `polygon sign-message --verify` (positive, G12 sister) |
 //! | R3 | `local_testnet_tx_list_with_address_reaches_handler` | `polygon tx list --address` (regress guard, live-RPC stubbed) |
@@ -65,7 +74,7 @@
 //! G12 sign-message verify negative (DONE Phase 5 row 18),
 //! G13 sign-typed gates (DONE Phase 5 rows 19 + 19b — true happy path blocked
 //! by the eip712 lib deferral, see the Phase 5 banner below),
-//! G14 send flag variants (MED),
+//! G14 send flag variants (MED, DONE Phase 6 rows 20-27),
 //! G15 negative input tests (LOW), G16 derive_address (DONE Phase 1).
 //!
 //! **Note:** rows R1/R2/R3/R4/R5 above are *partial gap-fillers* (clap-arg-parse
@@ -263,6 +272,13 @@ const APPROVE_SPENDER_ADDR: alloy_primitives::Address =
 /// itself still requires a funded signer. Replaces the inline magic literal
 /// per L12 cluster code-reviewer finding #2.
 const FUND_TX_GAS_WEI: &str = "0x8AC7230489E80000";
+
+/// Sister to `handlers/wallet.rs:611` — overrides are gwei floats that
+/// the handler multiplies by 1e9 to get wei. 50 gwei max + 40 gwei prio
+/// is well above Anvil's default `estimate_eip1559_fees()` so the
+/// override-vs-estimate branch is unambiguous in handler source review.
+const EIP1559_MAX_FEE_GWEI: f64 = 50.0;
+const EIP1559_PRIORITY_FEE_GWEI: f64 = 40.0;
 
 /// Install STOP-only bytecode at `AMOY_USDC_ADDR` on the fixture's Anvil
 /// instance via the raw `anvil_setCode` RPC. Mirrors `anvil_set_balance`
@@ -2219,4 +2235,501 @@ async fn local_testnet_sign_typed_domain_chain_id_mismatch_rejected() {
         "stderr should name the domain.chainId disagreement using the #463 guard \
          message at handlers/sign.rs:183-186; got: {stderr}"
     );
+}
+
+// =============================================================================
+// Phase 6 G14 — wallet send flag variants. Per-flag CLI smoke at Tier 1.
+// Sister to Phase 4 G10/G11 single-fn-per-surface split precedent.
+// =============================================================================
+
+/// Sister to `local_testnet_wallet_send_happy_path` (row 6) lines 506-523:
+/// create + fund in one step. The funded address is used internally for
+/// `anvil_set_balance`; callers don't capture it (every test sends to
+/// the static recipient `0x...0042`, see per-test `let recipient` below).
+async fn make_prefunded_wallet(fx: &Fixture, name: &str) {
+    let _ = run_polygon(
+        &[
+            "wallet",
+            "create",
+            "--name",
+            name,
+            "--password",
+            "test-pw-ignore-leak",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    let addr = read_first_address(fx.data_dir.path(), name);
+    let ten_pol_wei = "0x".to_string() + &format!("{:x}", 10_u128 * 10_u128.pow(18));
+    anvil_set_balance(&fx.anvil, &addr, &ten_pol_wei).await;
+}
+
+// =============================================================================
+// Phase 6 G14 row 20 — `--batch` deferral SKIP.
+// CLI accepts the flag (`cli.rs:289`); main dispatch drops it
+// (`main.rs:582` destructure `batch: _`). Handler never receives it.
+// Sister to Phase 2 G4 sync SKIP / Phase 5 G13a sign-typed deferral.
+// Follow-up issue to be filed for actual batch send handler wiring.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_batch_flag_reaches_handler_no_op() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "batch-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "batch-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--batch",
+            "/tmp/nonexistent-batch.csv",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "--batch should be CLI-accepted; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("tx_hash: 0x"),
+        "expected live tx hash (handler no-op branch); stdout={stdout}"
+    );
+}
+
+// =============================================================================
+// Phase 6 G14 row 21 — `--drain` deferral SKIP.
+// CLI accepts (`cli.rs:291`); handler receives as `_drain: bool`
+// (no-op at `handlers/wallet.rs:525`). Send still succeeds with
+// the explicit `--amount`. Sister precedent to row 20.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_drain_flag_reaches_handler_no_op() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "drain-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "drain-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--drain",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "--drain should be CLI-accepted; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("tx_hash: 0x"),
+        "expected live tx hash (drain ignored); stdout={stdout}"
+    );
+}
+
+// =============================================================================
+// Phase 6 G14 row 22 — `--nonce` happy path.
+// Overrides the RPC `get_transaction_count` fetch
+// (`handlers/wallet.rs:591-597`). Use `0` (the wallet has not sent
+// any tx yet on this fresh fixture, so nonce 0 is unambiguous).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_explicit_nonce_happy_path() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "nonce-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "nonce-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--nonce",
+            "0",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "--nonce 0 should be accepted; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let tx_hash_line = stdout
+        .lines()
+        .find(|l| l.starts_with("tx_hash: 0x"))
+        .expect("wallet send stdout should contain 'tx_hash: 0x...' line");
+    let tx_hash = tx_hash_line.trim_start_matches("tx_hash: 0x").trim();
+    assert_eq!(
+        tx_hash.len(),
+        64,
+        "tx_hash must be 64 hex chars; got {tx_hash:?}"
+    );
+    assert!(tx_hash.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+// =============================================================================
+// Phase 6 G14 row 23 — `--gas-limit` happy path.
+// Overrides the default `21_000` at `handlers/wallet.rs:624`. Use
+// the same default value to prove the override path executes without
+// under- or over-specifying gas.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_explicit_gas_limit_happy_path() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "gas-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "gas-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--gas-limit",
+            "21000",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "--gas-limit 21000 should be accepted; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let tx_hash_line = stdout
+        .lines()
+        .find(|l| l.starts_with("tx_hash: 0x"))
+        .expect("wallet send stdout should contain 'tx_hash: 0x...' line");
+    let tx_hash = tx_hash_line.trim_start_matches("tx_hash: 0x").trim();
+    assert_eq!(
+        tx_hash.len(),
+        64,
+        "tx_hash must be 64 hex chars; got {tx_hash:?}"
+    );
+    assert!(tx_hash.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+// =============================================================================
+// Phase 6 G14 row 24 — `--fee fastest` happy path.
+// Default is `half_hour`; selecting `fastest` exercises the OTHER
+// `FeeTier` branch in `handlers/fee.rs:267` (multiplier 1.20x).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_fee_tier_fastest_happy_path() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "fee-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "fee-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--fee",
+            "fastest",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "--fee fastest should be accepted; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let tx_hash_line = stdout
+        .lines()
+        .find(|l| l.starts_with("tx_hash: 0x"))
+        .expect("wallet send stdout should contain 'tx_hash: 0x...' line");
+    let tx_hash = tx_hash_line.trim_start_matches("tx_hash: 0x").trim();
+    assert_eq!(
+        tx_hash.len(),
+        64,
+        "tx_hash must be 64 hex chars; got {tx_hash:?}"
+    );
+    assert!(tx_hash.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+// =============================================================================
+// Phase 6 G14 row 25 — EIP-1559 override pair happy path.
+// Both `--max-fee-gwei` AND `--priority-fee-gwei` set → handler
+// multiplies by 1e9 and skips the `estimate_eip1559_fees` RPC
+// (see `handlers/wallet.rs:603-611`).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_eip1559_overrides_happy_path() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "eip1559-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "eip1559-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--max-fee-gwei",
+            &format!("{EIP1559_MAX_FEE_GWEI}"),
+            "--priority-fee-gwei",
+            &format!("{EIP1559_PRIORITY_FEE_GWEI}"),
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "both EIP-1559 overrides should be accepted; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let tx_hash_line = stdout
+        .lines()
+        .find(|l| l.starts_with("tx_hash: 0x"))
+        .expect("wallet send stdout should contain 'tx_hash: 0x...' line");
+    let tx_hash = tx_hash_line.trim_start_matches("tx_hash: 0x").trim();
+    assert_eq!(
+        tx_hash.len(),
+        64,
+        "tx_hash must be 64 hex chars; got {tx_hash:?}"
+    );
+    assert!(tx_hash.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+// =============================================================================
+// Phase 6 G14 row 25b — EIP-1559 partial override rejected.
+// Setting ONLY `--max-fee-gwei` (without `--priority-fee-gwei`)
+// triggers the user-error guard at `handlers/wallet.rs:604-610`:
+// exit 2 with the canonical error message.
+// Sister to the Phase 2 G1 mode-0600 dual-assert pattern.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_eip1559_partial_override_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "partial-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "partial-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--max-fee-gwei",
+            &format!("{EIP1559_MAX_FEE_GWEI}"),
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "partial override (only --max-fee-gwei) must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--max-fee-gwei")
+            || stderr.contains("--priority-fee-gwei")
+            || stderr.contains("InvalidInput"),
+        "stderr must reference the partial-override guard; got: {stderr}"
+    );
+}
+
+// =============================================================================
+// Phase 6 G14 row 26 — `--dry-run` short-circuits before broadcast.
+// Handler signs the envelope (`handlers/wallet.rs:642`) but skips
+// `send_raw_transaction`. Returns a synthetic tx-hash from
+// `keccak256(encoded_envelope)` (line 647-651). Stdout STILL prints
+// the `tx_hash: 0x...` line.
+// Sister to row 25 but no RPC broadcast (faster than live send).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_dry_run_returns_synthetic_hash() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "dry-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "dry-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--dry-run",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "--dry-run must exit 0 (no RPC broadcast); stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let tx_hash_line = stdout
+        .lines()
+        .find(|l| l.starts_with("tx_hash: 0x"))
+        .expect("--dry-run stdout should still contain 'tx_hash: 0x...' line");
+    let tx_hash = tx_hash_line.trim_start_matches("tx_hash: 0x").trim();
+    assert_eq!(
+        tx_hash.len(),
+        64,
+        "synthetic dry-run hash must be 64 hex chars; got {tx_hash:?}"
+    );
+    assert!(tx_hash.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+// =============================================================================
+// Phase 6 G14 row 27 — `--wait` blocks until receipt mined.
+// Handler issues `get_transaction_receipt` after broadcast
+// (`handlers/wallet.rs:663-668`). Anvil auto-mines on each tx, so
+// the receipt fetch returns immediately. Stdout shape is identical
+// to the non-wait happy path — the operator-visible difference is
+// wall-clock latency + the receipt has been fetched server-side.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_wait_blocks_for_receipt() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    make_prefunded_wallet(&fx, "wait-wallet").await;
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "wait-wallet",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--wait",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        out.status.success(),
+        "--wait must exit 0 (Anvil auto-mines); stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let tx_hash_line = stdout
+        .lines()
+        .find(|l| l.starts_with("tx_hash: 0x"))
+        .expect("--wait stdout should contain 'tx_hash: 0x...' line");
+    let tx_hash = tx_hash_line.trim_start_matches("tx_hash: 0x").trim();
+    assert_eq!(
+        tx_hash.len(),
+        64,
+        "tx_hash must be 64 hex chars; got {tx_hash:?}"
+    );
+    assert!(tx_hash.chars().all(|c| c.is_ascii_hexdigit()));
 }
