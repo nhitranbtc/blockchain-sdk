@@ -368,6 +368,14 @@ pub fn wallet_import(
 /// `bytes.as_slice()` directly to
 /// `WalletManager::import_private_key_for_network` without any
 /// hex-encoding round-trip.
+///
+/// **On-disk format contract (clarified per #502, 2026-09-01):** the
+/// file must contain the raw 32-byte secp256k1 scalar. No "0x" prefix,
+/// no hex encoding — `read_pk_file` reads bytes verbatim. Callers that
+/// store a hex-encoded PK must hex-decode before calling `write_pk_file`.
+/// The sister unit test at `wallet.rs:~2005` uses
+/// `write_pk_file(..., &anvil_pk_bytes(), 0o600)` with raw 32 bytes; the
+/// CLI smoke test must do the same.
 #[cfg_attr(not(unix), allow(unused_variables))]
 pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let bytes = std::fs::read(path).map_err(|e| {

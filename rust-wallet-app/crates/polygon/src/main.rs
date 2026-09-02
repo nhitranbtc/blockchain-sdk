@@ -384,13 +384,15 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 let data_dir: std::path::PathBuf =
                     cli.data_dir.clone().unwrap_or_else(default_data_dir);
                 let created = match (mnemonic, private_key, private_key_file) {
-                    (Some(_), _, _) => {
-                        // Unreachable under clap conflict enforcement;
-                        // defense-in-depth if a programmatic caller
-                        // bypasses clap.
-                        return Err(Error::InvalidInput(
-                            "--mnemonic conflicts with PK flags".into(),
-                        ));
+                    (Some(ref phrase), None, None) => {
+                        // Mnemonic path (PR #456). Restored per #502 —
+                        // the prior (Some(_),_,_) catch-all below made
+                        // this tuple unreachable and silently killed
+                        // mnemonic-based wallet import on the parent
+                        // branch after the Phase 2 squash (#497 eb360c1).
+                        // Sister to the (None,Some(hex),None) arm;
+                        // SecretMnemonic wraps the phrase for zero-on-drop.
+                        handlers::wallet::wallet_import(&data_dir, &name, &password, net, phrase)?
                     }
                     (None, Some(hex), None) => {
                         // Wired path (was dead pre-#469 per the T6c4
