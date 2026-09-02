@@ -79,7 +79,7 @@
 //! G13 sign-typed gates (DONE Phase 5 rows 19 + 19b — true happy path blocked
 //! by the eip712 lib deferral, see the Phase 5 banner below),
 //! G14 send flag variants (MED, DONE Phase 6 rows 20-27),
-//! G15 negative input tests (LOW), G16 derive_address (DONE Phase 1).
+//! G15 negative input tests (LOW, DONE Phase 7 rows 28-31; derivation-path + password-mismatch sub-cases deferred to #507 + #508), G16 derive_address (DONE Phase 1).
 //!
 //! **Note:** rows R1/R2/R3/R4/R5 above are *partial gap-fillers* (clap-arg-parse
 //! regress guards from PR `432210c`/`a775af7`) — they prove the args parse
