@@ -756,14 +756,57 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 );
                 Ok(())
             }
-            Erc20Action::Balance { .. } => {
-                // T6d-2 follow-up: Balance handler requires a
-                // standalone refactor (cli.rs Balance.address typed
-                // String vs value_parser=parse_address returning
-                // Address; needs deeper cli.rs surgery than one PR).
-                Err(Error::Rpc(
-                    "erc20 balance: deferred to T6d-2.1 follow-up (cli.rs Balance.address type conflict)".into(),
-                ))
+            Erc20Action::Balance {
+                address,
+                token,
+                token_address,
+                network,
+                all: _,
+                decimals,
+                json,
+                rpc_url: action_rpc_url,
+            } => {
+                // T6d-2.1 (Issue #523): dispatch to the real
+                // `handlers::erc20::erc20_balance` handler.
+                // `token_address: Option<Address>` takes precedence over
+                // the symbol form when supplied (mirrors `Send` arm at
+                // main.rs:724-727). Per-action `--rpc-url` overrides
+                // the global `--rpc-url`. `--all` deferred (issue body
+                // lists it as deferrable); `--decimals <N>` skips the
+                // secondary `decimals()` eth_call when supplied.
+                let net = handlers::parse_network(&network)?;
+                let token_addr = match token_address {
+                    Some(a) => handlers::erc20::resolve_token_address(&a.to_string(), net)?,
+                    None => handlers::erc20::resolve_token_address(&token, net)?,
+                };
+                let holder_addr = address;
+                let rpc_url = action_rpc_url.as_deref().or(cli.rpc_url.as_deref());
+                let result =
+                    handlers::erc20::erc20_balance(rpc_url, net, holder_addr, token_addr, decimals)
+                        .await?;
+                if json {
+                    let payload = serde_json::json!({
+                        "holder": format!("{:#x}", result.holder),
+                        "token": format!("{:#x}", result.token),
+                        "decimals": result.decimals,
+                        "raw": result.raw.to_string(),
+                        "formatted": result.formatted(),
+                    });
+                    println!(
+                        "{}",
+                        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into())
+                    );
+                } else {
+                    println!(
+                        "{} (raw: {}, decimals: {}, holder: {:#x}, token: {:#x})",
+                        result.formatted(),
+                        result.raw,
+                        result.decimals,
+                        result.holder,
+                        result.token,
+                    );
+                }
+                Ok(())
             }
             Erc20Action::List { network, json } => {
                 let network = handlers::parse_network(&network)?;
