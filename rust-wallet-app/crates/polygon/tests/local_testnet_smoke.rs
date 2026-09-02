@@ -244,11 +244,12 @@ fn find_signature_token(stdout: &str) -> Option<&str> {
 // =============================================================================
 
 /// Real Amoy USDC native address (lowercase form per #498 Q2 — alloy `address!`
-/// strict EIP-55 may fail on mixed-case checksum; lowercase bypasses). Same
-/// address as `polygon-wallet-core/tokens/amoy.json` (EIP-55 canonical form:
-/// `0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582`).
+/// strict EIP-55 may fail on mixed-case checksum; lowercase bypasses). Mock
+/// USDC(PoS) on Amoy (operator override per P8-T follow-up; previously
+/// `0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582` per plan §Network
+/// Configuration).
 const AMOY_USDC_ADDR: alloy_primitives::Address =
-    alloy_primitives::address!("0x41e94eb019c0762f9bfcf9fb1e58725bfb0e7582");
+    alloy_primitives::address!("0x8B0180f2101c8260d49339abfEe87927412494B4");
 
 /// Bridged USDC.e address — rejected by `guard_usdc_e` at
 /// `polygon/src/handlers/erc20.rs:36` BEFORE any RPC or broadcast step.
@@ -1146,7 +1147,8 @@ async fn local_testnet_erc20_balance_address_flag() {
     );
     if out.status.success() {
         let stdout = String::from_utf8_lossy(&out.stdout);
-        // Amoy USDC contract is `0x41e94eb019c0762f9bfcf9fb1e58725bfb0e7582`.
+        // Amoy USDC contract is the local `AMOY_USDC_ADDR` const (Mock
+        // USDC(PoS) per operator override — see const doc for history).
         // Either stdout contains a decimal balance, or the handler returns
         // a clear "no balance" line. The regression we're guarding against
         // is the panic itself — assertion is just "didn't crash".

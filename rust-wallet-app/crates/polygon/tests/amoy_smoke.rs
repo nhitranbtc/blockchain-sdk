@@ -37,16 +37,39 @@ use std::sync::Mutex;
 // once across the test binary lifetime. Path is explicit
 // (`tests/.env`) because cargo's per-test CWD = crate root
 // (`rust-wallet-app/crates/polygon/`), so the relative path resolves
-// from there. Colocated with the `.env.example` template in the same
-// dir so operator setup is one `cp .env.example .env` away. Called
-// from every env-reading helper (Rust rejects top-level expressions
-// in test files, so the loader runs lazily).
-fn ensure_dotenv_loaded() {
+// Load `${CARGO_MANIFEST_DIR}/tokens/amoy.json` once and parse it. Per
+// 2026-09-02 drift note: this file is the committed SoT for ALL Amoy
+// config (network + test-harness). Rust rejects top-level expressions in
+// test files, so the loader runs lazily from each helper.
+fn ensure_tokens_loaded() {
     use std::sync::OnceLock;
     static LOADED: OnceLock<()> = OnceLock::new();
     LOADED.get_or_init(|| {
-        let _ = dotenvy::from_filename("tests/.env");
+        let path = format!("{}/tokens/amoy.json", env!("CARGO_MANIFEST_DIR"));
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!("failed to read {path}: {e} — tokens/amoy.json is the committed Amoy SoT")
+        });
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|e| panic!("failed to parse {path}: {e}"));
+        AMOY_TOKENS_JSON
+            .set(parsed)
+            .expect("AMOY_TOKENS_JSON OnceLock set twice");
     });
+}
+
+static AMOY_TOKENS_JSON: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+
+/// Pull a JSON string field out of the loaded Amoy config (panics on
+/// missing/wrong-type so tests fail loudly on config drift).
+fn amoy_json_str(key: &str) -> String {
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON
+        .get()
+        .expect("AMOY_TOKENS_JSON set by ensure_tokens_loaded");
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .unwrap_or_else(|| panic!("missing string field `{key}` in tokens/amoy.json"))
+        .to_string()
 }
 
 // L54 (env-var secret defense-in-depth) — serialise reads of
@@ -65,12 +88,10 @@ fn polygon_bin() -> PathBuf {
 
 /// Operator-funded PK fixture (32-byte secp256k1 scalar). The test
 /// asserts the wallet's balance is non-zero — that requires the
-/// operator to pre-fund this address on Amoy before running. Reads
-/// `AMOY_FUNDED_PK_HEX` from env ONLY — config source-of-truth lives
-/// in `polygon/tests/.env` (loaded via `ensure_dotenv_loaded()`), not
-/// in this source file. Operator must `cp polygon/tests/.env.example
-/// polygon/tests/.env` (and edit if needed) before running
-/// `RUN_POLYGON_AMOY=1 cargo test -p polygon -- --ignored`.
+/// operator to pre-fund this address on Amoy before running. Config
+/// source-of-truth lives in `polygon/tokens/amoy.json` (loaded via
+/// `ensure_tokens_loaded()`), key `test_harness.amoy_funded_pk_hex`.
+/// Per 2026-09-02 drift note: no `.env` files anymore.
 ///
 /// **Callers MUST** hold `PK_LOCK` while reading + immediately
 /// `std::env::remove_var("AMOY_FUNDED_PK_HEX")` after capture (the
@@ -78,19 +99,21 @@ fn polygon_bin() -> PathBuf {
 /// `amoy_wallet_import_via_pk_file`).
 ///
 /// Default EIP-55 address (for the Anvil-#0 test vector shipped in
-/// `.env.example`): `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`.
+/// `tokens/amoy.json`): `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`.
 fn amoy_funded_pk_hex() -> String {
-    ensure_dotenv_loaded();
-    match std::env::var("AMOY_FUNDED_PK_HEX") {
-        Ok(s) if !s.is_empty() => s,
-        _ => panic!(
-            "AMOY_FUNDED_PK_HEX not set. Copy polygon/tests/.env.example to \
-             polygon/tests/.env (or export AMOY_FUNDED_PK_HEX) before running \
-             RUN_POLYGON_AMOY=1 cargo test -p polygon -- --ignored. See \
-             plan §Environment Configuration for the 64-hex-char secp256k1 \
-             scalar format."
-        ),
-    }
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON
+        .get()
+        .expect("AMOY_TOKENS_JSON set by ensure_tokens_loaded");
+    v.get("test_harness")
+        .and_then(|t| t.get("amoy_funded_pk_hex"))
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| {
+                panic!(
+                    "missing test_harness.amoy_funded_pk_hex in tokens/amoy.json — add the Anvil-#0 test vector"
+                )
+            })
+        .to_string()
 }
 
 /// Invoke `polygon` as a subprocess with hermetic env.
@@ -115,9 +138,19 @@ fn run_polygon(args: &[&str], data_dir: &std::path::Path) -> std::process::Outpu
 /// first so the operator's `polygon/.env` overrides are honoured before the
 /// guard fires.
 fn require_run_polygon_amoy() {
-    ensure_dotenv_loaded();
-    if std::env::var("RUN_POLYGON_AMOY").ok().as_deref() != Some("1") {
-        panic!("RUN_POLYGON_AMOY=1 not set; amoy_smoke tests require explicit opt-in");
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON
+        .get()
+        .expect("AMOY_TOKENS_JSON set by ensure_tokens_loaded");
+    let opt = v
+        .get("test_harness")
+        .and_then(|t| t.get("run_polygon_amoy"))
+        .and_then(|s| s.as_str());
+    if opt != Some("1") {
+        panic!(
+            "tokens/amoy.json test_harness.run_polygon_amoy must be \"1\" for live test runs; \
+             current = {opt:?}"
+        );
     }
 }
 
@@ -345,62 +378,68 @@ fn amoy_send_0_01_pol_after_pk_wallet_import() {
     );
 }
 
-// ── Sanity check (P8-T-setup verification, NOT #[ignore]) ──────────────────
+// ── Sanity check (tokens/amoy.json SoT verification, NOT #[ignore]) ───────
 //
-// Proves the P8-T-setup env-reading chain end-to-end WITHOUT hitting live
-// RPC: `ensure_dotenv_loaded()` reads `polygon/tests/.env`, `dotenvy` pushes
-// the vars into the process environment, and the env-reading helpers
-// (`amoy_funded_pk_hex`, the opt-in guard) see them. Lives alongside the
-// 5 #[ignore] amoy tests so it runs on plain `cargo test -p polygon
-// --test amoy_smoke` (no `--ignored`, no live RPC, no operator setup
-// beyond having `polygon/tests/.env` populated — CI parity).
+// Proves the tokens/amoy.json load chain end-to-end WITHOUT hitting live
+// RPC. Lives alongside the 5 #[ignore] amoy tests so it runs on plain
+// `cargo test -p polygon --test amoy_smoke` (no `--ignored`, no live
+// RPC, no operator setup beyond having `tokens/amoy.json` populated —
+// CI parity).
 //
-// Pass criterion: each var below matches the value in `polygon/tests/.env`.
-// If any value drifts (e.g. someone edits `.env` to a different RPC), the
-// test fails loudly — preventing silent config drift across the integration
-// suite.
+// Pass criterion: each field below matches the value in `tokens/amoy.json`.
+// If any value drifts, the test fails loudly — preventing silent config
+// drift across the integration suite.
 #[test]
-fn amoy_env_load_from_dotenv() {
-    ensure_dotenv_loaded();
+fn amoy_tokens_load() {
+    ensure_tokens_loaded();
 
-    // RPC URL — comes from `polygon/tests/.env` (NOT a Rust literal).
-    // The test source itself has no RPC URL hardcoded; if `.env` is
-    // missing or the var is unset, the panic message points to the
-    // `.env.example` template.
-    let rpc = std::env::var("POLYGON_RPC_URL")
-        .expect("POLYGON_RPC_URL not set after dotenvy load — check polygon/tests/.env");
+    // RPC URL — comes from `tokens/amoy.json` (NOT a Rust literal).
+    // The test source itself has no RPC URL hardcoded; if the JSON is
+    // missing or malformed, the panic message points to the JSON path.
+    let rpc = amoy_json_str("rpc_url");
     assert_eq!(
         rpc, "https://polygon-amoy-bor-rpc.publicnode.com",
-        "POLYGON_RPC_URL from .env must match plan §Network Configuration Amoy RPC (Q4 drift)"
+        "rpc_url from tokens/amoy.json must match plan §Network Configuration Amoy RPC (Q4 drift)"
     );
 
-    // Chain ID + USDC address — same pattern, .env is the source-of-truth.
-    let chain_id =
-        std::env::var("POLYGON_CHAIN_ID").expect("POLYGON_CHAIN_ID not set after dotenvy load");
-    assert_eq!(chain_id, "80002", "POLYGON_CHAIN_ID must be 80002 (Amoy)");
+    // Chain ID + USDC address — same pattern, JSON is the source-of-truth.
+    // `chain_id` is a JSON number (80002), not a string.
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON.get().expect("set");
+    let chain_id = v
+        .get("chain_id")
+        .and_then(|x| x.as_u64())
+        .unwrap_or_else(|| panic!("missing numeric field `chain_id` in tokens/amoy.json"));
+    assert_eq!(chain_id, 80002, "chain_id must be 80002 (Amoy)");
 
-    let usdc = std::env::var("POLYGON_USDC_ADDRESS")
-        .expect("POLYGON_USDC_ADDRESS not set after dotenvy load");
+    // Pull from tokens[] entry by symbol for USDC assertion.
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON.get().expect("set");
+    let usdc_addr = v
+        .get("tokens")
+        .and_then(|t| t.as_array())
+        .and_then(|a| {
+            a.iter()
+                .find(|t| t.get("symbol").and_then(|s| s.as_str()) == Some("USDC"))
+        })
+        .and_then(|t| t.get("address"))
+        .and_then(|a| a.as_str())
+        .unwrap_or_else(|| panic!("tokens[].address for USDC missing in tokens/amoy.json"));
     assert_eq!(
-        usdc, "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
-        "POLYGON_USDC_ADDRESS must match plan §Network Configuration USDC contract"
+        usdc_addr, "0x8B0180f2101c8260d49339abfEe87927412494B4",
+        "tokens[].address (USDC) must match plan §Network Configuration USDC contract"
     );
 
-    // PK — proves `amoy_funded_pk_hex()` reads env (no embedded literal).
-    // Uses the fn (not direct `std::env::var`) so the call path is
-    // exercised exactly the way the live tests use it.
+    // PK — proves `amoy_funded_pk_hex()` reads from JSON (no embedded literal).
+    // Uses the fn (not direct JSON access) so the call path is exercised
+    // exactly the way the live tests use it.
     let pk = amoy_funded_pk_hex();
     assert_eq!(
         pk, "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
-        "AMOY_FUNDED_PK_HEX from .env must match the Anvil-#0 test vector"
+        "test_harness.amoy_funded_pk_hex from tokens/amoy.json must match the Anvil-#0 test vector"
     );
 
-    // Opt-in guard — must read "1" if `.env` is populated; the live
-    // tests use this exact var to gate themselves per L29.
-    let opt_in =
-        std::env::var("RUN_POLYGON_AMOY").expect("RUN_POLYGON_AMOY not set after dotenvy load");
-    assert_eq!(
-        opt_in, "1",
-        "RUN_POLYGON_AMOY must be '1' for live test runs"
-    );
+    // Opt-in guard — must read "1" if JSON is populated; the live tests
+    // use this exact field to gate themselves per L29.
+    require_run_polygon_amoy(); // panics on != "1"
 }

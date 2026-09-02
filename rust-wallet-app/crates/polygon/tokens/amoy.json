@@ -1,0 +1,18 @@
+{
+  "chain_id": 80002,
+  "rpc_url": "https://polygon-amoy-bor-rpc.publicnode.com",
+  "faucet_pol_url": "https://faucet.polygon.technology",
+  "faucet_circle_url": "https://faucet.circle.com/",
+  "explorer_url": "https://amoy.polygonscan.com",
+  "tokens": [
+    {
+      "address": "0x8B0180f2101c8260d49339abfEe87927412494B4",
+      "symbol": "USDC",
+      "decimals": 6
+    }
+  ],
+  "test_harness": {
+    "amoy_funded_pk_hex": "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    "run_polygon_amoy": "1"
+  }
+}
