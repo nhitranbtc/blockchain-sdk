@@ -1,0 +1,104 @@
+name: polygon-phase-8
+
+# CI for the `task/polygon-full-scenario/8-amoy-gap-fill` parent branch
+# (issue #518 / P8-T-setup, parent #510). Per L25 sub-task workflow,
+# each Phase 8 child branch (`8-amoy-gap-fill/<n>-<slug>`) PRs into this
+# parent branch first; this workflow gates those child PRs at lint +
+# compile time. The umbrella `rust-evm-core-ci.yml` does not fire here
+# because the parent branch is not `rust-evm-core`.
+#
+# At v-cut time, the parent branch PRs to `main` (per plan §Branch
+# Strategy step 4) where the umbrella `ci.yml` runs the full workspace
+# gate.
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the
+# umbrella `ci.yml` (`actions/checkout@v4`, `dtolnay/rust-toolchain@stable`).
+# No SHA pins available yet; tag-based reference acceptable per L37
+# rule 2 (verified-cached SHAs land in a follow-up commit after the
+# first successful CI run captures the resolved SHAs).
+#
+# Per L29 + L55: live-testnet tests stay operator-driven; CI never runs
+# `cargo test` for this branch. Scope = `-p polygon` only — never
+# `--workspace` (bitcoin-wallet-core FFI tests dominate workspace
+# runtime). Lint + compile-only gate.
+
+on:
+  push:
+    branches: [task/polygon-full-scenario/8-amoy-gap-fill]
+  pull_request:
+    branches: [task/polygon-full-scenario/8-amoy-gap-fill]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Concurrency group kept for log dedup (mirror of rust-evm-core-ci.yml
+# Path B 2026-08-28 — `cancel-in-progress: true` removed because Phase
+# 8 child PRs typically push several commits in quick succession).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  rust-fmt:
+    name: Rust fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    # 10m ceiling — `-p polygon` only (no workspace tree walk, no FFI
+    # tests, no bitcoin-wallet-core cold cache). Mirrors the rust-evm-core
+    # clippy job's timeout, scoped tighter per L55.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo clippy
+        working-directory: rust-wallet-app
+        # L55: scope `-p polygon` not `--workspace`. L29: live-testnet
+        # tests are `#[ignore]` + operator-driven; compile-only gate.
+        run: cargo clippy -p polygon --all-targets -- -D warnings
+
+  # Compile-only gate (the `cargo test --no-run` part of L13 step 11
+  # acceptance: "Existing 5 tests continue to pass under
+  # `cargo test -p polygon --test amoy_smoke --no-run`"). Runs without
+  # `RUN_POLYGON_AMOY=1` so every `#[ignore]`'d test compiles but does
+  # not execute — confirms the env-reading refactor + `dotenvy` dep
+  # survived cargo's resolver.
+  rust-compile:
+    name: Rust test compile (no run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --no-run
+        working-directory: rust-wallet-app
+        # L55: `-p polygon` not `--workspace`. `--no-run` builds all
+        # test binaries (including `#[ignore]`'d ones) but skips
+        # execution — confirms compilation of the P8-T-setup refactor.
+        run: cargo test -p polygon --test amoy_smoke --no-run
