@@ -88,3 +88,9 @@ reqwest              = { workspace = true }
 serde_json           = { workspace = true }
 # tokio test runtime (the integration test fns are `#[tokio::test]`).
 tokio                = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# P8-T-setup (issue #518) — load `polygon/.env` at the top of each new
+# `amoy_*.rs` integration test (P8-T1..T5 + P8-T-manualfaucet). Same
+# `0.15` pin as `crates/eth/Cargo.toml` so the two CLIs share a single
+# crate version on the workspace dep graph. `.ok()` swallows missing-file
+# errors per the `eth` pattern so CI/clean checkouts still run.
+dotenvy              = "0.15"
