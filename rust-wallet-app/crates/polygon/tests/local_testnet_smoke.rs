@@ -59,6 +59,10 @@
 //! | 25b | `local_testnet_wallet_send_eip1559_partial_override_rejected` | `polygon wallet send --max-fee-gwei 50` (only ONE → exit 2 at `handlers/wallet.rs:604-610`) |
 //! | 26  | `local_testnet_wallet_send_dry_run_returns_synthetic_hash` | `polygon wallet send --dry-run` (short-circuits before broadcast at `handlers/wallet.rs:641-651`, returns `keccak256(encoded_envelope)`) |
 //! | 27  | `local_testnet_wallet_send_wait_blocks_for_receipt` | `polygon wallet send --wait` (blocks until receipt at `handlers/wallet.rs:663-668`) |
+//! | 28  | `local_testnet_wallet_send_empty_name_rejected` | `polygon wallet send --name ""` (handler-level reject at `handlers/mod.rs:106` `validate_wallet_name`, `Error::InvalidInput` — `main.rs:111` hardcodes `ExitCode::from(1)` for all errors routed through `run()`) |
+//! | 29  | `local_testnet_wallet_send_empty_to_rejected` | `polygon wallet send --to ""` (clap-level reject via `parse_address` at `cli.rs:21`; Address type fails on empty input) |
+//! | 30  | `local_testnet_wallet_send_missing_args_rejected` | `polygon wallet send --name <w>` (no `--to` AND no `--amount`) + `--name <w> --amount 1` (no `--to`) — dual-assert, clap-level required-arg enforcement at `cli.rs:280-283` |
+//! | 31  | `local_testnet_wallet_send_wrong_network_rejected` | `polygon wallet send --network notachain` (handler-level reject at `handlers/mod.rs:145` `parse_network` — `Error::InvalidInput`, `main.rs:111` ExitCode 1) |
 //! | R1 | `local_testnet_sign_message_accepts_address_flag` | `polygon sign-message --address` (regress guard, PR `432210c`/`a775af7`) |
 //! | R2 | `local_testnet_sign_message_verify_round_trips_positive` | `polygon sign-message --verify` (positive, G12 sister) |
 //! | R3 | `local_testnet_tx_list_with_address_reaches_handler` | `polygon tx list --address` (regress guard, live-RPC stubbed) |
@@ -2732,4 +2736,274 @@ async fn local_testnet_wallet_send_wait_blocks_for_receipt() {
         "tx_hash must be 64 hex chars; got {tx_hash:?}"
     );
     assert!(tx_hash.chars().all(|c| c.is_ascii_hexdigit()));
+}
+
+// =============================================================================
+// Phase 7 G15 row 28 — empty `--name` rejected at handler level.
+//
+// `polygon wallet send --name ""` passes clap (no `min_length` validator on
+// `--name` at `cli.rs:160-175`) and reaches `validate_wallet_name` at
+// `handlers/mod.rs:106`, which returns `Error::InvalidInput("wallet name
+// must not be empty")`. `main.rs:111` hardcodes `ExitCode::from(1)`
+// for all errors routed through `run()` — the `Error::exit_code()`
+// mapping is not yet applied.
+//
+// Drift from Phase 7 plan (issue #495 comment 5503844662): validator is
+// handler-level (`handlers/mod.rs:106`), NOT clap-level as the original plan
+// asserted. `--name` is `String` with no `min_length = 1` clap constraint
+// (grep `min_length` in `cli.rs` returns zero matches for the `--name`
+// fields). Test exercises the handler-layer validator.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_empty_name_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "empty --name must exit non-zero; got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Pin the EXACT fragment from `handlers/mod.rs:106-109`:
+    // `Error::InvalidInput("wallet name must not be empty")`. A loose
+    // `contains("name")` would also match the clap-level required-arg
+    // message for `--name` (different failure mode, different layer).
+    // The fragment `wallet name must not be empty` is unique to the
+    // handler-level validator.
+    assert!(
+        stderr.contains("wallet name must not be empty"),
+        "stderr should surface the handler-level empty-name reject (handlers/mod.rs:106-109); got: {stderr}"
+    );
+}
+
+// =============================================================================
+// Phase 7 G15 row 29 — empty `--to` rejected at clap level (drift substitute
+// for the planned derivation-path test).
+//
+// `polygon wallet send --to ""` triggers the `parse_address` value_parser
+// at `cli.rs:21` on the `--to` field (Address type). Empty string fails
+// `Address::from_str` and clap returns the parse error to stderr with exit
+// 2.
+//
+// Drift from Phase 7 plan (issue #495 comment 5503844662): the planned row
+// 29 ("bad `--derivation-path` rejected at parse_derivation_path") is
+// NOT testable. `--derivation-path` is destructured as `derivation_path:
+// _,` at `main.rs:329` (NEVER reached by the wallet-create dispatch) and
+// is silent-ignored at every call site. No `parse_derivation_path` function
+// exists (grep `parse_derivation_path` returns zero matches in the polygon
+// + evm-wallet-core crates). Substituted with empty `--to` — a real,
+// reachable clap-level validator on the `Address` type that closes a
+// parallel parse-layer gap. The original derivation-path validator gap is
+// filed as a follow-up issue (silent-drop bug).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_empty_to_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "any-name",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            "",
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "empty --to must exit non-zero at clap parse_address (cli.rs:21); got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Pin a fragment from the `parse_address` clap-level error chain.
+    // The function returns `Err(String)` for empty input (Address::from_str
+    // rejects ""), clap wraps it with the arg name. We pin on "address"
+    // (appears in both the wrapper prefix and the underlying parse error)
+    // rather than "to" (would false-positive against the missing-args row
+    // 30 which also mentions "to"). Combined with the success assertion
+    // above, the path is unambiguous.
+    assert!(
+        stderr.contains("address"),
+        "stderr should surface the parse_address reject on empty --to (cli.rs:21); got: {stderr}"
+    );
+}
+
+// =============================================================================
+// Phase 7 G15 row 30 — missing required `--to` + `--amount` rejected at clap
+// level (dual-assert, sister to Phase 4 G10 mode-0600 + --limit pattern at
+// row 16).
+//
+// `polygon wallet send --name <w>` (NO `--to`, NO `--amount`) → clap
+// required-arg check at `cli.rs:280-283` (`--to: Address` and
+// `--amount: String` both required) → exit non-zero (`main.rs:111`
+// hardcodes `ExitCode::from(1)` for any error path; clap-level
+// required-arg rejects route through `run()` and follow the same
+// mapping).
+// `polygon wallet send --name <w> --amount 1` (NO `--to`) → same layer,
+// single missing arg → exit non-zero (same path).
+//
+// Sister to `local_testnet_tx_list_limit_zero_rejected` (row 16, dual-assert
+// pattern: one fn, two asserts covering the boundary from both sides).
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_missing_args_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+
+    // Sub-case A: no --to AND no --amount.
+    let out_a = run_polygon(
+        &["wallet", "send", "--name", "any-name"],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out_a.status.success(),
+        "missing --to AND --amount must exit non-zero at clap; got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out_a.stdout)
+    );
+    let stderr_a = String::from_utf8_lossy(&out_a.stderr);
+    // clap required-arg error includes "required" + the missing arg name(s).
+    // Sub-case A mentions BOTH `--to` and `--amount`; pin the more
+    // semantically distinctive token.
+    assert!(
+        stderr_a.contains("required"),
+        "stderr (sub-case A) should surface clap required-arg reject; got: {stderr_a}"
+    );
+    assert!(
+        stderr_a.contains("--to") || stderr_a.contains("--amount"),
+        "stderr (sub-case A) should name at least one missing arg; got: {stderr_a}"
+    );
+
+    // Sub-case B: --amount present, --to missing.
+    let out_b = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "any-name",
+            "--password",
+            "test-pw-ignore-leak",
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out_b.status.success(),
+        "missing --to (with --amount present) must exit non-zero at clap; got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out_b.stdout)
+    );
+    let stderr_b = String::from_utf8_lossy(&out_b.stderr);
+    assert!(
+        stderr_b.contains("required"),
+        "stderr (sub-case B) should surface clap required-arg reject on --to; got: {stderr_b}"
+    );
+    assert!(
+        stderr_b.contains("--to"),
+        "stderr (sub-case B) should name the missing --to arg; got: {stderr_b}"
+    );
+}
+
+// =============================================================================
+// Phase 7 G15 row 31 — wrong `--network` rejected at handler level.
+//
+// `polygon wallet send --name <w> --to <addr> --amount 0.001 --unit pol
+//  --network notachain` passes clap (network is `String` at `cli.rs:284`)
+// and reaches `handlers::parse_network` at `main.rs:595`, which returns
+// `Error::InvalidInput("unknown polygon network: ...")` (sister to the
+// `anvil` / `mumbai` / `fakenet` reject tests at `handlers/mod.rs:179-207`).
+// `main.rs:111` hardcodes `ExitCode::from(1)` for all errors routed
+// through `run()` — the `Error::exit_code()` mapping is not yet applied.
+//
+// Dispatch order (verified by L12 review 2026-09-02): `parse_network` runs
+// at `main.rs:595` BEFORE `validate_wallet_name` (line 596) and BEFORE
+// any wallet lookup. The reject fires regardless of whether the wallet
+// exists, so no `make_prefunded_wallet` is needed. Sister to the
+// network-reject unit tests at `handlers/mod.rs:179-207`.
+// =============================================================================
+
+#[tokio::test]
+#[ignore = "L29: opt-in via RUN_POLYGON_LOCAL=1; local-testnet scenario"]
+async fn local_testnet_wallet_send_wrong_network_rejected() {
+    require_run_polygon_local();
+    let fx = Fixture::new();
+    let recipient = "0x0000000000000000000000000000000000000042";
+
+    let out = run_polygon(
+        &[
+            "wallet",
+            "send",
+            "--name",
+            "any-name",
+            "--password",
+            "test-pw-ignore-leak",
+            "--to",
+            recipient,
+            "--amount",
+            "0.001",
+            "--unit",
+            "pol",
+            "--network",
+            "notachain",
+        ],
+        fx.data_dir.path(),
+        &fx.rpc_url,
+    );
+    assert!(
+        !out.status.success(),
+        "wrong --network must exit non-zero at parse_network (handlers/mod.rs:145); got exit 0 with stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Pin the EXACT fragment from `handlers/mod.rs:147-154` (the catch-all
+    // arm): `Error::InvalidInput(e)` where `e` is the underlying
+    // `PolygonChain::parse_cli` error. The exact message text varies by
+    // unknown string, but the wrapper always passes through either
+    // "unknown polygon network" (base lib) or the anvil-specific drift
+    // hint. Pin on "network" (case-sensitive, present in both messages)
+    // + "notachain" (echoes the offending input, proves it reached the
+    // validator rather than a generic clap-level reject).
+    assert!(
+        stderr.contains("network") && stderr.contains("notachain"),
+        "stderr should surface the parse_network reject (handlers/mod.rs:145-156); got: {stderr}"
+    );
 }
