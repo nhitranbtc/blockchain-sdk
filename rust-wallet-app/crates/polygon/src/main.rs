@@ -314,6 +314,10 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
     use polygon_wallet_core::Error;
     use zeroize::Zeroizing;
 
+    // Kept for future stub call-sites during T6c/T6d; prefix suppresses
+    // `unused_variable` once the last caller (Command::Faucet, wired in
+    // Issue #512) migrates to its real handler.
+    #[allow(unused_variables)]
     let stub = |cmd: &'static str| -> polygon_wallet_core::Result<()> {
         Err(Error::Rpc(format!(
             "{cmd}: deferred past T6b — landing in T6c/T6d"
@@ -916,7 +920,12 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 Ok(())
             }
         },
-        Command::Faucet(_) => stub("faucet"),
+        Command::Faucet(args) => {
+            // Issue #512 / P8-T0 (G11): wire `polygon faucet --network amoy`
+            // to the real handler. PK-free URL print path — no RPC, no
+            // signing. --auto stays unimplemented (reserved for T7 per L29).
+            handlers::faucet::faucet_print_url(&args)
+        }
         Command::SignMessage(args) => {
             // T6d-3 follow-up (Issue #459): wire dispatch via
             // `dispatch_sign_message`. Sister pattern at
