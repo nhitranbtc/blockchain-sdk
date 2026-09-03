@@ -80,7 +80,7 @@ jobs:
 
   # Compile-only gate (the `cargo test --no-run` part of L13 step 11
   # acceptance: "Existing 5 tests continue to pass under
-  # `cargo test -p polygon --test amoy_smoke --no-run`"). Runs without
+  # `cargo test -p polygon --tests --no-run`"). Runs without
   # `RUN_POLYGON_AMOY=1` so every `#[ignore]`'d test compiles but does
   # not execute — confirms the env-reading refactor + `dotenvy` dep
   # survived cargo's resolver.
@@ -96,9 +96,41 @@ jobs:
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: cargo test --no-run
+      - name: cargo test --no-run (all tests, ignored included)
         working-directory: rust-wallet-app
-        # L55: `-p polygon` not `--workspace`. `--no-run` builds all
-        # test binaries (including `#[ignore]`'d ones) but skips
-        # execution — confirms compilation of the P8-T-setup refactor.
-        run: cargo test -p polygon --test amoy_smoke --no-run
+        # L55: `-p polygon` not `--workspace`. `--no-run` builds every
+        # test binary across `polygon/tests/` (including all `#[ignore]`'d
+        # ones) but skips execution — confirms the P8-T-setup refactor +
+        # every new test file under `polygon/tests/amoy_p9_pk_import.rs`
+        # and friends compiles cleanly.
+        run: cargo test -p polygon --tests --no-run
+
+  # Explicit L29/L55 override per operator direction (2026-09-03):
+  # runs the full polygon test suite WITH `--include-ignored`, forcing
+  # every `#[ignore]`-gated test to execute regardless of its marker.
+  # Expected runtime behavior in CI: RED. Each ignored test gates on
+  # `RUN_POLYGON_AMOY` / `RUN_POLYGON_MAINNET` / `RUN_POLYGON_LOCAL`
+  # env vars + live RPC + funded wallet — none of which CI provides.
+  # Purpose: surface the L29/L55 gap explicitly so the next plan-cycles
+  # revisit whether live-testnet tests belong in CI at all. Sister
+  # job `rust-compile` above stays green and remains the PR-merge gate.
+  rust-test-include-ignored:
+    name: Rust test (incl. ignored — known red)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --include-ignored (all polygon tests)
+        working-directory: rust-wallet-app
+        # L55: scope `-p polygon`. `--include-ignored` forces every
+        # `#[ignore]` test across `polygon/tests/*.rs` to execute.
+        # Each test helper (`require_run_polygon_amoy`, etc.) checks
+        # the relevant env var and returns Err when absent — this is
+        # the intended L29/L55 surface.
+        run: cargo test -p polygon --tests -- --include-ignored
