@@ -293,8 +293,8 @@ async fn main() -> ExitCode {
 
     // ---- Phase 3b: unified parity check — ONE table comparing POL + USDC
     // across polygon CLI subprocess + raw `curl eth_call` (USDC only) +
-    // Phase 2 alloy oracle. Surfaces #522 POL off-by-10^3 (reported) and
-    // validates #523 CLI wire format. Best-effort: any source failure logs
+    // Phase 2 alloy oracle. Validates #523 CLI wire format + #522 POL
+    // formatter fix (commit c774447). Best-effort: any source failure logs
     // a warning + row reads `(unavailable)`; exit code unchanged.
     let parity_block = verify_balances_parity(
         address,
@@ -372,7 +372,7 @@ fn balance_table(balance_pol: U256, balance_usdc: U256, usdc_contract: &Address)
 // vs raw `curl eth_call balanceOf(holder)` vs alloy provider.call. All
 // sources must agree at the byte level for a true verdict; any divergence
 // surfaces a CLI wire-format bug, a curl encoding regression, or the
-// pre-existing #522 POL formatter off-by-10^3 (reported, not fatal).
+// pre-existing #522 POL formatter off-by-10^3 (fixed by commit c774447).
 // Best-effort: any source failing prints a warning and the row reads
 // `(unavailable)`; the run's exit code is unchanged.
 // ============================================================================
@@ -508,11 +508,13 @@ fn verify_balances_parity(
     ));
     out.push_str(sep);
 
-    // POL rows — known #522 mismatch expected for `polygon CLI` row until #522 ships.
+    // POL rows — post #522 fix (commit c774447) the `polygon CLI` row MUST
+    // match the alloy `eth_getBalance` oracle byte-for-byte; any MISMATCH is
+    // a regression, not a known issue.
     let alloy_pol_u128: u128 = alloy_pol_wei.try_into().unwrap_or(u128::MAX);
     let pol_cli_note = match (pol_cli_u128, Some(alloy_pol_u128)) {
         (Some(c), Some(a)) if c == a => "✓ matches alloy eth_getBalance",
-        (Some(_), Some(_)) => "✗ MISMATCH (known: #522, CLI off-by-10^3)",
+        (Some(_), Some(_)) => "✗ MISMATCH (regression — was fixed by c774447)",
         _ => "? (one source unavailable)",
     };
     out.push_str(&format!(
@@ -585,9 +587,12 @@ fn verify_balances_parity(
     Some(out)
 }
 
-/// Parse `polygon wallet balance` stdout into wei (u128). Try the canonical
-/// form (decimal wei string OR "<value> POL" with f64 * 1e18 fallback) so
-/// this survives the #522 formatter fix once it lands.
+/// Parse `polygon wallet balance` stdout into wei (u128). Tries the
+/// canonical form first (decimal wei string OR "<value> POL" with f64 *
+/// 1e18 fallback). The f64 fallback is defense-in-depth: post #522 fix
+/// the CLI emits "<value> POL" for non-trivial balances; the f64 path
+/// covers cases where the wei branch fails to parse (e.g. legacy
+/// `printf` output).
 fn parse_pol_cli_pol_wei(stdout: &[u8]) -> Option<u128> {
     let s = std::str::from_utf8(stdout).ok()?;
     let first = s.split_whitespace().next()?;
