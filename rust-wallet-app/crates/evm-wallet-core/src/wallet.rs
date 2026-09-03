@@ -273,7 +273,7 @@ impl WalletManager {
         phrase: &str,
         password: &[u8],
     ) -> Result<WalletCreated> {
-        self.import_wallet_for_network(name, phrase, password, Network::default_v0_2())
+        self.import_wallet_for_network(name, phrase, password, 0, Network::default_v0_2())
     }
 
     /// Network-aware import (CLI uses this; the bare `import_wallet` is the
@@ -283,6 +283,7 @@ impl WalletManager {
         name: &str,
         phrase: &str,
         password: &[u8],
+        account_index: u32,
         network: Network,
     ) -> Result<WalletCreated> {
         if password.is_empty() {
@@ -298,7 +299,7 @@ impl WalletManager {
         }
         let mnemonic_parsed = Mnemonic::parse_in(Language::English, phrase)
             .map_err(|e| WalletError::Mnemonic(format!("parse: {e}")))?;
-        let address = mnemonic::derive_address(&mnemonic_parsed, 0);
+        let address = mnemonic::derive_address(&mnemonic_parsed, account_index);
 
         let plaintext_bytes = phrase.as_bytes();
         let salt = crypto::random_salt();
@@ -319,7 +320,7 @@ impl WalletManager {
             name: name.to_string(),
             network,
             address,
-            derivation_path: "m/44'/60'/0'/0/0".to_string(),
+            derivation_path: format!("m/44'/60'/0'/0/{account_index}"),
             created_at_secs: now_secs(),
         };
         write_atomic(&meta_path, &serde_json::to_vec(&meta)?)?;
@@ -1205,6 +1206,7 @@ mod tests {
                 "anvil-test",
                 "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
                 &password(),
+                0,
                 Network::Ethereum(EthereumChain::Anvil),
             )
             .unwrap();

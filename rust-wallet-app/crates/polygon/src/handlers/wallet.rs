@@ -316,6 +316,7 @@ pub fn wallet_import(
     data_dir: &std::path::Path,
     name: &str,
     password: &Zeroizing<Vec<u8>>,
+    account_index: u32,
     network: polygon_wallet_core::Network,
     phrase: &SecretMnemonic,
 ) -> Result<WalletCreated> {
@@ -324,8 +325,14 @@ pub fn wallet_import(
         .map_err(crate::handlers::map_wallet_err)?;
     // Bounded lifetime: the `&str` lives only for the synchronous
     // `import_wallet_for_network` call; the lib encrypts then drops.
-    mgr.import_wallet_for_network(name, phrase.expose().as_str(), password.as_slice(), network)
-        .map_err(crate::handlers::map_wallet_err)
+    mgr.import_wallet_for_network(
+        name,
+        phrase.expose().as_str(),
+        password.as_slice(),
+        account_index,
+        network,
+    )
+    .map_err(crate::handlers::map_wallet_err)
 }
 
 // =====================================================================
@@ -1329,7 +1336,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let phrase = good_mnemonic();
-        let created = super::wallet_import(tmp.path(), "beta-import", &pwd, amoy(), &phrase)
+        let created = super::wallet_import(tmp.path(), "beta-import", &pwd, 0, amoy(), &phrase)
             .expect("import ok");
         assert_eq!(created.name, "beta-import");
         let dir = tmp.path().join(amoy().as_dir_name());
@@ -1343,7 +1350,7 @@ mod tests {
     fn wallet_import_rejects_empty_password() {
         let tmp = tempdir().expect("tempdir");
         let empty = Zeroizing::new(Vec::<u8>::new());
-        let r = super::wallet_import(tmp.path(), "beta", &empty, amoy(), &good_mnemonic());
+        let r = super::wallet_import(tmp.path(), "beta", &empty, 0, amoy(), &good_mnemonic());
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput, got {other:?}"),
@@ -1354,7 +1361,7 @@ mod tests {
     fn wallet_import_rejects_invalid_mnemonic_word_count() {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad_word_count());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad_word_count());
         match r {
             Err(Error::InvalidInput(msg)) => {
                 assert!(
@@ -1370,7 +1377,7 @@ mod tests {
     fn wallet_import_rejects_invalid_mnemonic_word() {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad_words());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad_words());
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput, got {other:?}"),
@@ -1381,10 +1388,10 @@ mod tests {
     fn wallet_import_rejects_already_exists() {
         let tmp = tempdir().expect("tempdir");
         let pwd1 = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let _first = super::wallet_import(tmp.path(), "dupe", &pwd1, amoy(), &good_mnemonic())
+        let _first = super::wallet_import(tmp.path(), "dupe", &pwd1, 0, amoy(), &good_mnemonic())
             .expect("first import ok");
         let pwd2 = Zeroizing::new(b"different password 1234567".to_vec());
-        let r = super::wallet_import(tmp.path(), "dupe", &pwd2, amoy(), &good_mnemonic());
+        let r = super::wallet_import(tmp.path(), "dupe", &pwd2, 0, amoy(), &good_mnemonic());
         match r {
             Err(Error::InvalidInput(msg)) => {
                 assert!(
@@ -1419,8 +1426,8 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let phrase = good_mnemonic();
-        let created =
-            super::wallet_import(tmp.path(), "noleak", &pwd, amoy(), &phrase).expect("import ok");
+        let created = super::wallet_import(tmp.path(), "noleak", &pwd, 0, amoy(), &phrase)
+            .expect("import ok");
         let dbg = format!("{:?}", created);
         for field in &["wallet_id", "name:", "network:", "address:"] {
             assert!(
@@ -1622,7 +1629,7 @@ mod tests {
         let file_path = tmp.path().join("not-a-dir");
         std::fs::write(&file_path, b"blocker").expect("pre-write file");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(&file_path, "alpha", &pwd, amoy(), &good_mnemonic());
+        let r = super::wallet_import(&file_path, "alpha", &pwd, 0, amoy(), &good_mnemonic());
         match r {
             Err(Error::Rpc(_)) => {}
             other => panic!("expected Error::Rpc, got {other:?}"),
@@ -1919,7 +1926,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let empty = SecretMnemonic::new(String::new());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &empty);
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &empty);
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput for empty phrase, got {other:?}"),
@@ -1935,7 +1942,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let ws = SecretMnemonic::new("   \t  ".to_string());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &ws);
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &ws);
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput for whitespace-only, got {other:?}"),
@@ -1956,7 +1963,7 @@ mod tests {
              abandon abandon abandon abandon abandon abandon"
                 .to_string(),
         );
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad);
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad);
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput for bad checksum, got {other:?}"),
@@ -1979,7 +1986,7 @@ mod tests {
              abandon abandon abandon abandon art"
                 .to_string(),
         );
-        let r = super::wallet_import(tmp.path(), "w24", &pwd, amoy(), &phrase);
+        let r = super::wallet_import(tmp.path(), "w24", &pwd, 0, amoy(), &phrase);
         assert!(r.is_ok(), "24-word mnemonic must succeed: {r:?}");
     }
 
