@@ -312,20 +312,25 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo test -p polygon --test polygon_wallet_scenario
 
-  # Sister job to `polygon-anvil-e2e`: covers the `local_testnet_smoke`
-  # Tier 1 scenario (`#[ignore]`-gated, opt-in via `RUN_POLYGON_LOCAL=1`
-  # per L29). Spawns Anvil in-process via `alloy-node-bindings` (sister
-  # to `polygon_wallet_scenario` pattern), so no live testnet RPC
-  # dependency — fully CI-runnable. L29's operator-driven carve-out
-  # applies to `amoy_smoke.rs` / `mainnet_smoke.rs` (live testnet RPC);
-  # `local_testnet_smoke` is hermetic, hence CI-runnable.
+  # Sister job to `polygon-anvil-e2e`: covers ALL `#[ignore]`'d tests in the
+  # `polygon` package — `local_testnet_smoke` (Tier 1, hermetic, opt-in via
+  # `RUN_POLYGON_LOCAL=1` per L29) plus the live-testnet gated suites
+  # `amoy_smoke.rs` / `mainnet_smoke.rs` (Tier 2, L29 operator-driven
+  # carve-out). The live-testnet suites each guard on their own
+  # `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1` env var and early-return
+  # → PASS when unset, so leaving those vars unset keeps CI hermetic while
+  # still exercising the guard branches.
   #
-  # Phase 1-7 of Issue #495 (`local_testnet_smoke.rs` gap-fill) all
-  # land here. Phase 6 baseline = 993s for the 42-test sweep; Phase 7
-  # full sweep target = ~16m for 46 tests (4-fn Phase 7 addition is
-  # ~1.22s). 30m timeout gives headroom without GH default 6h.
-  polygon-local-testnet:
-    name: Polygon local-testnet e2e (Tier 1)
+  # Scope `-p polygon --all-targets -- --include-ignored` covers lib unit
+  # tests + every `tests/*.rs` integration binary's `#[ignore]`'d tests in
+  # one pass. `--test-threads=1` preserves deterministic ordering for
+  # `local_testnet_smoke` (shared Anvil fixture). The hermetic Anvil fixture
+  # spawns in-process via `alloy-node-bindings` (sister to
+  # `polygon_wallet_scenario` pattern), so no live testnet RPC dependency.
+  # Phase 1-7 of Issue #495 (`local_testnet_smoke.rs` gap-fill) all land
+  # here. 30m timeout gives headroom without GH default 6h.
+  polygon-testnet:
+    name: Polygon testnet e2e (Tier 1 + Tier 2 guards)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -345,15 +350,18 @@ jobs:
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: Polygon local-testnet e2e tests (Phase 1-7 + future)
-        # `cargo test -p polygon --test local_testnet_smoke -- --ignored`
-        # runs every `#[ignore]`'d test in the file. The
-        # `require_run_polygon_local()` guard at the top of each fn checks
-        # `RUN_POLYGON_LOCAL=1` and runs; the Anvil fixture spawns
-        # in-process via `alloy-node-bindings` (no external `anvil`
-        # binary beyond Foundry toolchain). Scope `-p polygon` only —
-        # never `--workspace` (L55).
+      - name: Polygon package — all `#[ignore]`'d tests (lib + integration)
+        # `--all-targets` covers lib unit tests + every `tests/*.rs`
+        # integration binary; `--include-ignored` runs every `#[ignore]`'d
+        # test inside them. The `require_run_polygon_local()` guard at the
+        # top of each `local_testnet_smoke` fn checks `RUN_POLYGON_LOCAL=1`
+        # and runs; the `amoy_smoke` / `mainnet_smoke` guards check their
+        # own env vars and early-return → PASS when unset (L29
+        # operator-driven carve-out — no live RPC from CI).
+        # `--test-threads=1` preserves deterministic ordering for the
+        # shared Anvil fixture. Scope `-p polygon` only — never
+        # `--workspace` (L55).
         working-directory: rust-wallet-app
         env:
           RUN_POLYGON_LOCAL: "1"
-        run: cargo test -p polygon --test local_testnet_smoke -- --ignored --test-threads=1
+        run: cargo test -p polygon --all-targets -- --include-ignored --test-threads=1
