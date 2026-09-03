@@ -316,6 +316,7 @@ pub fn wallet_import(
     data_dir: &std::path::Path,
     name: &str,
     password: &Zeroizing<Vec<u8>>,
+    account_index: u32,
     network: polygon_wallet_core::Network,
     phrase: &SecretMnemonic,
 ) -> Result<WalletCreated> {
@@ -324,8 +325,14 @@ pub fn wallet_import(
         .map_err(crate::handlers::map_wallet_err)?;
     // Bounded lifetime: the `&str` lives only for the synchronous
     // `import_wallet_for_network` call; the lib encrypts then drops.
-    mgr.import_wallet_for_network(name, phrase.expose().as_str(), password.as_slice(), network)
-        .map_err(crate::handlers::map_wallet_err)
+    mgr.import_wallet_for_network(
+        name,
+        phrase.expose().as_str(),
+        password.as_slice(),
+        account_index,
+        network,
+    )
+    .map_err(crate::handlers::map_wallet_err)
 }
 
 // =====================================================================
@@ -405,6 +412,77 @@ pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
         }
     }
     Ok(Zeroizing::new(bytes))
+}
+
+/// Read the contents of a `--mnemonic-file` path into a
+/// `SecretMnemonic` wrapper.
+///
+/// Sister invariant to `read_pk_file` above (Issue #469 / PR #470):
+/// - File must exist; missing → `Error::InvalidInput` (exit 2).
+/// - File mode must be `0o600` (owner-only); any other mode on Unix →
+///   `Error::InvalidInput` naming the actual mode so the operator can
+///   `chmod 600` without re-reading the source. On non-Unix (Windows)
+///   mode check is skipped — Windows ACLs are out of scope.
+/// - File contents wrapped in `SecretMnemonic(Zeroizing<String>)` so
+///   the heap buffer zeroizes on drop (sister invariant to the
+///   `Zeroizing<Vec<u8>>` wrap in `read_pk_file`).
+/// - Surrounding whitespace (leading + trailing newline from shell
+///   heredoc + `echo` operators) is trimmed before wrap, so the
+///   canonical 12/24-word vector round-trips byte-for-byte into the
+///   `WalletManager::import_wallet_for_network` lib call.
+/// - Empty (zero-byte) file is rejected at the handler boundary, not
+///   deferred to the lib's BIP-39 parser — the empty-input error
+///   envelope names the path so the operator can `touch` a real file
+///   instead of staring at an unrelated "invalid word count" lib error.
+///
+/// The returned wrapper's `expose().as_str()` is the bounded-lifetime
+/// `&str` the caller passes to `WalletManager::import_wallet_for_network`
+/// (the `import_wallet` lib call at `wallet_import_for_network` below).
+pub(crate) fn read_mnemonic_file(path: &Path) -> Result<SecretMnemonic> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(path).map_err(|e| {
+            Error::InvalidInput(format!(
+                "--mnemonic-file metadata (path missing or unreadable): {}: {e}",
+                path.display()
+            ))
+        })?;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode != 0o600 {
+            return Err(Error::InvalidInput(format!(
+                "--mnemonic-file must have mode 0o600 (owner-only); got 0o{mode:o}: {}",
+                path.display()
+            )));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Pre-flight existence check on non-Unix — the read itself
+        // would also fail for a missing path, but a separate check
+        // produces a more actionable error envelope. Mode check is
+        // documented as out-of-scope for non-Unix (Windows ACLs).
+        std::fs::metadata(path).map_err(|e| {
+            Error::InvalidInput(format!(
+                "--mnemonic-file metadata (path missing or unreadable): {}: {e}",
+                path.display()
+            ))
+        })?;
+    }
+    let raw = Zeroizing::new(std::fs::read_to_string(path).map_err(|e| {
+        Error::InvalidInput(format!(
+            "--mnemonic-file read failed: {}: {e}",
+            path.display()
+        ))
+    })?);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Error::InvalidInput(format!(
+            "--mnemonic-file must not be empty (0 words after trim): {}",
+            path.display()
+        )));
+    }
+    Ok(SecretMnemonic::new(trimmed.to_string()))
 }
 
 /// Real `wallet_import_private_key_for_network` impl (Issue #469) — the
@@ -1258,7 +1336,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let phrase = good_mnemonic();
-        let created = super::wallet_import(tmp.path(), "beta-import", &pwd, amoy(), &phrase)
+        let created = super::wallet_import(tmp.path(), "beta-import", &pwd, 0, amoy(), &phrase)
             .expect("import ok");
         assert_eq!(created.name, "beta-import");
         let dir = tmp.path().join(amoy().as_dir_name());
@@ -1272,7 +1350,7 @@ mod tests {
     fn wallet_import_rejects_empty_password() {
         let tmp = tempdir().expect("tempdir");
         let empty = Zeroizing::new(Vec::<u8>::new());
-        let r = super::wallet_import(tmp.path(), "beta", &empty, amoy(), &good_mnemonic());
+        let r = super::wallet_import(tmp.path(), "beta", &empty, 0, amoy(), &good_mnemonic());
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput, got {other:?}"),
@@ -1283,7 +1361,7 @@ mod tests {
     fn wallet_import_rejects_invalid_mnemonic_word_count() {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad_word_count());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad_word_count());
         match r {
             Err(Error::InvalidInput(msg)) => {
                 assert!(
@@ -1299,7 +1377,7 @@ mod tests {
     fn wallet_import_rejects_invalid_mnemonic_word() {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad_words());
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad_words());
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput, got {other:?}"),
@@ -1310,10 +1388,10 @@ mod tests {
     fn wallet_import_rejects_already_exists() {
         let tmp = tempdir().expect("tempdir");
         let pwd1 = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let _first = super::wallet_import(tmp.path(), "dupe", &pwd1, amoy(), &good_mnemonic())
+        let _first = super::wallet_import(tmp.path(), "dupe", &pwd1, 0, amoy(), &good_mnemonic())
             .expect("first import ok");
         let pwd2 = Zeroizing::new(b"different password 1234567".to_vec());
-        let r = super::wallet_import(tmp.path(), "dupe", &pwd2, amoy(), &good_mnemonic());
+        let r = super::wallet_import(tmp.path(), "dupe", &pwd2, 0, amoy(), &good_mnemonic());
         match r {
             Err(Error::InvalidInput(msg)) => {
                 assert!(
@@ -1348,8 +1426,8 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let phrase = good_mnemonic();
-        let created =
-            super::wallet_import(tmp.path(), "noleak", &pwd, amoy(), &phrase).expect("import ok");
+        let created = super::wallet_import(tmp.path(), "noleak", &pwd, 0, amoy(), &phrase)
+            .expect("import ok");
         let dbg = format!("{:?}", created);
         for field in &["wallet_id", "name:", "network:", "address:"] {
             assert!(
@@ -1551,7 +1629,7 @@ mod tests {
         let file_path = tmp.path().join("not-a-dir");
         std::fs::write(&file_path, b"blocker").expect("pre-write file");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
-        let r = super::wallet_import(&file_path, "alpha", &pwd, amoy(), &good_mnemonic());
+        let r = super::wallet_import(&file_path, "alpha", &pwd, 0, amoy(), &good_mnemonic());
         match r {
             Err(Error::Rpc(_)) => {}
             other => panic!("expected Error::Rpc, got {other:?}"),
@@ -1821,6 +1899,7 @@ mod tests {
             mnemonic: Some(SecretMnemonic::new(mnemonic_phrase.to_string())),
             private_key: None,
             private_key_file: None,
+            mnemonic_file: None,
             account_index: 0,
             legacy_token_symbol: false,
             rpc_url: None,
@@ -1847,7 +1926,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let empty = SecretMnemonic::new(String::new());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &empty);
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &empty);
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput for empty phrase, got {other:?}"),
@@ -1863,7 +1942,7 @@ mod tests {
         let tmp = tempdir().expect("tempdir");
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let ws = SecretMnemonic::new("   \t  ".to_string());
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &ws);
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &ws);
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput for whitespace-only, got {other:?}"),
@@ -1884,7 +1963,7 @@ mod tests {
              abandon abandon abandon abandon abandon abandon"
                 .to_string(),
         );
-        let r = super::wallet_import(tmp.path(), "beta", &pwd, amoy(), &bad);
+        let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad);
         match r {
             Err(Error::InvalidInput(_)) => {}
             other => panic!("expected Error::InvalidInput for bad checksum, got {other:?}"),
@@ -1907,7 +1986,7 @@ mod tests {
              abandon abandon abandon abandon art"
                 .to_string(),
         );
-        let r = super::wallet_import(tmp.path(), "w24", &pwd, amoy(), &phrase);
+        let r = super::wallet_import(tmp.path(), "w24", &pwd, 0, amoy(), &phrase);
         assert!(r.is_ok(), "24-word mnemonic must succeed: {r:?}");
     }
 
@@ -2142,6 +2221,253 @@ mod tests {
         assert!(
             msg.contains("--private-key") && msg.contains("--private-key-file"),
             "clap error must name both flags; got: {msg}"
+        );
+    }
+
+    // ============================================================
+    // #528 tests: --mnemonic-file flag (mode-0600 + SecretMnemonic wrap)
+    // + conflict class against --mnemonic / --private-key / --private-key-file.
+    // Sister invariant to the #469 --private-key-file block above.
+    // ============================================================
+
+    /// Anvil default account #0 — 12-word BIP-39 test vector that derives
+    /// to the same PK as `ANVIL_PK_HEX` (`ac0974bec39...ff80`). Used as
+    /// the canonical mnemonic fixture for the `--mnemonic-file` tests.
+    const ANVIL_MNEMONIC: &str = "test test test test test test test test test test test junk";
+
+    /// Write `words` to `<tmpdir>/<name>` with the requested mode. Unix
+    /// only — Windows lacks `PermissionsExt::set_permissions`.
+    #[cfg(unix)]
+    fn write_mnemonic_file(
+        dir: &std::path::Path,
+        name: &str,
+        words: &str,
+        mode: u32,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, words).expect("write mnemonic file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .expect("set mnemonic file mode");
+        path
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_mnemonic_file_accepts_mode_0600_file() {
+        // Happy path: mode 0600 + valid 12-word mnemonic → `SecretMnemonic`
+        // wrapper. Type assertion (`SecretMnemonic` return) is the
+        // contract — caller can `expose()` and pass the inner
+        // `&Zeroizing<String>` to `WalletManager::import_wallet_for_network`.
+        // Sister invariant to `read_pk_file_accepts_mode_0600_file` at L:2010.
+        let tmp = tempdir().expect("tempdir");
+        let path = write_mnemonic_file(tmp.path(), "mnemonic.txt", ANVIL_MNEMONIC, 0o600);
+        let got: SecretMnemonic = super::read_mnemonic_file(&path).expect("read ok");
+        assert_eq!(got.expose().as_str(), ANVIL_MNEMONIC);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_mnemonic_file_rejects_mode_0644_file() {
+        // Mode != 0600 must surface `Error::InvalidInput` with the
+        // actual mode in the message so the operator can chmod it
+        // without re-reading the source. Sister invariant to
+        // `read_pk_file_rejects_mode_0644_file` at L:2022.
+        let tmp = tempdir().expect("tempdir");
+        let path = write_mnemonic_file(tmp.path(), "mnemonic.txt", ANVIL_MNEMONIC, 0o644);
+        let err = super::read_mnemonic_file(&path).expect_err("mode 0o644 must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("0o644"),
+            "error must name the bad mode (0o644); got: {msg}"
+        );
+        assert!(
+            msg.contains("0o600"),
+            "error must mention required mode (0o600); got: {msg}"
+        );
+    }
+
+    #[test]
+    fn read_mnemonic_file_rejects_missing_file() {
+        let tmp = tempdir().expect("tempdir");
+        let path = tmp.path().join("does-not-exist.txt");
+        let err = super::read_mnemonic_file(&path).expect_err("missing file must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("not found") || msg.contains("No such file"),
+            "error must indicate missing file; got: {msg}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_mnemonic_file_trims_whitespace() {
+        // Tolerate leading + trailing whitespace (newline at EOF from
+        // shell heredoc + leading newline from `echo` operators). BIP-39
+        // words are split on whitespace; surrounding blanks must not
+        // produce a different `SecretMnemonic` payload than the raw
+        // 12-word canonical vector.
+        let tmp = tempdir().expect("tempdir");
+        let padded = format!("\n  {ANVIL_MNEMONIC}  \n");
+        let path = write_mnemonic_file(tmp.path(), "mnemonic.txt", &padded, 0o600);
+        let got: SecretMnemonic = super::read_mnemonic_file(&path).expect("read ok");
+        assert_eq!(got.expose().as_str(), ANVIL_MNEMONIC);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_mnemonic_file_rejects_empty_file() {
+        // Empty file (mode 0600, 0 bytes) is rejected at the handler
+        // boundary. Without this guard the empty string reaches the
+        // lib's BIP-39 parser and surfaces a less actionable error.
+        let tmp = tempdir().expect("tempdir");
+        let path = write_mnemonic_file(tmp.path(), "mnemonic.txt", "", 0o600);
+        let err = super::read_mnemonic_file(&path).expect_err("empty file must error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("empty") || msg.contains("0 words"),
+            "error must indicate empty/whitespace-only mnemonic; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cli_rejects_mnemonic_with_mnemonic_file() {
+        // `clap` `conflicts_with` enforcement: passing both `--mnemonic`
+        // and `--mnemonic-file` in one invocation must error at parse
+        // time (no dispatch). Sister invariant to
+        // `cli_rejects_private_key_with_private_key_file` at L:2120.
+        use crate::cli::Cli;
+        use clap::Parser;
+        let result = Cli::try_parse_from([
+            "polygon",
+            "wallet",
+            "import",
+            "--name",
+            "x",
+            "--password",
+            "pw",
+            "--mnemonic",
+            ANVIL_MNEMONIC,
+            "--mnemonic-file",
+            "/tmp/mnemonic.txt",
+        ]);
+        let err = result.expect_err("--mnemonic + --mnemonic-file must conflict");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--mnemonic") && msg.contains("--mnemonic-file"),
+            "clap error must name both flags; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cli_rejects_mnemonic_file_with_private_key() {
+        // Sister edge to `cli_rejects_mnemonic_with_mnemonic_file`.
+        // clap enforces all three pairs at parse time; this test pins
+        // the `--mnemonic-file` × `--private-key` edge that the
+        // sister test missed.
+        use crate::cli::Cli;
+        use clap::Parser;
+        let result = Cli::try_parse_from([
+            "polygon",
+            "wallet",
+            "import",
+            "--name",
+            "x",
+            "--password",
+            "pw",
+            "--mnemonic-file",
+            "/tmp/mnemonic.txt",
+            "--private-key",
+            "0xdeadbeef",
+        ]);
+        let err = result.expect_err("--mnemonic-file + --private-key must conflict");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--mnemonic-file") && msg.contains("--private-key"),
+            "clap error must name both flags; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn cli_rejects_mnemonic_file_with_private_key_file() {
+        // Sister edge to `cli_rejects_mnemonic_with_mnemonic_file`.
+        // clap enforces all three pairs at parse time; this test pins
+        // the `--mnemonic-file` × `--private-key-file` edge.
+        use crate::cli::Cli;
+        use clap::Parser;
+        let result = Cli::try_parse_from([
+            "polygon",
+            "wallet",
+            "import",
+            "--name",
+            "x",
+            "--password",
+            "pw",
+            "--mnemonic-file",
+            "/tmp/mnemonic.txt",
+            "--private-key-file",
+            "/tmp/pk.hex",
+        ]);
+        let err = result.expect_err("--mnemonic-file + --private-key-file must conflict");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--mnemonic-file") && msg.contains("--private-key-file"),
+            "clap error must name both flags; got: {msg}"
+        );
+    }
+
+    /// 24-word BIP-39 fixture — derived to a deterministic secp256k1
+    /// key. Format: 24 space-separated words from the BIP-39 English
+    /// wordlist (canonical `abandon` × 23 + `art` form, the standard
+    /// 24-word all-zeros test vector). Used for the 24-word wrap test.
+    const ANVIL_MNEMONIC_24: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+
+    #[test]
+    #[cfg(unix)]
+    fn read_mnemonic_file_accepts_24_word_mnemonic() {
+        // Word-count-agnostic contract: 24-word BIP-39 wraps in
+        // `SecretMnemonic` identically to 12-word. Sister to
+        // `read_mnemonic_file_accepts_mode_0600_file` at L:2208.
+        let tmp = tempdir().expect("tempdir");
+        let path = write_mnemonic_file(tmp.path(), "mnemonic24.txt", ANVIL_MNEMONIC_24, 0o600);
+        let got: SecretMnemonic = super::read_mnemonic_file(&path).expect("read ok");
+        assert_eq!(got.expose().as_str(), ANVIL_MNEMONIC_24);
+        assert_eq!(got.expose().as_str().split_whitespace().count(), 24);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn read_mnemonic_file_accepts_multiline_heredoc_layout() {
+        // Dominant operator use case: shell `polygon wallet import
+        // --mnemonic-file -` with a heredoc that puts one word per
+        // line (or 6-word groups). The lib's BIP-39 parser splits
+        // on Unicode whitespace; this test pins the contract at
+        // the handler boundary — the wrapper preserves inter-word
+        // newlines verbatim so a future `trim()` change can't
+        // silently collapse them and break the lib parser.
+        let tmp = tempdir().expect("tempdir");
+        let first_six: String = ANVIL_MNEMONIC
+            .split_whitespace()
+            .take(6)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let last_six: String = ANVIL_MNEMONIC
+            .split_whitespace()
+            .skip(6)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let multiline = format!("{first_six}\n{last_six}\n");
+        let path = write_mnemonic_file(tmp.path(), "mnemonic-multiline.txt", &multiline, 0o600);
+        let got: SecretMnemonic = super::read_mnemonic_file(&path).expect("read ok");
+        // Inter-word newlines are preserved by the handler; only
+        // surrounding whitespace is trimmed. Word count is the
+        // canonical assertion target (BIP-39 needs 12/15/18/21/24).
+        let words = got.expose().as_str().split_whitespace().count();
+        assert_eq!(words, 12, "wrapper must expose 12 words; got {words}");
+        assert_eq!(
+            got.expose().as_str(),
+            multiline.trim(),
+            "wrapper must preserve inter-word newlines (handler-side trim only)"
         );
     }
 }
