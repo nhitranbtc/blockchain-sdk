@@ -138,3 +138,60 @@ jobs:
         # lone `#[ignore]` fn at `:402` to execute; without
         # `RUN_POLYGON_AMOY=1` it fails at `require_run_polygon_amoy`.
         run: cargo test -p polygon --test amoy_erc20_send -- --include-ignored
+
+  # Scoped runtime gate for `polygon/tests/amoy_erc20_balance.rs` —
+  # the 2-test binary (1 ignored parity proof at `:154`, 1 hermetic
+  # SoT verification). The ignored one runs the CLI's
+  # `polygon erc20 balance` against the live Amoy USDC contract and
+  # asserts byte-level parity vs the alloy `token_balance` oracle.
+  # Same L29/L55 expectation as `rust-test-amoy-erc20-send`: red on
+  # CI without env vars; green locally with `RUN_POLYGON_AMOY=1`.
+  rust-test-amoy-erc20-balance:
+    name: Rust test amoy_erc20_balance (incl. ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --include-ignored (amoy_erc20_balance only)
+        working-directory: rust-wallet-app
+        # L55: `-p polygon` + `--test amoy_erc20_balance` (single test
+        # binary). `--include-ignored` forces the parity test at
+        # `:154` to execute; without `RUN_POLYGON_AMOY=1` it fails at
+        # the `require_run_polygon_amoy()` helper.
+        run: cargo test -p polygon --test amoy_erc20_balance -- --include-ignored
+
+  # Comprehensive runtime gate for every `#[ignore]`-marked test across
+  # the polygon test suite (`--tests --include-ignored`). Sister pattern
+  # to `rust-compile` (compile-only) and the two scoped per-file jobs
+  # above — broad view of the L29 surface: every ignored test fails at
+  # its env-var gate (RUN_POLYGON_AMOY / RUN_POLYGON_MAINNET /
+  # RUN_POLYGON_LOCAL) without the matching env var set. Use the
+  # per-file jobs to localize which test broke; use this one for the
+  # aggregate "did the ignored-test count change" signal.
+  rust-test-polygon-ignored:
+    name: Rust test polygon (all --include-ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable  # stable
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --tests --include-ignored (polygon, broad)
+        working-directory: rust-wallet-app
+        # L55: `-p polygon` + `--tests` (all 7 test binaries). `--include-ignored`
+        # forces every `#[ignore]` fn across `polygon/tests/*.rs` to execute.
+        # Expected: most fail at env-var checks (`require_run_polygon_amoy`,
+        # `require_run_polygon_local`, `require_run_polygon_mainnet`). The
+        # job's purpose is to surface the aggregate count + any drift, not
+        # to gate on per-test pass/fail.
+        run: cargo test -p polygon --tests -- --include-ignored

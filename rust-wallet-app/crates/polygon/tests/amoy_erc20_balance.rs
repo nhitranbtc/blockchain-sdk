@@ -164,6 +164,8 @@ fn amoy_erc20_balance_parity_against_eth_call_oracle() {
         &[
             "erc20",
             "balance",
+            "--token",
+            "USDC",
             "--json",
             "--address",
             &holder,
