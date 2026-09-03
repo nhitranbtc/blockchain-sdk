@@ -647,6 +647,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                     max_fee_gwei,
                     priority_fee_gwei,
                     dry_run,
+                    sign_only,
                     wait,
                     rpc_url: action_rpc_url,
                 } = args;
@@ -671,7 +672,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 let data_dir: std::path::PathBuf =
                     cli.data_dir.clone().unwrap_or_else(default_data_dir);
                 let rpc_url = action_rpc_url.as_deref().or(cli.rpc_url.as_deref());
-                let tx_hash = handlers::wallet::wallet_send_native_v2(
+                let outcome = handlers::wallet::wallet_send_native_v2(
                     &data_dir,
                     rpc_url,
                     network,
@@ -687,13 +688,25 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                     priority_fee_gwei,
                     drain,
                     dry_run,
+                    sign_only,
                     wait,
                 )
                 .await?;
-                println!(
-                    "tx_hash: 0x{}",
-                    alloy_primitives::hex::encode(tx_hash.as_slice())
-                );
+                // Acknowledge the operator when both --dry-run and
+                // --sign-only are set (per L12 review MED #5 — silent
+                // priority resolution is operator-hostile). Per the
+                // handler, sign_only wins; we surface that here.
+                if dry_run && sign_only {
+                    eprintln!(
+                        "note: --sign-only takes priority over --dry-run; \
+                         signed envelope printed below"
+                    );
+                }
+                // Display impl on SendOutcome co-locates the stdout
+                // contract with the type (per L12 review MED #3) — a
+                // 4th variant added later surfaces as a `match`
+                // exhaustiveness compiler error inside `impl Display`.
+                println!("{outcome}");
                 Ok(())
             }
             WalletAction::SendSpeedup(args) => {

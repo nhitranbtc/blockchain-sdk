@@ -49,6 +49,78 @@ const TRANSFER_TOPIC: [u8; 32] = [
     0x95, 0x2b, 0xa7, 0xf1, 0x63, 0xc4, 0xa1, 0x16, 0x28, 0xf5, 0x5a, 0x4d, 0xf5, 0x23, 0xb3, 0xef,
 ];
 
+/// Outcome of `wallet_send_native_v2` — distinguishes live broadcast
+/// from no-broadcast short-circuits (`dry_run`, `sign_only`). P8-T2
+/// (G3, issue #514) added `SignOnly { raw_rlp: Bytes }` for the
+/// cold-sign / hardware-wallet-migration pipeline; the existing
+/// `DryRun` variant was preserved for the historical sentinel
+/// `keccak256(rlp)` hash output.
+///
+/// `#[must_use]` on the enum (and `#[must_use = "..."]` on the
+/// `SignOnly` variant) prevents callers from silently dropping the
+/// signed envelope — the entire payload the v0.2 hardware-wallet
+/// pipeline consumes would vanish on `let _ = send(...)`. The
+/// per-variant message is calibrated to the blast radius: dropping
+/// `SignOnly` is catastrophic (no recovery — sign again), dropping
+/// `DryRun`/`Broadcast` is recoverable (re-run).
+///
+/// Display shape (set by main.rs dispatch — uses `Display` impl below):
+/// - `Broadcast(tx_hash)` → `tx_hash: 0x{hash}`
+/// - `DryRun(tx_hash)`    → `dry_run_tx_hash: 0x{hash}`
+/// - `SignOnly { raw_rlp }` → `signed_tx: 0x{rlp_hex}`
+#[derive(Debug, Clone)]
+#[must_use = "SendOutcome carries the result of a send — dropping it discards the on-chain hash (Broadcast/DryRun) or the entire signed envelope (SignOnly)."]
+pub enum SendOutcome {
+    /// Live broadcast — `tx_hash` is the broadcasted transaction
+    /// hash returned by `eth_sendRawTransaction` (not the receipt
+    /// hash; receipt requires a follow-up `get_transaction_receipt`).
+    Broadcast(B256),
+    /// Dry-run sentinel — `keccak256(rlp)` of the signed envelope,
+    /// no RPC broadcast issued.
+    DryRun(B256),
+    /// Sign-only (P8-T2 / G3, issue #514) — raw RLP bytes of the
+    /// signed envelope (EIP-1559 type byte 0x02 + RLP body), no RPC
+    /// broadcast issued. Consumed by future hardware-wallet
+    /// migration (v0.2 deferred) for out-of-band broadcast. The
+    /// enum-level `must_use` (above) is the operative guard against
+    /// silent loss — Rust 2024 does not allow `#[must_use]` on
+    /// individual variants (rust-lang/rust#130366 + successor RFCs);
+    /// the single enum-level message covers all three variants.
+    SignOnly { raw_rlp: alloy_primitives::Bytes },
+}
+
+impl std::fmt::Display for SendOutcome {
+    /// Co-locates the stdout contract with the type so a 4th variant
+    /// added later surfaces as a `non-exhaustive match` compiler error
+    /// here (instead of silently missing the dispatch site in
+    /// `main.rs`).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendOutcome::Broadcast(tx_hash) => {
+                write!(
+                    f,
+                    "tx_hash: 0x{}",
+                    alloy_primitives::hex::encode(tx_hash.as_slice())
+                )
+            }
+            SendOutcome::DryRun(tx_hash) => {
+                write!(
+                    f,
+                    "dry_run_tx_hash: 0x{}",
+                    alloy_primitives::hex::encode(tx_hash.as_slice())
+                )
+            }
+            SendOutcome::SignOnly { raw_rlp } => {
+                write!(
+                    f,
+                    "signed_tx: 0x{}",
+                    alloy_primitives::hex::encode(raw_rlp.as_ref())
+                )
+            }
+        }
+    }
+}
+
 // `TxSummary` lives in `polygon-wallet-core` (not here) — see
 // `polygon-wallet-core/src/lib.rs`. Keeping it in this publish=false
 // binary crate would make it unreachable to any sister CLI / future
@@ -610,8 +682,9 @@ pub async fn wallet_send_native_v2(
     priority_fee_gwei: Option<f64>,
     _drain: bool,
     dry_run: bool,
+    sign_only: bool,
     wait: bool,
-) -> Result<B256> {
+) -> Result<SendOutcome> {
     // Step 1: validators (pure, no I/O, no provider). Close the
     // S1 / S2 / S4 / S7 / S6 paths at exit 2 before any wallet
     // unlock or RPC call.
@@ -720,24 +793,36 @@ pub async fn wallet_send_native_v2(
         max_priority_fee_per_gas: Some(max_priority_fee_per_gas),
         ..Default::default()
     };
-    // Step 8: dry-run short-circuits before broadcast. The envelope is
-    // signed (so the operator can audit the exact bytes) but no RPC
-    // `send_raw_transaction` is issued. Returns the signed-tx B256 via
-    // a synthetic tx-hash derivation step.
+    // Step 8: no-broadcast short-circuits (priority order: sign_only
+    // wins over dry_run when both set — sign_only returns the actual
+    // RLP, dry_run returns a synthetic keccak256 sentinel). The
+    // envelope is signed (so the operator can audit the exact bytes)
+    // but no RPC `send_raw_transaction` is issued on either path.
+    //
+    // Sign once + encode once + branch on the return shape (per L12
+    // review MED #6 — eliminates the duplicated sign+encode pipeline
+    // that previously existed at `if sign_only` and `if dry_run`
+    // independently). Note on `--wait`: dry-run and sign-only return
+    // before step 10's `if wait`, so `--wait` is a silent no-op on
+    // these paths. Surfaced via the CLI flag doc-comment (cli.rs).
+    let signed = polygon_wallet_core::sign_native_eth_tx(&signer, tx_req)
+        .map_err(|e| Error::Rpc(format!("sign (no-broadcast): {e}")))?;
+    let encoded = polygon_wallet_core::encoded_envelope(&signed);
+    if sign_only {
+        return Ok(SendOutcome::SignOnly {
+            raw_rlp: alloy_primitives::Bytes::copy_from_slice(encoded.as_slice()),
+        });
+    }
     if dry_run {
-        let signed = polygon_wallet_core::sign_native_eth_tx(&signer, tx_req)
-            .map_err(|e| Error::Rpc(format!("sign (dry_run): {e}")))?;
         // Dry-run: surface a stable sentinel so the operator can
         // confirm the dry-run path executed. Live hash lands when
         // dry_run=false.
-        return Ok({
-            let bytes = polygon_wallet_core::encoded_envelope(&signed);
-            alloy_primitives::keccak256(&bytes)
-        });
+        return Ok(SendOutcome::DryRun(alloy_primitives::keccak256(&encoded)));
     }
-    // Step 9: sign + broadcast (live path).
-    let signed = polygon_wallet_core::sign_native_eth_tx(&signer, tx_req)
-        .map_err(|e| Error::Rpc(format!("sign: {e}")))?;
+    // Step 9: sign + broadcast (live path). The broadcast branch
+    // re-encodes from the signed envelope (functionally identical to
+    // `encoded` above; kept explicit so step 9 reads as a self-
+    // contained unit).
     let bytes = polygon_wallet_core::encoded_envelope(&signed);
     let pending = provider
         .send_raw_transaction(&bytes)
@@ -752,7 +837,7 @@ pub async fn wallet_send_native_v2(
             .await
             .map_err(|e| Error::Rpc(format!("get_transaction_receipt: {e}")))?;
     }
-    Ok(tx_hash)
+    Ok(SendOutcome::Broadcast(tx_hash))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1665,6 +1750,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             ));
         match r {
             Err(Error::InvalidInput(msg)) => {
@@ -1701,6 +1787,7 @@ mod tests {
                 "half_hour",
                 None,
                 None,
+                false,
                 false,
                 false,
                 false,
@@ -1743,6 +1830,7 @@ mod tests {
                 false,
                 false,
                 false,
+                false,
             ));
         match r {
             Err(Error::InvalidInput(msg)) => {
@@ -1781,6 +1869,7 @@ mod tests {
                 "half_hour",
                 None,
                 None,
+                false,
                 false,
                 false,
                 false,
