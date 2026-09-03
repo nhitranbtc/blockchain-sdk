@@ -128,7 +128,11 @@ fn format_balance(balance: alloy_primitives::U256, unit: &str) -> String {
                 alloy_primitives::U256::from(10u128).pow(alloy_primitives::U256::from(18u8));
             let whole = balance / one_e18;
             let frac = balance % one_e18;
-            let mut s = format!("{}.{:018}", whole, frac.to_string());
+            // Pass `frac` as U256 (not `frac.to_string()`) — the `{:018}`
+            // zero-pad flag is numeric-only and silently no-ops on String.
+            // Issue #522: amoy faucet drips <1 POL rendered as 0.37 POL
+            // instead of 0.00037 POL because the leading zeros were dropped.
+            let mut s = format!("{}.{:018}", whole, frac);
             // Trim trailing zeros (but keep at least one decimal digit).
             while s.ends_with('0') && s.contains('.') && !s.ends_with(".0") {
                 s.pop();
@@ -756,14 +760,57 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 );
                 Ok(())
             }
-            Erc20Action::Balance { .. } => {
-                // T6d-2 follow-up: Balance handler requires a
-                // standalone refactor (cli.rs Balance.address typed
-                // String vs value_parser=parse_address returning
-                // Address; needs deeper cli.rs surgery than one PR).
-                Err(Error::Rpc(
-                    "erc20 balance: deferred to T6d-2.1 follow-up (cli.rs Balance.address type conflict)".into(),
-                ))
+            Erc20Action::Balance {
+                address,
+                token,
+                token_address,
+                network,
+                all: _,
+                decimals,
+                json,
+                rpc_url: action_rpc_url,
+            } => {
+                // T6d-2.1 (Issue #523): dispatch to the real
+                // `handlers::erc20::erc20_balance` handler.
+                // `token_address: Option<Address>` takes precedence over
+                // the symbol form when supplied (mirrors `Send` arm at
+                // main.rs:724-727). Per-action `--rpc-url` overrides
+                // the global `--rpc-url`. `--all` deferred (issue body
+                // lists it as deferrable); `--decimals <N>` skips the
+                // secondary `decimals()` eth_call when supplied.
+                let net = handlers::parse_network(&network)?;
+                let token_addr = match token_address {
+                    Some(a) => handlers::erc20::resolve_token_address(&a.to_string(), net)?,
+                    None => handlers::erc20::resolve_token_address(&token, net)?,
+                };
+                let holder_addr = address;
+                let rpc_url = action_rpc_url.as_deref().or(cli.rpc_url.as_deref());
+                let result =
+                    handlers::erc20::erc20_balance(rpc_url, net, holder_addr, token_addr, decimals)
+                        .await?;
+                if json {
+                    let payload = serde_json::json!({
+                        "holder": format!("{:#x}", result.holder),
+                        "token": format!("{:#x}", result.token),
+                        "decimals": result.decimals,
+                        "raw": result.raw.to_string(),
+                        "formatted": result.formatted(),
+                    });
+                    println!(
+                        "{}",
+                        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into())
+                    );
+                } else {
+                    println!(
+                        "{} (raw: {}, decimals: {}, holder: {:#x}, token: {:#x})",
+                        result.formatted(),
+                        result.raw,
+                        result.decimals,
+                        result.holder,
+                        result.token,
+                    );
+                }
+                Ok(())
             }
             Erc20Action::List { network, json } => {
                 let network = handlers::parse_network(&network)?;
@@ -1012,6 +1059,83 @@ mod password_resolution_tests {
         assert!(
             std::env::var("POLYGON_PASSWORD").is_err(),
             "POLYGON_PASSWORD must be removed from process env after read"
+        );
+    }
+}
+
+#[cfg(test)]
+mod format_balance_tests {
+    //! Issue #522 — `format_balance("pol", wei)` returned 1000× too large.
+    //!
+    //! Root cause: the `{:018}` zero-pad flag is numeric-only; passing
+    //! `frac.to_string()` (a String) silently dropped the leading zeros,
+    //! so 369,999,998,677,000 wei rendered as `0.369999998677000 POL`
+    //! instead of `0.000369999998677 POL`. Sister formatter in
+    //! `handlers/erc20.rs:144` uses `{:0>w$}` (alignment), which DOES
+    //! pad Strings — main.rs formatter was the bug class.
+    //!
+    //! AC vectors from #522:
+    //! - raw 0x15083567cf008 = 369,999,998,677,000 wei → "0.000369999998677 POL"
+    //! - 1 POL (10^18 wei) → "1.0 POL"
+    //! - 0 wei → "0.0 POL"
+    //! - wei unit → raw U256 + " wei"
+    //! - unknown unit → falls back to wei
+
+    use super::format_balance;
+    use alloy_primitives::U256;
+
+    /// #522 primary vector: small-balance display matches oracle.
+    /// Catches the regression where `{:018}` was applied to a String
+    /// instead of a numeric type, stripping leading zeros and shifting
+    /// the decimal three places.
+    #[test]
+    fn format_balance_pol_amoy_faucet_drip_matches_rpc_oracle() {
+        let raw_wei = U256::from(369_999_998_677_000u64);
+        let got = format_balance(raw_wei, "pol");
+        assert_eq!(
+            got, "0.000369999998677 POL",
+            "369,999,998,677,000 wei must render as 0.000369999998677 POL (1000× regression catch); got {got}"
+        );
+    }
+
+    /// Whole-POL balance: 10^18 wei must render as "1.0 POL", NOT
+    /// "1.000000000000000000 POL" (the untrimmed raw).
+    #[test]
+    fn format_balance_pol_one_wei_trims_to_one_point_zero() {
+        let one_pol = U256::from(1_000_000_000_000_000_000u128);
+        let got = format_balance(one_pol, "pol");
+        assert_eq!(got, "1.0 POL", "1 POL must trim to 1.0; got {got}");
+    }
+
+    /// Zero balance: 0 wei with `pol` unit must render "0.0 POL"
+    /// (preserves the "always one decimal" rule).
+    #[test]
+    fn format_balance_pol_zero_wei_renders_zero_point_zero() {
+        let got = format_balance(U256::ZERO, "pol");
+        assert_eq!(got, "0.0 POL", "0 wei pol must be 0.0; got {got}");
+    }
+
+    /// `wei` unit returns the raw U256 + " wei" suffix, no division.
+    #[test]
+    fn format_balance_wei_unit_returns_raw_with_suffix() {
+        let raw = U256::from(369_999_998_677_000u64);
+        let got = format_balance(raw, "wei");
+        assert_eq!(
+            got, "369999998677000 wei",
+            "wei unit must echo raw + suffix; got {got}"
+        );
+    }
+
+    /// Unknown unit falls back to wei (per the fn-level doc at
+    /// `format_balance` — defensive default; catches accidental contract
+    /// changes that drop the fallback).
+    #[test]
+    fn format_balance_unknown_unit_falls_back_to_wei() {
+        let raw = U256::from(42u64);
+        let got = format_balance(raw, "gwei");
+        assert_eq!(
+            got, "42 wei",
+            "unknown unit must fall back to wei; got {got}"
         );
     }
 }
