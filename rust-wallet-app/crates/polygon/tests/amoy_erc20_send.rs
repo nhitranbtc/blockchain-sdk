@@ -65,12 +65,32 @@ fn amoy_sender_name() -> String {
     raw.to_string()
 }
 
+fn amoy_native_sender_name() -> String {
+    let harness = amoy_json_obj("test_harness");
+    let raw = harness
+        .get("amoy_native_sender")
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| panic!("missing `test_harness.amoy_native_sender` in tokens/amoy.json"));
+    raw.to_string()
+}
+
 fn amoy_recipient_name() -> String {
     let harness = amoy_json_obj("test_harness");
     let raw = harness
         .get("amoy_recipient")
         .and_then(|s| s.as_str())
         .unwrap_or_else(|| panic!("missing `test_harness.amoy_recipient` in tokens/amoy.json"));
+    raw.to_string()
+}
+
+fn amoy_native_recipient_name() -> String {
+    let harness = amoy_json_obj("test_harness");
+    let raw = harness
+        .get("amoy_native_recipient")
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| {
+            panic!("missing `test_harness.amoy_native_recipient` in tokens/amoy.json")
+        });
     raw.to_string()
 }
 
@@ -624,6 +644,12 @@ fn amoy_erc20_send_usdc_round_trip() {
         // the symbol lookup and binds to the exact address from JSON SoT.
         // Sign via the sender wallet loaded from JSON; recipient resolved
         // by scanning the wallet store.
+        //
+        // NOTE: `erc20 send` does NOT accept `--nonce` (only `wallet send`
+        // does) — can't pin nonce here; rely on CLI auto-fetch. Flaky
+        // when mempool has stuck txs from prior session runs (yields
+        // "nonce too low"); per L29 this is operator-driven and
+        // acceptable risk in local runs. CI smoke runs are best-effort.
         let send = run_polygon(
             &[
                 "erc20",
@@ -964,8 +990,8 @@ fn amoy_erc20_send_full_log_export() {
 }
 
 #[test]
-#[ignore = "operator-driven live Amoy RPC per L29 — run with: RUN_POLYGON_AMOY=1 cargo test -p polygon --test amoy_erc20_send amoy_erc20_send_pol_round_trip -- --ignored --nocapture"]
-fn amoy_erc20_send_pol_round_trip() {
+#[ignore = "operator-driven live Amoy RPC per L29 — run with: RUN_POLYGON_AMOY=1 cargo test -p polygon --test amoy_erc20_send amoy_erc20_send_native_round_trip -- --ignored --nocapture"]
+fn amoy_erc20_send_native_round_trip() {
     log_export_status();
     let started = Instant::now();
     let fail_guard = TestFailGuard::new();
@@ -981,8 +1007,8 @@ fn amoy_erc20_send_pol_round_trip() {
     log_step(1, 10, "preflight env check", "RUN_POLYGON_AMOY = \"1\" ✓");
 
     let data_dir = amoy_wallet_data_dir();
-    let sender_name = amoy_sender_name();
-    let recipient_name = amoy_recipient_name();
+    let sender_name = amoy_native_sender_name();
+    let recipient_name = amoy_native_recipient_name();
     let sender_addr_str = resolve_wallet_address(&sender_name);
     let recipient_addr_str = resolve_wallet_address(&recipient_name);
     let pol_amount = U256::from_str_radix(POL_TRANSFER_AMOUNT_WEI, 10)
@@ -1065,6 +1091,11 @@ fn amoy_erc20_send_pol_round_trip() {
         );
 
         // ===== Step 5: send 0.0001 POL =====
+        // Sender is `amoy-native-sender` (dedicated POL wallet — separate
+        // nonce space from `amoy-sender` used by USDC round-trip; no
+        // nonce race). High fees outbid any stuck mempool tx from prior
+        // session runs (defense-in-depth; not strictly needed for fresh
+        // wallets).
         let send = run_polygon(
             &[
                 "wallet",
@@ -1077,6 +1108,10 @@ fn amoy_erc20_send_pol_round_trip() {
                 POL_TRANSFER_AMOUNT_WEI,
                 "--unit",
                 "wei",
+                "--max-fee-gwei",
+                "100",
+                "--priority-fee-gwei",
+                "50",
                 "--network",
                 "amoy",
             ],
