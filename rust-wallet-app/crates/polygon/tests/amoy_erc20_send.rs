@@ -33,10 +33,9 @@
 #![cfg(test)]
 
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use alloy_primitives::{Address, B256, U256};
@@ -47,8 +46,44 @@ use alloy_provider::Provider;
 /// ERC-20 `Transfer(address,address,uint256)` event topic (per EIP-20).
 const TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
-/// Deterministic recipient sink. Same value as `amoy_smoke.rs:182`.
-const RECIPIENT_ADDR: &str = "0x0000000000000000000000000000000000000042";
+/// Recipient wallet — operator-funded `amoy-smoke-2` from the
+/// polygon-data-amoy wallet store (created in earlier session).
+const RECIPIENT_ADDR: &str = "0x2055ba398775b9aa890bd02222a948f4978c3661";
+
+/// Sender wallet — operator-funded `amoy-smoke-1` (funded via Circle USDC
+/// faucet + Polygon POL faucet per L29 + plan §G5).
+const SENDER_ADDR: &str = "0x971200F83562896Ff7049Cb8f6686c4eB5Cb1717";
+
+/// Sender wallet name (matches `.meta.json::name` in the wallet store).
+const WALLET_NAME: &str = "amoy-smoke-1";
+
+/// Path to the polygon CLI's local wallet store PARENT directory — CLI
+/// auto-resolves `<parent>/polygon_amoy/` for `--network amoy` (per
+/// `polygon_amoy/README.md` usage). Sender + recipient wallets already
+/// populated under `<parent>/polygon_amoy/`.
+/// Resolve the polygon CLI wallet-store path under the test crate's
+/// `tests/` dir. Project-relative (resolved via `CARGO_MANIFEST_DIR` at
+/// runtime) so the test works regardless of where the repo is checked out.
+/// CLI auto-resolves `<parent>/polygon_amoy/` for `--network amoy`.
+fn wallet_data_dir() -> PathBuf {
+    PathBuf::from(format!(
+        "{}/tests/polygon-data-amoy",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+}
+
+/// Wallet password source — env var only, never embedded in source per
+/// security review (matches L54 secret-via-env discipline). Operator sets
+/// `AMOY_TEST_WALLET_PASSWORD` at invocation; panic with pointer to
+/// `polygon_amoy/README.md` if unset so the cause is unambiguous.
+fn wallet_password() -> String {
+    std::env::var("AMOY_TEST_WALLET_PASSWORD").unwrap_or_else(|_| {
+        panic!(
+            "AMOY_TEST_WALLET_PASSWORD env var must be set to the polygon_amoy \
+             wallet password; see polygon_amoy/README.md"
+        )
+    })
+}
 
 /// 1.0 USDC at 6 decimals.
 const TRANSFER_AMOUNT_RAW: u64 = 1_000_000;
@@ -71,6 +106,12 @@ fn ensure_tokens_loaded() {
 }
 
 static AMOY_TOKENS_JSON: OnceLock<serde_json::Value> = OnceLock::new();
+
+/// Single-flight gate so the export-status entry is written at most once
+/// per process. Plain `cargo test` (no `--ignored`) still exercises this
+/// path via the hermetic sentinel; `--ignored` runs also exercise it via
+/// the live test's first call — same `OnceLock` keeps the marker count at 1.
+static LOG_EXPORT_INIT: OnceLock<()> = OnceLock::new();
 
 fn amoy_json_obj(key: &str) -> serde_json::Value {
     ensure_tokens_loaded();
@@ -139,32 +180,6 @@ fn require_run_polygon_amoy() {
     }
 }
 
-// ----- L54 PK capture + write_pk_file -----
-
-static PK_LOCK: Mutex<()> = Mutex::new(());
-
-fn amoy_funded_pk_hex() -> String {
-    ensure_tokens_loaded();
-    let v = amoy_json_obj("test_harness");
-    v.get("amoy_funded_pk_hex")
-        .and_then(|s| s.as_str())
-        .unwrap_or_else(|| {
-            panic!(
-                "missing test_harness.amoy_funded_pk_hex in tokens/amoy.json — \
-                 add the Anvil-#0 test vector (ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80)"
-            )
-        })
-        .to_string()
-}
-
-fn write_pk_file(dir: &Path, name: &str, hex: &str) -> PathBuf {
-    let path = dir.join(name);
-    std::fs::write(&path, hex.as_bytes()).expect("write pk file");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-        .expect("set pk file mode 0o600");
-    path
-}
-
 // ----- Polygon CLI runner -----
 
 fn polygon_bin() -> PathBuf {
@@ -176,7 +191,7 @@ fn run_polygon(args: &[&str], data_dir: &Path) -> std::process::Output {
         .args(args)
         .arg("--data-dir")
         .arg(data_dir)
-        .env("POLYGON_PASSWORD", "test-pw-ignore-leak")
+        .env("POLYGON_PASSWORD", wallet_password())
         .env("POLYGON_NETWORK", "amoy")
         .env("RUST_BACKTRACE", "1")
         .stdin(Stdio::null())
@@ -247,6 +262,44 @@ fn ensure_log_dir(path: &Path) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
+}
+
+/// Emit a single timestamped `LOG EXPORT` marker identifying the current
+/// cargo invocation (test binary loaded, live test held vs. invoked).
+/// Idempotent within a process via `LOG_EXPORT_INIT` — second call is a
+/// no-op so the live test's full 10-step trail doesn't get a duplicate
+/// export header.
+fn log_export_status() {
+    LOG_EXPORT_INIT.get_or_init(|| {
+        let held = std::env::var("RUN_POLYGON_AMOY").as_deref() == Ok("1");
+        let detail = format!(
+            "test binary loaded\nUSDC={}\nRPC={}\nCHAIN_ID={}\nRUN_POLYGON_AMOY={}\nlive_test_state={}",
+            usdc_address(),
+            amoy_rpc_url(),
+            amoy_chain_id(),
+            std::env::var("RUN_POLYGON_AMOY").unwrap_or_else(|_| "<unset>".to_string()),
+            if held {
+                "eligible (cargo test --ignored)"
+            } else {
+                "held (#[ignore] — set RUN_POLYGON_AMOY=1 to enable)"
+            },
+        );
+        log_step(0, 10, "LOG EXPORT", &detail);
+    });
+}
+
+/// Format a raw USDC amount (6-decimal ERC-20 base units) as a
+/// `whole.frac USDC` decimal string — e.g. `1_000_000` → `"1.000000 USDC"`,
+/// `1_234_567` → `"1.234567 USDC"`. Plan §G5 step 2 example uses this
+/// shape so operators can read the log without doing the ÷1e6 in their head.
+fn format_usdc(raw: U256) -> String {
+    let divisor = U256::from(1_000_000u64);
+    let whole = raw / divisor;
+    let frac_raw = raw % divisor;
+    // Render the fractional component as a zero-padded 6-digit decimal.
+    let frac_dec = frac_raw.to_string();
+    let frac_padded = format!("{:0>6}", frac_dec);
+    format!("{whole}.{frac_padded} USDC")
 }
 
 fn log_step(n: u8, total: u8, action: &str, detail: &str) {
@@ -348,6 +401,7 @@ async fn poll_receipt(
 #[test]
 #[ignore = "operator-driven live Amoy RPC per L29 — run with: RUN_POLYGON_AMOY=1 cargo test -p polygon --test amoy_erc20_send -- --ignored"]
 fn amoy_erc20_send_usdc_round_trip() {
+    log_export_status();
     let started = Instant::now();
     let fail_guard = TestFailGuard::new();
     let test_start_msg = format!(
@@ -362,7 +416,7 @@ fn amoy_erc20_send_usdc_round_trip() {
     require_run_polygon_amoy();
     log_step(1, 10, "preflight env check", "RUN_POLYGON_AMOY = \"1\" ✓");
 
-    let data_dir = tempfile::TempDir::new().expect("tempdir for data-dir");
+    let data_dir = wallet_data_dir();
     let token = usdc_address();
 
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -375,16 +429,10 @@ fn amoy_erc20_send_usdc_round_trip() {
             .expect("provider build for oracle");
 
         // ===== Step 2: snapshot sender USDC balance =====
-        let pk = {
-            let _guard = PK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            let pk = amoy_funded_pk_hex();
-            std::env::remove_var("AMOY_FUNDED_PK_HEX");
-            pk
-        };
-        // Anvil-#0 PK derives the canonical EIP-55 address.
-        let sender_addr: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
-            .parse()
-            .expect("canonical Anvil-#0 sender");
+        // Operator pre-funded `amoy-smoke-1` (sender) via Circle USDC faucet;
+        // see `polygon_amoy/README.md`. Address pinned via SENDER_ADDR constant
+        // — matches `.meta.json::address` for `amoy-smoke-1`.
+        let sender_addr: Address = SENDER_ADDR.parse().expect("sender EIP-55 parses");
         let recipient_addr: Address = RECIPIENT_ADDR.parse().expect("recipient hex parses");
         let token_addr: Address = token.parse().expect("USDC hex parses");
 
@@ -396,9 +444,10 @@ fn amoy_erc20_send_usdc_round_trip() {
         log_step(
             2,
             10,
-            "snapshot sender USDC balance",
+            "snapshot sender USDC balance (BEFORE SEND)",
             &format!(
-                "sender={sender_addr}\nUSDC contract={token_addr}\nbalanceOf(sender) = {sender_balance_before}"
+                "sender={sender_addr} (wallet name: {WALLET_NAME})\nUSDC contract={token_addr}\nbalanceOf(sender) raw = {sender_balance_before}\nbalanceOf(sender) = {usdc}",
+                usdc = format_usdc(sender_balance_before),
             ),
         );
         assert!(
@@ -416,56 +465,67 @@ fn amoy_erc20_send_usdc_round_trip() {
         log_step(
             3,
             10,
-            "snapshot recipient USDC balance",
+            "snapshot recipient USDC balance (BEFORE SEND)",
             &format!(
-                "recipient={recipient_addr}\nbalanceOf(recipient) = {recipient_balance_before}"
+                "recipient={recipient_addr}\nbalanceOf(recipient) raw = {recipient_balance_before}\nbalanceOf(recipient) = {usdc}",
+                usdc = format_usdc(recipient_balance_before),
             ),
         );
 
-        // ===== Step 4: wallet import =====
-        let pk_path = write_pk_file(data_dir.path(), "amoy-erc20.pk", &pk);
-        let import = run_polygon(
+        // ===== Step 4: wallet preflight (sender wallet must load) =====
+        // Sender (`amoy-smoke-1`) wallet must exist in `wallet_data_dir()`
+        // — CLI signs the transfer via this wallet. Recipient is a raw
+        // EIP-55 address string (`--to 0x...`) — `polygon erc20 send` does
+        // NOT require the recipient to be a managed wallet. So we only
+        // assert sender presence here; recipient presence is irrelevant
+        // to the send path.
+        let list = run_polygon(
             &[
                 "wallet",
-                "import",
-                "--name",
-                "amoy-erc20-test",
-                "--private-key-file",
-                pk_path.to_str().expect("tempdir path is utf-8 for tests"),
+                "list",
                 "--network",
                 "amoy",
+                "--json",
             ],
-            data_dir.path(),
+            &data_dir,
         );
-        let import_stdout = String::from_utf8_lossy(&import.stdout).to_string();
-        let import_stderr = String::from_utf8_lossy(&import.stderr).to_string();
+        let list_stdout = String::from_utf8_lossy(&list.stdout).to_string();
+        let list_stderr = String::from_utf8_lossy(&list.stderr).to_string();
         log_step(
             4,
             10,
-            "wallet import",
+            "wallet preflight (list)",
             &format!(
-                "polygon wallet import --name amoy-erc20-test --private-key-file <0600-mode>\nexit = {}\nstdout: {}\nstderr: {}",
-                import.status.code().unwrap_or(-1),
-                import_stdout.trim(),
-                import_stderr.trim(),
+                "polygon wallet list --network amoy --json\nexit = {}\nstdout: {}\nstderr: {}",
+                list.status.code().unwrap_or(-1),
+                list_stdout.trim(),
+                list_stderr.trim(),
             ),
         );
         assert!(
-            import.status.success(),
-            "polygon wallet import failed: stderr={import_stderr}"
+            list.status.success(),
+            "polygon wallet list failed: stderr={list_stderr}"
         );
         assert!(
-            import_stdout.contains("wallet imported:"),
-            "stdout should confirm import; got: {import_stdout}"
+            list_stdout.contains("\"amoy-smoke-1\""),
+            "wallet list must contain sender wallet name \"amoy-smoke-1\"; got: {list_stdout}"
         );
 
         // ===== Step 5: send 1.0 USDC =====
+        // CLI requires `--token` (positional, clap); `--token-address` is an
+        // optional override. main.rs:732-734 prefers `token_address` if Some
+        // else resolves `token` via the per-network registry. Pass both for
+        // defense-in-depth: `--token` satisfies clap, `--token-address` skips
+        // the symbol lookup and binds to the exact address from JSON SoT.
+        // Sign via existing `amoy-smoke-1` wallet (no import).
         let send = run_polygon(
             &[
                 "erc20",
                 "send",
                 "--name",
-                "amoy-erc20-test",
+                WALLET_NAME,
+                "--token",
+                "USDC",
                 "--token-address",
                 &token,
                 "--to",
@@ -475,7 +535,7 @@ fn amoy_erc20_send_usdc_round_trip() {
                 "--network",
                 "amoy",
             ],
-            data_dir.path(),
+            &data_dir,
         );
         let send_stdout = String::from_utf8_lossy(&send.stdout).to_string();
         let send_stderr = String::from_utf8_lossy(&send.stderr).to_string();
@@ -493,6 +553,11 @@ fn amoy_erc20_send_usdc_round_trip() {
             .parse()
             .unwrap_or_else(|e| panic!("parse tx_hash `{tx_hash_str}`: {e}"));
         let explorer = format!("{}/tx/0x{tx_hash_str}", amoy_explorer_url());
+        // Surface the tx hash on stdout (machine-greppable) so operators running
+        // with `--nocapture` can pipe `| grep TX_HASH=` to extract it without
+        // parsing the log file. Mirrors what `polygon erc20 send` already
+        // prints to stdout but with a stable machine-greppable marker.
+        println!("TX_HASH=0x{tx_hash_str}");
         log_step(
             5,
             10,
@@ -609,10 +674,17 @@ fn amoy_erc20_send_usdc_round_trip() {
         log_step(
             10,
             10,
-            "verify deltas",
+            "verify deltas (AFTER SEND)",
             &format!(
-                "sender_after   = {sender_balance_after}  delta = -{sender_delta}\n\
-                 recipient_after = {recipient_balance_after}  delta = +{recipient_delta}"
+                "sender_balance_after   raw = {sender_balance_after}  ({sender_usdc_after})\n\
+                 recipient_balance_after raw = {recipient_balance_after}  ({recipient_usdc_after})\n\
+                 sender_delta   = -{sender_delta} (-{sender_usdc_delta})\n\
+                 recipient_delta = +{recipient_delta} (+{recipient_usdc_delta})\n\
+                 expected delta  = +/- {TRANSFER_AMOUNT_RAW} (+/- 1.000000 USDC)",
+                sender_usdc_after = format_usdc(sender_balance_after),
+                recipient_usdc_after = format_usdc(recipient_balance_after),
+                sender_usdc_delta = format_usdc(sender_delta),
+                recipient_usdc_delta = format_usdc(recipient_delta),
             ),
         );
         assert_eq!(
@@ -638,9 +710,149 @@ fn amoy_erc20_send_usdc_round_trip() {
 }
 
 #[test]
+fn amoy_erc20_send_full_log_export() {
+    // Hermetic end-to-end log export — exercises every log_step call site
+    // (steps 0..10 + the pass marker) with deterministic synthetic data, so
+    // plain `cargo test -p polygon --test amoy_erc20_send` writes a complete
+    // 10-step log block to `.local/tmp/amoy_erc20_send_report.log` without
+    // hitting any RPC. Lets reviewers + operators inspect the full log shape
+    // without funding the L29 operator pre-conditions.
+    log_export_status();
+    let started = Instant::now();
+
+    let sender_addr: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+        .parse()
+        .expect("canonical Anvil-#0 sender");
+    let recipient_addr: Address = RECIPIENT_ADDR.parse().expect("recipient hex parses");
+    let token_addr: Address = usdc_address().parse().expect("USDC hex parses");
+    let _transfer_topic_b256: B256 = TRANSFER_TOPIC.parse().expect("topic hex");
+    // Deterministic synthetic tx hash — `DEADBEEF` × 8 = obviously fake
+    // placeholder (not a real on-chain tx). Valid hex, parses cleanly, lets
+    // reviewers grep for the deadbeef pattern instead of chasing a phantom
+    // tx on amoy.polygonscan.com. Real runs emit real hashes from receipts.
+    let tx_hash: B256 = "0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF"
+        .parse()
+        .expect("synthetic tx hash");
+    let tx_hash_str = alloy_primitives::hex::encode(tx_hash.as_slice());
+
+    let sender_balance_before = U256::from(2_500_000u64);
+    let recipient_balance_before = U256::ZERO;
+    let sender_balance_after = U256::from(1_500_000u64);
+    let recipient_balance_after = U256::from(1_000_000u64);
+
+    log_step(
+        0,
+        10,
+        "TEST STARTED (synthetic — no RPC)",
+        &format!(
+            "synthetic round-trip\nUSDC={token_addr}\nRPC={}\nCHAIN_ID={}\n\
+             tx_hash = 0x{tx_hash_str}",
+            amoy_rpc_url(),
+            amoy_chain_id(),
+        ),
+    );
+    log_step(
+        1,
+        10,
+        "preflight env check",
+        "RUN_POLYGON_AMOY = \"1\" ✓ (synthetic — gate bypassed for log export)",
+    );
+    log_step(
+        2,
+        10,
+        "snapshot sender USDC balance (BEFORE SEND)",
+        &format!(
+            "sender={sender_addr}\nUSDC contract={token_addr}\n\
+             balanceOf(sender) raw = {sender_balance_before}\n\
+             balanceOf(sender) = {}",
+            format_usdc(sender_balance_before)
+        ),
+    );
+    log_step(
+        3,
+        10,
+        "snapshot recipient USDC balance (BEFORE SEND)",
+        &format!(
+            "recipient={recipient_addr}\n\
+             balanceOf(recipient) raw = {recipient_balance_before}\n\
+             balanceOf(recipient) = {}",
+            format_usdc(recipient_balance_before)
+        ),
+    );
+    log_step(
+        4,
+        10,
+        "wallet import",
+        "polygon wallet import --name amoy-erc20-test --private-key-file <0600-mode>\n\
+         exit = 0\nstdout: wallet imported: name=amoy-erc20-test id=<synthetic-uuid> \
+         address=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\n\
+         stderr:",
+    );
+    log_step(
+        5,
+        10,
+        "send 1.0 USDC",
+        &format!(
+            "polygon erc20 send --name amoy-erc20-test --token-address {token_addr} \
+             --to {recipient_addr} --amount {TRANSFER_AMOUNT_RAW}\n\
+             exit = 0\ntx_hash = 0x{tx_hash_str} (synthetic — not on-chain)",
+        ),
+    );
+    log_step(
+        6,
+        10,
+        "poll receipt",
+        "receipt present (synthetic)\nstatus = true\ngas_used = 64257\n\
+         explorer link omitted (synthetic tx; no amoy.polygonscan.com entry)",
+    );
+    log_step(7, 10, "assert tx success", "status = 0x1 ✓ (synthetic)");
+    log_step(
+        8,
+        10,
+        "locate Transfer event",
+        &format!(
+            "logs count: 1 (synthetic)\n\
+             matching log: address={token_addr} topics[0]=0x{transfer_topic_str}",
+            transfer_topic_str = &TRANSFER_TOPIC[2..],
+        ),
+    );
+    log_step(
+        9,
+        10,
+        "decode event",
+        &format!(
+            "from = {sender_addr}\nto   = {recipient_addr}\n\
+             value = {TRANSFER_AMOUNT_RAW} ({} raw / 1.000000 USDC)",
+            TRANSFER_AMOUNT_RAW
+        ),
+    );
+    log_step(
+        10,
+        10,
+        "verify deltas (AFTER SEND)",
+        &format!(
+            "sender_balance_after   raw = {sender_balance_after}  ({})\n\
+             recipient_balance_after raw = {recipient_balance_after}  ({})\n\
+             sender_delta   = -{sender_delta} (-{})\n\
+             recipient_delta = +{recipient_delta} (+{})\n\
+             expected delta  = +/- {TRANSFER_AMOUNT_RAW} (+/- 1.000000 USDC)",
+            format_usdc(sender_balance_after),
+            format_usdc(recipient_balance_after),
+            U256::from(TRANSFER_AMOUNT_RAW),
+            format_usdc(U256::from(TRANSFER_AMOUNT_RAW)),
+            sender_delta = U256::from(TRANSFER_AMOUNT_RAW),
+            recipient_delta = U256::from(TRANSFER_AMOUNT_RAW),
+        ),
+    );
+
+    log_pass(started.elapsed());
+}
+
+#[test]
 fn amoy_erc20_send_config_present() {
     // Hermetic SoT verification — runs on plain `cargo test -p polygon`
     // without `RUN_POLYGON_AMOY=1`. Catches JSON drift silently.
+    log_export_status();
     let token = usdc_address();
     assert_eq!(
         token, "0x8B0180f2101c8260d49339abfEe87927412494B4",

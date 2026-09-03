@@ -19,6 +19,13 @@ tangem-app-ios/
 .local/
 *.local
 
+# Operator wallet material for amoy_erc20_send test (Issue #515).
+# `.enc` files are Argon2id + ChaCha20-Poly1305 encrypted mnemonics —
+# recoverable with the wallet password (per polygon_amoy/README.md).
+# Never commit. The runtime path is rebuilt by the operator from a
+# trusted source (or via `polygon wallet create` / `wallet import`).
+rust-wallet-app/crates/polygon/tests/polygon-data-amoy/
+
 # Python bytecode (leak from e2e test scripts)
 **/__pycache__/
 *.pyc
