@@ -105,19 +105,17 @@ jobs:
         # and friends compiles cleanly.
         run: cargo test -p polygon --tests --no-run
 
-  # Explicit L29/L55 override per operator direction (2026-09-03):
-  # runs the full polygon test suite WITH `--include-ignored`, forcing
-  # every `#[ignore]`-gated test to execute regardless of its marker.
-  # Expected runtime behavior in CI: RED. Each ignored test gates on
-  # `RUN_POLYGON_AMOY` / `RUN_POLYGON_MAINNET` / `RUN_POLYGON_LOCAL`
-  # env vars + live RPC + funded wallet — none of which CI provides.
-  # Purpose: surface the L29/L55 gap explicitly so the next plan-cycles
-  # revisit whether live-testnet tests belong in CI at all. Sister
-  # job `rust-compile` above stays green and remains the PR-merge gate.
-  rust-test-include-ignored:
-    name: Rust test (incl. ignored — known red)
+  # Scoped runtime gate for `polygon/tests/amoy_erc20_send.rs` —
+  # the single live-Amoy ERC-20 transfer test (1 #[ignore]'d fn at
+  # `:402`, gated on `RUN_POLYGON_AMOY=1` + public Amoy RPC + funded
+  # PK). Runs WITHOUT env vars per L29/L55 — expected to fail at
+  # the helper's env-var check. Sister pattern to `rust-compile`
+  # above (compile stays green as PR-merge gate; this surfaces
+  # the L29 gap for the one file).
+  rust-test-amoy-erc20-send:
+    name: Rust test amoy_erc20_send (incl. ignored)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4  # v4
         with:
@@ -126,11 +124,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: cargo test --include-ignored (all polygon tests)
+      - name: cargo test --include-ignored (amoy_erc20_send only)
         working-directory: rust-wallet-app
-        # L55: scope `-p polygon`. `--include-ignored` forces every
-        # `#[ignore]` test across `polygon/tests/*.rs` to execute.
-        # Each test helper (`require_run_polygon_amoy`, etc.) checks
-        # the relevant env var and returns Err when absent — this is
-        # the intended L29/L55 surface.
-        run: cargo test -p polygon --tests -- --include-ignored
+        # L55: `-p polygon` + `--test amoy_erc20_send` (single test
+        # binary, not `--tests`). `--include-ignored` forces the
+        # lone `#[ignore]` fn at `:402` to execute; without
+        # `RUN_POLYGON_AMOY=1` it fails at `require_run_polygon_amoy`.
+        run: cargo test -p polygon --test amoy_erc20_send -- --include-ignored
