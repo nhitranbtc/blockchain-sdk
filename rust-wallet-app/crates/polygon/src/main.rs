@@ -368,7 +368,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 private_key,
                 private_key_file,
                 mnemonic_file,
-                account_index: _,
+                account_index,
                 legacy_token_symbol: _,
                 rpc_url: _,
             } => {
@@ -405,7 +405,14 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                         // branch after the Phase 2 squash (#497 eb360c1).
                         // Sister to the (None,Some(path),None,None) arm;
                         // SecretMnemonic wraps the phrase for zero-on-drop.
-                        handlers::wallet::wallet_import(&data_dir, &name, &password, net, phrase)?
+                        handlers::wallet::wallet_import(
+                            &data_dir,
+                            &name,
+                            &password,
+                            account_index,
+                            net,
+                            phrase,
+                        )?
                     }
                     (None, Some(ref path), None, None) => {
                         // Mnemonic file path (#528). Sister to the
@@ -415,7 +422,14 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                         // zero-on-drop — same zeroization invariant as
                         // the argv form above.
                         let phrase = handlers::wallet::read_mnemonic_file(path)?;
-                        handlers::wallet::wallet_import(&data_dir, &name, &password, net, &phrase)?
+                        handlers::wallet::wallet_import(
+                            &data_dir,
+                            &name,
+                            &password,
+                            account_index,
+                            net,
+                            &phrase,
+                        )?
                     }
                     (None, None, Some(hex), None) => {
                         // Wired path (was dead pre-#469 per the T6c4
@@ -526,7 +540,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             WalletAction::Show {
                 network,
                 id,
-                name: _,
+                name,
                 addresses: _,
                 export: _,
                 json,
@@ -534,13 +548,34 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // T6c3 follow-up: dispatch to the real `wallet_show`
                 // handler (reads .meta.json plaintext — encrypted blob
                 // inspection deferred to T6d when rpassword + AES-GCM
-                // decryption wires up). --id required (--name look-up
-                // deferred).
+                // decryption wires up). Accepts EITHER --id OR --name
+                // (--name resolves via lib `lookup_by_name`; per
+                // P9-T-import-pk address verification cross-check
+                // test).
                 let net = handlers::parse_network(&network)?;
                 let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
-                let wallet_id =
-                    id.ok_or_else(|| Error::InvalidInput("--id required for wallet show".into()))?;
-                let info = handlers::wallet::wallet_show(&data_dir, net, wallet_id.as_str())?;
+                let wallet_id = match (id, name) {
+                    (Some(id), None) => id,
+                    (None, Some(name)) => {
+                        let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.clone())
+                            .map_err(crate::handlers::map_wallet_err)?;
+                        let uuid = mgr
+                            .lookup_by_name(&name, net)
+                            .map_err(crate::handlers::map_wallet_err)?;
+                        uuid.to_string()
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(Error::InvalidInput(
+                            "--id and --name are mutually exclusive for wallet show".into(),
+                        ));
+                    }
+                    (None, None) => {
+                        return Err(Error::InvalidInput(
+                            "one of --id or --name required for wallet show".into(),
+                        ));
+                    }
+                };
+                let info = handlers::wallet::wallet_show(&data_dir, net, &wallet_id)?;
                 if json {
                     println!(
                         "{}",

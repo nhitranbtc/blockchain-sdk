@@ -14,6 +14,10 @@
   "test_harness": {
     "amoy_funded_pk_hex": "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
     "holder_address_for_usdc_oracle": "0xB954c8fEfAb71e8478ebb288cB11b1c9d4aCF369",
-    "run_polygon_amoy": "1"
+    "run_polygon_amoy": "1",
+    "p9_test_wallet_data_dir": "/tmp/polygon-amoy-wallets",
+    "p9_test_pk_hex_test_vector": "c2aa06cadf51ba41ee42c04d7332de94e937565809ec8ca4b70df780765a17b2",
+    "p9_test_mnemonic_test_vector": "skill pupil success ethics blood street discover riot list develop hero cheese",
+    "p9_test_wallet_password_test_vector": "test-pw-p9-amoy-2026-09-03-do-not-reuse-on-real-wallets"
   }
 }
