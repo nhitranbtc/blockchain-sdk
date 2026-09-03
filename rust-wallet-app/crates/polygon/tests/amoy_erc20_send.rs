@@ -51,6 +51,9 @@ const TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a116
 /// 0.1 USDC at 6 decimals.
 const TRANSFER_AMOUNT_RAW: u64 = 100_000;
 
+/// 0.0001 POL at 18 decimals = 1e14 wei = 100_000_000_000_000.
+const POL_TRANSFER_AMOUNT_WEI: &str = "100000000000000";
+
 // ----- Test wallet config (all from tokens/amoy.json::test_harness) -----
 
 fn amoy_sender_name() -> String {
@@ -274,6 +277,24 @@ fn log_path() -> PathBuf {
         .join("amoy_erc20_send_report.log")
 }
 
+/// Separate log path for the native-POL transfer test (sister to
+/// `log_path()` for the ERC-20 USDC test). Kept distinct so operators
+/// can compare the two transfer families side-by-side without merging
+/// log streams. Same `.local/tmp/` parent (gitignored).
+fn log_path_native() -> PathBuf {
+    let repo_root = std::env::var("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    repo_root
+        .join(".local")
+        .join("tmp")
+        .join("amoy_native_send_report.log")
+}
+
 fn now_iso8601() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -368,6 +389,31 @@ fn log_step(n: u8, total: u8, action: &str, detail: &str) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("[log_step] failed to open {path:?}: {e}");
+            return;
+        }
+    };
+    let header = format!("[{}] [step {n}/{total}] {action}", now_iso8601());
+    let _ = writeln!(file, "{header}");
+    for line in detail.lines() {
+        let _ = writeln!(file, "  {line}");
+    }
+    let _ = writeln!(file);
+    let _ = file.flush();
+}
+
+/// Sister of `log_step` that writes to `log_path_native()` instead of
+/// `log_path()`. Used by the native-POL round-trip test.
+fn log_step_native(n: u8, total: u8, action: &str, detail: &str) {
+    let path = log_path_native();
+    ensure_log_dir(&path);
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("[log_step_native] failed to open {path:?}: {e}");
             return;
         }
     };
@@ -915,6 +961,259 @@ fn amoy_erc20_send_full_log_export() {
     );
 
     log_pass(started.elapsed());
+}
+
+#[test]
+#[ignore = "operator-driven live Amoy RPC per L29 — run with: RUN_POLYGON_AMOY=1 cargo test -p polygon --test amoy_erc20_send amoy_erc20_send_pol_round_trip -- --ignored --nocapture"]
+fn amoy_erc20_send_pol_round_trip() {
+    log_export_status();
+    let started = Instant::now();
+    let fail_guard = TestFailGuard::new();
+    let test_start_msg = format!(
+        "RUN_POLYGON_AMOY=1, POL_TRANSFER=0.0001 POL ({POL_TRANSFER_AMOUNT_WEI} wei), RPC={}, CHAIN_ID={}",
+        amoy_rpc_url(),
+        amoy_chain_id(),
+    );
+    log_step(0, 10, "TEST STARTED", &test_start_msg);
+
+    // ===== Step 1: preflight =====
+    require_run_polygon_amoy();
+    log_step(1, 10, "preflight env check", "RUN_POLYGON_AMOY = \"1\" ✓");
+
+    let data_dir = amoy_wallet_data_dir();
+    let sender_name = amoy_sender_name();
+    let recipient_name = amoy_recipient_name();
+    let sender_addr_str = resolve_wallet_address(&sender_name);
+    let recipient_addr_str = resolve_wallet_address(&recipient_name);
+    let pol_amount = U256::from_str_radix(POL_TRANSFER_AMOUNT_WEI, 10)
+        .expect("POL_TRANSFER_AMOUNT_WEI parses as decimal wei");
+    log_step_native(0, 10, "TEST STARTED", &test_start_msg);
+
+    // ===== Step 1: preflight =====
+    require_run_polygon_amoy();
+    log_step_native(1, 10, "preflight env check", "RUN_POLYGON_AMOY = \"1\" ✓");
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime for POL balance oracle + receipt poll");
+
+    rt.block_on(async {
+        let provider = polygon_wallet_core::new_http_polygon_amoy()
+            .expect("provider build for POL oracle");
+
+        // ===== Step 2: snapshot sender POL balance =====
+        let sender_addr: Address = sender_addr_str.parse().expect("sender EIP-55 parses");
+        let recipient_addr: Address = recipient_addr_str.parse().expect("recipient hex parses");
+        let sender_pol_before = provider
+            .get_balance(sender_addr)
+            .await
+            .expect("provider.get_balance(sender) before");
+        log_step_native(
+            2,
+            10,
+            "snapshot sender POL balance (BEFORE SEND)",
+            &format!(
+                "sender={sender_addr} (wallet name: {sender_name})\nsender POL balance = {sender_pol_before} wei"
+            ),
+        );
+        assert!(
+            sender_pol_before >= pol_amount,
+            "sender must be pre-funded with POL >= 0.0001 ({pol_amount} wei); \
+             visit https://faucet.polygon.technology/ — got {sender_pol_before}"
+        );
+
+        // ===== Step 3: snapshot recipient POL balance =====
+        let recipient_pol_before = provider
+            .get_balance(recipient_addr)
+            .await
+            .expect("provider.get_balance(recipient) before");
+        log_step_native(
+            3,
+            10,
+            "snapshot recipient POL balance (BEFORE SEND)",
+            &format!(
+                "recipient={recipient_addr}\nrecipient POL balance = {recipient_pol_before} wei"
+            ),
+        );
+
+        // ===== Step 4: wallet preflight =====
+        let list = run_polygon(
+            &["wallet", "list", "--network", "amoy", "--json"],
+            &data_dir,
+        );
+        let list_stdout = String::from_utf8_lossy(&list.stdout).to_string();
+        let list_stderr = String::from_utf8_lossy(&list.stderr).to_string();
+        log_step_native(
+            4,
+            10,
+            "wallet preflight (list)",
+            &format!(
+                "polygon wallet list --network amoy --json\nexit = {}\nstdout: {}\nstderr: {}",
+                list.status.code().unwrap_or(-1),
+                list_stdout.trim(),
+                list_stderr.trim(),
+            ),
+        );
+        assert!(
+            list.status.success(),
+            "polygon wallet list failed: stderr={list_stderr}"
+        );
+        assert!(
+            list_stdout.contains(&format!("\"{sender_name}\"")),
+            "wallet list must contain sender wallet name \"{sender_name}\"; got: {list_stdout}"
+        );
+
+        // ===== Step 5: send 0.0001 POL =====
+        let send = run_polygon(
+            &[
+                "wallet",
+                "send",
+                "--name",
+                &sender_name,
+                "--to",
+                &recipient_addr_str,
+                "--amount",
+                POL_TRANSFER_AMOUNT_WEI,
+                "--unit",
+                "wei",
+                "--network",
+                "amoy",
+            ],
+            &data_dir,
+        );
+        let send_stdout = String::from_utf8_lossy(&send.stdout).to_string();
+        let send_stderr = String::from_utf8_lossy(&send.stderr).to_string();
+        let tx_hash_str = send_stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("tx_hash: 0x").map(|s| s.to_string()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "polygon wallet send stdout must contain `tx_hash: 0x...`; \
+                     got: {send_stdout}\nstderr: {send_stderr}"
+                )
+            });
+        let tx_hash: B256 = tx_hash_str
+            .parse()
+            .unwrap_or_else(|e| panic!("parse tx_hash `{tx_hash_str}`: {e}"));
+        let explorer = format!("{}/tx/0x{tx_hash_str}", amoy_explorer_url());
+        println!("TX_HASH=0x{tx_hash_str}");
+        log_step_native(
+            5,
+            10,
+            "send 0.0001 POL",
+            &format!(
+                "polygon wallet send --name {sender_name} --to {recipient_addr_str} \
+                 --amount {POL_TRANSFER_AMOUNT_WEI} --unit wei\n\
+                 exit = {}\ntx_hash = 0x{tx_hash_str}\nexplorer: {explorer}",
+                send.status.code().unwrap_or(-1)
+            ),
+        );
+        assert!(
+            send.status.success(),
+            "polygon wallet send failed: stderr={send_stderr}"
+        );
+
+        // ===== Step 6: poll receipt =====
+        let receipt = poll_receipt(
+            &provider,
+            tx_hash,
+            Duration::from_secs(60),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_or_else(|| {
+            fail_guard.set("receipt not mined within 60s");
+            panic!(
+                "receipt not mined within 60s; tx_hash=0x{tx_hash_str}\nexplorer: {explorer}"
+            )
+        });
+        log_step_native(
+            6,
+            10,
+            "poll receipt",
+            &format!(
+                "receipt present\nstatus = {}\ngas_used = {}\nexplorer: {explorer}",
+                receipt.status(),
+                receipt.gas_used,
+            ),
+        );
+
+        // ===== Step 7: assert tx success =====
+        assert!(receipt.status(), "tx reverted; receipt={receipt:?}");
+        log_step_native(7, 10, "assert tx success", "status = 0x1 ✓");
+
+        // ===== Step 8: locate receipt value (native POL transfer — no Transfer event) =====
+        let value_field = receipt
+            .logs()
+            .iter()
+            .find(|log| log.address() == sender_addr)
+            .map(|_log| ());
+        log_step_native(
+            8,
+            10,
+            "skip Transfer event (native POL transfer — no ERC-20 event)",
+            &format!(
+                "native POL transfer emits no Transfer event; verification is balance-delta only. \
+                 receipt logs count = {}",
+                receipt.logs().len()
+            ),
+        );
+        let _ = value_field;
+
+        // ===== Step 9: snapshot after balances =====
+        let sender_pol_after = provider
+            .get_balance(sender_addr)
+            .await
+            .expect("provider.get_balance(sender) after");
+        let recipient_pol_after = provider
+            .get_balance(recipient_addr)
+            .await
+            .expect("provider.get_balance(recipient) after");
+        let sender_delta = sender_pol_before - sender_pol_after;
+        let recipient_delta = recipient_pol_after - recipient_pol_before;
+        log_step_native(
+            9,
+            10,
+            "verify POL deltas (AFTER SEND)",
+            &format!(
+                "sender_POL_after   = {sender_pol_after} wei\n\
+                 recipient_POL_after = {recipient_pol_after} wei\n\
+                 sender_delta   = -{sender_delta} wei (includes gas)\n\
+                 recipient_delta = +{recipient_delta} wei\n\
+                 expected transfer  = {pol_amount} wei (0.0001 POL)"
+            ),
+        );
+        assert_eq!(
+            recipient_delta, pol_amount,
+            "recipient POL delta must equal {pol_amount} wei (0.0001 POL)"
+        );
+        assert!(
+            sender_delta >= pol_amount,
+            "sender POL delta must be >= {pol_amount} wei (gas included); got {sender_delta}"
+        );
+
+        // ===== Step 10: assert sender lost at least amount (gas covered) =====
+        log_step_native(
+            10,
+            10,
+            "assert sender paid transfer + gas",
+            &format!(
+                "sender_delta = {sender_delta} wei (transfer {pol_amount} + gas {gas} wei)",
+                gas = sender_delta - pol_amount,
+            ),
+        );
+        assert!(
+            sender_delta > pol_amount,
+            "sender must pay gas on top of transfer amount; got {sender_delta}"
+        );
+
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })
+    .expect("POL workflow block_on");
+
+    log_pass(started.elapsed());
+    std::mem::forget(fail_guard);
 }
 
 #[test]

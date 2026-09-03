@@ -176,14 +176,27 @@ fn p9_test_wallet_password_test_vector() -> String {
         })
 }
 
-/// L29 opt-in guard — panics unless `RUN_POLYGON_AMOY=1`. Reads the env
-/// via `std::env::var` so the JSON SoT (above) and the operator-supplied
-/// override are both honored.
+/// L29 opt-in guard — panics unless `RUN_POLYGON_AMOY=1`. Reads
+/// `tokens/amoy.json::test_harness.run_polygon_amoy` FIRST (the
+/// committed SoT — what CI inherits), then falls back to the
+/// `RUN_POLYGON_AMOY` env var (operator override path). Mirrors
+/// `amoy_erc20_send.rs::require_run_polygon_amoy` so the broad
+/// `cargo test --tests --include-ignored` job can pass without
+/// the CI runner setting the env var.
 fn require_run_polygon_amoy() {
-    let v = std::env::var("RUN_POLYGON_AMOY").unwrap_or_default();
+    ensure_tokens_loaded();
+    let from_json = AMOY_TOKENS_JSON
+        .get()
+        .and_then(|v| v.get("test_harness"))
+        .and_then(|t| t.get("run_polygon_amoy"))
+        .and_then(|s| s.as_str())
+        .map(String::from);
+    let from_env = std::env::var("RUN_POLYGON_AMOY").ok();
+    let resolved = from_json.or(from_env).unwrap_or_default();
     assert_eq!(
-        v, "1",
-        "RUN_POLYGON_AMOY must be '1' to run live Amoy tests (L29)"
+        resolved, "1",
+        "tokens/amoy.json test_harness.run_polygon_amoy must be \"1\" \
+         (or RUN_POLYGON_AMOY=1 env var set) for live test runs; current = {resolved:?}"
     );
 }
 
