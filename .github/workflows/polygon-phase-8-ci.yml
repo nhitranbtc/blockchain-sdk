@@ -24,9 +24,9 @@ name: polygon-phase-8
 
 on:
   push:
-    branches: [task/polygon-full-scenario/8-amoy-gap-fill]
+    branches: [task/polygon-full-scenario]
   pull_request:
-    branches: [task/polygon-full-scenario/8-amoy-gap-fill]
+    branches: [task/polygon-full-scenario]
   workflow_dispatch: {}
 
 # Least-privilege token. CI doesn't push or comment.
