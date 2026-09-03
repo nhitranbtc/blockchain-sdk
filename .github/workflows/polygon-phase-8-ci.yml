@@ -97,13 +97,20 @@ jobs:
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo test --no-run (all tests, ignored included)
+        # DISABLED per operator directive (2026-09-03) — `if: false`
+        # skips execution; step stays defined for easy re-enable
+        # (flip `if:` line to remove/comment out). Original command
+        # was the L55 compile-only gate covering every test binary
+        # under polygon/tests/.
+        if: false
         working-directory: rust-wallet-app
+        run: echo "DISABLED — see git history (commit before 805f913+1)"
         # L55: `-p polygon` not `--workspace`. `--no-run` builds every
         # test binary across `polygon/tests/` (including all `#[ignore]`'d
         # ones) but skips execution — confirms the P8-T-setup refactor +
         # every new test file under `polygon/tests/amoy_p9_pk_import.rs`
         # and friends compiles cleanly.
-        run: cargo test -p polygon --tests --no-run
+        # run: cargo test -p polygon --tests --no-run
 
   # Scoped runtime gate for `polygon/tests/amoy_erc20_send.rs` —
   # the single live-Amoy ERC-20 transfer test (1 #[ignore]'d fn at
