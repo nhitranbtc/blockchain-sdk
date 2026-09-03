@@ -11,16 +11,18 @@
 //!
 //! ## Operator pre-conditions (per L29 + plan §G5)
 //!
-//! 1. Sender (`amoy_funded_pk_hex` from `tokens/amoy.json`) holds > 0 POL (gas).
-//!    Fund via `https://faucet.polygon.technology`.
-//! 2. Sender holds ≥ 1.0 USDC. Fund via `https://faucet.circle.com/`.
-//! 3. `RUN_POLYGON_AMOY=1` env set.
-//! 4. Recipient address `0x000…0042` is a deterministic sink (not pre-funded).
+//! 1. `RUN_POLYGON_AMOY=1` env set.
+//! 2. Sender wallet (`tokens/amoy.json::test_harness.amoy_sender`) holds > 0
+//!    POL (gas). Fund via `https://faucet.polygon.technology`.
+//! 3. Sender holds ≥ 0.1 USDC. Fund via `https://faucet.circle.com/`.
+//! 4. Sender + recipient wallets exist in the wallet store at
+//!    `tokens/amoy.json::test_harness.amoy_wallet_data_dir` (CLI auto-appends
+//!    `/polygon_amoy/`). Use `polygon wallet create` if missing.
 //!
 //! ## Acceptance (plan §P8-T3)
 //!
-//! - Recipient USDC balance increases by 1_000_000 (6 decimals).
-//! - Sender USDC balance decreases by 1_000_000 + gas (delta assertion).
+//! - Recipient USDC balance increases by 100_000 (6 decimals = 0.1 USDC).
+//! - Sender USDC balance decreases by 100_000 (gas comes from POL not USDC).
 //! - Receipt status == 1; logs contain `Transfer(address,address,uint256)`.
 //!
 //! ## Per-step log (plan §G5)
@@ -46,47 +48,100 @@ use alloy_provider::Provider;
 /// ERC-20 `Transfer(address,address,uint256)` event topic (per EIP-20).
 const TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 
-/// Recipient wallet — operator-funded `amoy-smoke-2` from the
-/// polygon-data-amoy wallet store (created in earlier session).
-const RECIPIENT_ADDR: &str = "0x2055ba398775b9aa890bd02222a948f4978c3661";
+/// 0.1 USDC at 6 decimals.
+const TRANSFER_AMOUNT_RAW: u64 = 100_000;
 
-/// Sender wallet — operator-funded `amoy-smoke-1` (funded via Circle USDC
-/// faucet + Polygon POL faucet per L29 + plan §G5).
-const SENDER_ADDR: &str = "0x971200F83562896Ff7049Cb8f6686c4eB5Cb1717";
+// ----- Test wallet config (all from tokens/amoy.json::test_harness) -----
 
-/// Sender wallet name (matches `.meta.json::name` in the wallet store).
-const WALLET_NAME: &str = "amoy-smoke-1";
-
-/// Path to the polygon CLI's local wallet store PARENT directory — CLI
-/// auto-resolves `<parent>/polygon_amoy/` for `--network amoy` (per
-/// `polygon_amoy/README.md` usage). Sender + recipient wallets already
-/// populated under `<parent>/polygon_amoy/`.
-/// Resolve the polygon CLI wallet-store path under the test crate's
-/// `tests/` dir. Project-relative (resolved via `CARGO_MANIFEST_DIR` at
-/// runtime) so the test works regardless of where the repo is checked out.
-/// CLI auto-resolves `<parent>/polygon_amoy/` for `--network amoy`.
-fn wallet_data_dir() -> PathBuf {
-    PathBuf::from(format!(
-        "{}/tests/polygon-data-amoy",
-        env!("CARGO_MANIFEST_DIR")
-    ))
+fn amoy_sender_name() -> String {
+    let harness = amoy_json_obj("test_harness");
+    let raw = harness
+        .get("amoy_sender")
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| panic!("missing `test_harness.amoy_sender` in tokens/amoy.json"));
+    raw.to_string()
 }
 
-/// Wallet password source — env var only, never embedded in source per
-/// security review (matches L54 secret-via-env discipline). Operator sets
-/// `AMOY_TEST_WALLET_PASSWORD` at invocation; panic with pointer to
-/// `polygon_amoy/README.md` if unset so the cause is unambiguous.
-fn wallet_password() -> String {
-    std::env::var("AMOY_TEST_WALLET_PASSWORD").unwrap_or_else(|_| {
+fn amoy_recipient_name() -> String {
+    let harness = amoy_json_obj("test_harness");
+    let raw = harness
+        .get("amoy_recipient")
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| panic!("missing `test_harness.amoy_recipient` in tokens/amoy.json"));
+    raw.to_string()
+}
+
+fn amoy_wallet_password() -> String {
+    let harness = amoy_json_obj("test_harness");
+    let raw = harness
+        .get("amoy_wallet_password")
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| {
+            panic!("missing `test_harness.amoy_wallet_password` in tokens/amoy.json")
+        });
+    raw.to_string()
+}
+
+fn amoy_wallet_data_dir() -> PathBuf {
+    let harness = amoy_json_obj("test_harness");
+    let raw = harness
+        .get("amoy_wallet_data_dir")
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| {
+            panic!("missing `test_harness.amoy_wallet_data_dir` in tokens/amoy.json")
+        });
+    let p = PathBuf::from(raw);
+    if p.is_absolute() {
+        p
+    } else {
+        // Resolve relative paths against the repo root (= CARGO_MANIFEST_DIR/../../../)
+        // so the test works regardless of cwd.
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let p_ref = &p;
+        manifest
+            .parent()
+            .and_then(|x| x.parent())
+            .and_then(|x| x.parent())
+            .map(|root| root.join(p_ref))
+            .unwrap_or(p)
+    }
+}
+
+/// Scan the wallet store (CLI's `<data_dir>/polygon_amoy/*.meta.json`) and
+/// return the EIP-55 address whose `name` field matches the given wallet name.
+/// Used by both sender (for the balance oracle) and recipient (for `--to`).
+fn resolve_wallet_address(name: &str) -> String {
+    let wallet_dir = amoy_wallet_data_dir().join("polygon_amoy");
+    let entries = std::fs::read_dir(&wallet_dir).unwrap_or_else(|e| {
         panic!(
-            "AMOY_TEST_WALLET_PASSWORD env var must be set to the polygon_amoy \
-             wallet password; see polygon_amoy/README.md"
+            "failed to list wallet store at {wallet_dir:?}: {e} — \
+             ensure sender + recipient wallets exist; see `polygon wallet create`"
         )
-    })
+    });
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Skip non-meta files (README.md, .enc ciphertext, etc).
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("failed to read wallet meta {path:?}: {e}"));
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|e| panic!("failed to parse wallet meta {path:?}: {e}"));
+        let meta_name = parsed.get("name").and_then(|n| n.as_str());
+        if meta_name == Some(name) {
+            return parsed
+                .get("address")
+                .and_then(|a| a.as_str())
+                .unwrap_or_else(|| panic!("wallet meta {path:?} missing `address` field"))
+                .to_string();
+        }
+    }
+    panic!(
+        "wallet name `{name}` not found in {wallet_dir:?}; \
+         create it via `polygon wallet create --name {name}` first"
+    )
 }
-
-/// 1.0 USDC at 6 decimals.
-const TRANSFER_AMOUNT_RAW: u64 = 1_000_000;
 
 // ----- JSON SoT loader (mirrors amoy_erc20_balance.rs) -----
 
@@ -191,7 +246,7 @@ fn run_polygon(args: &[&str], data_dir: &Path) -> std::process::Output {
         .args(args)
         .arg("--data-dir")
         .arg(data_dir)
-        .env("POLYGON_PASSWORD", wallet_password())
+        .env("POLYGON_PASSWORD", amoy_wallet_password())
         .env("POLYGON_NETWORK", "amoy")
         .env("RUST_BACKTRACE", "1")
         .stdin(Stdio::null())
@@ -416,8 +471,12 @@ fn amoy_erc20_send_usdc_round_trip() {
     require_run_polygon_amoy();
     log_step(1, 10, "preflight env check", "RUN_POLYGON_AMOY = \"1\" ✓");
 
-    let data_dir = wallet_data_dir();
+    let data_dir = amoy_wallet_data_dir();
     let token = usdc_address();
+    let sender_name = amoy_sender_name();
+    let recipient_name = amoy_recipient_name();
+    let sender_addr_str = resolve_wallet_address(&sender_name);
+    let recipient_addr_str = resolve_wallet_address(&recipient_name);
 
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -429,11 +488,11 @@ fn amoy_erc20_send_usdc_round_trip() {
             .expect("provider build for oracle");
 
         // ===== Step 2: snapshot sender USDC balance =====
-        // Operator pre-funded `amoy-smoke-1` (sender) via Circle USDC faucet;
-        // see `polygon_amoy/README.md`. Address pinned via SENDER_ADDR constant
-        // — matches `.meta.json::address` for `amoy-smoke-1`.
-        let sender_addr: Address = SENDER_ADDR.parse().expect("sender EIP-55 parses");
-        let recipient_addr: Address = RECIPIENT_ADDR.parse().expect("recipient hex parses");
+        // Wallet names + addresses resolved from tokens/amoy.json + the
+        // wallet store at runtime (no hardcoded consts). Sender funded
+        // via Circle USDC faucet per L29 + plan §G5.
+        let sender_addr: Address = sender_addr_str.parse().expect("sender EIP-55 parses");
+        let recipient_addr: Address = recipient_addr_str.parse().expect("recipient hex parses");
         let token_addr: Address = token.parse().expect("USDC hex parses");
 
         let sender_balance_before = evm_wallet_core::erc20::token_balance(
@@ -446,13 +505,13 @@ fn amoy_erc20_send_usdc_round_trip() {
             10,
             "snapshot sender USDC balance (BEFORE SEND)",
             &format!(
-                "sender={sender_addr} (wallet name: {WALLET_NAME})\nUSDC contract={token_addr}\nbalanceOf(sender) raw = {sender_balance_before}\nbalanceOf(sender) = {usdc}",
+                "sender={sender_addr} (wallet name: {sender_name})\nUSDC contract={token_addr}\nbalanceOf(sender) raw = {sender_balance_before}\nbalanceOf(sender) = {usdc}",
                 usdc = format_usdc(sender_balance_before),
             ),
         );
         assert!(
             sender_balance_before >= U256::from(TRANSFER_AMOUNT_RAW),
-            "sender must be pre-funded with USDC >= 1.0; visit https://faucet.circle.com/ — \
+            "sender must be pre-funded with USDC >= 0.1; visit https://faucet.circle.com/ — \
              got {sender_balance_before}"
         );
 
@@ -473,12 +532,12 @@ fn amoy_erc20_send_usdc_round_trip() {
         );
 
         // ===== Step 4: wallet preflight (sender wallet must load) =====
-        // Sender (`amoy-smoke-1`) wallet must exist in `wallet_data_dir()`
-        // — CLI signs the transfer via this wallet. Recipient is a raw
-        // EIP-55 address string (`--to 0x...`) — `polygon erc20 send` does
-        // NOT require the recipient to be a managed wallet. So we only
-        // assert sender presence here; recipient presence is irrelevant
-        // to the send path.
+        // Sender wallet (name from tokens/amoy.json) must exist in the
+        // wallet store — CLI signs the transfer via this wallet. Recipient
+        // is resolved as a raw EIP-55 address string (`--to 0x...`) —
+        // `polygon erc20 send` does NOT require the recipient to be a
+        // managed wallet. So we only assert sender presence here; recipient
+        // presence is irrelevant to the send path.
         let list = run_polygon(
             &[
                 "wallet",
@@ -507,29 +566,30 @@ fn amoy_erc20_send_usdc_round_trip() {
             "polygon wallet list failed: stderr={list_stderr}"
         );
         assert!(
-            list_stdout.contains("\"amoy-smoke-1\""),
-            "wallet list must contain sender wallet name \"amoy-smoke-1\"; got: {list_stdout}"
+            list_stdout.contains(&format!("\"{sender_name}\"")),
+            "wallet list must contain sender wallet name \"{sender_name}\"; got: {list_stdout}"
         );
 
-        // ===== Step 5: send 1.0 USDC =====
+        // ===== Step 5: send 0.1 USDC =====
         // CLI requires `--token` (positional, clap); `--token-address` is an
         // optional override. main.rs:732-734 prefers `token_address` if Some
         // else resolves `token` via the per-network registry. Pass both for
         // defense-in-depth: `--token` satisfies clap, `--token-address` skips
         // the symbol lookup and binds to the exact address from JSON SoT.
-        // Sign via existing `amoy-smoke-1` wallet (no import).
+        // Sign via the sender wallet loaded from JSON; recipient resolved
+        // by scanning the wallet store.
         let send = run_polygon(
             &[
                 "erc20",
                 "send",
                 "--name",
-                WALLET_NAME,
+                &sender_name,
                 "--token",
                 "USDC",
                 "--token-address",
                 &token,
                 "--to",
-                RECIPIENT_ADDR,
+                &recipient_addr_str,
                 "--amount",
                 &TRANSFER_AMOUNT_RAW.to_string(),
                 "--network",
@@ -561,10 +621,10 @@ fn amoy_erc20_send_usdc_round_trip() {
         log_step(
             5,
             10,
-            "send 1.0 USDC",
+            "send 0.1 USDC",
             &format!(
-                "polygon erc20 send --name amoy-erc20-test --token-address {token} \
-                 --to {RECIPIENT_ADDR} --amount {TRANSFER_AMOUNT_RAW}\nexit = {}\n\
+                "polygon erc20 send --name {sender_name} --token-address {token} \
+                 --to {recipient_addr_str} --amount {TRANSFER_AMOUNT_RAW}\nexit = {}\n\
                  tx_hash = 0x{tx_hash_str}\nexplorer: {explorer}",
                 send.status.code().unwrap_or(-1)
             ),
@@ -680,11 +740,12 @@ fn amoy_erc20_send_usdc_round_trip() {
                  recipient_balance_after raw = {recipient_balance_after}  ({recipient_usdc_after})\n\
                  sender_delta   = -{sender_delta} (-{sender_usdc_delta})\n\
                  recipient_delta = +{recipient_delta} (+{recipient_usdc_delta})\n\
-                 expected delta  = +/- {TRANSFER_AMOUNT_RAW} (+/- 1.000000 USDC)",
+                 expected delta  = +/- {TRANSFER_AMOUNT_RAW} (+/- {expected_usdc})",
                 sender_usdc_after = format_usdc(sender_balance_after),
                 recipient_usdc_after = format_usdc(recipient_balance_after),
                 sender_usdc_delta = format_usdc(sender_delta),
                 recipient_usdc_delta = format_usdc(recipient_delta),
+                expected_usdc = format_usdc(U256::from(TRANSFER_AMOUNT_RAW)),
             ),
         );
         assert_eq!(
@@ -720,10 +781,12 @@ fn amoy_erc20_send_full_log_export() {
     log_export_status();
     let started = Instant::now();
 
-    let sender_addr: Address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    let sender_addr: Address = resolve_wallet_address(&amoy_sender_name())
         .parse()
-        .expect("canonical Anvil-#0 sender");
-    let recipient_addr: Address = RECIPIENT_ADDR.parse().expect("recipient hex parses");
+        .expect("sender EIP-55 parses (resolved from tokens/amoy.json + wallet store)");
+    let recipient_addr: Address = resolve_wallet_address(&amoy_recipient_name())
+        .parse()
+        .expect("recipient hex parses");
     let token_addr: Address = usdc_address().parse().expect("USDC hex parses");
     let _transfer_topic_b256: B256 = TRANSFER_TOPIC.parse().expect("topic hex");
     // Deterministic synthetic tx hash — `DEADBEEF` × 8 = obviously fake
@@ -735,10 +798,12 @@ fn amoy_erc20_send_full_log_export() {
         .expect("synthetic tx hash");
     let tx_hash_str = alloy_primitives::hex::encode(tx_hash.as_slice());
 
-    let sender_balance_before = U256::from(2_500_000u64);
+    // Synthetic balances sized for 0.1 USDC transfer (TRANSFER_AMOUNT_RAW = 100_000):
+    // sender loses exactly 100_000, recipient gains exactly 100_000.
+    let sender_balance_before = U256::from(200_000u64);
     let recipient_balance_before = U256::ZERO;
-    let sender_balance_after = U256::from(1_500_000u64);
-    let recipient_balance_after = U256::from(1_000_000u64);
+    let sender_balance_after = U256::from(100_000u64);
+    let recipient_balance_after = U256::from(100_000u64);
 
     log_step(
         0,
@@ -783,15 +848,17 @@ fn amoy_erc20_send_full_log_export() {
         4,
         10,
         "wallet import",
-        "polygon wallet import --name amoy-erc20-test --private-key-file <0600-mode>\n\
-         exit = 0\nstdout: wallet imported: name=amoy-erc20-test id=<synthetic-uuid> \
-         address=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\n\
-         stderr:",
+        &format!(
+            "polygon wallet import --name amoy-erc20-test --private-key-file <0600-mode>\n\
+             exit = 0\nstdout: wallet imported: name=amoy-erc20-test id=<synthetic-uuid> \
+             address={sender_addr}\n\
+             stderr:"
+        ),
     );
     log_step(
         5,
         10,
-        "send 1.0 USDC",
+        "send 0.1 USDC",
         &format!(
             "polygon erc20 send --name amoy-erc20-test --token-address {token_addr} \
              --to {recipient_addr} --amount {TRANSFER_AMOUNT_RAW}\n\
@@ -822,8 +889,9 @@ fn amoy_erc20_send_full_log_export() {
         "decode event",
         &format!(
             "from = {sender_addr}\nto   = {recipient_addr}\n\
-             value = {TRANSFER_AMOUNT_RAW} ({} raw / 1.000000 USDC)",
-            TRANSFER_AMOUNT_RAW
+             value = {TRANSFER_AMOUNT_RAW} ({} raw / {})",
+            TRANSFER_AMOUNT_RAW,
+            format_usdc(U256::from(TRANSFER_AMOUNT_RAW))
         ),
     );
     log_step(
@@ -835,10 +903,11 @@ fn amoy_erc20_send_full_log_export() {
              recipient_balance_after raw = {recipient_balance_after}  ({})\n\
              sender_delta   = -{sender_delta} (-{})\n\
              recipient_delta = +{recipient_delta} (+{})\n\
-             expected delta  = +/- {TRANSFER_AMOUNT_RAW} (+/- 1.000000 USDC)",
+             expected delta  = +/- {TRANSFER_AMOUNT_RAW} (+/- {})",
             format_usdc(sender_balance_after),
             format_usdc(recipient_balance_after),
             U256::from(TRANSFER_AMOUNT_RAW),
+            format_usdc(U256::from(TRANSFER_AMOUNT_RAW)),
             format_usdc(U256::from(TRANSFER_AMOUNT_RAW)),
             sender_delta = U256::from(TRANSFER_AMOUNT_RAW),
             recipient_delta = U256::from(TRANSFER_AMOUNT_RAW),

@@ -18,6 +18,10 @@
     "p9_test_wallet_data_dir": "/tmp/polygon-amoy-wallets",
     "p9_test_pk_hex_test_vector": "c2aa06cadf51ba41ee42c04d7332de94e937565809ec8ca4b70df780765a17b2",
     "p9_test_mnemonic_test_vector": "skill pupil success ethics blood street discover riot list develop hero cheese",
-    "p9_test_wallet_password_test_vector": "test-pw-p9-amoy-2026-09-03-do-not-reuse-on-real-wallets"
+    "p9_test_wallet_password_test_vector": "test-pw-p9-amoy-2026-09-03-do-not-reuse-on-real-wallets",
+    "amoy_sender": "amoy-sender",
+    "amoy_recipient": "amoy-recipient",
+    "amoy_wallet_password": "amoy-demo",
+    "amoy_wallet_data_dir": "rust-wallet-app/crates/polygon/tests/polygon-data-amoy"
   }
 }
