@@ -367,16 +367,20 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 mnemonic,
                 private_key,
                 private_key_file,
+                mnemonic_file,
                 account_index: _,
                 legacy_token_symbol: _,
                 rpc_url: _,
             } => {
-                // #469 dispatch — three import sources (mutually
-                // exclusive via clap `conflicts_with`, enforced at parse
-                // time):
+                // #528 dispatch — four import sources (mutually exclusive
+                // via clap `conflicts_with`, enforced at parse time):
                 //   1. `--mnemonic` (existing path)        → wallet_import
-                //   2. `--private-key <hex>` (newly wired) → wallet_import_private_key_for_network
-                //   3. `--private-key-file <path>` (new)   → wallet_import_private_key_for_network
+                //   2. `--mnemonic-file` (new in #528)     → wallet_import
+                //      via handlers::wallet::read_mnemonic_file (mode-0600
+                //      + SecretMnemonic wrap; closes the L12 H-1
+                //      argv-exposure hole for mnemonic import).
+                //   3. `--private-key <hex>` (wired #469)  → wallet_import_private_key_for_network
+                //   4. `--private-key-file <path>` (#469)  → wallet_import_private_key_for_network
                 //      via handlers::wallet::read_pk_file (mode-0600
                 //      + Zeroizing<Vec<u8>> wrap; mode check skipped
                 //      on non-Unix).
@@ -385,24 +389,35 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // is an exhaustive single-Some guard (with the
                 // none-of-the-above error as the negative case).
                 // Sister invariant to L12 H-1 finding closed by PR
-                // #456 for `--mnemonic`.
+                // #456 for `--mnemonic`; #528 closes the argv-exposure
+                // path that PR #456 left open (memory zeroization only).
                 let net = handlers::parse_network(&network)?;
                 let pw_string = resolve_password(password.as_deref())?;
                 let password = Zeroizing::new(pw_string.into_bytes());
                 let data_dir: std::path::PathBuf =
                     cli.data_dir.clone().unwrap_or_else(default_data_dir);
-                let created = match (mnemonic, private_key, private_key_file) {
-                    (Some(ref phrase), None, None) => {
-                        // Mnemonic path (PR #456). Restored per #502 —
+                let created = match (mnemonic, mnemonic_file, private_key, private_key_file) {
+                    (Some(ref phrase), None, None, None) => {
+                        // Mnemonic argv path (PR #456). Restored per #502 —
                         // the prior (Some(_),_,_) catch-all below made
                         // this tuple unreachable and silently killed
                         // mnemonic-based wallet import on the parent
                         // branch after the Phase 2 squash (#497 eb360c1).
-                        // Sister to the (None,Some(hex),None) arm;
+                        // Sister to the (None,Some(path),None,None) arm;
                         // SecretMnemonic wraps the phrase for zero-on-drop.
                         handlers::wallet::wallet_import(&data_dir, &name, &password, net, phrase)?
                     }
-                    (None, Some(hex), None) => {
+                    (None, Some(ref path), None, None) => {
+                        // Mnemonic file path (#528). Sister to the
+                        // (None,None,None,Some(path)) PK-file arm.
+                        // read_mnemonic_file validates mode-0600 + non-empty,
+                        // trims whitespace, wraps in SecretMnemonic for
+                        // zero-on-drop — same zeroization invariant as
+                        // the argv form above.
+                        let phrase = handlers::wallet::read_mnemonic_file(path)?;
+                        handlers::wallet::wallet_import(&data_dir, &name, &password, net, &phrase)?
+                    }
+                    (None, None, Some(hex), None) => {
                         // Wired path (was dead pre-#469 per the T6c4
                         // follow-up comment). Hex-decode + Zeroizing
                         // wrap matches the file variant's invariants.
@@ -415,7 +430,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                             &data_dir, &name, &password, net, &pk_bytes,
                         )?
                     }
-                    (None, None, Some(path)) => {
+                    (None, None, None, Some(path)) => {
                         handlers::wallet::wallet_import_private_key_for_network(
                             &data_dir,
                             &name,
@@ -424,19 +439,19 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                             &read_pk_file(&path)?,
                         )?
                     }
-                    (None, None, None) => {
+                    (None, None, None, None) => {
                         return Err(Error::InvalidInput(
-                            "one of --mnemonic, --private-key, --private-key-file required".into(),
+                            "one of --mnemonic, --mnemonic-file, --private-key, --private-key-file required".into(),
                         ));
                     }
                     // clap `conflicts_with` already rejects every other
-                    // (mnemonic × private_key × private_key_file)
-                    // combination at parse time; the single `_` catch-
-                    // all is the defense-in-depth net for programmatic
-                    // callers that bypass clap.
+                    // (mnemonic × mnemonic_file × private_key ×
+                    // private_key_file) combination at parse time; the
+                    // single `_` catch-all is the defense-in-depth net
+                    // for programmatic callers that bypass clap.
                     _ => {
                         return Err(Error::InvalidInput(
-                            "exactly one of --mnemonic / --private-key / --private-key-file allowed".into(),
+                            "exactly one of --mnemonic / --mnemonic-file / --private-key / --private-key-file allowed".into(),
                         ));
                     }
                 };
