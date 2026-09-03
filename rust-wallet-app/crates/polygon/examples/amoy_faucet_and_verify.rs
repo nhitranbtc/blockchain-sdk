@@ -52,7 +52,7 @@ use std::process::{Command, ExitCode};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{hex, Address, U256};
 use alloy_provider::{Provider, ProviderBuilder};
 use alloy_rpc_types::{BlockId, BlockNumberOrTag, TransactionRequest};
 use clap::Parser;
@@ -94,6 +94,13 @@ struct AmoyConfigJson {
     faucet_circle_url: String,
     explorer_url: String,
     tokens: Vec<TokenJson>,
+    /// `test_harness.*` fields are owned by the integration test
+    /// suite (`amoy_smoke.rs`, `amoy_erc20_balance.rs`); the example
+    /// reads only the network/token/faucet fields. The `deny_unknown_fields`
+    /// attribute above still rejects typos in this struct's own fields.
+    #[serde(default)]
+    #[allow(dead_code)]
+    test_harness: Option<serde_json::Value>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -284,11 +291,18 @@ async fn main() -> ExitCode {
         &cfg.usdc_address,
     );
 
-    // ---- Phase 3b: parity check — compare alloy readback against `polygon
-    // wallet balance` subprocess. Surfaces the #522 known mismatch (CLI
-    // formatter off by 10^3) without failing the run. Output is both
-    // printed and appended to the log file via write_log_entry's tail-arg.
-    let parity_block = verify_cli_parity(address, final_pol);
+    // ---- Phase 3b: unified parity check — ONE table comparing POL + USDC
+    // across polygon CLI subprocess + raw `curl eth_call` (USDC only) +
+    // Phase 2 alloy oracle. Surfaces #522 POL off-by-10^3 (reported) and
+    // validates #523 CLI wire format. Best-effort: any source failure logs
+    // a warning + row reads `(unavailable)`; exit code unchanged.
+    let parity_block = verify_balances_parity(
+        address,
+        cfg.usdc_address,
+        final_pol,
+        final_usdc,
+        &cfg.rpc_url,
+    );
 
     // Append the parity block to the same per-run log entry.
     if let Some(p) = parity_block {
@@ -351,19 +365,34 @@ fn balance_table(balance_pol: U256, balance_usdc: U256, usdc_contract: &Address)
 }
 
 // ============================================================================
-// Parity check: spawn `polygon wallet balance` and compare stdout against
-// the alloy readback. Currently surfaces #522 (CLI formatter off by 10^3);
-// USDC parity is skipped because `polygon erc20 balance` is stubbed per
-// #523 (deferred to T6d-2.1). Best-effort: any failure prints a warning and
-// returns without altering the run's exit code.
+// Unified parity check (lands post #523 T6d-2.1): ONE table comparing
+// POL + USDC across `polygon` CLI (subprocess) + raw `curl eth_call` (where
+// applicable) + the Phase 2 alloy oracle. POL rows: polygon CLI wallet
+// balance vs alloy eth_getBalance. USDC rows: polygon CLI erc20 balance
+// vs raw `curl eth_call balanceOf(holder)` vs alloy provider.call. All
+// sources must agree at the byte level for a true verdict; any divergence
+// surfaces a CLI wire-format bug, a curl encoding regression, or the
+// pre-existing #522 POL formatter off-by-10^3 (reported, not fatal).
+// Best-effort: any source failing prints a warning and the row reads
+// `(unavailable)`; the run's exit code is unchanged.
 // ============================================================================
 
-fn verify_cli_parity(address: Address, alloy_pol_wei: U256) -> Option<String> {
-    println!("\n[parity check] `polygon wallet balance` vs alloy get_balance");
+fn verify_balances_parity(
+    address: Address,
+    usdc_address: Address,
+    alloy_pol_wei: U256,
+    alloy_usdc_raw: U256,
+    rpc_url: &str,
+) -> Option<String> {
+    println!(
+        "\n[parity check] POL + USDC: polygon CLI vs raw `curl eth_call` vs alloy oracle (single table)"
+    );
 
     let polygon_bin =
         std::env::var("CARGO_BIN_EXE_polygon").unwrap_or_else(|_| "polygon".to_string());
-    let output = Command::new(&polygon_bin)
+
+    // ---- 1. POL: spawn `polygon wallet balance` ----------------------------
+    let pol_cli_out = Command::new(&polygon_bin)
         .args([
             "wallet",
             "balance",
@@ -373,80 +402,254 @@ fn verify_cli_parity(address: Address, alloy_pol_wei: U256) -> Option<String> {
             "amoy",
         ])
         .output();
-    let output = match output {
-        Ok(o) => o,
+    let pol_cli_u128 = match pol_cli_out {
+        Ok(o) if o.status.success() => parse_pol_cli_pol_wei(&o.stdout),
+        Ok(o) => {
+            println!(
+                "  warn: `polygon wallet balance` exited {} — stderr={}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            );
+            None
+        }
         Err(e) => {
-            let msg = format!("  warn: could not spawn `polygon wallet balance`: {e}");
-            println!("{msg}");
-            return Some(msg);
+            println!("  warn: could not spawn `polygon wallet balance`: {e}");
+            None
         }
     };
 
-    if !output.status.success() {
-        let msg = format!(
-            "  warn: `polygon wallet balance` exited with status {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        println!("{msg}");
-        return Some(msg);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let cli_displayed = stdout.trim();
-
-    // Parse the first whitespace-separated token as a float (handles both
-    // "0.37 POL" and "0.00037 POL" forms from any future formatter change).
-    // f64 has enough precision for typical faucet drip magnitudes; we only
-    // use this for the visual mismatch check.
-    let cli_wei_approx: Option<u128> = cli_displayed
-        .split_whitespace()
-        .next()
-        .and_then(|s| s.parse::<f64>().ok())
-        .map(|n| (n * 1e18) as u128);
-
-    let alloy_u128: u128 = alloy_pol_wei.try_into().unwrap_or(u128::MAX);
-
-    let match_mark = match cli_wei_approx {
-        Some(c) if c == alloy_u128 => "✓ match",
-        Some(_) => "✗ MISMATCH (1000× off — #522)",
-        None => "? (CLI stdout unparseable)",
+    // ---- 2. USDC: spawn `polygon erc20 balance --json` (post #523) ---------
+    // clap requires `--token <TOKEN>` (required field). Pass the USDC
+    // hex address as `--token` so the CLI accepts the call; `resolve_token_address`
+    // accepts hex prefixes per handlers/erc20.rs:82.
+    let usdc_cli_out = Command::new(&polygon_bin)
+        .args([
+            "erc20",
+            "balance",
+            "--json",
+            "--address",
+            &format!("{address}"),
+            "--token",
+            &format!("{usdc_address}"),
+            "--token-address",
+            &format!("{usdc_address}"),
+            "--network",
+            "amoy",
+        ])
+        .output();
+    let usdc_cli_raw = match usdc_cli_out {
+        Ok(o) if o.status.success() => parse_polygon_cli_raw(&o.stdout, &o.stderr),
+        Ok(o) => {
+            println!(
+                "  warn: `polygon erc20 balance` exited {} — stderr={}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            );
+            None
+        }
+        Err(e) => {
+            println!("  warn: could not spawn `polygon erc20 balance`: {e}");
+            None
+        }
     };
 
-    // Machine-readable parity verdict (grep-able). `true` only when the parsed
-    // CLI wei number equals the alloy readback exactly.
-    let parity_ok = matches!(cli_wei_approx, Some(c) if c == alloy_u128);
-    let parity_line = format!(
-        "parity: {} (polygon_cli_vs_eth_getBalance = {})",
-        parity_ok,
-        if parity_ok { "true" } else { "false" }
-    );
+    // ---- 3. USDC: raw curl eth_call ----------------------------------------
+    // Encode balanceOf(holder): 0x70a08231 ++ 32-byte left-padded holder.
+    let mut calldata = String::from("0x70a08231");
+    let mut padded = [0u8; 32];
+    padded[12..32].copy_from_slice(address.as_slice());
+    for b in &padded {
+        calldata.push_str(&format!("{b:02x}"));
+    }
+    let payload = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params": [
+            {"to": format!("{usdc_address}"), "data": calldata},
+            "latest",
+        ],
+        "id": 1,
+    });
+    let curl_out = Command::new("curl")
+        .args([
+            "-s",
+            "-X",
+            "POST",
+            rpc_url,
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &payload.to_string(),
+        ])
+        .output();
+    let usdc_curl_raw = match curl_out {
+        Ok(o) if o.status.success() => parse_jsonrpc_result_u256(&o.stdout, &o.stderr),
+        Ok(o) => {
+            println!(
+                "  warn: curl eth_call exited {} — stderr={}",
+                o.status,
+                String::from_utf8_lossy(&o.stderr)
+            );
+            None
+        }
+        Err(e) => {
+            println!("  warn: could not spawn `curl` (PATH lookup failed): {e}");
+            None
+        }
+    };
 
-    // ---- Parity table: polygon CLI vs eth_getBalance raw oracle ----
-    let sep = "+-------------------+----------------------+--------------------------------+\n";
+    // ---- 4. Compose ONE unified parity table --------------------------------
+    let sep = "+----------+-------------------+----------------------+--------------------------------+\n";
     let mut out = String::new();
     out.push_str(sep);
     out.push_str(&format!(
-        "| {:<17} | {:<20} | {:<30} |\n",
-        "Source", "Value (display)", "Notes"
+        "| {:<8} | {:<17} | {:<20} | {:<30} |\n",
+        "Token", "Source", "Raw value", "Notes"
     ));
     out.push_str(sep);
+
+    // POL rows — known #522 mismatch expected for `polygon CLI` row until #522 ships.
+    let alloy_pol_u128: u128 = alloy_pol_wei.try_into().unwrap_or(u128::MAX);
+    let pol_cli_note = match (pol_cli_u128, Some(alloy_pol_u128)) {
+        (Some(c), Some(a)) if c == a => "✓ matches alloy eth_getBalance",
+        (Some(_), Some(_)) => "✗ MISMATCH (known: #522, CLI off-by-10^3)",
+        _ => "? (one source unavailable)",
+    };
     out.push_str(&format!(
-        "| {:<17} | {:<20} | {:<30} |\n",
-        "polygon CLI", cli_displayed, match_mark
+        "| {:<8} | {:<17} | {:<20} | {:<30} |\n",
+        "POL",
+        "polygon CLI",
+        pol_cli_u128
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "(unavailable)".into()),
+        pol_cli_note,
     ));
     out.push_str(&format!(
-        "| {:<17} | {:<20} | {:<30} |\n",
-        "eth_getBalance",
-        format!("{alloy_u128} wei"),
-        "raw oracle (raw = displayed/1000)"
+        "| {:<8} | {:<17} | {:<20} | {:<30} |\n",
+        "POL",
+        "alloy oracle",
+        format!("{alloy_pol_u128} wei"),
+        "Phase 2 alloy eth_getBalance",
+    ));
+
+    // USDC rows.
+    let usdc_cli_note = match (usdc_cli_raw, usdc_curl_raw) {
+        (Some(c), Some(k)) if c == k => "✓ matches curl eth_call",
+        (Some(_), Some(_)) => "✗ MISMATCH (CLI vs curl)",
+        (Some(_), None) => "? (curl unavailable)",
+        (None, _) => "? (CLI unavailable)",
+    };
+    let usdc_curl_note = match (usdc_cli_raw, usdc_curl_raw) {
+        (Some(_), Some(_)) => "raw JSON-RPC eth_call balanceOf(holder)",
+        (_, _) => "raw JSON-RPC eth_call (unavailable)",
+    };
+    out.push_str(&format!(
+        "| {:<8} | {:<17} | {:<20} | {:<30} |\n",
+        "USDC",
+        "polygon CLI",
+        usdc_cli_raw
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "(unavailable)".into()),
+        usdc_cli_note,
+    ));
+    out.push_str(&format!(
+        "| {:<8} | {:<17} | {:<20} | {:<30} |\n",
+        "USDC",
+        "curl eth_call",
+        usdc_curl_raw
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "(unavailable)".into()),
+        usdc_curl_note,
+    ));
+    out.push_str(&format!(
+        "| {:<8} | {:<17} | {:<20} | {:<30} |\n",
+        "USDC",
+        "alloy oracle",
+        alloy_usdc_raw.to_string(),
+        "Phase 2 alloy provider.call(balanceOf)",
     ));
     out.push_str(sep);
-    out.push_str(&format!("{parity_line}\n"));
-    out.push_str("USDC parity skipped — `polygon erc20 balance` deferred to T6d-2.1 (#523)\n");
+
+    // Per-token verdicts + combined machine-readable line.
+    let pol_ok = pol_cli_u128 == Some(alloy_pol_u128);
+    let usdc_ok = usdc_cli_raw == Some(alloy_usdc_raw) && usdc_curl_raw == Some(alloy_usdc_raw);
+    let parity_line = format!(
+        "parity: pol={} usdc={} (polygon_cli_vs_alloy = pol:{}, usdc_cli_vs_curl_vs_alloy = {})\n",
+        if pol_ok { "true" } else { "false" },
+        if usdc_ok { "true" } else { "false" },
+        if pol_ok { "true" } else { "false" },
+        if usdc_ok { "true" } else { "false" },
+    );
+    out.push_str(&parity_line);
     print!("{out}");
     Some(out)
+}
+
+/// Parse `polygon wallet balance` stdout into wei (u128). Try the canonical
+/// form (decimal wei string OR "<value> POL" with f64 * 1e18 fallback) so
+/// this survives the #522 formatter fix once it lands.
+fn parse_pol_cli_pol_wei(stdout: &[u8]) -> Option<u128> {
+    let s = std::str::from_utf8(stdout).ok()?;
+    let first = s.split_whitespace().next()?;
+    if let Ok(u) = first.parse::<u128>() {
+        return Some(u);
+    }
+    if let Ok(f) = first.parse::<f64>() {
+        return Some((f * 1e18) as u128);
+    }
+    None
+}
+
+/// Decode a JSON-RPC `eth_call` result hex string into a U256. The
+/// canonical 32-byte big-endian encoding matches what alloy returns from
+/// `U256::from_be_slice`; any non-32-byte response (revert payload,
+/// short ABI mismatch) returns `None` and the parity row reads
+/// `(unavailable)`.
+fn hex_decode_u256(hex_str: &str) -> Option<U256> {
+    let s = hex_str.trim_start_matches("0x");
+    let bytes = hex::decode(s).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    Some(U256::from_be_slice(&bytes))
+}
+
+/// Parse the polygon CLI `--json` stdout for `erc20 balance` and extract
+/// the `raw` field as a decimal U256. Returns `None` and prints a warning
+/// on parse failure (or if the field is missing / wrong type).
+///
+/// Extracted from `verify_erc20_cli_vs_curl` to give each step a concrete
+/// type (the inline `.ok().and_then(|v| ...).and_then(|r| ...)` chain
+/// confuses the borrow-checker / type inference under `--all-targets`).
+fn parse_polygon_cli_raw(stdout: &[u8], stderr: &[u8]) -> Option<U256> {
+    let v: serde_json::Value = serde_json::from_slice(stdout)
+        .map_err(|e| {
+            println!(
+                "  warn: CLI stdout JSON parse: {e}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                String::from_utf8_lossy(stdout),
+                String::from_utf8_lossy(stderr),
+            );
+        })
+        .ok()?;
+    let s = v.get("raw").and_then(|r| r.as_str())?;
+    U256::from_str_radix(s.trim_start_matches("0x"), 10).ok()
+}
+
+/// Parse a raw `curl eth_call` JSON-RPC response and extract the `result`
+/// field as a U256 (hex-encoded 32-byte big-endian per JSON-RPC spec).
+/// Returns `None` and prints a warning on parse failure.
+fn parse_jsonrpc_result_u256(stdout: &[u8], stderr: &[u8]) -> Option<U256> {
+    let v: serde_json::Value = serde_json::from_slice(stdout)
+        .map_err(|e| {
+            println!(
+                "  warn: curl JSON-RPC parse: {e}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                String::from_utf8_lossy(stdout),
+                String::from_utf8_lossy(stderr),
+            );
+        })
+        .ok()?;
+    let s = v.get("result").and_then(|r| r.as_str())?;
+    hex_decode_u256(s)
 }
 
 // ============================================================================
