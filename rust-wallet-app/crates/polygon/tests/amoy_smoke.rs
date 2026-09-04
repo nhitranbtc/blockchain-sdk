@@ -116,13 +116,91 @@ fn amoy_funded_pk_hex() -> String {
         .to_string()
 }
 
+/// Read the shared Amoy wallet password from `tokens/amoy.json:test_harness.amoy_wallet_password`.
+/// Used as `POLYGON_PASSWORD` env for every subprocess — must match the password
+/// the pre-existing wallets in `amoy_wallet_data_dir()` were encrypted with
+/// (sister to `amoy_erc20_send.rs::amoy_wallet_password`).
+fn amoy_wallet_password() -> String {
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON
+        .get()
+        .expect("AMOY_TOKENS_JSON set by ensure_tokens_loaded");
+    v.get("test_harness")
+        .and_then(|t| t.get("amoy_wallet_password"))
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| {
+            panic!("missing `test_harness.amoy_wallet_password` in tokens/amoy.json")
+        })
+        .to_string()
+}
+
+/// Read the native-POL sender wallet name from
+/// `tokens/amoy.json:test_harness.amoy_native_sender`.
+fn amoy_native_sender_name() -> String {
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON
+        .get()
+        .expect("AMOY_TOKENS_JSON set by ensure_tokens_loaded");
+    v.get("test_harness")
+        .and_then(|t| t.get("amoy_native_sender"))
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| panic!("missing `test_harness.amoy_native_sender` in tokens/amoy.json"))
+        .to_string()
+}
+
+/// Read the native-POL recipient wallet name from
+/// `tokens/amoy.json:test_harness.amoy_native_recipient`.
+#[allow(dead_code)] // reserved for future native-POL round-trip test
+fn amoy_native_recipient_name() -> String {
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON
+        .get()
+        .expect("AMOY_TOKENS_JSON set by ensure_tokens_loaded");
+    v.get("test_harness")
+        .and_then(|t| t.get("amoy_native_recipient"))
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| {
+            panic!("missing `test_harness.amoy_native_recipient` in tokens/amoy.json")
+        })
+        .to_string()
+}
+
+/// Resolve the configured wallet data directory (relative or absolute).
+/// Relative paths resolve against the repo root so the test works
+/// regardless of cwd.
+fn amoy_wallet_data_dir() -> std::path::PathBuf {
+    ensure_tokens_loaded();
+    let v = AMOY_TOKENS_JSON
+        .get()
+        .expect("AMOY_TOKENS_JSON set by ensure_tokens_loaded");
+    let raw = v
+        .get("test_harness")
+        .and_then(|t| t.get("amoy_wallet_data_dir"))
+        .and_then(|s| s.as_str())
+        .unwrap_or_else(|| {
+            panic!("missing `test_harness.amoy_wallet_data_dir` in tokens/amoy.json")
+        });
+    let p = std::path::PathBuf::from(raw);
+    if p.is_absolute() {
+        p
+    } else {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        manifest
+            .parent()
+            .and_then(|x| x.parent())
+            .and_then(|x| x.parent())
+            .map(|root| root.join(&p))
+            .unwrap_or(p)
+    }
+}
+
 /// Invoke `polygon` as a subprocess with hermetic env.
 fn run_polygon(args: &[&str], data_dir: &std::path::Path) -> std::process::Output {
     Command::new(polygon_bin())
         .args(args)
         .arg("--data-dir")
         .arg(data_dir)
-        .env("POLYGON_PASSWORD", "test-pw-ignore-leak")
+        .env("POLYGON_PASSWORD", amoy_wallet_password())
         .env("POLYGON_NETWORK", "amoy")
         .env("RUST_BACKTRACE", "1")
         .stdin(Stdio::null())
@@ -269,7 +347,7 @@ fn amoy_wallet_import_via_pk_file() {
             "wallet",
             "import",
             "--name",
-            "amoy-smoke-pk",
+            "amoy-native-sender",
             "--private-key-file",
             pk_path.to_str().expect("tempdir path is utf-8 for tests"),
             "--network",
@@ -342,68 +420,51 @@ fn amoy_balance_after_pk_wallet_import() {
     );
 }
 
-/// Story 5 (sister to PK-file path) — `polygon wallet send` against an
-/// operator-funded wallet. Sends 0.01 POL to a deterministic sink
-/// address; asserts the CLI exits 0 and stdout confirms the tx hash.
-/// `network amoy` default per cli.rs:165.
+/// Story 5 (sister to PK-file path) — `polygon wallet send` against
+/// the operator-funded `amoy-native-sender` wallet (pre-existing in
+/// `amoy_wallet_data_dir`, configured in `tokens/amoy.json`). Sends
+/// 0.001 POL to a deterministic sink address; asserts the CLI exits 0
+/// and stdout confirms the tx hash. `network amoy` default per
+/// cli.rs:165.
 ///
-/// Self-contained: imports the PK wallet into a fresh TempDir before
-/// sending. Previously depended on a prior test having imported
-/// `amoy-smoke-pk` into the same data dir — cargo test does not
-/// guarantee execution order even with `--test-threads=1`, so the
-/// shared-state assumption was racy. Re-runnable as a standalone
-/// `cargo test --test amoy_smoke -- --ignored` invocation.
+/// Uses the configured native-sender wallet (NOT the Anvil-#0
+/// placeholder PK from `tokens/amoy.json:test_harness.amoy_funded_pk_hex`)
+/// — the Anvil-#0 address has no real POL on Amoy and previously
+/// failed with `insufficient funds`. The configured sender is the
+/// operator-funded wallet this test infrastructure was designed around
+/// (sister to `amoy_erc20_send.rs`'s native-POL test). `POLYGON_PASSWORD`
+/// env comes from `amoy_wallet_password()` so it decrypts the
+/// pre-existing wallet blob in `amoy_wallet_data_dir`.
+///
+/// Amount lowered from 0.01 → 0.001 POL after the live Amoy gas-price
+/// spike (Amoy oracle returned ~2.6M gwei × 67.2M gas ≈ 0.18 POL per
+/// send, eating most of the sender's dust balance). 0.001 POL value
+/// keeps the total tx cost under the sender's funded balance while
+/// still exercising the full send-sign-broadcast flow.
 #[test]
 #[ignore]
-fn amoy_send_0_01_pol_after_pk_wallet_import() {
+fn amoy_send_native_after_pk_wallet_import() {
     require_run_polygon_amoy();
-    let data_dir = tempfile::TempDir::new().expect("tempdir for data-dir");
-    // Import pre-step: sister to `amoy_wallet_import_via_pk_file`. Uses
-    // the same PK_LOCK + tokens/amoy.json PK source so the address
-    // derivation is deterministic + the canonical Anvil-#0 address is
-    // what the send call signs with.
-    let pk_path = {
-        let _guard = PK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let pk = amoy_funded_pk_hex();
-        std::env::remove_var("AMOY_FUNDED_PK_HEX");
-        write_pk_file(data_dir.path(), "amoy-fund.pk", &pk)
-    };
-    let import_out = run_polygon(
-        &[
-            "wallet",
-            "import",
-            "--name",
-            "amoy-smoke-pk",
-            "--private-key-file",
-            pk_path.to_str().expect("utf-8 path"),
-            "--network",
-            "amoy",
-        ],
-        data_dir.path(),
-    );
-    assert!(
-        import_out.status.success(),
-        "wallet import pre-step failed: stderr={}",
-        String::from_utf8_lossy(&import_out.stderr)
-    );
+    let data_dir = amoy_wallet_data_dir();
+    let sender_name = amoy_native_sender_name();
     let out = run_polygon(
         &[
             "wallet",
             "send",
             "--name",
-            "amoy-smoke-pk",
+            &sender_name,
             "--to",
             "0x0000000000000000000000000000000000000042",
             "--amount",
-            "10000000000000000", // 0.01 POL in wei (design §3.5 unit = wei in handler)
+            "0.001", // 0.001 POL; CLI `--unit pol` default (cli.rs:260) — handler still receives wei after main.rs conversion (main.rs:660)
             "--network",
             "amoy",
         ],
-        data_dir.path(),
+        &data_dir,
     );
     assert!(
         out.status.success(),
-        "wallet send 0.01 POL failed: stderr={}",
+        "wallet send 0.001 POL failed: stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
