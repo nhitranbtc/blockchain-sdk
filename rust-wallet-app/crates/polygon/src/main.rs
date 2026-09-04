@@ -470,9 +470,8 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                     }
                 };
                 println!(
-                    "wallet imported: name={name} id={} address=0x{}",
-                    created.wallet_id,
-                    alloy_primitives::hex::encode(created.address.as_slice()),
+                    "wallet imported: name={name} id={} address={}",
+                    created.wallet_id, created.address,
                 );
                 Ok(())
             }
