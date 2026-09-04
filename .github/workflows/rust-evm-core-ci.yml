@@ -297,13 +297,14 @@ jobs:
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: Polygon lib + bin unit tests
-        # Lib unit tests (~16 min on cached CI) cover every module
-        # under `polygon/src/**`. Bin tests cover the `main` dispatch
-        # in `polygon/src/main.rs`. Scope `--lib --bin polygon` excludes
-        # integration binaries (which land in the sister job below).
+      - name: Polygon bin unit tests
+        # `polygon` is a binary-only crate (no `lib.rs`) — `--lib` is
+        # invalid for this package. `--bin polygon` runs the unit tests
+        # inside `polygon/src/main.rs` + its submodule `#[cfg(test)]`
+        # blocks (~16 min on cached CI). Integration binaries land in
+        # the sister job below.
         working-directory: rust-wallet-app
-        run: cargo test -p polygon --lib --bin polygon
+        run: cargo test -p polygon --bin polygon
 
   polygon-integration-tests:
     name: Polygon integration tests (local Anvil + Amoy testnet)
