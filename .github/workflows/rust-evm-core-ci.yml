@@ -274,7 +274,7 @@ jobs:
   polygon-e2e:
     name: Polygon e2e (local Anvil + Amoy testnet)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4 # v4
         with:
