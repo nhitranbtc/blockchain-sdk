@@ -448,15 +448,21 @@ pub fn wallet_import(
 /// `WalletManager::import_private_key_for_network` without any
 /// hex-encoding round-trip.
 ///
-/// **On-disk format contract (revised 2026-09-04, #502 follow-up):**
-/// the file must contain a hex-encoded PK string (with optional `0x`
-/// prefix; surrounding whitespace tolerated). `read_pk_file` hex-decodes
-/// the contents before handing them to
-/// `WalletManager::import_private_key_for_network` — matching the sister
-/// inline `--private-key` path at `polygon/src/main.rs:~438`. Operators
-/// naturally write the PK as a hex string (via heredoc / `echo` / clipboard);
-/// requiring raw 32 bytes was hostile UX and tripped the
-/// `amoy_wallet_import_via_pk_file` smoke test.
+/// **On-disk format contract (auto-detect, 2026-09-04):** `read_pk_file`
+/// accepts EITHER of:
+///
+/// - Hex-encoded PK string (with optional `0x` prefix; surrounding
+///   whitespace tolerated). Operators naturally write the PK this way
+///   (via heredoc / `echo` / clipboard) — the prior contract required raw
+///   bytes which was hostile UX and tripped `amoy_smoke.rs`.
+/// - Raw 32-byte secp256k1 scalar. Used by the P9 follow-up
+///   `amoy_p9_pk_import` tests (issue #528) which write
+///   `hex::decode(&pk_hex)` output verbatim.
+///
+/// Auto-detect order: try UTF-8 + hex-decode first; if that succeeds AND
+/// yields 32 bytes, return decoded. Otherwise fall back to raw bytes IF
+/// the file is exactly 32 bytes long. Otherwise error with the file path
+/// + observed length so the operator can `cat -A` / `xxd` and diagnose.
 #[cfg_attr(not(unix), allow(unused_variables))]
 pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let bytes = std::fs::read(path).map_err(|e| {
@@ -485,22 +491,32 @@ pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
             )));
         }
     }
-    let trimmed = std::str::from_utf8(bytes.as_slice())
-        .map_err(|e| {
-            Error::InvalidInput(format!(
-                "--private-key-file not UTF-8 (raw bytes?): {e}: {}",
+    // Auto-detect: hex string (preferred) OR raw 32 bytes (P9 follow-up).
+    let parsed: Zeroizing<Vec<u8>> = match std::str::from_utf8(bytes.as_slice()) {
+        Ok(text) => {
+            let stripped = text.trim().trim_start_matches("0x");
+            match alloy_primitives::hex::decode(stripped) {
+                Ok(decoded) if decoded.len() == 32 => Zeroizing::new(decoded),
+                _ if bytes.len() == 32 => Zeroizing::new(bytes),
+                _ => {
+                    return Err(Error::InvalidInput(format!(
+                        "--private-key-file hex decode failed and raw length != 32 ({} bytes): {}",
+                        bytes.len(),
+                        path.display()
+                    )));
+                }
+            }
+        }
+        Err(_) if bytes.len() == 32 => Zeroizing::new(bytes),
+        Err(e) => {
+            return Err(Error::InvalidInput(format!(
+                "--private-key-file not UTF-8 and raw length != 32 ({} bytes): {e}: {}",
+                bytes.len(),
                 path.display()
-            ))
-        })?
-        .trim()
-        .trim_start_matches("0x");
-    let decoded = alloy_primitives::hex::decode(trimmed).map_err(|e| {
-        Error::InvalidInput(format!(
-            "--private-key-file hex decode failed: {e}: {}",
-            path.display()
-        ))
-    })?;
-    Ok(Zeroizing::new(decoded))
+            )));
+        }
+    };
+    Ok(parsed)
 }
 
 /// Read the contents of a `--mnemonic-file` path into a
