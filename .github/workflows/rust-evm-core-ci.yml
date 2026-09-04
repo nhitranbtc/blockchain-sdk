@@ -272,7 +272,7 @@ jobs:
   # (Tier 1 hermetic + Tier 2 guard branches). See the per-step comments
   # for the `RUN_POLYGON_*` env-var gates.
   polygon-e2e:
-    name: Polygon e2e (Anvil spike + testnet guards)
+    name: Polygon e2e (local Anvil + Amoy testnet)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

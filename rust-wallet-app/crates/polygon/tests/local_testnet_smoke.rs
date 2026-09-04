@@ -1321,15 +1321,15 @@ async fn local_testnet_wallet_import_private_key_file_mode_0600() {
     use std::os::unix::fs::PermissionsExt;
     require_run_polygon_local();
     let fx = Fixture::new();
-    // Deterministic 32-byte test PK (NOT a real key — fake data for seam coverage).
+    // Deterministic test PK (NOT a real key — fake data for seam coverage).
     // 0x11 repeated 32 times = a valid secp256k1 scalar (in [1, n-1] for
-    // n ≈ 2^256 - 0x1455...). Written as raw 32 bytes per the
-    // `read_pk_file` contract (no hex decode on the reader side — the
-    // sister unit test at `polygon/src/handlers/wallet.rs:2002` and the
-    // `write_pk_file` helper both write raw bytes too).
-    let pk_bytes = [0x11_u8; 32];
+    // n ≈ 2^256 - 0x1455...). Written as a hex string per the
+    // `read_pk_file` contract (revised 2026-09-04: reader now hex-decodes
+    // the file contents, matching the inline `--private-key` path's
+    // sister behavior at `polygon/src/main.rs:~438`).
+    let pk_hex = "1111111111111111111111111111111111111111111111111111111111111111";
     let pk_path = fx.data_dir.path().join("test-pk.key");
-    std::fs::write(&pk_path, pk_bytes).expect("write PK file");
+    std::fs::write(&pk_path, pk_hex.as_bytes()).expect("write PK file");
     std::fs::set_permissions(&pk_path, std::fs::Permissions::from_mode(0o600))
         .expect("set perms 0o600");
     let out = run_polygon(

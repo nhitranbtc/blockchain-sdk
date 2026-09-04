@@ -448,13 +448,15 @@ pub fn wallet_import(
 /// `WalletManager::import_private_key_for_network` without any
 /// hex-encoding round-trip.
 ///
-/// **On-disk format contract (clarified per #502, 2026-09-01):** the
-/// file must contain the raw 32-byte secp256k1 scalar. No "0x" prefix,
-/// no hex encoding — `read_pk_file` reads bytes verbatim. Callers that
-/// store a hex-encoded PK must hex-decode before calling `write_pk_file`.
-/// The sister unit test at `wallet.rs:~2005` uses
-/// `write_pk_file(..., &anvil_pk_bytes(), 0o600)` with raw 32 bytes; the
-/// CLI smoke test must do the same.
+/// **On-disk format contract (revised 2026-09-04, #502 follow-up):**
+/// the file must contain a hex-encoded PK string (with optional `0x`
+/// prefix; surrounding whitespace tolerated). `read_pk_file` hex-decodes
+/// the contents before handing them to
+/// `WalletManager::import_private_key_for_network` — matching the sister
+/// inline `--private-key` path at `polygon/src/main.rs:~438`. Operators
+/// naturally write the PK as a hex string (via heredoc / `echo` / clipboard);
+/// requiring raw 32 bytes was hostile UX and tripped the
+/// `amoy_wallet_import_via_pk_file` smoke test.
 #[cfg_attr(not(unix), allow(unused_variables))]
 pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
     let bytes = std::fs::read(path).map_err(|e| {
@@ -483,7 +485,22 @@ pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
             )));
         }
     }
-    Ok(Zeroizing::new(bytes))
+    let trimmed = std::str::from_utf8(bytes.as_slice())
+        .map_err(|e| {
+            Error::InvalidInput(format!(
+                "--private-key-file not UTF-8 (raw bytes?): {e}: {}",
+                path.display()
+            ))
+        })?
+        .trim()
+        .trim_start_matches("0x");
+    let decoded = alloy_primitives::hex::decode(trimmed).map_err(|e| {
+        Error::InvalidInput(format!(
+            "--private-key-file hex decode failed: {e}: {}",
+            path.display()
+        ))
+    })?;
+    Ok(Zeroizing::new(decoded))
 }
 
 /// Read the contents of a `--mnemonic-file` path into a
@@ -2180,7 +2197,7 @@ mod tests {
         // wrapper. Type assertion (`Zeroizing<Vec<u8>>` return) is the
         // contract — caller can `as_slice()` and pass to lib.
         let tmp = tempdir().expect("tempdir");
-        let path = write_pk_file(tmp.path(), "pk.hex", &anvil_pk_bytes(), 0o600);
+        let path = write_pk_file(tmp.path(), "pk.hex", ANVIL_PK_HEX.as_bytes(), 0o600);
         let got: Zeroizing<Vec<u8>> = super::read_pk_file(&path).expect("read ok");
         assert_eq!(got.as_slice(), &anvil_pk_bytes());
     }
@@ -2192,7 +2209,7 @@ mod tests {
         // actual mode in the message so the operator can chmod it
         // without re-reading the source.
         let tmp = tempdir().expect("tempdir");
-        let path = write_pk_file(tmp.path(), "pk.hex", &anvil_pk_bytes(), 0o644);
+        let path = write_pk_file(tmp.path(), "pk.hex", ANVIL_PK_HEX.as_bytes(), 0o644);
         let err = super::read_pk_file(&path).expect_err("mode 0o644 must error");
         let msg = format!("{err:?}");
         assert!(
@@ -2224,7 +2241,7 @@ mod tests {
         // caller-side lifecycle zeros the buffer on drop (sister
         // invariant to `SecretMnemonic(Zeroizing<String>)`).
         let tmp = tempdir().expect("tempdir");
-        let path = write_pk_file(tmp.path(), "pk.hex", &anvil_pk_bytes(), 0o600);
+        let path = write_pk_file(tmp.path(), "pk.hex", ANVIL_PK_HEX.as_bytes(), 0o600);
         let got: Zeroizing<Vec<u8>> = super::read_pk_file(&path).expect("read ok");
         // Zeroizing<Vec<u8>> deref to &[u8].
         assert_eq!(got.len(), 32);
