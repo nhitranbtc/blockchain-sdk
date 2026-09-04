@@ -41,10 +41,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable  # stable
+      - uses: dtolnay/rust-toolchain@stable # stable
         with:
           components: rustfmt
       - name: cargo fmt --check
@@ -56,10 +56,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable  # stable
+      - uses: dtolnay/rust-toolchain@stable # stable
         with:
           components: clippy
       - name: Install protoc (>=3.12)
@@ -67,7 +67,7 @@ jobs:
         # core/Tron.proto). Issue #403 deliverable #9. Debian/Ubuntu:
         # protobuf-compiler package ships protoc 3.x.
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo clippy
@@ -90,7 +90,7 @@ jobs:
     # them; the run never opens a live RPC connection.
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -98,7 +98,7 @@ jobs:
         # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
         # core/Tron.proto). Issue #403 deliverable #9.
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: Install Foundry (anvil)
@@ -124,7 +124,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -132,7 +132,7 @@ jobs:
         # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
         # core/Tron.proto). Issue #403 deliverable #9.
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo tree --duplicates
@@ -149,7 +149,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -171,7 +171,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -192,7 +192,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -200,7 +200,7 @@ jobs:
         # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
         # core/Tron.proto). Issue #403 deliverable #9.
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: Install cargo-geiger
@@ -245,7 +245,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - name: grep -rnE 'Rpc\(\s*format!' must return 0 code matches
@@ -265,18 +265,22 @@ jobs:
   # alpha→beta 100 USDC). Mirrors `.github/workflows/rust-eth-core-ci.yml`
   # `anvil-e2e` job shape: Anvil spawns a fork in-process, no live RPC
   # broadcast, no public-RPC flake or CI-IP rate-limit risk (L29 carve-out).
-  # Both V9 + use_case tests are now `#[ignore]`'d with `RUN_POLYGON_ANVIL_E2E=1`
-  # opt-in gate — default `cargo test --workspace --all-targets` skips them.
-  polygon-anvil-e2e:
-    name: Polygon Anvil e2e
+  # Merged from the former `polygon-anvil-e2e` + `polygon-testnet` pair.
+  # Single setup (checkout/toolchain/cache/protoc/foundry/workspace build)
+  # followed by three sequential test steps covering Anvil spike, the
+  # Anvil-backed wallet scenario, and the package-wide `#[ignore]` sweep
+  # (Tier 1 hermetic + Tier 2 guard branches). See the per-step comments
+  # for the `RUN_POLYGON_*` env-var gates.
+  polygon-e2e:
+    name: Polygon e2e (Anvil spike + testnet guards)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: Install protoc (>=3.12)
@@ -288,79 +292,21 @@ jobs:
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: Polygon Anvil-fork e2e tests
-        working-directory: rust-wallet-app
-        env:
-          RUN_POLYGON_ANVIL_E2E: "1"
-        run: |
-          # `cargo test -p polygon-v1-spike -- --ignored` runs every
-          # `#[ignore]`'d test in the package. The Anvil-fork tests check
-          # `RUN_POLYGON_ANVIL_E2E=1` and run; the live-RPC tests check
-          # `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1`, find their
-          # var unset, return early → PASS (their bodies never execute).
-          cargo test -p polygon-v1-spike -- --ignored
-      - name: Polygon CLI wallet scenario (Issue #438 / T7 prep)
-        # End-to-end exercise of `polygon wallet {create,list,balance,send}`
-        # against a local Anvil node. The integration test spawns Anvil
-        # in-process via `alloy-node-bindings` so no external `anvil`
-        # binary is required beyond the one Foundry toolchain provides.
-        # Per #438 acceptance: Anvil path MUST run in CI; Amoy-fork path
-        # is operator-driven (`scripts/polygon-wallet-scenario.sh
-        # --env=amoy-fork` per L29).
-        # Scope `-p polygon` only — never `--workspace` (L55: bitcoin-wallet-core
-        # FFI tests dominate workspace runtime).
-        working-directory: rust-wallet-app
-        run: cargo test -p polygon --test polygon_wallet_scenario
 
-  # Sister job to `polygon-anvil-e2e`: covers ALL `#[ignore]`'d tests in the
-  # `polygon` package — `local_testnet_smoke` (Tier 1, hermetic, opt-in via
-  # `RUN_POLYGON_LOCAL=1` per L29) plus the live-testnet gated suites
-  # `amoy_smoke.rs` / `mainnet_smoke.rs` (Tier 2, L29 operator-driven
-  # carve-out). The live-testnet suites each guard on their own
-  # `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1` env var and early-return
-  # → PASS when unset, so leaving those vars unset keeps CI hermetic while
-  # still exercising the guard branches.
-  #
-  # Scope `-p polygon --all-targets -- --include-ignored` covers lib unit
-  # tests + every `tests/*.rs` integration binary's `#[ignore]`'d tests in
-  # one pass. `--test-threads=1` preserves deterministic ordering for
-  # `local_testnet_smoke` (shared Anvil fixture). The hermetic Anvil fixture
-  # spawns in-process via `alloy-node-bindings` (sister to
-  # `polygon_wallet_scenario` pattern), so no live testnet RPC dependency.
-  # Phase 1-7 of Issue #495 (`local_testnet_smoke.rs` gap-fill) all land
-  # here. 30m timeout gives headroom without GH default 6h.
-  polygon-testnet:
-    name: Polygon testnet e2e (Tier 1 + Tier 2 guards)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4  # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2  # v2
-        with:
-          workspaces: rust-wallet-app -> target
-      - name: Install protoc (>=3.12)
-        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
-        # core/Tron.proto). Issue #403 deliverable #9.
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install Foundry (anvil)
-        uses: foundry-rs/foundry-toolchain@v1
-      - name: cargo build (workspace)
-        working-directory: rust-wallet-app
-        run: cargo build --workspace
-      - name: Polygon package — all `#[ignore]`'d tests (lib + integration)
-        # `--all-targets` covers lib unit tests + every `tests/*.rs`
-        # integration binary; `--include-ignored` runs every `#[ignore]`'d
-        # test inside them. The `require_run_polygon_local()` guard at the
-        # top of each `local_testnet_smoke` fn checks `RUN_POLYGON_LOCAL=1`
-        # and runs; the `amoy_smoke` / `mainnet_smoke` guards check their
-        # own env vars and early-return → PASS when unset (L29
-        # operator-driven carve-out — no live RPC from CI).
-        # `--test-threads=1` preserves deterministic ordering for the
-        # shared Anvil fixture. Scope `-p polygon` only — never
-        # `--workspace` (L55).
+      - name: Polygon package — all `#[ignore]`'d tests
+        # Sweeps the entire `polygon` package — every `tests/*.rs`
+        # integration binary + lib unit tests. `--include-ignored` runs
+        # both ignored and non-ignored tests in one pass, so the
+        # non-ignored `polygon_wallet_scenario` integration binary
+        # (Issue #438 / T7 prep) lands here without a separate step.
+        # Tier 1 (`local_testnet_smoke`, hermetic, opt-in via
+        # `RUN_POLYGON_LOCAL=1` per L29) + Tier 2 (`amoy_smoke` /
+        # `mainnet_smoke`, operator-driven carve-out — early-return →
+        # PASS when their `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1`
+        # guards find the var unset). `--test-threads=1` preserves
+        # deterministic ordering for the shared Anvil fixture. Phase 1-7
+        # of Issue #495 land here. Scope `-p polygon` only — never
+        # `--workspace` (L55: bitcoin-wallet-core FFI dominates).
         working-directory: rust-wallet-app
         env:
           RUN_POLYGON_LOCAL: "1"
