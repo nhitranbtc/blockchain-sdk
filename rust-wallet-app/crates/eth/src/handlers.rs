@@ -148,7 +148,10 @@ pub fn wallet_import(
         (Some(phrase), None) => {
             let network = Network::parse_cli_eth(network_str)
                 .map_err(|e| Error::InvalidInput(e.to_string()))?;
-            mgr.import_wallet_for_network(name, phrase, password.as_bytes(), network)
+            // Drift: eth CLI does not yet surface `--account-index`; hardcode
+            // BIP44 account 0 to match the legacy `import_wallet` alias.
+            // Mirror of the `--private-key` argv drift noted below.
+            mgr.import_wallet_for_network(name, phrase, password.as_bytes(), 0u32, network)
                 .map_err(map_wallet_err)
         }
         (None, Some(pk)) => {
