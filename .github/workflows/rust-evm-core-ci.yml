@@ -327,21 +327,50 @@ jobs:
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: Polygon package — all integration tests (incl. `#[ignore]`'d)
-        # Sweeps every `tests/*.rs` integration binary in the `polygon`
-        # package — `local_testnet_smoke` (Tier 1, hermetic, opt-in via
-        # `RUN_POLYGON_LOCAL=1` per L29) + `amoy_smoke` / `mainnet_smoke`
-        # / `amoy_erc20_send` / `amoy_p9_pk_import` / `amoy_sign_only`
-        # / `amoy_error_paths` / `amoy_erc20_balance` (Tier 2, L29
-        # operator-driven carve-out — early-return → PASS when their
-        # `RUN_POLYGON_*` guards find the var unset, so leaving those
-        # vars unset keeps CI hermetic). `--include-ignored` runs every
-        # `#[ignore]`'d test in each binary. `--test-threads=1`
-        # preserves deterministic ordering for the shared Anvil fixture.
+      - name: Polygon amoy + mainnet integration tests
+        # Tier 2 (L29 operator-driven carve-out — early-return → PASS when
+        # their `RUN_POLYGON_*` guards find the var unset, so leaving
+        # those vars unset keeps CI hermetic). `--include-ignored` runs
+        # every `#[ignore]`'d test in each binary. `--test-threads=1`
+        # preserves deterministic ordering where fixtures are shared.
+        # Excludes `local_testnet_smoke` (slower ~19 min) — it has its
+        # own parallel job (`polygon-local-testnet-tests`). Scope
+        # `-p polygon` only — never `--workspace` (L55:
+        # bitcoin-wallet-core FFI dominates).
+        working-directory: rust-wallet-app
+        run: cargo test -p polygon --test amoy_smoke --test amoy_erc20_send --test amoy_erc20_balance --test amoy_sign_only --test amoy_error_paths --test amoy_p9_pk_import --test mainnet_smoke -- --include-ignored --test-threads=1
+
+  polygon-local-testnet-tests:
+    name: Polygon local-testnet integration tests (Tier 1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Foundry (anvil)
+        # `local_testnet_smoke` spawns `anvil` in-process via
+        # `alloy-node-bindings` (sister to `polygon_wallet_scenario`).
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Polygon local_testnet_smoke (Tier 1, hermetic)
+        # Local-Anvil integration suite — Tier 1 (L29 hermetic, opt-in
+        # via `RUN_POLYGON_LOCAL=1`). Each test spawns an in-process
+        # Anvil fixture, so it takes ~19 min on cached CI for ~33 tests.
+        # `--test-threads=1` preserves deterministic ordering for the
+        # shared Anvil fixture. Isolated in its own job (vs. the amoy
+        # job) so its runtime doesn't gate the smaller amoy suite.
         # Phase 1-7 of Issue #495 (`local_testnet_smoke.rs` gap-fill)
-        # land here. Scope `-p polygon` only — never `--workspace`
-        # (L55: bitcoin-wallet-core FFI dominates).
+        # land here. Scope `-p polygon` only.
         working-directory: rust-wallet-app
         env:
           RUN_POLYGON_LOCAL: "1"
-        run: cargo test -p polygon --tests -- --include-ignored --test-threads=1
+        run: cargo test -p polygon --test local_testnet_smoke -- --include-ignored --test-threads=1
