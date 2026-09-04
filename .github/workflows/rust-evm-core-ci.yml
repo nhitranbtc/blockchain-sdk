@@ -271,10 +271,17 @@ jobs:
   # Anvil-backed wallet scenario, and the package-wide `#[ignore]` sweep
   # (Tier 1 hermetic + Tier 2 guard branches). See the per-step comments
   # for the `RUN_POLYGON_*` env-var gates.
-  polygon-e2e:
-    name: Polygon e2e (local Anvil + Amoy testnet)
+  # Polygon e2e — split into two parallel jobs (lib + integration) so
+  # `local_testnet_smoke` (~19 min alone) doesn't block the lib test
+  # sweep (~16 min). Wall-clock = max(lib, integration) ≈ 25 min —
+  # under any single 30/40-min timeout. Split replaced the prior
+  # sequential 50-min single job (which kept hitting the cap; latest
+  # run terminated at 11:16 with `local_testnet_smoke` still
+  # in-flight + 5+ integration binaries queued).
+  polygon-lib-tests:
+    name: Polygon lib tests
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -287,27 +294,53 @@ jobs:
         # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
         # core/Tron.proto). Issue #403 deliverable #9.
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Polygon lib + bin unit tests
+        # Lib unit tests (~16 min on cached CI) cover every module
+        # under `polygon/src/**`. Bin tests cover the `main` dispatch
+        # in `polygon/src/main.rs`. Scope `--lib --bin polygon` excludes
+        # integration binaries (which land in the sister job below).
+        working-directory: rust-wallet-app
+        run: cargo test -p polygon --lib --bin polygon
+
+  polygon-integration-tests:
+    name: Polygon integration tests (local Anvil + Amoy testnet)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: Install Foundry (anvil)
+        # `local_testnet_smoke` spawns `anvil` in-process via
+        # `alloy-node-bindings` (sister to `polygon_wallet_scenario`).
         uses: foundry-rs/foundry-toolchain@v1
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace
-
-      - name: Polygon package — all `#[ignore]`'d tests
-        # Sweeps the entire `polygon` package — every `tests/*.rs`
-        # integration binary + lib unit tests. `--include-ignored` runs
-        # both ignored and non-ignored tests in one pass, so the
-        # non-ignored `polygon_wallet_scenario` integration binary
-        # (Issue #438 / T7 prep) lands here without a separate step.
-        # Tier 1 (`local_testnet_smoke`, hermetic, opt-in via
-        # `RUN_POLYGON_LOCAL=1` per L29) + Tier 2 (`amoy_smoke` /
-        # `mainnet_smoke`, operator-driven carve-out — early-return →
-        # PASS when their `RUN_POLYGON_AMOY=1` / `RUN_POLYGON_MAINNET=1`
-        # guards find the var unset). `--test-threads=1` preserves
-        # deterministic ordering for the shared Anvil fixture. Phase 1-7
-        # of Issue #495 land here. Scope `-p polygon` only — never
-        # `--workspace` (L55: bitcoin-wallet-core FFI dominates).
+      - name: Polygon package — all integration tests (incl. `#[ignore]`'d)
+        # Sweeps every `tests/*.rs` integration binary in the `polygon`
+        # package — `local_testnet_smoke` (Tier 1, hermetic, opt-in via
+        # `RUN_POLYGON_LOCAL=1` per L29) + `amoy_smoke` / `mainnet_smoke`
+        # / `amoy_erc20_send` / `amoy_p9_pk_import` / `amoy_sign_only`
+        # / `amoy_error_paths` / `amoy_erc20_balance` (Tier 2, L29
+        # operator-driven carve-out — early-return → PASS when their
+        # `RUN_POLYGON_*` guards find the var unset, so leaving those
+        # vars unset keeps CI hermetic). `--include-ignored` runs every
+        # `#[ignore]`'d test in each binary. `--test-threads=1`
+        # preserves deterministic ordering for the shared Anvil fixture.
+        # Phase 1-7 of Issue #495 (`local_testnet_smoke.rs` gap-fill)
+        # land here. Scope `-p polygon` only — never `--workspace`
+        # (L55: bitcoin-wallet-core FFI dominates).
         working-directory: rust-wallet-app
         env:
           RUN_POLYGON_LOCAL: "1"
-        run: cargo test -p polygon --all-targets -- --include-ignored --test-threads=1
+        run: cargo test -p polygon --tests -- --include-ignored --test-threads=1
