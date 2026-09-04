@@ -10,6 +10,7 @@ use polygon_wallet_core::{Error, Network};
 // instead of reaching into individual files. Mirrors design doc §5.3.
 pub mod config;
 pub mod erc20;
+pub mod faucet;
 pub mod fee;
 pub mod sign;
 pub mod tx;

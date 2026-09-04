@@ -23,7 +23,7 @@ use alloy_signer_local::PrivateKeySigner;
 use zeroize::Zeroizing;
 
 use evm_wallet_core::{erc20 as evm_erc20, sign_erc20_tx_bytes, WalletManager};
-use polygon_wallet_core::{Error, Network, PolygonChain, Result};
+use polygon_wallet_core::{new_http, new_http_polygon_amoy, Error, Network, PolygonChain, Result};
 
 use crate::handlers::{
     fee::{build_provider, RPC_TIMEOUT},
@@ -102,6 +102,104 @@ pub fn resolve_token_address(symbol: &str, network: Network) -> Result<Address> 
     Err(Error::InvalidInput(format!(
         "unknown token symbol '{trimmed}' for network {network:?}; pass a 0x... address"
     )))
+}
+
+/// Raw ERC-20 balance query result. Returned by `erc20_balance` so the
+/// dispatch layer can format both human-readable and `--json` outputs
+/// from one canonical struct. Mirrors the handler/formatter split in
+/// `wallet_balance` (handlers/wallet.rs:78) — handler returns the raw
+/// value, `main.rs` decides the print shape.
+#[derive(Debug, Clone)]
+pub struct Erc20BalanceResult {
+    pub holder: Address,
+    pub token: Address,
+    pub decimals: u8,
+    pub raw: U256,
+}
+
+impl Erc20BalanceResult {
+    /// Human-readable render: `raw / 10^decimals`, trailing fractional
+    /// zeros stripped (preserves at least one decimal digit). Mirrors
+    /// `amoy_faucet_and_verify.rs:341` (`usdc_raw as f64 / 1e6` → 6 dp)
+    /// for the canonical USDC case; scales per-token for any decimals.
+    /// `decimals=0` returns raw integer (no fractional part).
+    pub fn formatted(&self) -> String {
+        format_token_balance(self.raw, self.decimals)
+    }
+}
+
+/// Format a raw U256 token balance as `whole.frac` string. Trims trailing
+/// fractional zeros after the decimal; preserves ONE trailing zero when
+/// the value is otherwise a whole number so the output stays recognisably
+/// a token balance (e.g. `"10.0"` rather than `"10"` for USDC). For zero
+/// raw + `decimals > 0`, returns `"0.0"` (matching the "always preserve
+/// one decimal" rule — `decimals = 0` returns the raw integer).
+fn format_token_balance(raw: U256, decimals: u8) -> String {
+    if decimals == 0 {
+        return raw.to_string();
+    }
+    let scale = U256::from(10u8).pow(U256::from(decimals));
+    let whole = raw / scale;
+    let frac = raw % scale;
+    let s = format!("{whole}.{:0>w$}", frac, w = decimals as usize);
+    let trimmed = s.trim_end_matches('0');
+    match trimmed.strip_suffix('.') {
+        Some(stripped) => format!("{stripped}.0"),
+        None => trimmed.to_string(),
+    }
+}
+
+/// Query ERC-20 `balanceOf(holder)` for `token` (Issue #523 / T6d-2.1).
+///
+/// Reads the raw balance via `eth_call` to selector `0x70a08231`
+/// (handled by `evm_wallet_core::erc20::token_balance`) and the token's
+/// decimal scale via selector `0x313ce567` (`query_decimals`), unless
+/// the caller supplies `--decimals <N>` to skip the second RPC roundtrip
+/// (per issue AC #5: "if --decimals supplied, use it; otherwise query
+/// `decimals()` via a second `eth_call`").
+///
+/// Provider-build pattern mirrors `wallet_balance` (handlers/wallet.rs:78-94):
+/// custom `--rpc-url` (with `validate_rpc_scheme` guard) or the Amoy
+/// default `new_http_polygon_amoy()`. Network union narrowed here to
+/// `Network::Polygon(...)` — token registry is Polygon-bundled per
+/// `resolve_token_address`; calling this handler with an Ethereum
+/// network variant is rejected upstream by `parse_network` (`super::mod`).
+pub async fn erc20_balance(
+    rpc_url: Option<&str>,
+    // `network` is accepted for forward-compat per-network default
+    // provider selection (sister to `wallet_send_native_v2` lines
+    // 573-583). Today only Amoy is exercised end-to-end per Issue #523
+    // AC; the default below hardcodes Amoy.
+    _network: Network,
+    holder: Address,
+    token: Address,
+    decimals_override: Option<u8>,
+) -> Result<Erc20BalanceResult> {
+    let provider = match rpc_url {
+        Some(url_str) => {
+            let url = url::Url::parse(url_str)
+                .map_err(|e| Error::Rpc(format!("rpc url parse failed: {e}")))?;
+            validate_rpc_scheme(&url)?;
+            new_http(url).map_err(|e| Error::Rpc(format!("provider new_http: {e}")))?
+        }
+        None => new_http_polygon_amoy()
+            .map_err(|e| Error::Rpc(format!("provider new_http_polygon_amoy: {e}")))?,
+    };
+    let raw = evm_erc20::token_balance(&provider, token, holder)
+        .await
+        .map_err(|e| Error::Rpc(format!("erc20 token_balance (balanceOf): {e}")))?;
+    let decimals = match decimals_override {
+        Some(d) => d,
+        None => evm_erc20::query_decimals(&provider, token)
+            .await
+            .map_err(|e| Error::Rpc(format!("erc20 query_decimals: {e}")))?,
+    };
+    Ok(Erc20BalanceResult {
+        holder,
+        token,
+        decimals,
+        raw,
+    })
 }
 
 /// Print bundled token registry for `network` (Story 23).
@@ -414,5 +512,75 @@ mod tests {
     fn erc20_list_mainnet_json_emits_rows() {
         erc20_list(Network::Polygon(PolygonChain::Mainnet), true)
             .expect("mainnet list JSON should not error");
+    }
+
+    // ===== Issue #523 — erc20_balance formatter (pure, no RPC) =====
+
+    /// `formatted()` of raw `0` returns `"0.0"` — preserves the
+    /// "one-decimal" rule so the output is recognisably a token balance
+    /// even at the zero edge case (don't collapse to bare `"0"` which
+    /// could be misread as an integer field next to a value column).
+    #[test]
+    fn formatted_zero_raw_returns_zero_point_zero() {
+        let r = Erc20BalanceResult {
+            holder: Address::ZERO,
+            token: Address::ZERO,
+            decimals: 6,
+            raw: U256::ZERO,
+        };
+        assert_eq!(r.formatted(), "0.0");
+    }
+
+    /// USDC 6-decimal canonical vector: raw `10_000_000` → `"10.0"`.
+    /// (Trailing fractional zeros trimmed; at least one decimal digit
+    /// preserved so the value is recognisably a token balance.)
+    #[test]
+    fn formatted_usdc_10_canonical_vector() {
+        let r = Erc20BalanceResult {
+            holder: Address::ZERO,
+            token: Address::ZERO,
+            decimals: 6,
+            raw: U256::from(10_000_000u64),
+        };
+        assert_eq!(r.formatted(), "10.0");
+    }
+
+    /// USDC fractional: raw `12_500_000` → `"12.5"`.
+    #[test]
+    fn formatted_usdc_fractional_trims_trailing_zeros() {
+        let r = Erc20BalanceResult {
+            holder: Address::ZERO,
+            token: Address::ZERO,
+            decimals: 6,
+            raw: U256::from(12_500_000u64),
+        };
+        assert_eq!(r.formatted(), "12.5");
+    }
+
+    /// `decimals = 0` returns the raw integer (no fractional part).
+    /// Sentinel for tokens that don't expose `decimals()` (would error
+    /// at auto-detect time; handler callers either suppress via explicit
+    /// `--decimals 0` or use the lib's erc20 surface differently).
+    #[test]
+    fn formatted_zero_decimals_returns_raw_integer() {
+        let r = Erc20BalanceResult {
+            holder: Address::ZERO,
+            token: Address::ZERO,
+            decimals: 0,
+            raw: U256::from(1_234u64),
+        };
+        assert_eq!(r.formatted(), "1234");
+    }
+
+    /// `decimals = 18` (canonical ETH-style) vector: raw `1_000_000_000_000_000_000` → `"1.0"`.
+    #[test]
+    fn formatted_18_decimals_one_eth() {
+        let r = Erc20BalanceResult {
+            holder: Address::ZERO,
+            token: Address::ZERO,
+            decimals: 18,
+            raw: U256::from(1_000_000_000_000_000_000u128),
+        };
+        assert_eq!(r.formatted(), "1.0");
     }
 }

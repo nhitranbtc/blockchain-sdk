@@ -4139,6 +4139,7 @@ dependencies = [
  "bitcoin-wallet-core",
  "clap",
  "directories",
+ "dotenvy",
  "evm-wallet-core",
  "polygon-wallet-core",
  "reqwest 0.12.28",

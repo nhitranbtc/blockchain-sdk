@@ -201,6 +201,20 @@ pub enum WalletAction {
         /// zeroized on drop; path is not zeroized. Per #469.
         #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key")]
         private_key_file: Option<PathBuf>,
+        /// Mode-0600 file path containing the 12/24-word BIP-39 mnemonic
+        /// (whitespace-separated words; surrounding whitespace tolerated).
+        /// Sister flag to `--private-key-file` (issue #469 / PR #470) for
+        /// the mnemonic-import path; closes the L12 H-1 argv-exposure
+        /// hole that `--mnemonic` still has. PR #456 (commit `3b48a6b`)
+        /// wrapped the `--mnemonic` argv in `SecretMnemonic` for memory
+        /// zeroization, but did NOT add a file-input flag. Issue #528.
+        #[arg(
+            long,
+            conflicts_with = "mnemonic",
+            conflicts_with = "private_key",
+            conflicts_with = "private_key_file"
+        )]
+        mnemonic_file: Option<PathBuf>,
         #[arg(long, default_value_t = 0)]
         account_index: u32,
         #[arg(long)]
@@ -302,6 +316,18 @@ pub struct SendArgs {
     pub priority_fee_gwei: Option<f64>,
     #[arg(long)]
     pub dry_run: bool,
+    /// P8-T2 (G3, issue #514): sign + return 0x-prefixed raw RLP
+    /// without broadcasting. Cold-sign pipeline for future hardware-
+    /// wallet migration (v0.2 deferred). The handler short-circuits
+    /// before `eth_sendRawTransaction`, so `--wait` has no observable
+    /// effect on this path (sign-only returns before step 10's wait
+    /// check). When `--sign-only` is combined with `--dry-run`,
+    /// `sign_only` wins; main.rs emits a one-line stderr note
+    /// acknowledging the priority. `sign_only` returns the actual
+    /// RLP bytes whereas `dry_run` returns a synthetic
+    /// `keccak256(rlp)` sentinel for "what would the hash be".
+    #[arg(long)]
+    pub sign_only: bool,
     #[arg(long)]
     pub wait: bool,
     #[arg(long)]

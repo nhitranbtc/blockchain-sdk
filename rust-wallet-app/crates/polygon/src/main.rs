@@ -128,7 +128,11 @@ fn format_balance(balance: alloy_primitives::U256, unit: &str) -> String {
                 alloy_primitives::U256::from(10u128).pow(alloy_primitives::U256::from(18u8));
             let whole = balance / one_e18;
             let frac = balance % one_e18;
-            let mut s = format!("{}.{:018}", whole, frac.to_string());
+            // Pass `frac` as U256 (not `frac.to_string()`) — the `{:018}`
+            // zero-pad flag is numeric-only and silently no-ops on String.
+            // Issue #522: amoy faucet drips <1 POL rendered as 0.37 POL
+            // instead of 0.00037 POL because the leading zeros were dropped.
+            let mut s = format!("{}.{:018}", whole, frac);
             // Trim trailing zeros (but keep at least one decimal digit).
             while s.ends_with('0') && s.contains('.') && !s.ends_with(".0") {
                 s.pop();
@@ -310,6 +314,10 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
     use polygon_wallet_core::Error;
     use zeroize::Zeroizing;
 
+    // Kept for future stub call-sites during T6c/T6d; prefix suppresses
+    // `unused_variable` once the last caller (Command::Faucet, wired in
+    // Issue #512) migrates to its real handler.
+    #[allow(unused_variables)]
     let stub = |cmd: &'static str| -> polygon_wallet_core::Result<()> {
         Err(Error::Rpc(format!(
             "{cmd}: deferred past T6b — landing in T6c/T6d"
@@ -359,16 +367,20 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 mnemonic,
                 private_key,
                 private_key_file,
-                account_index: _,
+                mnemonic_file,
+                account_index,
                 legacy_token_symbol: _,
                 rpc_url: _,
             } => {
-                // #469 dispatch — three import sources (mutually
-                // exclusive via clap `conflicts_with`, enforced at parse
-                // time):
+                // #528 dispatch — four import sources (mutually exclusive
+                // via clap `conflicts_with`, enforced at parse time):
                 //   1. `--mnemonic` (existing path)        → wallet_import
-                //   2. `--private-key <hex>` (newly wired) → wallet_import_private_key_for_network
-                //   3. `--private-key-file <path>` (new)   → wallet_import_private_key_for_network
+                //   2. `--mnemonic-file` (new in #528)     → wallet_import
+                //      via handlers::wallet::read_mnemonic_file (mode-0600
+                //      + SecretMnemonic wrap; closes the L12 H-1
+                //      argv-exposure hole for mnemonic import).
+                //   3. `--private-key <hex>` (wired #469)  → wallet_import_private_key_for_network
+                //   4. `--private-key-file <path>` (#469)  → wallet_import_private_key_for_network
                 //      via handlers::wallet::read_pk_file (mode-0600
                 //      + Zeroizing<Vec<u8>> wrap; mode check skipped
                 //      on non-Unix).
@@ -377,24 +389,49 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // is an exhaustive single-Some guard (with the
                 // none-of-the-above error as the negative case).
                 // Sister invariant to L12 H-1 finding closed by PR
-                // #456 for `--mnemonic`.
+                // #456 for `--mnemonic`; #528 closes the argv-exposure
+                // path that PR #456 left open (memory zeroization only).
                 let net = handlers::parse_network(&network)?;
                 let pw_string = resolve_password(password.as_deref())?;
                 let password = Zeroizing::new(pw_string.into_bytes());
                 let data_dir: std::path::PathBuf =
                     cli.data_dir.clone().unwrap_or_else(default_data_dir);
-                let created = match (mnemonic, private_key, private_key_file) {
-                    (Some(ref phrase), None, None) => {
-                        // Mnemonic path (PR #456). Restored per #502 —
+                let created = match (mnemonic, mnemonic_file, private_key, private_key_file) {
+                    (Some(ref phrase), None, None, None) => {
+                        // Mnemonic argv path (PR #456). Restored per #502 —
                         // the prior (Some(_),_,_) catch-all below made
                         // this tuple unreachable and silently killed
                         // mnemonic-based wallet import on the parent
                         // branch after the Phase 2 squash (#497 eb360c1).
-                        // Sister to the (None,Some(hex),None) arm;
+                        // Sister to the (None,Some(path),None,None) arm;
                         // SecretMnemonic wraps the phrase for zero-on-drop.
-                        handlers::wallet::wallet_import(&data_dir, &name, &password, net, phrase)?
+                        handlers::wallet::wallet_import(
+                            &data_dir,
+                            &name,
+                            &password,
+                            account_index,
+                            net,
+                            phrase,
+                        )?
                     }
-                    (None, Some(hex), None) => {
+                    (None, Some(ref path), None, None) => {
+                        // Mnemonic file path (#528). Sister to the
+                        // (None,None,None,Some(path)) PK-file arm.
+                        // read_mnemonic_file validates mode-0600 + non-empty,
+                        // trims whitespace, wraps in SecretMnemonic for
+                        // zero-on-drop — same zeroization invariant as
+                        // the argv form above.
+                        let phrase = handlers::wallet::read_mnemonic_file(path)?;
+                        handlers::wallet::wallet_import(
+                            &data_dir,
+                            &name,
+                            &password,
+                            account_index,
+                            net,
+                            &phrase,
+                        )?
+                    }
+                    (None, None, Some(hex), None) => {
                         // Wired path (was dead pre-#469 per the T6c4
                         // follow-up comment). Hex-decode + Zeroizing
                         // wrap matches the file variant's invariants.
@@ -407,7 +444,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                             &data_dir, &name, &password, net, &pk_bytes,
                         )?
                     }
-                    (None, None, Some(path)) => {
+                    (None, None, None, Some(path)) => {
                         handlers::wallet::wallet_import_private_key_for_network(
                             &data_dir,
                             &name,
@@ -416,26 +453,25 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                             &read_pk_file(&path)?,
                         )?
                     }
-                    (None, None, None) => {
+                    (None, None, None, None) => {
                         return Err(Error::InvalidInput(
-                            "one of --mnemonic, --private-key, --private-key-file required".into(),
+                            "one of --mnemonic, --mnemonic-file, --private-key, --private-key-file required".into(),
                         ));
                     }
                     // clap `conflicts_with` already rejects every other
-                    // (mnemonic × private_key × private_key_file)
-                    // combination at parse time; the single `_` catch-
-                    // all is the defense-in-depth net for programmatic
-                    // callers that bypass clap.
+                    // (mnemonic × mnemonic_file × private_key ×
+                    // private_key_file) combination at parse time; the
+                    // single `_` catch-all is the defense-in-depth net
+                    // for programmatic callers that bypass clap.
                     _ => {
                         return Err(Error::InvalidInput(
-                            "exactly one of --mnemonic / --private-key / --private-key-file allowed".into(),
+                            "exactly one of --mnemonic / --mnemonic-file / --private-key / --private-key-file allowed".into(),
                         ));
                     }
                 };
                 println!(
-                    "wallet imported: name={name} id={} address=0x{}",
-                    created.wallet_id,
-                    alloy_primitives::hex::encode(created.address.as_slice()),
+                    "wallet imported: name={name} id={} address={}",
+                    created.wallet_id, created.address,
                 );
                 Ok(())
             }
@@ -503,7 +539,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
             WalletAction::Show {
                 network,
                 id,
-                name: _,
+                name,
                 addresses: _,
                 export: _,
                 json,
@@ -511,13 +547,34 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 // T6c3 follow-up: dispatch to the real `wallet_show`
                 // handler (reads .meta.json plaintext — encrypted blob
                 // inspection deferred to T6d when rpassword + AES-GCM
-                // decryption wires up). --id required (--name look-up
-                // deferred).
+                // decryption wires up). Accepts EITHER --id OR --name
+                // (--name resolves via lib `lookup_by_name`; per
+                // P9-T-import-pk address verification cross-check
+                // test).
                 let net = handlers::parse_network(&network)?;
                 let data_dir = cli.data_dir.clone().unwrap_or_else(default_data_dir);
-                let wallet_id =
-                    id.ok_or_else(|| Error::InvalidInput("--id required for wallet show".into()))?;
-                let info = handlers::wallet::wallet_show(&data_dir, net, wallet_id.as_str())?;
+                let wallet_id = match (id, name) {
+                    (Some(id), None) => id,
+                    (None, Some(name)) => {
+                        let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.clone())
+                            .map_err(crate::handlers::map_wallet_err)?;
+                        let uuid = mgr
+                            .lookup_by_name(&name, net)
+                            .map_err(crate::handlers::map_wallet_err)?;
+                        uuid.to_string()
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(Error::InvalidInput(
+                            "--id and --name are mutually exclusive for wallet show".into(),
+                        ));
+                    }
+                    (None, None) => {
+                        return Err(Error::InvalidInput(
+                            "one of --id or --name required for wallet show".into(),
+                        ));
+                    }
+                };
+                let info = handlers::wallet::wallet_show(&data_dir, net, &wallet_id)?;
                 if json {
                     println!(
                         "{}",
@@ -589,6 +646,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                     max_fee_gwei,
                     priority_fee_gwei,
                     dry_run,
+                    sign_only,
                     wait,
                     rpc_url: action_rpc_url,
                 } = args;
@@ -613,7 +671,7 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 let data_dir: std::path::PathBuf =
                     cli.data_dir.clone().unwrap_or_else(default_data_dir);
                 let rpc_url = action_rpc_url.as_deref().or(cli.rpc_url.as_deref());
-                let tx_hash = handlers::wallet::wallet_send_native_v2(
+                let outcome = handlers::wallet::wallet_send_native_v2(
                     &data_dir,
                     rpc_url,
                     network,
@@ -629,13 +687,25 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                     priority_fee_gwei,
                     drain,
                     dry_run,
+                    sign_only,
                     wait,
                 )
                 .await?;
-                println!(
-                    "tx_hash: 0x{}",
-                    alloy_primitives::hex::encode(tx_hash.as_slice())
-                );
+                // Acknowledge the operator when both --dry-run and
+                // --sign-only are set (per L12 review MED #5 — silent
+                // priority resolution is operator-hostile). Per the
+                // handler, sign_only wins; we surface that here.
+                if dry_run && sign_only {
+                    eprintln!(
+                        "note: --sign-only takes priority over --dry-run; \
+                         signed envelope printed below"
+                    );
+                }
+                // Display impl on SendOutcome co-locates the stdout
+                // contract with the type (per L12 review MED #3) — a
+                // 4th variant added later surfaces as a `match`
+                // exhaustiveness compiler error inside `impl Display`.
+                println!("{outcome}");
                 Ok(())
             }
             WalletAction::SendSpeedup(args) => {
@@ -756,14 +826,57 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 );
                 Ok(())
             }
-            Erc20Action::Balance { .. } => {
-                // T6d-2 follow-up: Balance handler requires a
-                // standalone refactor (cli.rs Balance.address typed
-                // String vs value_parser=parse_address returning
-                // Address; needs deeper cli.rs surgery than one PR).
-                Err(Error::Rpc(
-                    "erc20 balance: deferred to T6d-2.1 follow-up (cli.rs Balance.address type conflict)".into(),
-                ))
+            Erc20Action::Balance {
+                address,
+                token,
+                token_address,
+                network,
+                all: _,
+                decimals,
+                json,
+                rpc_url: action_rpc_url,
+            } => {
+                // T6d-2.1 (Issue #523): dispatch to the real
+                // `handlers::erc20::erc20_balance` handler.
+                // `token_address: Option<Address>` takes precedence over
+                // the symbol form when supplied (mirrors `Send` arm at
+                // main.rs:724-727). Per-action `--rpc-url` overrides
+                // the global `--rpc-url`. `--all` deferred (issue body
+                // lists it as deferrable); `--decimals <N>` skips the
+                // secondary `decimals()` eth_call when supplied.
+                let net = handlers::parse_network(&network)?;
+                let token_addr = match token_address {
+                    Some(a) => handlers::erc20::resolve_token_address(&a.to_string(), net)?,
+                    None => handlers::erc20::resolve_token_address(&token, net)?,
+                };
+                let holder_addr = address;
+                let rpc_url = action_rpc_url.as_deref().or(cli.rpc_url.as_deref());
+                let result =
+                    handlers::erc20::erc20_balance(rpc_url, net, holder_addr, token_addr, decimals)
+                        .await?;
+                if json {
+                    let payload = serde_json::json!({
+                        "holder": format!("{:#x}", result.holder),
+                        "token": format!("{:#x}", result.token),
+                        "decimals": result.decimals,
+                        "raw": result.raw.to_string(),
+                        "formatted": result.formatted(),
+                    });
+                    println!(
+                        "{}",
+                        serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into())
+                    );
+                } else {
+                    println!(
+                        "{} (raw: {}, decimals: {}, holder: {:#x}, token: {:#x})",
+                        result.formatted(),
+                        result.raw,
+                        result.decimals,
+                        result.holder,
+                        result.token,
+                    );
+                }
+                Ok(())
             }
             Erc20Action::List { network, json } => {
                 let network = handlers::parse_network(&network)?;
@@ -869,7 +982,12 @@ async fn run(cli: cli::Cli) -> polygon_wallet_core::Result<()> {
                 Ok(())
             }
         },
-        Command::Faucet(_) => stub("faucet"),
+        Command::Faucet(args) => {
+            // Issue #512 / P8-T0 (G11): wire `polygon faucet --network amoy`
+            // to the real handler. PK-free URL print path — no RPC, no
+            // signing. --auto stays unimplemented (reserved for T7 per L29).
+            handlers::faucet::faucet_print_url(&args)
+        }
         Command::SignMessage(args) => {
             // T6d-3 follow-up (Issue #459): wire dispatch via
             // `dispatch_sign_message`. Sister pattern at
@@ -1012,6 +1130,83 @@ mod password_resolution_tests {
         assert!(
             std::env::var("POLYGON_PASSWORD").is_err(),
             "POLYGON_PASSWORD must be removed from process env after read"
+        );
+    }
+}
+
+#[cfg(test)]
+mod format_balance_tests {
+    //! Issue #522 — `format_balance("pol", wei)` returned 1000× too large.
+    //!
+    //! Root cause: the `{:018}` zero-pad flag is numeric-only; passing
+    //! `frac.to_string()` (a String) silently dropped the leading zeros,
+    //! so 369,999,998,677,000 wei rendered as `0.369999998677000 POL`
+    //! instead of `0.000369999998677 POL`. Sister formatter in
+    //! `handlers/erc20.rs:144` uses `{:0>w$}` (alignment), which DOES
+    //! pad Strings — main.rs formatter was the bug class.
+    //!
+    //! AC vectors from #522:
+    //! - raw 0x15083567cf008 = 369,999,998,677,000 wei → "0.000369999998677 POL"
+    //! - 1 POL (10^18 wei) → "1.0 POL"
+    //! - 0 wei → "0.0 POL"
+    //! - wei unit → raw U256 + " wei"
+    //! - unknown unit → falls back to wei
+
+    use super::format_balance;
+    use alloy_primitives::U256;
+
+    /// #522 primary vector: small-balance display matches oracle.
+    /// Catches the regression where `{:018}` was applied to a String
+    /// instead of a numeric type, stripping leading zeros and shifting
+    /// the decimal three places.
+    #[test]
+    fn format_balance_pol_amoy_faucet_drip_matches_rpc_oracle() {
+        let raw_wei = U256::from(369_999_998_677_000u64);
+        let got = format_balance(raw_wei, "pol");
+        assert_eq!(
+            got, "0.000369999998677 POL",
+            "369,999,998,677,000 wei must render as 0.000369999998677 POL (1000× regression catch); got {got}"
+        );
+    }
+
+    /// Whole-POL balance: 10^18 wei must render as "1.0 POL", NOT
+    /// "1.000000000000000000 POL" (the untrimmed raw).
+    #[test]
+    fn format_balance_pol_one_wei_trims_to_one_point_zero() {
+        let one_pol = U256::from(1_000_000_000_000_000_000u128);
+        let got = format_balance(one_pol, "pol");
+        assert_eq!(got, "1.0 POL", "1 POL must trim to 1.0; got {got}");
+    }
+
+    /// Zero balance: 0 wei with `pol` unit must render "0.0 POL"
+    /// (preserves the "always one decimal" rule).
+    #[test]
+    fn format_balance_pol_zero_wei_renders_zero_point_zero() {
+        let got = format_balance(U256::ZERO, "pol");
+        assert_eq!(got, "0.0 POL", "0 wei pol must be 0.0; got {got}");
+    }
+
+    /// `wei` unit returns the raw U256 + " wei" suffix, no division.
+    #[test]
+    fn format_balance_wei_unit_returns_raw_with_suffix() {
+        let raw = U256::from(369_999_998_677_000u64);
+        let got = format_balance(raw, "wei");
+        assert_eq!(
+            got, "369999998677000 wei",
+            "wei unit must echo raw + suffix; got {got}"
+        );
+    }
+
+    /// Unknown unit falls back to wei (per the fn-level doc at
+    /// `format_balance` — defensive default; catches accidental contract
+    /// changes that drop the fallback).
+    #[test]
+    fn format_balance_unknown_unit_falls_back_to_wei() {
+        let raw = U256::from(42u64);
+        let got = format_balance(raw, "gwei");
+        assert_eq!(
+            got, "42 wei",
+            "unknown unit must fall back to wei; got {got}"
         );
     }
 }
