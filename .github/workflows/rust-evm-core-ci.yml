@@ -306,10 +306,10 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo test -p polygon --bin polygon
 
-  polygon-integration-tests:
-    name: Polygon integration tests (local Anvil + Amoy testnet)
+  polygon-amoy-tests:
+    name: Polygon amoy + mainnet integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -320,10 +320,6 @@ jobs:
           workspaces: rust-wallet-app -> target
       - name: Install protoc (>=3.12)
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Install Foundry (anvil)
-        # `local_testnet_smoke` spawns `anvil` in-process via
-        # `alloy-node-bindings` (sister to `polygon_wallet_scenario`).
-        uses: foundry-rs/foundry-toolchain@v1
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace

@@ -2677,9 +2677,11 @@ async fn local_testnet_wallet_send_dry_run_returns_synthetic_hash() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let tx_hash_line = stdout
         .lines()
-        .find(|l| l.starts_with("tx_hash: 0x"))
-        .expect("--dry-run stdout should still contain 'tx_hash: 0x...' line");
-    let tx_hash = tx_hash_line.trim_start_matches("tx_hash: 0x").trim();
+        .find(|l| l.starts_with("dry_run_tx_hash: 0x"))
+        .expect("--dry-run stdout should contain 'dry_run_tx_hash: 0x...' line");
+    let tx_hash = tx_hash_line
+        .trim_start_matches("dry_run_tx_hash: 0x")
+        .trim();
     assert_eq!(
         tx_hash.len(),
         64,
