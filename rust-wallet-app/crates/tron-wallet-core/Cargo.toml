@@ -20,6 +20,22 @@ anychain-core = { workspace = true }
 anychain-tron = { workspace = true }
 anychain-kms = { workspace = true }
 
+# Error surface. Our public `Error` carries owned strings rather than anychain
+# error types so an upstream `=X.Y.Z` bump cannot break our public API.
+thiserror = { workspace = true }
+
+# Secret hygiene. `anychain_kms::secp256k1_sign` takes `&[u8]` and does NOT
+# zeroize its `sk` argument (plan Risk Register #3), so every raw secret we
+# hold lives inside `Zeroizing` and is dropped right after use.
+zeroize = { workspace = true }
+
+# Dual-SHA256 txid workaround: `anychain_tron` computes a single SHA-256
+# (plan Risk Register #2), so `tx::sign::txid` recomputes it caller-side.
+sha2 = { workspace = true }
+
+# Hex rendering for address round-trips and canonical-vector assertions.
+hex = { workspace = true }
+
 # Docker-backed local-node tests (plan Task 0.5). Declared here rather than in
 # [dev-dependencies] because Cargo rejects optional dev-dependencies:
 #   "dev-dependencies are not allowed to be optional: `testcontainers`"
