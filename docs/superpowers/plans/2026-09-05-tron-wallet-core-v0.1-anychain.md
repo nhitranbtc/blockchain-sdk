@@ -582,40 +582,47 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Files:** `rust-wallet-app/crates/tron-wallet-core/src/keys/mod.rs`, `src/keys/mnemonic.rs`
 
-- [ ] `keys::Mnemonic::new(words: u8, language: Language) -> Result<Self>` wraps `anychain_kms::Mnemonic::new(MnemonicType::Words12, Language::English)`.
-- [ ] `keys::Mnemonic::from_phrase(phrase: &str, language: Language) -> Result<Self>` wraps `anychain_kms::Mnemonic::from_phrase`.
-- [ ] `keys::Mnemonic::to_seed(&self, passphrase: &str) -> Zeroizing<[u8; 64]>` wraps `anychain_kms::seed_from_mnemonic` + wraps in `Zeroizing<[u8; 64]>`.
-- [ ] Test: `Mnemonic::from_phrase("abandon ".repeat(11) + "about", English).is_ok()`.
+- [x] `keys::Mnemonic::generate(word_count: MnemonicType, language: Language) -> Self` wraps `anychain_kms::bip39::Mnemonic::new`. **Deviation:** the plan sketched `new(words: u8, ...) -> Result<Self>`. `MnemonicType` is an enum, so there is no invalid word count to reject — returning `Result` would be a failure case that never fires. Infallible, and named `generate` so it does not read as a constructor over an existing phrase.
+- [x] `keys::Mnemonic::from_phrase(phrase: &str, language: Language) -> Result<Self>` wraps `anychain_kms::bip39::Mnemonic::from_phrase`.
+- [x] `keys::Mnemonic::to_seed(&self, passphrase: &str) -> Zeroizing<[u8; 64]>` wraps `bip39::Seed::new` + copies into `Zeroizing<[u8; 64]>`. **Correction to the module path:** the plan cited `anychain_kms::seed_from_mnemonic`, which does not exist; the real API is `bip39::Seed::new(&mnemonic, password)`.
+- [x] Test: `Mnemonic::from_phrase("abandon ".repeat(11) + "about", English).is_ok()`, plus checksum rejection, out-of-wordlist rejection, and the BIP-39 reference seed vector for passphrase `"TREZOR"`.
+- [x] **Finding that narrows Risk Register #3:** `anychain_kms::bip39::Mnemonic` already stores `phrase: Zeroizing<String>` and `entropy: Zeroizing<Vec<u8>>`, and `bip39::Seed` has an explicit zeroizing `Drop`. The wrapper does not need to re-add mnemonic hygiene. The real gap is narrower than the plan assumed: `ExtendedPrivateKey` holds a `libsecp256k1::SecretKey` with no zeroizing `Drop`, and `secp256k1_sign` takes a `&[u8]` it never clears.
+- [x] `Debug` is implemented by hand to redact the phrase.
 
 #### Task 1.2 — Wrap `anychain_kms::ExtendedPrivateKey`
 
 **Files:** `src/keys/derivation.rs`
 
-- [ ] `keys::derive_keypair(mnemonic: &Mnemonic, path: &DerivationPath) -> Result<KeyPair>` chains `seed_from_mnemonic → ExtendedPrivateKey::from_seed → derive_child`.
-- [ ] `keys::KeyPair { sk: Zeroizing<[u8; 32]>, pk: PublicKey }`.
-- [ ] Wrap `sk_bytes` in `Zeroizing<[u8; 32]>` before any `secp256k1_sign` call (closes anychain GAP).
-- [ ] Test: `derive_keypair(m, "m/44'/195'/0'/0/0".parse().unwrap()).is_ok()`.
+- [x] `keys::derive_keypair(mnemonic: &Mnemonic, passphrase: &str, path: &DerivationPath) -> Result<KeyPair>` chains `to_seed → XprvSecp256k1::new_from_path → private_key`. **Deviation:** `passphrase` is not in the plan's signature. It is part of the BIP-39 seed, so leaving it out would force a second derivation entry point once passphrase wallets are supported — two key-derivation paths through one crate is how key-handling bugs start. **Correction to the API name:** `ExtendedPrivateKey::from_seed` does not exist; the real constructors are `XprvSecp256k1::new` / `new_from_path`.
+- [x] `keys::KeyPair { secret: Zeroizing<[u8; 32]>, public: TronPublicKey }` — fields private, read through `secret_bytes()` and `public_key()`.
+- [x] Wrap `sk_bytes` in `Zeroizing<[u8; 32]>` before any `secp256k1_sign` call (closes anychain GAP).
+- [x] **Zeroize hazard found via clippy:** `needless_borrows_for_generic_args` fires on `new_from_path(&*seed, …)` and suggests `*seed`. Taking that suggestion would deref the `Zeroizing<[u8; 64]>` to a `Copy` array and pass it **by value**, leaving an unwiped copy of the seed behind. Resolved with `seed.as_slice()`, which satisfies the lint without duplicating secret material. Same fix in `xpub.rs`. Commented in both files so the reasoning survives.
+- [x] Test: `derive_keypair(m, "", "m/44'/195'/0'/0/0".parse().unwrap()).is_ok()`, plus determinism, sibling-index divergence, passphrase sensitivity, and a `Debug`-redaction check.
 
 #### Task 1.3 — Wrap `anychain_tron::TronAddress`
 
 **Files:** `src/address/mod.rs`
 
-- [ ] `address::Address::from_public_key(pk: &PublicKey) -> Self` wraps `anychain_tron::TronAddress::from_public_key`.
-- [ ] `address::Address::to_base58(&self) -> String` wraps `anychain_tron::TronAddress::to_base58`.
-- [ ] `address::Address::to_hex(&self) -> String` wraps `anychain_tron::TronAddress::to_hex`.
-- [ ] `address::Address::from_str(s: &str) -> Result<Self>` wraps `anychain_tron::TronAddress::from_str`.
-- [ ] `address::Address::is_valid(&self) -> bool`.
-- [ ] Test: round-trip `to_base58 → from_str` matches.
+- [x] `address::Address::from_public_key(pk: &TronPublicKey) -> Result<Self>` wraps `TronAddress::from_public_key`. **Deviation:** returns `Result`, not `Self` — the upstream call is fallible and takes a `&TronFormat` second argument, which this wrapper supplies as `TronFormat::Standard`.
+- [x] `address::Address::to_base58(&self) -> String`.
+- [x] `address::Address::to_hex(&self) -> String`.
+- [x] `address::Address::from_str(s: &str) -> Result<Self>` via `FromStr`; accepts base58check, bare hex, and `0x`-prefixed hex.
+- [x] `address::Address::is_valid(candidate: &str) -> bool`. **Deviation:** associated function, not the planned `&self` method. On a constructed `Address` the answer is always `true`, so a method would be a check that can never fail; callers need to screen untrusted input before constructing one.
+- [x] Test: round-trip `to_base58 → from_str`, plus rejection of truncated, over-length, non-alphabet, mutated-checksum, and wrong-version-byte input.
 
 #### Task 1.4 — SLIP-44 canonical vector test (Spike V10)
 
 **Files:** `tests/v10_slip44.rs`
 
-- [ ] `bip39::Mnemonic::parse_in(English, "abandon ".repeat(11) + "about")` → seed → `m/44'/195'/0'/0/0` → T-address must match `bip_utils::slip44::Coin::Tron` reference (verify against `kobe-tron` KAT vectors per deep-dive).
-- [ ] Address must start with `T` using prefix `0x41`.
-- [ ] Test fails if anychain-kms derivation drifts.
+- [x] **Correction to the plan's premise:** neither this plan nor the deep-dive records a published TRON address for the canonical mnemonic, so "match a SLIP-44 reference" had no reference to match. Pinning a value this crate produced would have made the test self-confirming. Two outside anchors are used instead.
+- [x] **Anchor 1 (independent implementation):** `spikes/tron-v1` derives the same mnemonic and path with a separate stack — `bip39` + `bip32` + `k256` + hand-rolled base58check, sharing no code with anychain — and produces `TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH`. The test asserts anychain lands on the same address. This is the deep-dive's "hand-rolled cross-check".
+- [x] **Anchor 2 (repo-wide vector):** the same mnemonic at `m/44'/60'/0'/0/0` must hash to `0x9858EfFD232B4033E47d90003D41EC34EcaEda94`, which `evm-wallet-core`, `polygon-wallet-core`, `spikes/alloy-v1`, and `spikes/polygon-v1` all already assert. TRON and Ethereum hash accounts identically, so this exercises the whole BIP-39 → BIP-32 → pubkey → keccak chain.
+- [x] Address must start with `T` using prefix `0x41`; 34 characters; base58 round-trip.
+- [x] Coin 195 and coin 60 must derive distinct accounts (guards a derivation that ignores the coin index).
+- [x] Passphrase must change the derived account.
+- [x] Test fails if anychain-kms derivation drifts.
 
-**Verification:** `cargo test -p tron-wallet-core --test v10_slip44` passes.
+**Verification:** `cargo test -p tron-wallet-core --test v10_slip44` passes — 6 tests.
 
 **Test Scenario mapping:** supports deep-dive §"Test Scenario" infrastructure (foundational — SLIP-44 vector required by every row 1-8 wallet derivation). Used by Phase 7 V10 PASS gate.
 
@@ -623,12 +630,12 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Files:** `src/tx/sign.rs`, `tests/v8_sign_only.rs`
 
-- [ ] `tx::sign::sign_hash(sk_z: &Zeroizing<[u8; 32]>, msg32: &[u8; 32]) -> (Signature, u8)` wraps `anychain_kms::secp256k1_sign(&sk_z, msg32)`.
-- [ ] **ZEROIZE wrap `sk_z` param** (closes anychain GAP — `secp256k1_sign` does NOT Zeroize its sk param).
-- [ ] Reject any signature with `v ∈ {27, 28}` (compile-fail test per Q8).
-- [ ] **Dual-SHA256 txid workaround:** `tx::sign::txid(raw_bytes: &[u8]) -> [u8; 32]` computes `Sha256::digest(&Sha256::digest(raw_bytes))`.
-- [ ] **Regression test:** assert `txid == SHA256(SHA256(raw_bytes))` so any future anychain "fix" gets caught.
-- [ ] Test: `sign_hash` returns `v ∈ {0, 1}` for any input.
+- [x] `tx::sign::sign_hash(secret: &Zeroizing<[u8; 32]>, msg32: &[u8; 32]) -> Result<Signed>` wraps `anychain_kms::secp256k1_sign`.
+- [x] **ZEROIZE wrap the secret param** (closes anychain GAP — `secp256k1_sign` does NOT Zeroize its sk param).
+- [x] Reject any recovery id outside `0..=1`. **Deviation:** the plan asked for a compile-fail test for `v ∈ {27, 28}`. `v` is a runtime `u8` returned by libsecp256k1, so the constraint is not expressible as a compile failure; it is enforced by a validating `RecoveryId` newtype whose only constructor rejects anything outside `0..=1`, and covered by a test that signs six different digests. Note libsecp256k1 can also return 2 or 3 on r-overflow, which TRON likewise rejects — the check is `v > 1`, not just `v != 27 && v != 28`.
+- [x] **Dual-SHA256 txid workaround:** `tx::sign::txid(raw_bytes: &[u8]) -> [u8; 32]` computes `Sha256::digest(&Sha256::digest(raw_bytes))`.
+- [x] **Regression test:** `txid(b"")` must equal `5df6e0e2…4c9456`, confirmed independently via `printf '' | sha256sum | cut -d' ' -f1 | xxd -r -p | sha256sum`. A future anychain "fix" to single-SHA256 breaks this.
+- [x] Test: `sign_hash` returns `v ∈ {0, 1}`, is deterministic (RFC 6979), diverges per message, and rejects an out-of-range secret.
 
 **Verification:** `cargo test -p tron-wallet-core --test v8_sign_only` passes.
 
@@ -638,16 +645,18 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Files:** `src/keys/xpub.rs`, `tests/address.rs`
 
-- [ ] `keys::xpub(mnemonic: &Mnemonic, path: &DerivationPath) -> String` returns `xprv.public_key().to_string()`.
-- [ ] Test: `xpub.to_string()` starts with `xpub` (SLIP-0132 format, same as Bitcoin).
+- [x] `keys::xpub(mnemonic: &Mnemonic, passphrase: &str, path: &DerivationPath) -> Result<String>` returns `xprv.public_key().to_string(Prefix::XPUB)`. **Deviation:** returns `Result` (derivation is fallible) and takes `passphrase`, matching `derive_keypair`.
+- [x] Test: export starts with `xpub` (SLIP-0132, same as Bitcoin), is deterministic, diverges per account and per passphrase, and never emits an `xprv`.
 
 **Test Scenario mapping:** supports **Local row 8 (wallet-to-wallet TRC-20)** + **Nile row 1 + 2** — `--to-wallet <name|id>` resolution requires xpub export path. Also supports **Nile row 3 (Mobile-specific)** — FFI smoke derives xpub for hardware-wallet companion.
 
 #### Phase 1 Verification
 
-- [ ] `cargo test -p tron-wallet-core --tests` passes (V10 + V8 + address + xpub).
-- [ ] `cargo clippy -p tron-wallet-core -- -D warnings` passes.
-- [ ] `cargo fmt --check` passes.
+- [x] `cargo test -p tron-wallet-core --tests` passes (V10 + V8 + address + lib units).
+- [x] `cargo clippy -p tron-wallet-core --all-targets -- -D warnings` passes.
+- [x] `cargo fmt --all -- --check` passes.
+
+**Naming note:** the plan's §File Structure lists these as `tests/derivation.rs` and `tests/sign_only.rs`, while Task 1.4/1.5 above name them `tests/v10_slip44.rs` and `tests/v8_sign_only.rs`. The task-level names win, since the stated verification commands (`--test v10_slip44`, `--test v8_sign_only`) cite them. §File Structure is stale on this point.
 
 **PAUSE. Verify L13 step 11 (claims gate). Proceed to Phase 2 only after sign-off.**
 
