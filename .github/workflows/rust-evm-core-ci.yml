@@ -333,7 +333,13 @@ jobs:
         # own parallel job (`polygon-local-testnet-tests`). Scope
         # `-p polygon` only — never `--workspace` (L55:
         # bitcoin-wallet-core FFI dominates).
+        # `mainnet_smoke` requires `RUN_POLYGON_MAINNET=1` (its hard
+        # guard at `tests/mainnet_smoke.rs:56` panics without it) —
+        # the other binaries read their guard from `tokens/amoy.json:
+        # test_harness.run_polygon_amoy` and pass via the loaded JSON.
         working-directory: rust-wallet-app
+        env:
+          RUN_POLYGON_MAINNET: "1"
         run: cargo test -p polygon --test amoy_smoke --test amoy_erc20_send --test amoy_erc20_balance --test amoy_sign_only --test amoy_error_paths --test amoy_p9_pk_import --test mainnet_smoke -- --include-ignored --test-threads=1
 
   polygon-local-testnet-tests:
