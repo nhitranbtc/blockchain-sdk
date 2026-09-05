@@ -1,0 +1,194 @@
+name: evm + polygon CI
+
+# CI for EVM/Polygon-specific gates that are NOT shared with umbrella `ci.yml`.
+#
+# Scope: push/PR targeting `main` only when EVM or Polygon crate code
+# changes. Shared gates (rust-fmt, rust-clippy, rust-test, rust-audit,
+# rust-deny, rust-geiger, rust-ffi-cdylib) live in umbrella `ci.yml` and
+# fire on every main push/PR — duplicating them here would double CI
+# minutes for zero coverage gain (regression of the 2026-09-05 split).
+#
+# Jobs unique to this file:
+#   * rust-error-grep           — evm Rpc(format!) redaction audit
+#                                  (Issue #382 + #428 expansion).
+#   * polygon-lib-tests         — Polygon bin unit tests (Tier 1).
+#   * polygon-amoy-tests        — Polygon amoy + mainnet e2e (Tier 2,
+#                                  L29 operator carve-out).
+#   * polygon-local-testnet-tests — Polygon Anvil local-fork e2e (Tier 1).
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the
+# umbrella ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain@stable`,
+# `Swatinem/rust-cache@v2`). SHA-pin follow-up commit lands after the
+# first successful CI run captures the resolved SHAs.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rust-wallet-app/crates/eth/**'
+      - 'rust-wallet-app/crates/eth-wallet-core/**'
+      - 'rust-wallet-app/crates/evm-wallet-core/**'
+      - 'rust-wallet-app/crates/polygon/**'
+      - 'rust-wallet-app/crates/polygon-wallet-core/**'
+      - '.github/workflows/evm-polygon-ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'rust-wallet-app/crates/eth/**'
+      - 'rust-wallet-app/crates/eth-wallet-core/**'
+      - 'rust-wallet-app/crates/evm-wallet-core/**'
+      - 'rust-wallet-app/crates/polygon/**'
+      - 'rust-wallet-app/crates/polygon-wallet-core/**'
+      - '.github/workflows/evm-polygon-ci.yml'
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# NOTE (Path B 2026-08-28, PR #430): `cancel-in-progress: true` removed.
+# Phase 1 PR (#430) hit cascade-cancel: 3 substantive commits in 17 min
+# killed the in-flight test jobs twice before any could finish. The 40m
+# `timeout-minutes` budget was never reached — auto-cancel from new pushes
+# was the real killer. Removed here so the test budget is the test budget.
+# Concurrency group kept for log dedup (still useful for grouping runs).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  # AC #5 audit-gate per Issue #382 (rooted in the centralised
+  # `Error::rpc(impl Display)` redaction in `eth-wallet-core`). Scope
+  # expansion in #428: this job now also scans `evm-wallet-core` since the
+  # Phase 0 refactor (commit `21540f0`) moved the `Network` enum + redaction
+  # shape into the new crate. Pattern matches `Rpc(\s*format!` (extended
+  # regex) — catches both `Error::Rpc(format!(...))` and the equally leaky
+  # `Self::Rpc(format!(...))` + tolerates whitespace after the open paren.
+  # Rust doc-comment lines (`///`) are filtered so the gate does not
+  # self-flag on its own pointer. Any non-zero exit fails the workflow on
+  # PR + push to `main` when EVM crate files change.
+  rust-error-grep:
+    name: Rust Error::Rpc(format!) audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - name: grep -rnE 'Rpc\(\s*format!' must return 0 code matches
+        run: |
+          if grep -rnE 'Rpc\(\s*format!' \
+              rust-wallet-app/crates/eth \
+              rust-wallet-app/crates/eth-wallet-core \
+              rust-wallet-app/crates/evm-wallet-core \
+              | grep -v '///'; then
+            echo "::error::Rpc(format!...) bypasses the centralised" \
+              "redaction in Error::rpc(impl Display) and may leak RPC URL" \
+              "secrets via Display. Use Error::rpc(e) instead."
+            exit 1
+          fi
+
+  # Polygon e2e — split into two parallel jobs (lib + integration) so
+  # `local_testnet_smoke` (~19 min alone) doesn't block the lib test
+  # sweep (~16 min). Wall-clock = max(lib, integration) ≈ 25 min —
+  # under any single 30/40-min timeout. Split replaced the prior
+  # sequential 50-min single job (which kept hitting the cap; latest
+  # run terminated at 11:16 with `local_testnet_smoke` still
+  # in-flight + 5+ integration binaries queued).
+  polygon-lib-tests:
+    name: Polygon lib tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Issue #403 deliverable #9.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Polygon bin unit tests
+        # `polygon` is a binary-only crate (no `lib.rs`) — `--lib` is
+        # invalid for this package. `--bin polygon` runs the unit tests
+        # inside `polygon/src/main.rs` + its submodule `#[cfg(test)]`
+        # blocks (~16 min on cached CI). Integration binaries land in
+        # the sister job below.
+        working-directory: rust-wallet-app
+        run: cargo test -p polygon --bin polygon
+
+  polygon-amoy-tests:
+    name: Polygon amoy + mainnet integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Polygon amoy + mainnet integration tests
+        # Tier 2 (L29 operator-driven carve-out — early-return → PASS when
+        # their `RUN_POLYGON_*` guards find the var unset, so leaving
+        # those vars unset keeps CI hermetic). `--include-ignored` runs
+        # every `#[ignore]`'d test in each binary. `--test-threads=1`
+        # preserves deterministic ordering where fixtures are shared.
+        # Excludes `local_testnet_smoke` (slower ~19 min) — it has its
+        # own parallel job (`polygon-local-testnet-tests`). Scope
+        # `-p polygon` only — never `--workspace` (L55:
+        # bitcoin-wallet-core FFI dominates).
+        # `mainnet_smoke` requires `RUN_POLYGON_MAINNET=1` (its hard
+        # guard at `tests/mainnet_smoke.rs:56` panics without it) —
+        # the other binaries read their guard from `tokens/amoy.json:
+        # test_harness.run_polygon_amoy` and pass via the loaded JSON.
+        working-directory: rust-wallet-app
+        env:
+          RUN_POLYGON_MAINNET: "1"
+        run: cargo test -p polygon --test amoy_smoke --test amoy_erc20_send --test amoy_erc20_balance --test amoy_sign_only --test amoy_error_paths --test amoy_p9_pk_import --test mainnet_smoke -- --include-ignored --test-threads=1
+
+  polygon-local-testnet-tests:
+    name: Polygon local-testnet integration tests (Tier 1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Install Foundry (anvil)
+        # `local_testnet_smoke` spawns `anvil` in-process via
+        # `alloy-node-bindings` (sister to `polygon_wallet_scenario`).
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: Polygon local_testnet_smoke (Tier 1, hermetic)
+        # Local-Anvil integration suite — Tier 1 (L29 hermetic, opt-in
+        # via `RUN_POLYGON_LOCAL=1`). Each test spawns an in-process
+        # Anvil fixture, so it takes ~19 min on cached CI for ~33 tests.
+        # `--test-threads=1` preserves deterministic ordering for the
+        # shared Anvil fixture. Isolated in its own job (vs. the amoy
+        # job) so its runtime doesn't gate the smaller amoy suite.
+        # Phase 1-7 of Issue #495 (`local_testnet_smoke.rs` gap-fill)
+        # land here. Scope `-p polygon` only.
+        working-directory: rust-wallet-app
+        env:
+          RUN_POLYGON_LOCAL: "1"
+        run: cargo test -p polygon --test local_testnet_smoke -- --include-ignored --test-threads=1
