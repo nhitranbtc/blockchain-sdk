@@ -309,7 +309,7 @@ jobs:
   polygon-amoy-tests:
     name: Polygon amoy + mainnet integration tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -345,7 +345,7 @@ jobs:
   polygon-local-testnet-tests:
     name: Polygon local-testnet integration tests (Tier 1)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4 # v4
         with:
