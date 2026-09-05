@@ -1,0 +1,224 @@
+name: rust-tron-core
+
+# CI for the `rust-tron-core` integration branch.
+#
+# Scope: any PR that targets `rust-tron-core` (NOT main). Each issue labeled
+# `rust-tron-core` / `rust-tron-cli` feeds work via a sub-task branch that
+# PRs into this branch. At v0.1 completion, a final cut PR merges
+# `rust-tron-core` -> main (per L25).
+#
+# Branch rule (plan Phase Set Up, Task S.2): task branches are cut from
+# `rust-tron-core`, never from `main`, and PR back into `rust-tron-core`,
+# never into `main`. `main` is deliberately absent from the triggers below —
+# the umbrella `ci.yml` covers main.
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the umbrella
+# ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain`,
+# `Swatinem/rust-cache@v2`). No SHA pins available yet; tag-based reference
+# acceptable per L37 rule 2 (verified-cached SHAs land in a follow-up commit
+# after the first successful CI run captures the resolved SHAs).
+#
+# MSRV: pinned to 1.98.1 to match `rust-toolchain.toml` (plan Task 0.1) —
+# the anychain-* crates require it. Not floating on `stable`.
+
+on:
+  push:
+    branches: [rust-tron-core]
+  pull_request:
+    branches: [rust-tron-core]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-fmt:
+    name: Rust fmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+
+  rust-clippy:
+    name: Rust clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo clippy
+        working-directory: rust-wallet-app
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rust-test:
+    name: Rust test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo build
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test
+        working-directory: rust-wallet-app
+        run: cargo test --workspace --all-targets
+
+  # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
+  # (L13 step 11, 4th gate). Workspace-wide tree walks are slow, so this
+  # runs at CI cadence rather than locally.
+  rust-dedup:
+    name: Rust dep dedup
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo tree --duplicates
+        working-directory: rust-wallet-app
+        run: cargo tree --workspace --duplicates
+
+  rust-audit:
+    name: Rust audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        # The `--ignore` list mirrors the umbrella `ci.yml` and
+        # `rust-eth-core-ci.yml` rationale — transitive dev-deps without
+        # upstream fixes yet. Canonical list: `rust-wallet-app/deny.toml`.
+        #   RUSTSEC-2026-0098: transitive via regtest deps; no fix upstream
+        #   RUSTSEC-2026-0099: same transitive chain (testcontainers-tokio-tar)
+        #   RUSTSEC-2026-0104: same transitive chain
+        #   RUSTSEC-2025-0111: pre-existing umbrella allowance
+        working-directory: rust-wallet-app
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
+
+  rust-deny:
+    name: Rust deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny
+        working-directory: rust-wallet-app
+        run: cargo deny check
+
+  # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)".
+  # `tron-wallet-core` MUST compile for iOS + Android arm64 with no source
+  # changes — this catches platform-incompatible deps (e.g. `directories`)
+  # the moment they enter the tree, long before V0.1.5 needs them.
+  #
+  # `cargo check` does not invoke a linker, so both targets are checkable
+  # from a Linux runner using the rustup-provided std. Runtime smoke on a
+  # real device is explicitly out of scope for v0.1 (deep-dive: mobile CI
+  # is compile-only; runtime smoke lands in v0.2 via Nile).
+  #
+  # Skips cleanly until Phase 0 creates the crate, so the Phase Set Up
+  # no-op PR can go green before any Rust code exists.
+  mobile-check:
+    name: Mobile compile-only (iOS + Android arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: aarch64-apple-ios,aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo check (aarch64-apple-ios)
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/tron-wallet-core ]; then
+            echo "tron-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo check -p tron-wallet-core --target aarch64-apple-ios
+      - name: cargo check (aarch64-linux-android)
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/tron-wallet-core ]; then
+            echo "tron-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo check -p tron-wallet-core --target aarch64-linux-android
+
+  # Branch-rule guard (plan Phase Set Up, Task S.2). A PR reaching this
+  # workflow already targets `rust-tron-core` by definition of the trigger,
+  # so this job's real purpose is to fail loudly if a future edit widens the
+  # trigger list to include `main`.
+  branch-rule:
+    name: Branch rule (base must be rust-tron-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Assert PR base is rust-tron-core
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ "$BASE_REF" != "rust-tron-core" ]; then
+            echo "::error::PR base is '$BASE_REF'. TRON v0.1 task branches" \
+              "must PR into 'rust-tron-core', never into 'main'. Retarget:" \
+              "gh pr edit <n> --base rust-tron-core"
+            exit 1
+          fi
+          echo "base=$BASE_REF OK"
