@@ -23,23 +23,10 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 - [L21] Update estimate-report AND ai-cost-report on every PR merge (status, progress, in-flight count, merge SHAs)
 - [L24] On PR merge: update CHANGELOG.md (Keep a Changelog + User Stories table) + "Try it" column. For ≥3 sub-tasks: parent branch + sequential merge + PR-to-parent.
 - [L25] Sub-task workflow for large tasks (≥3 sub-tasks: parent branch + sequential merge + PR-to-parent)
-- [L28] Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
-- [L29] Live testnet smoke is operator-driven, not CI — `#[ignore]` + opt-in env var + manual run script
-- [L37] CI workflow action-SHA hygiene (pin verified, tag when unverified)
-- [L42] Verify staged set before commit (`git diff --cached --stat` after every `git add`)
-- [L45] Issues labeled `rust-eth-core` route to the integration branch, never main directly
-- [L46] Branch-identity gate: verify `git branch --show-current` matches expected before `git add`, `git commit`, and `commit-push-pr`
-- [L47] Drift-scan can refute issue premise — no-repro closure type
-- [L48] `git stash` can carry diagnostic residue into the next task
-- [L49] Plugin-structure changes require `plugin-dev:plugin-validator` pre-commit
+- [L46] Git-action hygiene: branch identity + drift-scan + stash audit + post-commit verify
 - [L50] Harness-style work: `metaharness_oia_audit` weekly or pre-release
-- [L51] Verify post-commit contents — Edit tool can report success without applying
-- [L52] Honest follow-up commit when prior commit message diverges from actual diff
-- [L53] Critical-tier L12 cluster (3 sub-agents + security-review standalone) catches bugs TDD alone misses on key-encryption surfaces
-- [L54] Defense-in-depth for env-var secrets: read + immediate `std::env::remove_var()` + Mutex-serialized test
 - [L55] Step 11 verify gate: scope `cargo test -p <crate>`>` — never `--workspace` (bitcoin-wallet-core FFI tests dominate)
-- [L60] `sol!` macro `bytecode` attribute expects **creation (init) bytecode** from `solc --bin`, NOT runtime bytecode from `--bin-runtime` (Issue #419, PR #485)
-- [L61] EVM contract-creation input = `creation_bytecode ++ abi_encoded_args` — NO 4-byte selector; constructor args are appended to init code, not invoked via CALL dispatch (Issue #419)
+
 
 > **Index gaps (L15–L20):** entries were added then trimmed during session 2026-08-10. L15/L16/L17 were `Secret<T>` / ZeroizeOnDrop / Debug patterns. L18/L19 were review findings (doc-test + merge gate). L20 was estimate-report self-improvement (replaced by client-bill pivot). All removed per user direction; rules not currently in scope.
 >
@@ -47,18 +34,16 @@ Project-local corrections ledger. Seeded from recent commits + ready for new ent
 
 ### Domain map
 
-| Domain | Lessons |
-|---|---|
-| Build / Cargo hygiene | L1 |
-| Git workflow | L6 (approval gates), L8, L14, L42, L46, L48 |
-| Issue/PR protocol | L9, L24, L47, L62 |
-| Skill + review pair | L11, L12, L13 |
-| Post-merge bookkeeping | L21, L24 |
-| Client product | L28 |
-| Live testnet smoke | L29 |
-| CI workflow hygiene | L37 |
-| Flutter verify gate | L39 |
-| Security review | (merged into L11/L12 review pair + L13 complexity tiers) |
+| Domain                       | Lessons                                                            |
+| ---------------------------- | ------------------------------------------------------------------ |
+| Build / Cargo hygiene        | L1                                                                 |
+| Git workflow                 | L6 (approval gates), L8, L14, L46 (merged branch+drift+stash+verify) |
+| Issue/PR protocol            | L9, L24, L25                                                       |
+| Skill + review pair          | L11, L12, L13                                                      |
+| Post-merge bookkeeping       | L21, L24                                                           |
+| Harness-style work           | L50                                                                |
+| Test scope discipline        | L55                                                                |
+| Security review              | (merged into L11/L12 review pair + L13 complexity tiers)           |
 
 ---
 
@@ -167,6 +152,8 @@ Anti-patterns to avoid:
 
 Apply this schema to: drift fixes, security findings, refactors, breaking changes. Skip for trivial typo/style PRs (one-line body is fine).
 
+**Cross-reference**: issue-body templates (Context + Goal/Repro + Acceptance criteria + References) and the full backlog-issue creation workflow (PL22 pause-then-act, PL23 body template, PL24 two-layer labels, PL25 wayfinder, PL26 canonical create command) live in `tasks/issues-lesson.md` PL21-PL26. L9 owns the status-vs-analysis principle and PR drift-table schema; `tasks/issues-lesson.md` owns the body-template shape + `gh issue create` execution flags + label/milestone format. Read both at pickup: L9 for the schema, PL22-PL26 for the create command shape.
+
 ---
 
 ## L11 — Scan skills list at session start, tag 3-5 relevant, invoke before doing
@@ -183,35 +170,35 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 
 **Skill → task-step mapping** (use this as starting checklist):
 
-| Task step                                    | Skill to invoke first                                                                                                                |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Task pickup (understand + plan)              | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                      |
-| Task pickup (drift scan, per L13 step 4a)    | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts. |
-| Task pickup (new feature, no existing plan)  | `feature-dev:feature-dev` — 4-phase (discover → explore → clarify → architect) producing ad-hoc plan. Use when feature unclear or scope undecided; phases 1-4 → ad-hoc plan, then L13 owns from step 9 onward (implement/review/summary re-absorbed into L13). |
-| Brainstorming (pre-implementation design)    | `superpowers:brainstorming` (MUST before any creative work; gates L13 pre-pickup per L11 itself) |
-| Workspace isolation                         | `superpowers:using-git-worktrees` (after brainstorming, before plan execution; integration branch per L45) |
-| Plan authoring / plan review                 | `tasks/plan-lesson.md` (PL1, PL2, PL3, PL7–PL16) — drift scan, story trace, plugin stack, host-first SDK design, step-by-step workflow |
-| Code review / SDK quality                    | `tasks/review-lesson.md` (PL4, PL5, PL6, PL17) — flat re-exports, async mutex, stability policy, review plugins |
-| Deep search / content review / code-block    | `tasks/search-lesson.md` (PL18, PL19, PL20) — content review, code-block review, deep search + agent management |
-| Plan authoring (multi-step task)            | `superpowers:writing-plans` (after brainstorming approval, before L13 step 9 TDD) |
-| Plan execution (current session)            | `superpowers:subagent-driven-development` (default if subagents available; L13 step 5a branch) |
-| Plan execution (parallel session)           | `superpowers:executing-plans` (fallback if no subagents) |
-| TDD red-green-refactor                       | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`)                                              |
-| Build/cargo error cascade                    | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)                                     |
-| Module interface design                      | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4)                                     |
-| Behavioral discipline (every L13 step)       | `andrej-karpathy-skills:karpathy-guidelines` — wrapper at step 4 (branch checkout) + step 15c (broad L13 audit). Per L13 behavioral discipline section (4 principles: think-first, simplicity, surgical, goal-driven). |
-| Pre-PR code review (comprehensive)          | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10). Scope: correctness, security, tests, structure. |
-| Pre-PR security review (critical tier, after L12) | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy) |
-| Code smell / debt reported (any tier) | `ecc:refactor-clean` (dead-code audit first) → per-language `*-review` (interpret findings) → `ecc:quality-gate` (formatter check) |
-| Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator` |
-| PR review feedback (L13 step 15, 3-round fix loop) | `superpowers:receiving-code-review` wrapped by `pr-review-toolkit:code-review` |
-| Test coverage gap analysis                   | `pr-review-toolkit:pr-test-analyzer`                                                                                                 |
-| Doc / threat-model review                    | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`)         |
-| Document stage (per-task tech doc → PR body) | `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections) |
-| Before declaring done                        | `superpowers:verification-before-completion` (L11 recommends; L13 step 11 note says "User rejected adding to L13 spec" — invoke as L11-mapped wrapper, not L13-enforced gate) |
-| Commit + push + PR                           | `commit-commands:commit-push-pr`                                                                                                     |
-| Rust toolchain static analysis (one-shot verify) | `ecc:rust-build-resolver` (fmt + clippy + test + dedup + cargo audit in one invocation); slash command `/ecc:rust-build` |
-| Rust toolchain review (review-paired fmt check)  | `ecc:rust-reviewer` or `/ecc:rust-review`                                                              |
+| Task step                                                             | Skill to invoke first                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Task pickup (understand + plan)                                       | `mattpocock-skills:domain-modeling` if new domain; `compound-engineering:ce-plan` if multi-step                                                                                                                                                                |
+| Task pickup (drift scan, per L13 step 4a)                             | `git log --all -- <path>` for every plan/spec SHA cited in the picked-up issue. Empty = drift; commit artifact or file follow-up before feature work starts.                                                                                                   |
+| Task pickup (new feature, no existing plan)                           | `feature-dev:feature-dev` — 4-phase (discover → explore → clarify → architect) producing ad-hoc plan. Use when feature unclear or scope undecided; phases 1-4 → ad-hoc plan, then L13 owns from step 9 onward (implement/review/summary re-absorbed into L13). |
+| Brainstorming (pre-implementation design)                             | `superpowers:brainstorming` (MUST before any creative work; gates L13 pre-pickup per L11 itself)                                                                                                                                                               |
+| Workspace isolation                                                   | `superpowers:using-git-worktrees` (after brainstorming, before plan execution; integration branch per L45)                                                                                                                                                     |
+| Plan authoring / plan review                                          | `tasks/plan-lesson.md` (PL1, PL2, PL3, PL7–PL16) — drift scan, story trace, plugin stack, host-first SDK design, step-by-step workflow                                                                                                                         |
+| Code review / SDK quality                                             | `tasks/review-lesson.md` (PL4, PL5, PL6, PL17) — flat re-exports, async mutex, stability policy, review plugins                                                                                                                                                |
+| Deep search / content review / code-block                             | `tasks/search-lesson.md` (PL18, PL19, PL20) — content review, code-block review, deep search + agent management                                                                                                                                                |
+| Plan authoring (multi-step task)                                      | `superpowers:writing-plans` (after brainstorming approval, before L13 step 9 TDD)                                                                                                                                                                              |
+| Plan execution (current session)                                      | `superpowers:subagent-driven-development` (default if subagents available; L13 step 5a branch)                                                                                                                                                                 |
+| Plan execution (parallel session)                                     | `superpowers:executing-plans` (fallback if no subagents)                                                                                                                                                                                                       |
+| TDD red-green-refactor                                                | `superpowers:test-driven-development` (post-re-evaluation; was `mattpocock-skills:tdd`)                                                                                                                                                                        |
+| Build/cargo error cascade                                             | `superpowers:systematic-debugging` (post-re-evaluation; was `mattpocock-skills:diagnosing-bugs`)                                                                                                                                                               |
+| Module interface design                                               | `mattpocock-skills:codebase-design` + `pr-review-toolkit:type-design-analyzer` (pair per L13 Q4)                                                                                                                                                               |
+| Behavioral discipline (every L13 step)                                | `andrej-karpathy-skills:karpathy-guidelines` — wrapper at step 4 (branch checkout) + step 15c (broad L13 audit). Per L13 behavioral discipline section (4 principles: think-first, simplicity, surgical, goal-driven).                                         |
+| Pre-PR code review (comprehensive)                                    | `pr-review-toolkit:code-review` wrapped by `superpowers:requesting-code-review` (parallel sub-agents: `type-design-analyzer` + `code-reviewer` per L13 step 10). Scope: correctness, security, tests, structure.                                               |
+| Pre-PR security review (critical tier, after L12)                     | `security-review` (standalone, comprehensive: secrets, SSRF, authz, trust boundaries, crypto, multi-tenancy)                                                                                                                                                   |
+| Code smell / debt reported (any tier)                                 | `ecc:refactor-clean` (dead-code audit first) → per-language `*-review` (interpret findings) → `ecc:quality-gate` (formatter check)                                                                                                                             |
+| Pre-commit plugin structure validation (when trigger matches per L49) | `plugin-dev:plugin-validator`                                                                                                                                                                                                                                  |
+| PR review feedback (L13 step 15, 3-round fix loop)                    | `superpowers:receiving-code-review` wrapped by `pr-review-toolkit:code-review`                                                                                                                                                                                 |
+| Test coverage gap analysis                                            | `pr-review-toolkit:pr-test-analyzer`                                                                                                                                                                                                                           |
+| Doc / threat-model review                                             | `mattpocock-skills:domain-modeling` (re-invoke; threat model is a domain artifact; was `compound-engineering:ce-doc-review`)                                                                                                                                   |
+| Document stage (per-task tech doc → PR body)                          | `compass:docs-writer` (primary, generates 10-section doc) + `compass:api-designer` (secondary, refines API surface + Drift sections)                                                                                                                           |
+| Before declaring done                                                 | `superpowers:verification-before-completion` (L11 recommends; L13 step 11 note says "User rejected adding to L13 spec" — invoke as L11-mapped wrapper, not L13-enforced gate)                                                                                  |
+| Commit + push + PR                                                    | `commit-commands:commit-push-pr`                                                                                                                                                                                                                               |
+| Rust toolchain static analysis (one-shot verify)                      | `ecc:rust-build-resolver` (fmt + clippy + test + dedup + cargo audit in one invocation); slash command `/ecc:rust-build`                                                                                                                                       |
+| Rust toolchain review (review-paired fmt check)                       | `ecc:rust-reviewer` or `/ecc:rust-review`                                                                                                                                                                                                                      |
 
 > **Skill-pair wrappers (2026-08-11):** `pr-review-toolkit:code-review` is the
 > toolkit; the superpowers meta-skills wrap its invocation. Pre-PR (L13 step 10)
@@ -253,12 +240,12 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
 - Both fire on critical-tier tasks: `pr-review-toolkit:security-auditor` inside L12 review (code-review lens), then `security-review` standalone (security-review lens). Defense in depth.
 - **Lens coverage**:
 
-  | Lens                                              | Plugin                                       | Position                                  |
-  | ------------------------------------------------- | -------------------------------------------- | ----------------------------------------- |
-  | Type design (encapsulation, invariants)           | `pr-review-toolkit:type-design-analyzer`     | sub-agent, parallel                       |
-  | Code quality (correctness, security, convention)  | `pr-review-toolkit:code-reviewer`            | sub-agent, parallel                       |
-  | Security-audit (in L12 code-review lens)          | `pr-review-toolkit:security-auditor`         | sub-agent, critical tier only             |
-  | Comprehensive security (secrets, SSRF, authz, crypto) | `security-review`                         | standalone gate, critical tier only       |
+  | Lens                                                  | Plugin                                   | Position                            |
+  | ----------------------------------------------------- | ---------------------------------------- | ----------------------------------- |
+  | Type design (encapsulation, invariants)               | `pr-review-toolkit:type-design-analyzer` | sub-agent, parallel                 |
+  | Code quality (correctness, security, convention)      | `pr-review-toolkit:code-reviewer`        | sub-agent, parallel                 |
+  | Security-audit (in L12 code-review lens)              | `pr-review-toolkit:security-auditor`     | sub-agent, critical tier only       |
+  | Comprehensive security (secrets, SSRF, authz, crypto) | `security-review`                        | standalone gate, critical tier only |
 
 - **Order** (defense in depth):
   1. L12 review (sub-agents: `type-design-analyzer` + `code-reviewer` [+ `security-auditor` if critical]) → fix loop on L12 findings
@@ -470,33 +457,33 @@ Apply this schema to: drift fixes, security findings, refactors, breaking change
     - If stuck 3 rounds: PAUSE then revert-to-last-green + follow-up issue + ledger entry
     - **Pipeline status snapshot** (render before PR review starts; mirrors L13 steps 1-15b with skill + plugin + status; gate decision = snapshot completeness):
 
-        | Step | Skill invoked | Plugin / Tool | Status |
-        |---|---|---|---|
-        | 1 L11 enumerate | `mattpocock-skills:ask-matt` (router) + L11 skill→step mapping table | `mattpocock-skills` | ☐ |
-        | 2 complexity tier | self-detect (trivial / normal / critical) + user confirm; `mattpocock-skills:wayfinder` if huge-work (multi-session, multi-PR) | `mattpocock-skills` | ☐ |
-        | 3 issue pickup | `mattpocock-skills:triage` (categorise → verify → grill → brief) + `gh issue view` + checklist parse; `mattpocock-skills:to-tickets` if large task per L25; `mattpocock-skills:prototype` if issue asks for design sanity-check / throwaway prototype | `mattpocock-skills` | ☐ |
-        | 3a spec synthesis | `mattpocock-skills:to-spec` (no interview; synthesis → publish to tracker) when no spec/plan exists | `mattpocock-skills` | ☐ |
-        | 4 branch checkout | `superpowers:using-git-worktrees`; `andrej-karpathy-skills:karpathy-guidelines` wrapper | — | ☐ |
-        | 4a drift scan | `git log --all -- <path>` (per L13 step 4a) | — | ☐ |
-        | 5-8 skill pair | `mattpocock-skills:ask-matt` (narrow candidates) + per L11 row + Q4 cap (max 2 normal, max 3 critical L12 cluster) | `mattpocock-skills` | ☐ |
-        | 9 TDD red-green | `mattpocock-skills:implement` (high-level orchestrator when spec/tickets exist) wrapping `superpowers:test-driven-development` (lower-level driver); `context-engineering-kit:kaizen:kaizen` during REFACTOR phase (anti-overengineering) | `mattpocock-skills` + `superpowers` + `context-engineering-kit` | ☐ |
-        | 9a module interface | `mattpocock-skills:codebase-design` (new public types only); `mattpocock-skills:grill-with-docs` if interface decision warrants ADR (new error type, breaking API, cross-crate contract); `mattpocock-skills:domain-modeling` if new domain terms / CONTEXT.md / ADR edits | `mattpocock-skills` | ☐ |
-        | 10 L12 review | `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review` | `pr-review-toolkit` (`type-design-analyzer` + `code-reviewer`; critical: +`security-auditor`); `/ecc:rust-review` review-paired fmt re-check (`ecc`) | ☐ |
-        | 10a test coverage | `pr-review-toolkit:pr-test-analyzer` (separate gate) | `pr-review-toolkit` | ☐ |
-        | 10b security-review | `security-review` (critical tier only, standalone) | `security` | ☐ |
-        | 10c standards + spec | `mattpocock-skills:code-review` (separate gate; Standards + Spec axes) | `mattpocock-skills` | ☐ |
-        | 11 triple gate (local) | prefer `/ecc:rust-build`; bare cargo `fmt --check --workspace` + `clippy --workspace --all-targets -- -D warnings` + `test --workspace --all-targets` (+ `cargo audit` if installed) | `ecc:rust-build-resolver` | ☐ |
-        | 11-ci dedup | `cargo tree --workspace --duplicates` runs in `.github/workflows/rust-eth-core-ci.yml` (CI only, per L45) | — | ☐ |
-        | 11a backlog triage | `gh issue create` (multi-PR deferred) or in-session backlogs list | — | ☐ |
-        | 11b L24 cascade local | CHANGELOG `[Unreleased]` + User Stories flip + "Try it" column (project convention, not skill) | — | ☐ |
-        | 11c systematic-debugging | `superpowers:systematic-debugging` (conditional on verify failure); `mattpocock-skills:diagnosing-bugs` for perf-regression shape; `mattpocock-skills:research` for unknown-root-cause needing primary-source facts; `context-engineering-kit:kaizen:root-cause-tracing` for errors deep in execution call stack; `context-engineering-kit:kaizen:why` for symptom fundamentals drill | `superpowers` + `mattpocock-skills` + `context-engineering-kit` | ☐ |
-        | 11d plugin structure | `plugin-dev:plugin-validator` (per L49 trigger match) | `plugin-dev` | ☐ |
-        | 12 PAUSE | manual gate per L6 + workflow-approval-required memory | — | ☐ |
-        | 13 commit-push-pr | `commit-commands:commit-push-pr`; `mattpocock-skills:resolving-merge-conflicts` if push fails with conflict (L51) | `commit-commands` + `mattpocock-skills` | ☐ |
-        | 14 flip checkboxes | `gh issue edit N --body "<full body with [x] marks>"` (per step 14 evidence format: file:line, test name, commit SHA, PR number) | — | ☐ |
-        | 15 PR review | `superpowers:receiving-code-review` wrapping `pr-review-toolkit:code-review` | `superpowers` + `pr-review-toolkit` | ☐ |
-        | 15a tech doc | `mattpocock-skills:grill-with-docs` (Goal/Drift/Tradeoff sharpening + ADR emission) + `compass:docs-writer` (primary, 10-section doc) + `compass:api-designer` (secondary, API surface + Drift sections); `mattpocock-skills:domain-modeling` for glossary emission during tech-doc write; `anthropics/skills:frontend-design` if wallet-desktop files in PR diff (structural UI lens) | `mattpocock-skills` + `compass` + `anthropics` | ☐ |
-        | 15b L24 verify merged | (project convention, not skill) | — | ☐ |
+        | Step                     | Skill invoked                                                                                                                                                                                                                                                                                                                                                                          | Plugin / Tool                                                                                                                                        | Status |
+        | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+        | 1 L11 enumerate          | `mattpocock-skills:ask-matt` (router) + L11 skill→step mapping table                                                                                                                                                                                                                                                                                                                   | `mattpocock-skills`                                                                                                                                  | ☐      |
+        | 2 complexity tier        | self-detect (trivial / normal / critical) + user confirm; `mattpocock-skills:wayfinder` if huge-work (multi-session, multi-PR)                                                                                                                                                                                                                                                         | `mattpocock-skills`                                                                                                                                  | ☐      |
+        | 3 issue pickup           | `mattpocock-skills:triage` (categorise → verify → grill → brief) + `gh issue view` + checklist parse; `mattpocock-skills:to-tickets` if large task per L25; `mattpocock-skills:prototype` if issue asks for design sanity-check / throwaway prototype                                                                                                                                  | `mattpocock-skills`                                                                                                                                  | ☐      |
+        | 3a spec synthesis        | `mattpocock-skills:to-spec` (no interview; synthesis → publish to tracker) when no spec/plan exists                                                                                                                                                                                                                                                                                    | `mattpocock-skills`                                                                                                                                  | ☐      |
+        | 4 branch checkout        | `superpowers:using-git-worktrees`; `andrej-karpathy-skills:karpathy-guidelines` wrapper                                                                                                                                                                                                                                                                                                | —                                                                                                                                                    | ☐      |
+        | 4a drift scan            | `git log --all -- <path>` (per L13 step 4a)                                                                                                                                                                                                                                                                                                                                            | —                                                                                                                                                    | ☐      |
+        | 5-8 skill pair           | `mattpocock-skills:ask-matt` (narrow candidates) + per L11 row + Q4 cap (max 2 normal, max 3 critical L12 cluster)                                                                                                                                                                                                                                                                     | `mattpocock-skills`                                                                                                                                  | ☐      |
+        | 9 TDD red-green          | `mattpocock-skills:implement` (high-level orchestrator when spec/tickets exist) wrapping `superpowers:test-driven-development` (lower-level driver); `context-engineering-kit:kaizen:kaizen` during REFACTOR phase (anti-overengineering)                                                                                                                                              | `mattpocock-skills` + `superpowers` + `context-engineering-kit`                                                                                      | ☐      |
+        | 9a module interface      | `mattpocock-skills:codebase-design` (new public types only); `mattpocock-skills:grill-with-docs` if interface decision warrants ADR (new error type, breaking API, cross-crate contract); `mattpocock-skills:domain-modeling` if new domain terms / CONTEXT.md / ADR edits                                                                                                             | `mattpocock-skills`                                                                                                                                  | ☐      |
+        | 10 L12 review            | `superpowers:requesting-code-review` wrapping `pr-review-toolkit:code-review`                                                                                                                                                                                                                                                                                                          | `pr-review-toolkit` (`type-design-analyzer` + `code-reviewer`; critical: +`security-auditor`); `/ecc:rust-review` review-paired fmt re-check (`ecc`) | ☐      |
+        | 10a test coverage        | `pr-review-toolkit:pr-test-analyzer` (separate gate)                                                                                                                                                                                                                                                                                                                                   | `pr-review-toolkit`                                                                                                                                  | ☐      |
+        | 10b security-review      | `security-review` (critical tier only, standalone)                                                                                                                                                                                                                                                                                                                                     | `security`                                                                                                                                           | ☐      |
+        | 10c standards + spec     | `mattpocock-skills:code-review` (separate gate; Standards + Spec axes)                                                                                                                                                                                                                                                                                                                 | `mattpocock-skills`                                                                                                                                  | ☐      |
+        | 11 triple gate (local)   | prefer `/ecc:rust-build`; bare cargo `fmt --check --workspace` + `clippy --workspace --all-targets -- -D warnings` + `test --workspace --all-targets` (+ `cargo audit` if installed)                                                                                                                                                                                                   | `ecc:rust-build-resolver`                                                                                                                            | ☐      |
+        | 11-ci dedup              | `cargo tree --workspace --duplicates` runs in `.github/workflows/rust-eth-core-ci.yml` (CI only, per L45)                                                                                                                                                                                                                                                                              | —                                                                                                                                                    | ☐      |
+        | 11a backlog triage       | `gh issue create` (multi-PR deferred) or in-session backlogs list                                                                                                                                                                                                                                                                                                                      | —                                                                                                                                                    | ☐      |
+        | 11b L24 cascade local    | CHANGELOG `[Unreleased]` + User Stories flip + "Try it" column (project convention, not skill)                                                                                                                                                                                                                                                                                         | —                                                                                                                                                    | ☐      |
+        | 11c systematic-debugging | `superpowers:systematic-debugging` (conditional on verify failure); `mattpocock-skills:diagnosing-bugs` for perf-regression shape; `mattpocock-skills:research` for unknown-root-cause needing primary-source facts; `context-engineering-kit:kaizen:root-cause-tracing` for errors deep in execution call stack; `context-engineering-kit:kaizen:why` for symptom fundamentals drill  | `superpowers` + `mattpocock-skills` + `context-engineering-kit`                                                                                      | ☐      |
+        | 11d plugin structure     | `plugin-dev:plugin-validator` (per L49 trigger match)                                                                                                                                                                                                                                                                                                                                  | `plugin-dev`                                                                                                                                         | ☐      |
+        | 12 PAUSE                 | manual gate per L6 + workflow-approval-required memory                                                                                                                                                                                                                                                                                                                                 | —                                                                                                                                                    | ☐      |
+        | 13 commit-push-pr        | `commit-commands:commit-push-pr`; `mattpocock-skills:resolving-merge-conflicts` if push fails with conflict (L51)                                                                                                                                                                                                                                                                      | `commit-commands` + `mattpocock-skills`                                                                                                              | ☐      |
+        | 14 flip checkboxes       | `gh issue edit N --body "<full body with [x] marks>"` (per step 14 evidence format: file:line, test name, commit SHA, PR number)                                                                                                                                                                                                                                                       | —                                                                                                                                                    | ☐      |
+        | 15 PR review             | `superpowers:receiving-code-review` wrapping `pr-review-toolkit:code-review`                                                                                                                                                                                                                                                                                                           | `superpowers` + `pr-review-toolkit`                                                                                                                  | ☐      |
+        | 15a tech doc             | `mattpocock-skills:grill-with-docs` (Goal/Drift/Tradeoff sharpening + ADR emission) + `compass:docs-writer` (primary, 10-section doc) + `compass:api-designer` (secondary, API surface + Drift sections); `mattpocock-skills:domain-modeling` for glossary emission during tech-doc write; `anthropics/skills:frontend-design` if wallet-desktop files in PR diff (structural UI lens) | `mattpocock-skills` + `compass` + `anthropics`                                                                                                       | ☐      |
+        | 15b L24 verify merged    | (project convention, not skill)                                                                                                                                                                                                                                                                                                                                                        | —                                                                                                                                                    | ☐      |
 
     - **Snapshot discipline**: render table at PR review start. Fill ☐ → ✓ as evidence lands (file:line, test name, commit SHA, PR number per step 14 format). Gate decision = all ✓ (proceed to 15c walk → 15d merge); any ☐ = fix + re-run. Per L28 (verify-before-claim).
     - **Triggers / skips** (apply when matching):
@@ -625,27 +612,27 @@ Apply at every L13 step (pickup, plan, code, review, verify, commit). Distilled 
 
 **Complexity tier → pipeline variation** (self-detect + user confirm):
 
-| Tier                                                                                         | Pipeline                                                                    |
-| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Tier                                                                                         | Pipeline                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `trivial` (doc-only / single-line)                                                           | doc-review only; skip pre-PR code review. L49 (plugin-validator) + L51 (post-commit verification) + L52 (honest fix-up if discrepancy) ALWAYS apply when their triggers match — trivial doesn't exempt them. EXCEPTION: doc-only commits that change public-facing contracts (README examples, public API docs, CHANGELOG breaking-change notes) still get a doc-review pass via `compass:docs-writer` per L11 Document stage row. |
-| `normal` (typical feature)                                                                   | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review |
-| `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + `pr-review-toolkit:security-auditor` inside L12 + `security-review` standalone (defense in depth per L13 step 10) |
-| `feature-dev path` (no prior plan / scope undecided)                                          | `feature-dev:feature-dev` phases 1-4 (discover → explore → clarify → architect) produce ad-hoc plan; then L13 steps 9-15d own TDD → review → verify → PAUSE → commit-push-pr → PR review → tech doc → ledger |
+| `normal` (typical feature)                                                                   | full pipeline: TDD + code-review + verify + PAUSE + commit + post-PR review                                                                                                                                                                                                                                                                                                                                                        |
+| `critical` (security-sensitive: key material / signing / encryption / network / persistence) | full + `pr-review-toolkit:security-auditor` inside L12 + `security-review` standalone (defense in depth per L13 step 10)                                                                                                                                                                                                                                                                                                           |
+| `feature-dev path` (no prior plan / scope undecided)                                         | `feature-dev:feature-dev` phases 1-4 (discover → explore → clarify → architect) produce ad-hoc plan; then L13 steps 9-15d own TDD → review → verify → PAUSE → commit-push-pr → PR review → tech doc → ledger                                                                                                                                                                                                                       |
 
 **10 decisions (the grilling record)**:
 
-| Q   | Decision                                                                                                                                                                                                                                     |
-| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | Goals: A (correctness) + C (learning) — speed + reversibility deprioritized                                                                                                                                                                  |
-| 2   | Skill-tag: per-task pickup (not session-start, not per-step)                                                                                                                                                                                 |
-| 3   | Skill-conflict resolution: domain-tag wins; security > correctness > simplicity                                                                                                                                                              |
-| 4   | Max 2 skills per pipeline step. `critical` tier: max 3 sub-agents in the parallel review cluster (L13 step 10) + 1 standalone security gate (`security-review` per L11 row) + 1 plugin-structure validator (`plugin-dev:plugin-validator` per L49 if trigger matches) = 5 effective skills. Sequential gates don't compound with the cluster cap. |
-| 5   | Fix-loop limit: 3 rounds per task then PAUSE; round = one review + one fix commit pair. Shared budget across pre-commit (step 12) and post-PR-review (step 15). Exceed → PAUSE + revert-to-last-green + follow-up issue + ledger entry (Q9). |
-| 6   | Verify: double-gate (per-step + task-end)                                                                                                                                                                                                    |
-| 7   | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`)                                                                                                                                                                |
-| 8   | Review input: squash-candidate state (final commit on PR branch before merge) — not first commit, not uncommitted. For PRs that squash, reviewers see the combined final state. For PRs that merge commit-by-commit (rare), reviewers see the full history. (Re-grill 2026-08-15: corrected from "first commit" wording — Tasks 3-4 squash-merged multiple commits; reviewers read the combined state.)                                                                                                                                                  |
-| 9   | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry                                                                                                                                                         |
-| 10  | Complexity: self-detect + user confirm (hybrid of C + D)                                                                                                                                                                                     |
+| Q   | Decision                                                                                                                                                                                                                                                                                                                                                                                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Goals: A (correctness) + C (learning) — speed + reversibility deprioritized                                                                                                                                                                                                                                                                                                                             |
+| 2   | Skill-tag: per-task pickup (not session-start, not per-step)                                                                                                                                                                                                                                                                                                                                            |
+| 3   | Skill-conflict resolution: domain-tag wins; security > correctness > simplicity                                                                                                                                                                                                                                                                                                                         |
+| 4   | Max 2 skills per pipeline step. `critical` tier: max 3 sub-agents in the parallel review cluster (L13 step 10) + 1 standalone security gate (`security-review` per L11 row) + 1 plugin-structure validator (`plugin-dev:plugin-validator` per L49 if trigger matches) = 5 effective skills. Sequential gates don't compound with the cluster cap.                                                       |
+| 5   | Fix-loop limit: 3 rounds per task then PAUSE; round = one review + one fix commit pair. Shared budget across pre-commit (step 12) and post-PR-review (step 15). Exceed → PAUSE + revert-to-last-green + follow-up issue + ledger entry (Q9).                                                                                                                                                            |
+| 6   | Verify: double-gate (per-step + task-end)                                                                                                                                                                                                                                                                                                                                                               |
+| 7   | Pre-PR review: parallel sub-agents (`type-design-analyzer` + `code-reviewer`)                                                                                                                                                                                                                                                                                                                           |
+| 8   | Review input: squash-candidate state (final commit on PR branch before merge) — not first commit, not uncommitted. For PRs that squash, reviewers see the combined final state. For PRs that merge commit-by-commit (rare), reviewers see the full history. (Re-grill 2026-08-15: corrected from "first commit" wording — Tasks 3-4 squash-merged multiple commits; reviewers read the combined state.) |
+| 9   | Off-rails recovery: PAUSE then revert-to-last-green + follow-up issue + ledger entry                                                                                                                                                                                                                                                                                                                    |
+| 10  | Complexity: self-detect + user confirm (hybrid of C + D)                                                                                                                                                                                                                                                                                                                                                |
 
 ### L13 amendment 2026-08-25 — `security-review` for critical tier
 
@@ -676,13 +663,13 @@ Same 19-step spec as L13, with toolchain + reviewer + sweep substitutions. Appli
 
 ### Toolchain substitutions (L13 step 11)
 
-| L13 element | Rust (`rust-wallet-app/`) | Flutter (`wallet-desktop/`) |
-|---|---|---|
-| Format | `cargo fmt --check` | `dart format --set-exit-if-changed --output=none .` |
-| Static analysis | `cargo clippy --workspace --all-targets -- -D warnings` | `dart analyze --fatal-warnings --fatal-infos` |
-| Tests | `cargo test --workspace` | `flutter test` |
-| Reviewer (L13 step 10) | `ecc:rust-reviewer` | `ecc:flutter-reviewer` |
-| Branch prefix | `feat/<domain>/<task>` | `feat/wallet-desktop/task-N` |
+| L13 element            | Rust (`rust-wallet-app/`)                               | Flutter (`wallet-desktop/`)                         |
+| ---------------------- | ------------------------------------------------------- | --------------------------------------------------- |
+| Format                 | `cargo fmt --check`                                     | `dart format --set-exit-if-changed --output=none .` |
+| Static analysis        | `cargo clippy --workspace --all-targets -- -D warnings` | `dart analyze --fatal-warnings --fatal-infos`       |
+| Tests                  | `cargo test --workspace`                                | `flutter test`                                      |
+| Reviewer (L13 step 10) | `ecc:rust-reviewer`                                     | `ecc:flutter-reviewer`                              |
+| Branch prefix          | `feat/<domain>/<task>`                                  | `feat/wallet-desktop/task-N`                        |
 
 ### Verify gate (Flutter) — all three must pass before commit
 
@@ -708,10 +695,10 @@ rg -n -e 'print\s*\(.*password|print\s*\(.*mnemonic'
 
 ### Complexity tier variation (Flutter)
 
-| Tier | Pipeline variation |
-|---|---|
-| `trivial` (lint config, asset stubs) | Skip TDD; verify gate only; no L12 review subagent |
-| `normal` (DTOs, providers, widgets) | Full: failing test → impl → pass → L12 review → verify → PAUSE → commit |
+| Tier                                                                             | Pipeline variation                                                                                                              |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `trivial` (lint config, asset stubs)                                             | Skip TDD; verify gate only; no L12 review subagent                                                                              |
+| `normal` (DTOs, providers, widgets)                                              | Full: failing test → impl → pass → L12 review → verify → PAUSE → commit                                                         |
 | `critical` (BtcInvoker, TempSecretFile, BtcLogFilter, password/mnemonic widgets) | Full + `pr-review-toolkit:security-auditor` subagent + explicit L12 CRITICAL #2 sweep + custom lint for mnemonic-shaped strings |
 
 ### Flutter-specific anti-patterns
@@ -996,410 +983,70 @@ Then re-merge sub-task onto parent (not main) per the rule.
 - After #19b merged into parent: branch `task/19c-balance` from parent
 - Final cut: `task/19-wallet-end-to-end` → main as single merge commit when all 3 sub-tasks are integrated
 
----
 
-## L28 — Client product: verify before claiming done (three gates — stub honesty, example verify, real-deps verify)
+## L46 — Git-action hygiene (branch identity + drift-scan + stash audit + post-commit verify)
 
-**Trigger**: Session 2026-08-10 multi-PR churn on Task 9. Three distinct failures, each from skipping a different gate:
+**Trigger**: Four recurring mistakes observed in 2026-08-24 / 2026-08-25 sessions — wrong-branch commit, issue-premise drift, stash residue carry-over, Edit-tool silent drop. Each caught post-hoc; cost was revert + recommit + post-mortem. All four are preventable with a per-stage discipline check.
 
-- **Stub-vs-done gate**: implemented `#19b` (`Wallet::sync`) as URL-validation stub returning `Err("not yet implemented")`; treated as "minimal viable Option A". User course-corrected: "we are developing client product, and support features, user cases for real users, so we need to choose the best implementation in technical." Stubs are internal-only.
-- **Example-verify gate**: wrote `examples/wallet_demo.rs` to demonstrate `Wallet::from_mnemonic`, then ran `cargo run --example wallet_demo` — 2 compile errors caught only at run time (Network not re-exported; `WordCount` path wrong). ~10 min round-trip waste + client confidence loss.
-- **Real-deps gate**: built `Wallet::sync` + `Wallet::balance` full impl (PR #55). 164 tests pass, clippy clean, existing demo clean. Then user said "demo on main" — wrote NEW `sync_demo.rs` against live blockstream.info testnet. **3 semantic bugs surfaced** that all 164 unit tests + clippy missed: receive path double-indexed, xprv prefix hardcoded to XPRV (testnet needs TPRV), `reqwest::Url::join` dropped `/api` (no trailing `/` on base).
+**Rule**: Four pre/post gates, each at its cheapest-recoverable step in the commit chain:
 
-**Rule**: For any client-facing claim ("Try it works", "Story #N playaround-able", "Demo ready", "Feature X shipped"), three gates must pass in order:
+### Gate 1 — Branch identity (per `git add`, `git commit`, `commit-push-pr`)
 
-### Gate A — Stub honesty (CHANGELOG state)
-
-Stub vs full impl is binary, not gradient. `Err("not yet implemented")` is **no impl**, not partial.
-
-Three states per feature:
-
-- **`[x] done`** — fully implemented + tested; user can rely on it.
-- **`[ ] gated`** — listed in CHANGELOG User Stories but marked not-yet-implemented.
-- **(not listed)** — feature doesn't exist; don't tease.
-
-Do NOT introduce a third implicit state: "merged but doesn't actually work."
-
-**PR title honesty**: `feat(wallet): Wallet::sync stub (Task 9 #19b)` ← explicit "stub" in title; `feat(wallet): Wallet::sync implementation (Task 9 #19b)` ← only when real impl lands.
-
-**L24 + L21 cascades**: User Story checkbox flip (L24) is gated on real impl, not merge. Estimate-report row update (L21) is gated on real capability — don't bill for a stub.
-
-### Gate B — Example verify (`cargo check --examples` + `test --examples` + run binary)
-
-Before declaring any of: "Try this command" / "Story #N playaround-able" / "Demo ready" / "Example works" — run the full chain:
+Before ANY of those commands, run `git branch --show-current` and confirm it equals the expected branch (recorded at L13 step 4). Mismatch → `git checkout <expected>`, re-verify, then proceed. The check is mandatory regardless of how recently the checkout happened (`gh pr merge --delete-branch`, `git rebase`, IDE tab switch, session restart can all move HEAD silently).
 
 ```bash
-cargo check --examples -p <crate>           # compile errors catch (fast)
-cargo test --examples -p <crate>            # runtime errors catch
-cargo run --example <name> -p <crate>        # binary runs end-to-end
-```
-
-If any fails, the claim is false — don't claim it. CHANGELOG "Try it" is a contract with the client.
-
-### Gate C — Real-deps verify (run binary against live network/fs/db)
-
-For any new example or method that composes third-party APIs (bdk, Esplora, bip32, reqwest, sqlx): write an example that calls it against live testnet / real fs / real db, run it, paste output as evidence in PR description + add comment in example source.
-
-Unit tests + clippy + Gate B all pass when the function *type-checks* + has correct shapes. They do NOT exercise:
-
-- Third-party parser semantics (bdk's `Key(InvalidNetworkKind)` for wrong prefix; bdk's `InvalidHdKeyPath` for double-indexed paths)
-- URL composition semantics (`reqwest::Url::join` drops last segment without trailing `/`)
-- Live API responses (HTML 200 instead of JSON 404 from a wrong path)
-
-These only surface when the binary actually calls the third-party code against a real input.
-
-**Why**: Client trust is built by honest scope communication, not by inflating delivered-features counts. Each gate catches a distinct trust-erosion mode: Gate A = optimistic CHANGELOG; Gate B = "Try it" doesn't work; Gate C = feature works in test but not in real-world use. All three share the property: the claim was made before the verification ran.
-
-**Apply — per-claim checklist**:
-
-- Before merging any PR that introduces a public API → Gate A: is the API actually functional end-to-end, or does it return `Err/TODO/unimplemented`?
-- Before flipping any CHANGELOG User Story checkbox → Gate A: can a client call this API today and get a real result?
-- Before billing for an item → Gate A: does the shipped artifact actually deliver the billed capability?
-- Before declaring "Try it" in CHANGELOG → Gate B: did you run `cargo check --examples && cargo test --examples && cargo run --example <name>` and paste the output as evidence?
-- Before declaring a method "done" that composes bdk / Esplora / reqwest → Gate C: did you write an example calling it against live testnet and run it?
-
-**Anti-patterns**:
-
-- "I'll add the full impl later; ship the stub now and flip the box" — Gate A.
-- "Internal placeholder for external feature" — stubs are fine for internal modules (trait method placeholder); wrong for client-facing features.
-- "Try this — it should work" (without running it yourself) — Gate B.
-- "Tests pass, so the example works" — `cargo test` doesn't build examples unless `--examples` flag used.
-- "Tests pass, the example compiles — we're good" (without running against real deps) — Gate C.
-- Declaring "playaround-able" on a `#[ignore]` test that's never run.
-- Skipping the demo for "trivial" methods — even `Wallet::sync` is non-trivial when it composes bdk + Esplora + bip32.
-
-**Examples in this session** (2026-08-10):
-
-- ✅ PR #48 (`Wallet::from_mnemonic`) — full impl, all tests pass, real capability. Story #10 flipped to `[x]`.
-- ❌ PR #50 (`Wallet::sync stub`) — stub returning `Err("not yet implemented")`. **Story #11 should NOT be flipped**. PR #50 must NOT be merged without full impl replacing the stub.
-- ❌ PR #55 (`Wallet::sync` + `Wallet::balance` full impl) — gates A + B passed but Gate C missed; 3 semantic bugs caught only when "demo on main" ran against real testnet.
-
----
-
-## L29 — Live testnet smoke is operator-driven, not CI
-
-**Trigger**: Multiple `#[ignore]`-marked live-Esplora tests across PRs (#55, #63, #84). Referenced in CHANGELOG entries ("Live testnet smoke `#[ignore]` per L29") + lesson L13 step 11b + L13 step 14 "external gate" handling — but never written as a stand-alone lesson.
-
-**Rule**: For any test that requires live network access (blockstream.info, mempool.space, public Esplora endpoints), apply all three:
-
-1. **Mark `#[ignore]`** with a comment naming L29: `#[ignore = "requires live testnet Esplora; run manually before merge per L29"]`. CI must never run it (flake risk on public infra; rate-limit risk on CI IPs).
-2. **Provide a CLI opt-in path for operators** — typically an env var like `BTC_TESTNET_RUN=1` gating a shell script that exercises the feature end-to-end (`rust-wallet-app/scripts/btc-quickstart.sh` is the canonical example, ~7 steps covering wallet create → message sign → wallet show → balance → sync).
-3. **Document the operator workflow in the PR description** — list the command(s) operator runs against live testnet before approving the PR merge. Issue acceptance checkboxes for `L29 manual smoke` stay `[ ]` until operator confirms; flip to `[x]` with operator's confirmation commit (per L13 step 14 "external gate acceptance").
-
-**Why**: CI runner network access is unreliable + flaky + slow. Public Esplora endpoints can rate-limit CI IPs. Tests that make real network calls belong in operator-driven smoke on hardware with stable egress + a real SPKI pin + the operator's judgment on whether the sync output matches the PR's claims. Demoing on real testnet before merge catches semantic bugs the unit tests miss (PR #55 — Gate C gap).
-
-**Apply — pattern for new live-network features**:
-
-```rust
-#[tokio::test]
-#[ignore = "requires live testnet Esplora; run manually before merge per L29"]
-async fn feature_completes_against_testnet_for_fresh_wallet() {
-    // ... test body ...
-}
-```
-
-And in the PR description:
-
-```markdown
-## L29 manual smoke (operator action before merge)
-
-\`\`\`bash
-BTC_TESTNET_RUN=1 BTC_ESPLORA_SPKI_PIN=<real-hex> \
-  cargo run -p bitcoin-wallet-core --example sync_demo
-# Expected: n_utxos=0 total_sat=0 (fresh wallet, no UTXOs)
-\`\`\`
-```
-
-Operator confirms via PR comment + flips the `L29` acceptance box.
-
-**Anti-patterns**:
-
-- Running live tests in CI (causes flakes + rate-limit failures; PR review noise).
-- Skipping the live smoke entirely (Gate C gap — semantic bugs that unit tests miss).
-- Auto-flipping the `L29` acceptance box before operator confirmation (false-positive completion; per L13 step 14).
-
----
-
-
-## L37 — CI workflow action-SHA hygiene: pin verified SHAs, tag-based when unverified
-
-**Trigger**: Session 2026-08-18 wallet-desktop Task 25 CI workflows pickup. Trivial-tier (per L31). Wrote 2 GitHub Actions workflows (`wallet-desktop-ci.yml`, `btc-bundle.yml`) with action references. Initially used 7 fabricated / guessed SHA pins (`subosito/flutter-action@2f7f8b6...`, `actions/cache@1bd1e32...`, `actions/upload-artifact@65c4c4a...`, `codecov/codecov-action@0565863...`). L12 review's verify-gate step (`python3 -c "import yaml"` + `grep -hE "uses: "`) caught no fabricated-SHA issue directly — but a manual cross-reference against the existing `ci.yml` revealed 4 of 7 SHAs didn't match any known-good reference. Fixed by replacing the 4 unverified SHAs with tag-based references (`@v2`/`@v4`) and documenting the deviation inline.
-
-**Rule**: for every GitHub Actions `uses:` reference in a workflow file:
-1. **If the SHA matches an existing pinned reference** in another workflow file (e.g. `ci.yml`), reuse the exact same SHA — pin from the existing reference (supply-chain defense).
-2. **If no verified SHA is available**, use the tag-based reference (`@v2` / `@v4`) AND add an inline comment explaining the deviation. Pin to a verified SHA in a follow-up commit after first successful CI run.
-3. **Never fabricate a SHA** — even well-formed 40-hex strings. Without a verified reference, the action may not resolve, breaking the workflow at the worst possible time (first PR after introduction).
-
-**Why**: GitHub Actions `uses: <repo>@<SHA>` is the supply-chain defense against action maintainer compromise (a compromised action can exfiltrate secrets, modify repo contents, etc.). The SHA pin locks to a specific commit. Tag-based references (`@v2`) allow the maintainer to push a new commit under the same tag — convenient but defeats the defense.
-
-**How to apply**:
-- For wallet-desktop: every workflow file under `.github/workflows/*.yml`. Existing `ci.yml` is the SHA reference (`actions/checkout@11d5960...` v4, `dtolnay/rust-toolchain@4360b5...` stable, `Swatinem/rust-cache@49a0bd...` v2). Use these SHAs directly.
-- v0.2 follow-up: pin the 4 currently-tag-based actions (`subosito/flutter-action`, `actions/cache`, `actions/upload-artifact`, `codecov/codecov-action`) to verified SHAs after the first successful CI run captures the resolved SHAs from the Actions log.
-- For new workflows in general: when adding a new `uses:` line, check the official action repo for its current SHA; add the SHA to the team's "verified SHA" reference document so future workflows can pin without re-verifying.
-- v0.2 follow-up: a pre-commit hook that greps all `.github/workflows/*.yml` for SHA patterns and compares against the verified SHA document — would have caught the 4 fabricated SHAs at write time.
-
----
-
-
-## L42 — Verify staged set before commit
-
-**Trigger:** Session 2026-08-20 lessons.md L13 feature-dev hookup. Pre-existing staged-but-uncommitted files in the index from prior session (`CHANGELOG.md` + 2 `native_lib` Dart files). `git add tasks/lessons.md` appended to the existing index; the next `git commit` captured all 3 files in commit `0585adb` (1 intended + 2 unrelated + 1 unrelated CHANGELOG). User caught the bundle during the commit-pause review. Recovery via `git reset --mixed HEAD~` + clean recommit = 3 extra steps (commit, amend, reset, recommit, pop stash) that the L42 check would have eliminated.
-
-**Rule:** After every `git add <files>`, run `git diff --cached --stat` before any commit to verify the staged set matches intent. If the staged set contains unexpected files, unstage them (`git restore --staged <files>`) and re-verify before committing.
-
-**Why:** `git add <specific-file>` does NOT clear pre-existing staged content — it APPENDS to the index. Silent bundling of unrelated changes into a commit breaks the L6 separation principle (one commit = one scope) and forces a recovery via `git reset --mixed HEAD~` + recommit, which is itself state-modifying and gate-prone. The recovery cost (3-5 commands + re-pause) vastly exceeds the one-command pre-check. Session-start state is the worst case: prior sessions may have left files in the index; `git status` alone doesn't surface staged-vs-working-tree distinctions as clearly as `git diff --cached --stat`.
-
-**How to apply:**
-- After every `git add <files>`: run `git diff --cached --stat` — confirm the file list matches your intent (one file, one hunk range, no surprises).
-- If unexpected files appear in the staged set: `git restore --staged <unexpected-files>` then `git diff --cached --stat` again to confirm the staged set is now correct.
-- Session-start defensive check: `git status --short | grep '^[^?]' | grep -v '^.. '` flags staged-but-not-modified files (untracked-looking but in index) — those are the bundles most likely to surprise.
-- Combine with L6 (approval gates before `git commit`) and L13 step 12 (PAUSE for commit approval): three-stage guard = `add → verify staged → commit`. The verify-staged step is the cheapest, fastest catch — runs in <1s and prevents the costliest recovery.
-- Anti-pattern: relying on `git status` alone. The two-column output (`M file` = staged; ` M file` = unstaged) is hard to scan for unexpected content under load. `--cached --stat` gives a single clean list of what's about to ship.
-- Companion check before commit: `git log --oneline @{u}..HEAD` — confirm the commits ahead of upstream match what you intend to push (catches accidental mixed commits in the same way).
-
----
-
-## L43 — alloy 1.8.x: manual TxEip1559 + sign_transaction_sync for clean broadcast
-
-**Trigger**: PR #300 (`feat(eth-e2e): 3 Sepolia sample tests + operator script (Issue #299)`). The `e2e_sepolia_send_native.rs` rewrite in `rust-wallet-app/spikes/alloy-v1/tests/`. Initial attempt used `EthereumWallet::from(sender).send_transaction(&provider, tx)` → type inference failed for `send_transaction` return type, and `sign_transaction` also failed (Network trait mismatch). Re-running after fixing to `with_signer` + fillers — same generics ambiguity. **Pattern landed by mirroring `tests/v4_anvil_send.rs` (which already worked end-to-end against Anvil).**
-
-**Rule**: For v0.2 production code, build the tx envelope manually:
-
-```rust
-use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_eips::Encodable2718;
-use alloy_network::TxSignerSync;
-use alloy_primitives::{Address, TxKind, U256};
-use alloy_provider::{Provider, ProviderBuilder};
-use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
-
-let sender: PrivateKeySigner = MnemonicBuilder::english()
-    .phrase(phrase.as_str()).index(0).expect("valid")
-    .build().expect("build signer");
-
-let nonce: u64 = /* provider.raw_request("eth_getTransactionCount", (sender.address(), "latest")).await */
-let mut tx = TxEip1559 {
-    chain_id: SEPOLIA_CHAIN_ID, nonce,
-    gas_limit: 21_000,
-    max_fee_per_gas: 10_000_000_000,
-    max_priority_fee_per_gas: 1_000_000_000,
-    to: TxKind::Call(recipient),
-    value: U256::from(1_000_000_000_000_000u128),
-    access_list: Default::default(), input: Default::default(),
-};
-let sig = sender.sign_transaction_sync(&mut tx).expect("sign");
-let envelope = tx.into_signed(sig);
-let pending = provider.send_raw_transaction(&envelope.encoded_2718()).await?;
-```
-
-**Why**:
-- `EthereumWallet::send_transaction` and `EthereumWallet::sign_transaction` are Network-generic and require turbofish on the `N::UnsignedTx = TransactionRequest` inference path — fails in cargo test contexts where `Provider` is built without an explicit network type.
-- `provider.send_raw_transaction(&Vec<u8>)` takes **owned bytes** (or `&[u8]`), so the envelope's `encoded_2718()` (`Vec<u8>`) drops in cleanly.
-- Receipt polling mirrors V4: 20 retries x 100ms (Anvil) or 60 retries x 2s (Sepolia = 120s budget).
-- F47 key handling: `MnemonicBuilder` already zeroize-aware via the `bip39` feature; wrap `phrase: &str` from env zeroized after use.
-
-**Apply**:
-- Any `eth-wallet-core` task involving EIP-1559 broadcast (Stories 5, 6, 13, 14, 17, 21, 25).
-- L29 e2e samples (`e2e_sepolia_send_native.rs`) follow this pattern.
-- Do NOT carry the pattern into a `Wallet` abstraction until alloy's `EthereumWallet` API stabilizes (currently 1.8.3) — manual sign is the canonical path with verified behavior.
-
-## L44 — alloy 1.8.x: provider.call + abi_decode + SolCall scope quirks
-
-**Trigger**: PR #300 + #295 plan wiring. Four compile errors during e2e_sepolia_erc20_balance.rs scaffolding:
-
-1. `provider.call(&alloy_rpc_types::TransactionRequest::default().to(...).input(...))` → `expected TransactionRequest, found &TransactionRequest`.
-2. `IERC20::balanceOfCall::decode(&raw, true)` → `takes 1 argument but 2 supplied`.
-3. `decoded.account` returns `Address`, not `U256`.
-4. `IERC20::balanceOfCall.abi_encode()` → `no method named abi_encode found`, fix `use alloy_sol_types::SolCall`.
-
-**Rule**:
-- `provider.call(tx)` takes an **owned** `TransactionRequest` (per `Provider::call(&self, tx: N::TransactionRequest) -> EthCall<N, Bytes>` in alloy 1.8.3). Bind to a local first: `let req = TransactionRequest::default().to(addr).input(calldata.into()); provider.call(req).await?`.
-- `SolCall::abi_decode(&raw)` takes **one argument** in alloy-sol-types 1.6.x (the `validate: bool` overload is on `SolValue::abi_decode_raw`). Don't pass a second bool.
-- The `*Call` struct generated by `sol!` only carries **inputs** — for output, use either `SolCall::abi_decode_returns(&raw)` OR slice the raw bytes manually:
-  ```rust
-  let mut word = [0u8; 32];
-  word.copy_from_slice(&raw[..32]);
-  let balance = U256::from_be_bytes(word);
-  ```
-  This works for `uint256` returns (single 32-byte BE word). Multi-return abi-encoded responses need the typed `abi_decode_returns`.
-- For sol! blocks that produce `IERC20::balanceOfCall { account: owner }`, the `.abi_encode()` method comes from the `SolCall` trait — `use alloy_sol_types::SolCall;` in scope is mandatory.
-
-**Why**:
-- alloy's `alloy_provider::Provider::call` reflects `N::TransactionRequest` (could be owned or borrowed depending on `N`); in default Ethereum binding it's owned.
-- alloy-sol-types 1.6.x changed the `decode` signature — the `validate: bool` param went away in favor of separate `decode` and `decode_validate` (or via `abi_decode_raw` on `SolValue`).
-- The `sol!` macro emits `IERC20` module with `balanceOfCall { account: Address }` (input) — output is via the `sol!`-generated `Return` struct or via raw bytes.
-
-**Apply**:
-- Any `eth-wallet-core` test or task calling `provider.call`, `sol!`-typed `decode`, or `.abi_encode()`.
-- For Story 22 (ERC-20 balanceOf) + Story 24 (custom token decimals/symbol) — both use the manual-byte-slice decode since values are single `uint256`.
-- For Story 21 (transfer) — outputs are ignored once broadcast accepts; can skip decode entirely.
-- For Story 25 (approve) — uses `approveCall` similarly; tx shape only matters.
-## L45 — Issues labeled `rust-eth-core` route to the integration branch, never main directly
-
-**Trigger**: 2026-08-23 session bootstrap. PR #294 (alloy v1.8 spike + eth-wallet-core plan) merged to main. User requested a dedicated integration branch for the eth-wallet-core v0.2 work: `docs/superpowers/plans/2026-08-23-eth-wallet-core.md` (12 tasks #295 + #301-#311). Workflow + CODEOWNERS bootstrapped on integration branch `rust-eth-core` (commits `04fb6d2` + `701a294`); user authorized autonomous `auto push and commit, PR, merge on rust-eth-core` for the 12-task duration.
-
-**Rule**:
-
-1. **Integration branch canonical**: New branch `rust-eth-core` is the single landing zone for any PR labeled `rust-eth-core`. Created off `main` immediately after PR #294 landed; carries the new CI workflow `.github/workflows/rust-eth-core-ci.yml` (label-routing + verify-gate) and `CODEOWNERS` entry.
-2. **Sub-task branches**: Each Plan Task is one PR. Sub-task branches fork from `rust-eth-core`, NOT from main. Naming convention `task/eth-wallet-core-v0.2/<n>-<slug>` (e.g., `task/eth-wallet-core-v0.2/1-scaffold`).
-3. **PR base = `rust-eth-core`**: Every sub-task PR opens with `--base rust-eth-core --head <sub-task-branch>`. The `label-routing` job in `rust-eth-core-ci.yml` fails the CI check if the PR is missing the `rust-eth-core` label — guards base-branch + label consistency.
-4. **CODEOWNERS routes review**: `.github/CODEOWNERS` auto-assigns `@nhitranbtc` for eth-wallet-core crate paths + plan + user-stories + deep-dive + agent-docs + the workflow file. Single accountable approver before each sub-task merge.
-5. **Merge flow**: Sub-task PRs squash-merge into `rust-eth-core` per `gh pr merge <N> --squash --delete-branch`. No `--admin` needed for the integration branch.
-6. **Final cut at v0.2 completion**: After Task 12 #311 ships, ONE PR cuts `rust-eth-core` → main. This PR uses explicit `"merge PR N with --admin and delete-branch, approved"` phrasing per L6 (the bare "approve" triggered the post-action classifier block on PR #294 earlier this session).
-7. **No direct-to-main PRs for eth-wallet-core surfaces**: A sub-task PR accidentally targeting main must be closed + re-opened against `rust-eth-core`. The integration branch is the gate.
-
-**Why**:
-
-- **L25 sub-task workflow** in canonical form: each Plan Task is one PR; the integration branch accumulates sub-task work in one place; main stays releasable throughout the v0.2 build. Prevents the "ship half-baked crate to main" failure mode where individual tasks land out-of-order.
-- **Label-based CI gating** catches the rare case where base-branch matches but label is missing (operator mis-set via web UI). `label-routing` job is the safety net beneath the CODEOWNERS human review.
-- **CODEOWNERS single-approver pattern** keeps one person accountable before each sub-task merge. Per `rust-eth-core` is a 12-PR cadence; the same person who approves sub-task-by-sub-task also cuts the final-cut-at-v0.2 → review consistency.
-- **Final cut as one PR**: collapsing 12 sub-task commits into one v0.2 release commit keeps `main` history clean per L25 rule 6. Releases from `rust-eth-core` once, after all 12 Tasks pass CI.
-
-**Apply**:
-
-- **Task pickup (L13 step 3)**: Read the issue's labels FIRST. If the issue carries `rust-eth-core`, branch off `rust-eth-core` — never off main. (12 issues in flight as of 2026-08-23: #295 + #301-#311.)
-- **PR open**: `gh pr create --base rust-eth-core --head <sub-task-branch> --label rust-eth-core --body-file <path>`. Keep the `label-routing` CI check green.
-- **PR merge (sub-task)**: `gh pr merge <N> --squash --delete-branch` — no `--admin` flag required (integration branch has no admin-bypass-requiring protection).
-- **Post-merge housekeeping**: After sub-task merges into `rust-eth-core`, switch back to `rust-eth-core`, pull, branch the next sub-task off the now-included state. Don't carry local edits across merges.
-- **Final cut at #311**: ONE PR titled `chore(eth): release cut v0.2.0 — eth-wallet-core landing (#311, `rust-eth-core` → main)`. L24 cascade travels WITH this PR (CHANGELOG `[Unreleased]` → `[v0.2.0]` section + User Stories table checkbox flip). L21 estimate-report + ai-cost-report updates via sub-agent dispatch per L13 step 19.
-- **Drift recovery** (if a sub-task PR accidentally targeted main): close the bad PR, redo from `rust-eth-core` base. L13 Q9 off-rails recovery applies — pause + revert-to-last-green + follow-up issue + ledger entry.
-- **Workspace hygiene**: After the v0.2 final cut, close `rust-eth-core` (delete from origin). The `.github/workflows/rust-eth-core-ci.yml` + `CODEOWNERS` entries can be retired or repurposed for the next multi-task integration cycle.
-
----
-
-## L46 — Branch-identity gate: verify `git branch --show-current` before `git add`, `git commit`, and `commit-push-pr`
-
-**Trigger**: User correction during 2026-08-24 session on `rust-eth-core`. First iteration of this lesson covered only L13 step 13 (`commit-push-pr`). User broadened scope (same session): wrong-branch mistake can land at any point in the commit chain — `git add` stages onto the wrong branch, `git commit` freezes the wrong destination, `commit-push-pr` publishes. Catch at the earliest irreversible step (add = unstageable, commit = revert-only, push = public).
-
-**Rule**: Before ANY of `git add`, `git commit`, or `commit-commands:commit-push-pr`, run `git branch --show-current` and confirm the output equals the expected branch (L13 step 4 = `karpathy-guidelines + branch checkout`). If they differ → STOP. Run `git checkout <expected>` and re-verify before continuing. The check is mandatory regardless of how recently the checkout happened (session restart, tab switch, prior `gh pr merge --delete-branch` etc. can all move HEAD silently).
-
-**Why**: Each step in the commit chain has a different blast radius:
-
-- **Wrong `git add`** = staged onto wrong branch. Recovery: `git restore --staged <file>` then re-add on correct branch. Cheap.
-- **Wrong `git commit`** = SHA frozen on wrong branch. Recovery: `git reset --soft HEAD~1` (keeps changes staged) or `git reset HEAD~1` (unstages). Local-only revert possible, but the commit SHA appears in reflog until garbage-collected.
-- **Wrong `commit-push-pr`** = SHA published to `origin/<wrong-branch>`. Recovery: revert or force-rewrite — both visible in public history per L6.
-
-Cross-checking branch identity at every command catches the mistake at the cheapest recoverable step. Branch name is git's single source of truth; verification is free.
-
-**Apply**:
-
-```bash
-# Run BEFORE every git add / git commit / commit-push-pr:
-EXPECTED="<branch from L13 step 4>"   # e.g. rust-eth-core, task/eth-wallet-core-v0.2/1-scaffold
+EXPECTED="<branch from L13 step 4>"   # rust-eth-core, task/<slug>/<n>-<slug>, etc.
 ACTUAL=$(git branch --show-current)
-if [ "$ACTUAL" != "$EXPECTED" ]; then
-  echo "Branch mismatch: expected=$EXPECTED actual=$ACTUAL"
-  git checkout "$EXPECTED"
-  # re-verify ACTUAL == EXPECTED, then proceed
-fi
+[ "$ACTUAL" != "$EXPECTED" ] && git checkout "$EXPECTED"
 ```
 
-- **Three gates, one rule**: check branch before (1) `git add`, (2) `git commit`, (3) `commit-commands:commit-push-pr`. Even if add passed, re-check before commit. Even if commit passed, re-check before push. The check is cheap; the mistake is expensive.
-- **Record the expected branch at step 4**: write it down in the working scratch (chat scratch or `.superpowers/sdd/<plan>/progress.md` per L14). Don't rely on memory — session restarts erase it.
-- **Re-check after any branch-modifying operation** in the same session: `gh pr merge --squash --delete-branch`, `git rebase`, `git checkout -`, manual branch switch via IDE.
-- **Pair with L42**: L42 audits the staged set (content); L46 audits the destination (branch). Both run at the same commit gate. Two checks, one pause.
-- **Pair with L6 prompt shape**: when surfacing the commit for approval, include the branch name verbatim per L6 ("Show branch name in the approval prompt"). Example: *"Commit `chore(eth): scaffold` on branch `rust-eth-core` — approve?"* The L46 destination check is the gate before the prompt; the branch name in the prompt is the gate the reviewer reads.
-- **Mismatch recovery by stage**:
-  - Wrong `git add` → `git restore --staged <files>` then `git checkout <expected>` and re-add.
-  - Wrong `git commit` → `git reset --soft HEAD~1` (keep changes staged), `git checkout <expected>`, re-commit. NEVER `--hard` (loses staged content). Ledger entry required.
-  - Wrong `commit-push-pr` → per L6 + L13 Q9 off-rails: pause, surface the mistake, revert via new commit on correct branch + cherry-pick or revert on wrong branch. Do NOT force-push. Ledger entry required.
+Pair with L42 (staged-set audit) — L42 audits content, L46 audits destination. Pair with L6: branch name verbatim in the approval prompt.
 
----
+### Gate 2 — Drift-scan refutes stale issue premise (at pickup, L13 step 4a)
 
-## L47 — Drift-scan can refute issue premise (no-repro closure type)
-
-**Trigger**: 2026-08-24 #323 close. Issue body claimed BTC FFI tests regressed. Drift scan (per L13 step 4a) showed `git log` had no test code change since the last green run; the cited SHA + symptom combination never appeared in the cited file. Issue premise was stale relative to actual repo state.
-
-**Rule**: Before pickup on any "tests regressed" / "feature broken" / "X stopped working" issue, validate the premise against current repo state. If `git log --all -- <cited-path>` + `grep -n "<cited-symptom>"` + a local re-run of the cited failure mode all come back clean, the premise is stale. Close the issue as **no-repro** with drift evidence — do NOT start implementation work against a refuted premise.
-
-**Why**: Implementation work against a stale premise burns hours writing code that solves a problem that does not exist. Drift scan is the cheapest test: if the cited artifact never contained the cited symptom, the issue is asking you to fix a fiction. Closing with evidence (rather than silently no-oping) preserves the audit trail and protects the next reader from re-doing the drift scan.
-
-**Apply**:
-
-- At pickup (L13 step 4a), expand the drift scan to cover the issue's failure claim, not just the plan/spec citations:
-
-  ```bash
-  git log --all -- <cited-file-or-path>          # was anything changed since the symptom appeared?
-  grep -n "<cited-symptom>" <cited-file>         # does the symptom ever appear in cited history?
-  <local re-run of the cited failure mode>       # does it fail today?
-  ```
-
-- All three clean → premise is stale → close with drift evidence in body + `[x]` no-repro state + link to L47 in close comment.
-- One or more dirty → premise holds → proceed with normal L13 pipeline.
-
-**Anti-patterns**:
-
-- "I'll start the fix and see if the symptom reproduces" — pickup is too late; do the drift scan first.
-- Closing as "stale" without drift evidence — leaves the next reader no audit trail to confirm the close was sound.
-- Bulk-closing multiple issues on a "no repro" hunch — each close needs its own drift scan.
-
----
-
-## L48 — `git stash` can carry diagnostic residue into the next task
-
-**Trigger**: 2026-08-24 session. After resolving #323 (no-repro close per L47), `git stash list` held an entry from an earlier diagnostic sequence — a WIP test file referencing a SHA + symbol name that no longer matched the closed issue. Had `git stash pop` run implicitly as part of the next task's setup, the residue would have entered the working tree silently and risked bundling into the next commit.
-
-**Rule**: After closing any task that involved temporary WIP files (debug prints, scratch test cases, diagnostic scripts), audit `git stash list` BEFORE pickup of the next task on the same branch. If a stash entry exists, decide explicitly: drop it (`git stash drop`) or land it (`git stash show -p | git apply` + commit with a real scope). Do NOT let `git stash pop` run implicitly as part of the next task's setup.
-
-**Why**: Stash residue is silent. It does not appear in `git status` until popped. Once popped, the file is in the working tree and looks like normal WIP — the next `git add` will pick it up, the next commit will bundle it, the L42 verify-staged gate may or may not catch it depending on whether the operator notices the unfamiliar filename. Pre-emptive audit before the next task starts is cheaper than post-commit recovery.
-
-**Apply**:
-
-- After task close (any path: merged, no-repro, deferred): run `git stash list` — if non-empty, name each entry by its branch-context + WIP-purpose before deciding.
-- Default action: `git stash drop`. WIP diagnostic files are throwaway by definition; if the work was real, it would have been committed long ago.
-- Exception: stash contains real-but-uncommitted scope → land it as a named commit (`git stash show -p | git apply` + commit with descriptive subject). Do NOT pop in-place.
-- Pair with L42 (verify staged set): same discipline, applied to git's stash namespace instead of the index.
-
-**Anti-patterns**:
-
-- `git stash pop` without an explicit reason — the pop is the residue vector; everything after it inherits the WIP scope.
-- "I'll just commit the stash content with the next task's changes" — bundles unrelated work; defeats L6 (one commit = one scope).
-- Assuming `git stash list` is empty after a clean merge — stash entries persist across `gh pr merge --delete-branch` if the merge did not consume them.
-
----
-
-## L49 — Plugin-structure changes require `plugin-dev:plugin-validator` pre-commit
-
-**Trigger** (any one matches before commit):
-
-- Edit to `**/plugin.json` (`.claude-plugin/plugin.json` or `marketplace.json`)
-- Edit to `**/hooks/**` (any hooks file)
-- Edit to `**/skills/**/SKILL.md` YAML frontmatter (name + description only — content body edits outside trigger)
-- Edit to `**/.mcp/servers.json`
-- Edit to `**/settings.json` (when changes touch permissions/hooks/MCP)
-- Edit to `**/settings.local.json` (local override file — same validation need)
-- New plugin scaffold output (e.g. `plugin-dev:create-plugin`)
-
-**Rule**: Invoke `plugin-dev:plugin-validator` post-edit, BEFORE the L13 step 12 commit PAUSE. Read-only agent. Findings feed same fix loop as L12 review (max 3 rounds per L13 Q5 budget, shared budget).
-
-**Why**: Plugin structure bugs (broken manifest, wrong hook event, missing permission, malformed frontmatter) surface only at install/load time on user's machine. Late discovery = bad UX + hotfix cycle. Pre-commit validation = cheap insurance, single agent call.
-
-**Apply**:
+Before pickup on any "tests regressed" / "feature broken" / "X stopped working" issue, validate the premise against current repo state:
 
 ```bash
-# Quick trigger check before commit:
-git diff --cached --name-only | grep -E '(plugin\.json|hooks/.*\.(sh|js|ts|py)|skills/.*SKILL\.md|\.mcp/servers\.json|settings(\.local)?\.json)$' \
-  && echo "Plugin-structure change detected — run plugin-dev:plugin-validator before commit per L49"
+git log --all -- <cited-file-or-path>          # anything changed since symptom appeared?
+grep -n "<cited-symptom>" <cited-file>         # does symptom ever appear in cited history?
+<local re-run of the cited failure mode>       # does it fail today?
 ```
 
-- If no match → skip validator, proceed to commit PAUSE
-- If match → invoke `plugin-dev:plugin-validator` as `general-purpose` sub-agent (or direct call). Findings Critical/Important → fix loop. Findings Minor → defer to PR body.
-- Skip if change is docs-only within plugin dir (e.g. `README.md` inside `.claude-plugin/`). Validator scope = manifest/hooks/skills/permissions, not prose.
+All three clean → premise stale → close as **no-repro** with drift evidence in body + `[x]` no-repro state + link to L46 in close comment. Don't start implementation against a refuted premise (costs hours fixing a fiction).
 
-**Where L49 fits in L13 workflow** (cross-reference, not amendment): conditional gate inside L13 step 11 cluster (verify), before step 12 commit PAUSE. See L13 step 11 Apply section for the inline bullet.
+### Gate 3 — Stash residue audit (before next-task pickup on same branch)
 
-**NOT changing**:
+After closing any task that involved WIP files (debug prints, scratch tests, diagnostic scripts), audit `git stash list` BEFORE pickup. If non-empty, name each entry by branch-context + WIP-purpose. Default action: `git stash drop` (WIP is throwaway by definition). Exception: stash contains real-but-uncommitted scope → land as a named commit (`git stash show -p | git apply` + commit). Do NOT let `git stash pop` run implicitly — pop is the residue vector.
 
-- L13 step 10 — `plugin-dev:plugin-validator` is a different lens from `type-design-analyzer` + `code-reviewer`. L13 step 10 = source-code review. L49 = plugin-manifest review. Mutually exclusive by trigger, not by step.
-- L13 complexity tiers — L49 fires whenever trigger matches, regardless of trivial/normal/critical.
+### Gate 4 — Post-commit contents verify (after multi-hunk Edit commits)
 
-**In-flight eth-wallet-core v0.2**: no trigger match. L49 dormant until first plugin-structure edit.
+After `git commit` (≥2 Edit calls), BEFORE push, run `git show --stat <sha>` and verify: file list matches intent, line counts sane, each file's diff matches the corresponding Edit. If mismatch (Edit reported success but change didn't reach commit):
+
+- DO NOT amend (L6, no force-push; commit is destined for push)
+- DO write a follow-up commit with L9 honest disclosure (state prior SHA, what was missing, why)
+- DO document discrepancy in the new commit message
+
+**Why** (one blast radius per gate):
+
+| Gate            | Failure mode                                      | Recovery cost                                                                 |
+| --------------- | ------------------------------------------------- | ----------------------------------------------------------------------------- |
+| 1 (branch)      | `commit-push-pr` to wrong branch = public revert  | revert or force-rewrite, both visible in history                              |
+| 1 (branch)      | `git commit` to wrong branch = SHA frozen locally | `git reset --soft HEAD~1` + re-commit; SHA appears in reflog                  |
+| 1 (branch)      | `git add` to wrong branch = staged silently       | cheap (`git restore --staged`) but easy to miss                               |
+| 2 (drift)       | Implementation against stale premise              | hours writing code that solves a non-existent problem                         |
+| 3 (stash)       | `git stash pop` during next-task setup            | silent WIP injection, may bundle into next commit                             |
+| 4 (post-commit) | Edit tool silent drop                             | only caught at PR review or remote — far more expensive than follow-up commit |
+
+Cross-checking all four gates catches mistakes at the cheapest recoverable step. Each check is free; the mistake is expensive.
 
 **Anti-patterns**:
+- Skipping gate 1 because "I just checked out" — IDE tab switch + session restart are silent movers.
+- Skipping gate 2 with "I'll start the fix and see if symptom reproduces" — pickup is too late; do the drift scan first.
+- `git stash pop` without explicit reason — pop is the residue vector.
+- Trusting Edit tool's success report without verification (commit `dc5972c`, 2026-08-25).
+- Bulk-closing multiple issues on "no repro" hunch without per-issue drift scan.
 
-- Skipping `plugin-dev:plugin-validator` because "manifest looks fine to me" — manual eyeball misses schema drift the validator catches.
-- Validating then ignoring Critical findings (commit anyway) — same as skipping validator, just slower.
-- Trigger check on `git status` (working tree) instead of `git diff --cached --name-only` (staged) — misses the actual commit contents per L42.
+**Pair-with**: L42 (staged-set audit) at the same commit gate as Gate 1. L6 (approval gates) for the commit/push PAUSE shape. L9 (issue body = status) for honest disclosure in Gate 4 follow-up commits.
 
 ---
 
@@ -1430,138 +1077,6 @@ git diff --cached --name-only | grep -E '(plugin\.json|hooks/.*\.(sh|js|ts|py)|s
 
 ---
 
-## L51 — Verify post-commit contents — Edit tool can report success without applying
-
-**Trigger**: any `git commit` that follows a multi-hunk Edit session (≥2 separate Edit tool calls in the same commit).
-
-**Rule**: after `git commit`, BEFORE any `git push`, run `git show --stat <sha>` and verify:
-- All expected files appear in the diff
-- Line counts match the expected hunks (insertions + deletions)
-- Each file's diff matches the intent of the corresponding Edit call
-
-If mismatch (Edit reported success but the change didn't reach the commit):
-- DO NOT amend (per L6, no force-push; commit is destined for push)
-- DO write a follow-up commit with L9 honest disclosure (per L52)
-- DO document the discrepancy in the new commit message (link prior SHA, state what was missing, why)
-
-**Why**: the Edit tool can report success even when the change didn't apply (observed 2026-08-25 in commit `dc5972c` — claimed "L11 mapping table: new row for security-review" but the actual diff only included 2 of 3 intended hunks; the L11 row silently missed). Without post-commit verification, the discrepancy only surfaces at PR review or remote — far more expensive than a follow-up commit.
-
-**Apply**:
-
-```bash
-# After any commit, before push:
-git show --stat <sha> | head -30
-# Verify: file list matches intent, line counts sane
-```
-
-- Single-edit commits: low risk, optional check
-- Multi-edit commits: mandatory check
-- Multi-Edit where each call is in a separate hunk: mandatory check
-- After the check passes → proceed to push per L6 bundling
-
-**Anti-patterns**:
-
-- Trusting Edit tool's success report without verification
-- Amending the prior commit when push already happened (force-push risk per L6)
-- Silently leaving an inaccurate commit message in history
-
----
-
-## L52 — Honest follow-up commit when prior commit message diverges from actual diff
-
-**Trigger**: discovered that a prior commit's message claims a change that the actual diff doesn't include (or includes a change the message omits).
-
-**Rule**: write a follow-up commit with:
-- Subject prefixed `fix(<scope>):` (e.g. `fix(lessons):`)
-- Body explicitly states: which prior commit, what was missing, why (e.g. "L9 honesty: prior commit message inaccurate; this commit documents the fix in the audit trail")
-- Link the prior commit SHA explicitly
-- DO NOT amend the prior commit (per L6, no force-push on a commit already destined for push; even if not yet pushed, amending breaks the prior commit SHA which other references may point to)
-- DO NOT silently leave the prior message inaccurate (L9 honesty violation)
-
-**Why**: L9 schema (issue body = status, PR body = fix analysis) demands honest reporting. Inaccurate commit messages create audit-trail drift that future-self or reviewers can't trust. A follow-up fix commit with explicit disclosure is cheap; amending hides the mistake; silence compounds the drift.
-
-**Apply** (template for the follow-up commit body):
-
-```text
-fix(<scope>): <one-line summary of fix>
-
-Fixes omission in <prior-sha> — that commit's message claimed <claim>
-but the actual diff only included <what-was-actually-included>. The
-<what-was-missing> was silently missing.
-
-This commit:
-- Adds the missing <change>
-- <other changes>
-
-L9 honesty: prior commit message inaccurate; this commit documents
-the fix in the audit trail.
-```
-
-**Pair with L51** (post-commit verification): L51 catches the discrepancy. L52 codifies the response.
-
-**Anti-patterns**:
-
-- Amending the prior commit when it was already pushed or referenced
-- Rewriting history with `git rebase -i` to "clean up" the inaccurate message
-- Apologizing in the new commit message (L9: state the fact, move on)
-- Skipping the fix because "the change is in the file now" — the audit trail matters more than the line content
-
-## L53 — Critical-tier L12 cluster (3 sub-agents + security-review standalone) catches bugs TDD alone misses on key-encryption surfaces
-
-**Trigger**: Session 2026-08-26, Issue #351 (cycle 8b / C-1 from #339 — rpassword TTY prompt as primary password source). 5-file / +264/-16 PR on `rust-eth-core`. TDD wrote 4 unit tests + 2 rpassword test-seam integration tests, all GREEN. L12 critical-tier cluster (3 sub-agents: `pr-review-toolkit:type-design-analyzer` + `pr-review-toolkit:code-reviewer` + `compass:security-auditor` because the pr-review-toolkit variant isn't registered in this harness) caught **2 real bugs TDD missed**:
-
-1. **HIGH** — empty `--password ""` accepted as the wallet password (would brick the wallet, since a keystore encrypted with an empty password is unrecoverable). Code-reviewer flagged divergence from `btc/src/handlers.rs:86` which makes `Some(p) if !p.is_empty() => Ok(p)` so empty flag falls through to prompt. Fix: `if !p.is_empty()` guard in the eth kernel + empty-argv-falls-through to env then prompt. Two new unit tests pin both branches.
-2. **HIGH** — `map_err(|_| Error::InvalidInput("password required: ..."))` discarded the underlying `io::Error` from `rpassword::prompt_password`. Operator on a CI runner without `/dev/tty` saw the generic "password required" message — same as someone who forgot to supply a password — masking the real diagnostic. Fix: drop the re-wrap so `prompt_password`'s own `Error::InvalidInput(format!("password prompt failed: {e}; ..."))` propagates with full io::Error context.
-
-Plus `compass:security-auditor` M-2 caught a third defense-in-depth gap the kernel-level reviewers couldn't see: `ETH_PASSWORD` env var lingers in process env after read, so any future subprocess spawned by the eth CLI (or by alloy / tokio deps) would silently inherit the cleartext password. Fix: `std::env::remove_var("ETH_PASSWORD")` immediately after read; `ENV_LOCK: Mutex<()>` test serializes the env-mutation check for parallel-safe cargo test runs.
-
-**Rule**: Critical-tier L13 review pays for itself on key-encryption / signing / encryption / network / persistence surfaces. Do not skip the L12 sub-agent cluster or the standalone `security-review` gate even when TDD is thorough. The 5 sub-agent cost (3 L12 + security-review + pr-test-analyzer) is small relative to the cost of a bricked-wallet bug or a leaked env-var secret shipped to production.
-
-**Why**: TDD covers happy paths + boundary cases the author can imagine. Critical-tier review covers:
-
-- **Cross-crate convention divergence** (eth-vs-btc on `--password ""` handling) — only visible when comparing to a sibling CLI's existing pattern.
-- **Error-message context preservation** (the `map_err(|_|...)` anti-pattern — invisible from inside the chain; needs a reviewer's eye for "what does the operator actually see at the leaf").
-- **Defense-in-depth gaps for future code paths** (subprocess inheritance — no subprocess exists today, so TDD can't write a test for "no future subprocess can inherit the var"). Only a security lens catches "what COULD be inherited by code that doesn't exist yet".
-
-**Apply**:
-
-- For any critical-tier PR per L13 (key material / signing / encryption / network / persistence surfaces), run the full L12 cluster + standalone security-review + pr-test-analyzer. Budget the sub-agent cost upfront.
-- When the cluster catches divergent findings across reviewers (same bug surfaced by 2+ sub-agents with different lenses = high-confidence real bug), fix in one pass before verify gate — don't split fixes across multiple rounds.
-- After the fix loop, do the quad verify gate (`cargo fmt` + `cargo clippy --all-targets -- -D warnings` + `cargo test` + `cargo audit`) BEFORE the commit PAUSE — per L13 step 11, the verify gate runs on the final fix, not the first pre-review pass.
-- For env-var + subprocess concerns, the security-auditor's "no subprocess spawning in current crate" verification is necessary but NOT sufficient — the fix must remove the var from process env post-read as defense-in-depth for code that doesn't exist yet.
-
-**Pair with L13 amendment 2026-08-25**: the `security-review` standalone gate (added to L13 step 10b) is what catches the defense-in-depth gaps like M-2 — `pr-review-toolkit:security-auditor` (L12 cluster) and `security-review` (standalone) are defense in depth, not redundant. The cluster catches code-level issues; the standalone catches "what could go wrong in code that doesn't exist yet".
-
-## L54 — Defense-in-depth for env-var secrets: read + immediate `std::env::remove_var()` + Mutex-serialized test
-
-**Trigger**: Session 2026-08-26, Issue #351 cycle 8b. `compass:security-auditor` M-2 finding: `ETH_PASSWORD` env var lingered in process env after `resolve_password()` read it. Today no subprocess is spawned from the `eth` CLI (no `tokio::process::Command` / `std::process::Command`), so the inheritance risk is zero. But `Cargo.lock` already pins `alloy-node-bindings::Anvil` for dev tests + any future spawn work (PR-B sign + broadcast already wires RPC) would silently inherit the cleartext password.
-
-**Rule**: When reading any env-var secret (password, token, signing key, API key), capture the value then **immediately** `std::env::remove_var("NAME")` after the read. Treat the var as single-use for this invocation; reading it twice would be a security regression. Verify the removal with a `Mutex`-serialized test:
-
-```rust
-#[test]
-fn reads_and_removes_env_var() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    std::env::set_var("THE_SECRET", "value");
-    let result = read_secret();
-    std::env::remove_var("THE_SECRET"); // cleanup before assertions
-    assert_eq!(result.unwrap(), "value");
-    assert!(std::env::var("THE_SECRET").is_err());
-}
-static ENV_LOCK: Mutex<()> = Mutex::new(());
-```
-
-**Why**: `std::env::var` reads without clearing — the var stays in the process env block until the process exits. Any subprocess spawned later (today, tomorrow, by a future feature) inherits the parent's env block and can read the secret via `std::env::var` from the child. Removing the var post-read blocks this inheritance class without requiring knowledge of which future subprocesses will exist.
-
-The Mutex is necessary because `cargo test` runs tests in parallel by default; without the lock, one test's `set_var` races with another test's `var()` and produces flaky failures or false-positive assertions (e.g. the cleanup removes the var that another test just set).
-
-**Apply**:
-- For any `std::env::var("SECRET")` call in production code (passwords, tokens, keys), follow it with `std::env::remove_var("SECRET")` in the same scope.
-- The cleanup must happen unconditionally — not just on the success path. Use a `let _guard = ...` pattern or explicit `remove_var` at the end of the read scope.
-- Test the removal in a unit test that uses a static `Mutex<()>` to serialize env mutation within the test binary. The `Mutex` is local to the test module (one per file); other test modules can still mutate env in parallel.
-- Cleanup BEFORE assertions — if the assertion panics, the cleanup still runs (Rust drops `_guard` on panic, which doesn't help here because we want explicit `remove_var` not RAII; but the explicit `remove_var` before assertions gives a loud failure if a sibling test already clobbered the var).
-- This is defense-in-depth for code that doesn't exist yet — the security lens ("what COULD be inherited by code that doesn't exist yet") catches it; TDD alone can't write a test for "no future subprocess can inherit the var".
-
 ## L55 — Step 11 verify gate: scope `cargo test -p <crate>` — never `--workspace`
 
 **Trigger**: Session 2026-08-26, Issue #358 verify gate. `cargo test -p eth -p eth-wallet-core --workspace` ran >5 min and crossed the 300s Bash timeout. The slow part isn't `eth`/`eth-wallet-core` (which finish in <60s combined) — it's `bitcoin-wallet-core` integration tests that the `--workspace` flag pulls in (FFI tests that spawn Dart VMs, threat-model tests, etc., some 3–5 min each).
@@ -1576,248 +1091,3 @@ The Mutex is necessary because `cargo test` runs tests in parallel by default; w
 - Step 11-ci dedup (L13): keep `cargo tree --workspace --duplicates` in CI workflow (cheap, one-time per push).
 - If PR diff touches more than 2 crates, add each as a `-p` flag.
 - L13 step 11 header line updated to reference L55 + show the scoped-cargo-test command.
-
-## L56 — Permanent regression block via CI audit-grep (Issue #382)
-
-**Trigger**: Session 2026-08-26, Issue #382 (follow-up to PR #374 / Issue #365). PR #374 landed the `Error::rpc(impl Display)` constructor + bulk-replaced 23 leaky `Error::Rpc(format!("...{e}"))` sites + closed AC #5 via a one-shot per-PR `grep` audit. The audit was one-shot — a future author reverting to the leaky pattern would bypass the redaction contract and CI would not catch it. The constructor's doc-comment cited "L18 PAUSE-before-write rule" (L18 retired per the lessons audit) but the enforcement was a PR-time check, not a permanent gate.
-
-**Rule**: For security-critical code paths (RPC redaction, secret handling, key material, signing surfaces), one-shot PR-time audits are insufficient. Convert the audit into a CI job that fails on regression. Pair the job with a doc-comment at the constructor's site so the enforcement mechanism is visible to future authors.
-
-**Apply**:
-
-- When landing a redaction / secret-handling fix that ships an AC audit (`grep -rn '<bad-pattern>'` returns 0), immediately add a CI job running the same grep with exit-on-match.
-- The job must run on every PR + push to the protected branch. No `--ignored` skip, no `if: success()` guard. Lightweight (just `actions/checkout` + bash, no rust toolchain needed).
-- Reference the job from a doc-comment at the constructor's site so future authors see the enforcement mechanism (e.g. `/// Enforced by CI audit-gate \`rust-error-grep\` job in ... — see Issue #N.`).
-- Document the rule in `tasks/lessons.md` per L24 cascade — link the parent issue + the audit grep pattern + the enforcement job path.
-- Use a clear error message in the CI step (`echo "::error::<why-this-pattern-bad>"`) so a future author who triggers the gate gets actionable guidance, not just a failing exit code.
-- **Drift caveat**: the parent issue body for #382 cited "L18 PAUSE-before-write rule" — L18 was retired per the lessons audit. The rule (PAUSE-before-write + enforcement gate) now lives at L13 step 12 (commit approval) + this lesson. When citing retired lesson numbers in issue bodies, surface the drift in the PR body Drift section.
-
-**Anti-patterns**:
-
-- One-shot audit only — silent regression possible the moment the audit author moves on.
-- Doc-comment without CI gate — describes the rule but does not enforce it.
-- CI gate without doc-comment — enforcement works but the rationale is invisible to readers of the source.
-- Job scoped to `--ignored` / `if: success()` — defeats the permanent-block intent.
-- Generic `grep` for `format!` or `Rpc` — too broad, causes false positives in unrelated code. Anchor on the specific leaky pattern (`Error::Rpc(format`).
-
-### L57 — Security-auditor fallback for critical-tier (2026-08-30, PR #462 application)
-
-**Trigger**: `pr-review-toolkit:security-auditor` not in active harness's agent registry during L13 step 10 critical-tier review of #459 (sign dispatch wiring). Existing L53 amendment (2026-08-26) permits substituting the closest equivalent but requires the deviation be documented in PR body AND lessons.md.
-
-**Rule**: When `pr-review-toolkit:security-auditor` is absent, substitute `compass:security-auditor` (closest lens match — description names "trust boundaries, crypto, secrets, authz"). Alternatives: `ecc:security-reviewer` (OWASP-flavored) or `voltagent-qa-sec:security-auditor`. Pick the one whose description explicitly mentions the lens needed (for key-material / signing surfaces: crypto + secrets + trust boundaries). Document the substitution in the PR body alongside the fallback attribution, AND append a per-instance note here with the PR# / tier / outcome. Do NOT skip the security lens entirely per L13 Q4 carve-out — the fallback is mandatory.
-
-**Why**: Critical-tier surfaces (key material / signing / encryption / network / persistence) MUST get the security lens. Skipping it leaves gaps TDD + type-design + code-review cameras don't see. PR #462 application: `compass:security-auditor` caught (a) the `from_slice` error-category fix (keystore corruption → `Error::Rpc`, NOT `InvalidInput` — operator retry-trap), and (b) confirmed 6/7 lenses clean (zeroizing, password chain, wrong-password exit code, Q7 gate, verify round-trip, signer construction error). Two pre-existing gaps (L54 threading invariant, empty `POLYGON_PASSWORD` env) flagged but not regressed by #459 — deferred to separate small-PR follow-ups per L13 surgical.
-
-**Apply**: When `pr-review-toolkit:security-auditor` (or `type-design-analyzer`, `code-reviewer`) is unavailable, substitute the closest equivalent and document the fallback in (a) PR body "L12 review" section + (b) `tasks/lessons.md` with PR# / tier / outcome / lenses-covered. Never silently skip a lens; if no equivalent exists, surface the gap to the user and PAUSE before proceeding (per L13 Q4 budget).
-
----
-
-### L13 amendment 2026-08-28 — `cancel-in-progress: true` cascade-cancels cargo test in workspace-wide CI
-
-Trigger: PR #430 (Phase 1 `polygon-wallet-core` thin wrapper, issue #423) on `feat/polygon-phase-1-423` against `rust-evm-core`. Three substantive commits in 17 minutes (feature scaffold, L24 CHANGELOG bullet, [ci-skip] lessons amendment) cascade-cancelled the in-flight `Rust test` job twice — Run 7 cancelled at 13m20s, Run 8 cancelled at 14m — before `cargo test --workspace --all-targets` could finish. The 40m `timeout-minutes` was never reached. The cancel signal came from the workflow's `concurrency.cancel-in-progress: true` setting, NOT from the timeout.
-
-**Rule**: When a PR to `rust-evm-core` (or any integration branch) is likely to receive >1 substantive commit during the run of its longest required-check job, either (a) drop `cancel-in-progress: true` from the workflow `concurrency` block, OR (b) bump the relevant job's `timeout-minutes` past `expected_runtime × 2` AND accept that any push during the run kills the in-flight test.
-
-**Why**: `cargo test --workspace --all-targets` against `rust-wallet-app/` includes `bitcoin-wallet-core` FFI tests that deliberately wait for esplora sync timeouts (~60-90s each) plus several FFI tests in the same magnitude. Whole-workspace run takes 30-40 min depending on cache state. The default 40m timeout is tight; a single substantive push mid-run cancels the test, the next push cancels that one too, and the test never gets to complete.
-
-**Apply — pattern**:
-
-```yaml
-# BAD (cascade-cancels in-flight runs on every push):
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-# GOOD (let runs queue, each gets full budget):
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-
-# GOOD (scope cancel-in-progress per-job, only safe jobs):
-jobs:
-  rust-fmt:
-    concurrency:
-      group: fmt-${{ github.ref }}
-      cancel-in-progress: true
-  rust-test:
-    # NO cancel-in-progress here — let it run to completion
-```
-
-**Pair with** the [ci-skip] amendment above: doc-only commits no longer churn the required-check list (saved by [ci-skip]); code-bearing commits no longer cascade-cancel (saved by removing `cancel-in-progress`). Two complementary rules, both shipped via PR #430.
-
-**Pair with** the timeout-bump pattern: when `cargo test --workspace --all-targets` is the required gate, `timeout-minutes` should be ≥ `expected_runtime × 1.5` to absorb cache-miss variance. PR #430 bumped `rust-test` from 40m → 60m on the same edit.
-
-**Anti-patterns**:
-
-- Setting `cancel-in-progress: true` globally on an integration-branch workflow that runs `cargo test --workspace` — every push kills in-flight test runs.
-- Trusting the operator's push cadence ("I'll just push one typo fix") — substantive commits land more often than expected, especially during plan-driven multi-step work.
-- Bumping `timeout-minutes` without also addressing `cancel-in-progress` — if cancel is the killer, more timeout headroom just means more wasted CI minutes per cancelled run.
-- Removing `cancel-in-progress` from a per-push-typo-fix workflow (e.g. a fork-and-fix branch) where it's still useful — this amendment is for integration branches with `cargo test --workspace` as a required check.
-
-**Worked example (PR #430 timeline)**:
-
-| Push | Run | Result | Why |
-|------|-----|--------|-----|
-| 09:17 — `846778b` (feature scaffold) | Run 7 (head `846778b`) | cancelled @ 09:34 | superseded by Run 8 from `17066ba` push at 09:34 |
-| 09:34 — `17066ba` (L24 CHANGELOG bullet) | Run 8 (head `17066ba`) | cancelled @ 09:49 | superseded by Run 9 from `e7f1144` push at 09:48 |
-| 09:48 — `e7f1144` ([ci-skip] lessons amendment) | Run 9 (head `e7f1144`) | in progress @ 09:49 | awaiting Rust test completion |
-
-`Rust test` (the only required-check that takes >5 min) never had a chance to finish a single cargo test cycle. Fix landed in commit `45d0669` on `feat/polygon-phase-1-423` (folded into squash `92256ad` on `rust-evm-core`).
-
-
-## L58 — `k256::SigningKey::from_slice` accepts variable-length byte slices (parses as big-endian scalar mod N)
-
-**Trigger**: 2026-08-30, PR #470 (Issue #469). Initial test wrote `vec![0x42u8; 31]` expecting `PrivateKeySigner::from_slice` to reject non-32-byte input. Test failed (impl returned `Ok`). Re-read the alloy-signer-local source at `~/.cargo/registry/.../alloy-signer-local-1.8.3/src/private_key.rs:fn from_slice` — it delegates to `k256::SigningKey::from_slice(bytes)`, which accepts ANY byte slice and interprets it as a big-endian integer mod curve order N. "Wrong length" is not a rejection criterion; "scalar ≥ N" is.
-
-**Rule**: When writing a unit test that asserts `PrivateKeySigner::from_slice` rejects malformed input, use 32 bytes of `0xFF` (which exceeds the secp256k1 curve order N) to trigger scalar rejection — NOT a short or long slice. 31 bytes of `0x42` silently parses as a valid (but unusual) private key. Apply to any test against the alloy signer stack, the `k256::ecdsa` crate directly, or any sister crate built on it.
-
-**Why**: The sister invariant `decode_signer_bytes_rejects_wrong_length_hex` at `evm-wallet-core/src/wallet.rs:1034` only catches malformed HEX STRING length — it doesn't catch malformed BYTE length on the raw-bytes entry point that #469 introduces (`import_private_key_for_network(name, key_bytes: &[u8], ...)`). The byte-length test gap is invisible to TDD cameras focused on the hex entry point. Without this lesson, future contributors will write the same wrong test and either (a) silently pass with bogus coverage, or (b) defensively add a length check to the lib that breaks the sister `from_slice` semantics.
-
-**Apply**:
-- When the surface is `from_slice(&[u8])` (raw bytes), test rejection with `0xFF * 32` (scalar ≥ N).
-- When the surface is `from_slice(&str)` (hex), test rejection with `&str` of wrong length (existing sister test).
-- When the surface is `from_slice(&SecretKey)` (typed), the lib does its own validation; trust the type.
-
-**Anti-patterns**:
-- Assuming `from_slice` enforces a fixed 32-byte input. It does not.
-- Adding an explicit `key_bytes.len() != 32` check in a new wrapper around `from_slice` without first confirming the wrapped caller doesn't expect variable-length scalar semantics (e.g. hardware-wallet keys that use a different curve).
-- Naming a test `rejects_wrong_key_length` when the actual rejection criterion is scalar range, not length — pin the rejection mechanism in the test name (e.g. `rejects_out_of_range_scalar`).
-
-**Apply — example** (from PR #470 commit `b4194e7`):
-
-```rust
-let bad_pk = [0xFFu8; 32]; // > secp256k1 N → triggers from_slice scalar rejection
-let err = mgr.import_private_key_for_network("bad-scalar", &bad_pk, &pw, net)
-    .expect_err("out-of-range scalar must error");
-assert!(matches!(err, WalletError::PrivateKey(_)));
-```
-
-PR #470 evidence: commit `b4194e7` + 7 new lib tests (this one + 6 sister tests for polygon-amoy happy path, same-name-different-network uniqueness, dup-name rejection, empty-password rejection, 0o600 blob persistence, `unlock_signer` round-trip).
-
----
-
-## L59 — clap `#[arg(long, conflicts_with = "...")]` uses the FIELD-NAME-derived arg ID, not the long-flag string
-
-**Trigger**: 2026-08-30, PR #470 (Issue #469). Adding a new `--private-key-file` flag to `WalletAction::Import` (which already had `--private-key` and `--mnemonic`). Initial naive write: `#[arg(long, conflicts_with = "private_key_file")]` on the existing `private_key` field — silently did nothing because clap's `conflicts_with` takes the ARG ID, not the literal flag string. The arg ID for `#[arg(long)]` on a Rust field is the field name (snake_case) — so the right string is `"private_key_file"` (matches the field name) NOT `"--private-key-file"` (the user-facing flag).
-
-**Rule**: When adding a new clap field that must conflict with one or more existing fields, append `conflicts_with = "<other_field_name>"` to BOTH sides of the relationship (the new field + every existing field it conflicts with). Arg IDs are derived from field names automatically (snake_case from Rust convention). User-facing flag strings (`--private-key-file`) are irrelevant to `conflicts_with`. To check an arg ID: `clap_derive` exposes it via `#[arg(id = "explicit")]`; without that override, the field name is the ID.
-
-**Why**: Sister-flag conflicts are critical for security (closing argv-exposure holes, preventing dual-secret paths). If `conflicts_with` is silent no-op because of a wrong reference, the conflict check never fires and the user can pass both flags. TDD tests for the clap parse surface (`Cli::try_parse_from`) DO catch this — that's exactly the role of `cli_rejects_private_key_with_private_key_file` in PR #470 — but only if the test author knows to write the test. Without the test, the silent no-op ships.
-
-**Apply**:
-- Adding a new conflicting field: enumerate ALL existing fields that should conflict with it; append `conflicts_with = "<their_field_name>"` to the new field; append `conflicts_with = "<new_field_name>"` to every existing field.
-- Use `Cli::try_parse_from(["binary", "sub", ...])` in a unit test to confirm the conflict fires — don't rely on docstring or manual smoke.
-- The conflict message should mention BOTH flag names (`msg.contains("--private-key") && msg.contains("--private-key-file")` per the PR #470 test) so the operator sees the full conflict.
-
-**Anti-patterns**:
-- `conflicts_with = "--private-key-file"` (with leading `--`) — clap treats it as a literal string match against the arg ID; doesn't match; silent no-op.
-- Adding `conflicts_with` on only the NEW field, not the existing ones — clap enforces conflicts only one directionally; both sides needed.
-- Assuming `conflicts_with` works for long-flag strings — it doesn't; clap's arg ID system is documented but easy to miss.
-
-**Apply — example** (from PR #470 commit `b4194e7`):
-
-```rust
-Import {
-    #[arg(long, conflicts_with = "private_key", conflicts_with = "private_key_file")]
-    mnemonic: Option<SecretMnemonic>,
-    #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key_file")]
-    private_key: Option<String>,
-    #[arg(long, conflicts_with = "mnemonic", conflicts_with = "private_key")]
-    private_key_file: Option<PathBuf>,
-    // ...
-}
-```
-
-Every pair appears on both sides. Tested via `cli_rejects_private_key_with_private_key_file` (`polygon/src/handlers/wallet.rs:2098`).
-
----
-
-## L60 — `sol!` macro `bytecode` attribute expects creation (init) bytecode, NOT runtime bytecode
-
-**Trigger**: Issue #419 / PR #485 (2026-08-31). The `sol!` macro in alloy 1.8.x emits `MockUSDC::BYTECODE` const + `deploy()` helper when `#[sol(bytecode = "0x...")]` is set. The macro expects **creation (init) bytecode** from `solc --bin` — the constructor logic + runtime appended after the `fe` INVALID split, NOT the deployed-only bytecode from `--bin-runtime`. Embedding runtime bytecode deploys but reverts in the constructor (~71K gas consumed, empty code on-chain).
-
-**Rule**: When using `sol! { #[sol(bytecode = "0x...")] contract Foo {} }` to make a contract deployable from the macro, compile via `solc 0.8.X --bin` (creation code), NOT `--bin-runtime` (deployed code). The two differ by ~25% (1223-byte runtime vs 2908-byte creation in the MockUSDC example — creation includes constructor dispatch + runtime).
-
-**Why**: Without this distinction, the deploy succeeds (tx mined, `contract_address` populated) but the constructor reverts silently — Anvil returns `status = false` + `gas_used = ~71K` (early revert), no runtime code ends up at the address, and any `eth_call` returns `0x` empty bytes. The wire-format symptom (empty `eth_call` response) is the same as if you'd forgotten the attribute entirely — root-cause diagnosis via receipt.status + `eth_getCode` is the difference (revert shows `status = false`; missing attribute shows `status = true` + empty code).
-
-**Apply**:
-
-- When wiring a deployable `sol!` contract: compile once via `solc <ver> --bin --optimize-runs <N> --metadata-hash none <Contract>.sol`, paste the `bin` output (NOT `bin-runtime`) into the `bytecode` attribute.
-- Embed Solidity source above the `sol!` block + documented regeneration protocol in a header comment (mock example at `rust-wallet-app/spikes/polygon-v1/src/erc20.rs:13-29`) so future contributors can recompile if the contract changes.
-- For deploy input, concatenate `MockUSDC::BYTECODE` (creation code) ++ `U256(args...).abi_encode()` (raw args, NO selector — see L61).
-- After deploy, assert `eth_getCode(token_addr).len() > 0` as defense-in-depth regression guard against the root cause recurring.
-
-**Anti-patterns**:
-
-- Embedding `bin-runtime` into the `bytecode` attribute — deploy tx mined but constructor reverts silently.
-- Forgetting to embed the `Solidity` source reference next to the `sol!` block — future contributors can't recompile without reverse-engineering the macro's ABI.
-- Skipping the `eth_getCode` post-deploy check — assumes the deploy succeeded because the receipt.status is true, but the runtime can be empty even on success.
-
----
-
-## L61 — EVM contract-creation input format: `creation_bytecode ++ abi_encoded_args` (NO 4-byte selector)
-
-**Trigger**: Issue #419 / PR #485 (2026-08-31). `MockUSDC::constructorCall { initialSupply }.abi_encode()` returns `selector (4 bytes) ++ abi_encode(initialSupply)` — but for EVM contract-creation input, the selector must NOT be present; constructor args are appended to init code directly (the init code knows its own constructor signature).
-
-**Rule**: For `deploy_tx.input` of an EVM contract-creation transaction, use `[MockUSDC::BYTECODE, SolValue::abi_encode(&ctor_arg)].concat()` where `ctor_arg` is the constructor arg type directly (e.g. `U256` for `constructor(uint256 initialSupply)`). Do NOT use `MockUSDC::constructorCall::abi_encode()` — that prepends the 4-byte function selector (valid for `eth_call` / `eth_sendTransaction` call paths, INVALID for deploy input).
-
-**Why**: If the selector is included, the init code reads 4 bytes it doesn't expect as part of its constructor-arg payload. For MockUSDC's `constructor(uint256 initialSupply)`, the init code reads the next 32 bytes as `initialSupply` — but with the selector prepended, those 32 bytes are the selector (4 bytes) + 28 bytes of garbage from the actual `initialSupply` arg. The `initialSupply` SSTORE writes a nonsense value, the rest of the constructor logic may or may not succeed depending on what the garbage bytes look like — but crucially the contract is deployed (status = true) with `_balances[msg.sender]` set to a wrong value, so subsequent `transfer` + `balanceOf` tests fail with mismatched math. OR — as observed in #419 — the entire constructor reverts because the garbage value fails an internal check (or the gas accounting differs).
-
-**Apply**:
-
-```rust
-// CORRECT — for deploy_tx.input on a contract-creation tx:
-let initial_supply = usdc_to_raw(10_000_000);  // U256
-let ctor_args = initial_supply.abi_encode();     // SolValue::abi_encode on U256
-let deploy_input: alloy_primitives::Bytes = {
-    let mut v: Vec<u8> = MockUSDC::BYTECODE.to_vec();
-    v.extend_from_slice(&ctor_args);
-    v.into()
-};
-
-// WRONG — selector prepended:
-let ctor_calldata = MockUSDC::constructorCall { initialSupply }.abi_encode();  // 4-byte selector ++ args
-let deploy_input: alloy_primitives::Bytes = {
-    let mut v: Vec<u8> = MockUSDC::BYTECODE.to_vec();
-    v.extend_from_slice(&ctor_calldata);  // wrong — selector contaminates init-code's arg read
-    v.into()
-};
-
-// CORRECT — for `eth_call` (NOT deploy):
-let balance_calldata = MockUSDC::balanceOfCall { account: recipient }.abi_encode();  // selector ++ args = correct here
-provider.call(&TransactionRequest::default().to(token_addr).input(balance_calldata.into())).await
-```
-
-- Use `MockUSDC::constructorCall::abi_encode()` ONLY for the eventual full EIP-712 / typed-call dispatch paths (post-deploy), NOT for deploy input.
-- Use `SolValue::abi_encode(&value)` for any single constructor arg type (U256 / Address / bool / bytes / etc.).
-- The mnemonic for selector inclusion vs exclusion: "CALL dispatches via selector (include); CREATE reads args directly from init code (exclude)."
-
-**Anti-patterns**:
-
-- Treating `constructorCall::abi_encode()` as a universal encoding helper — it's specifically for the call path, not deploy.
-- Trying to "strip the selector" by slicing the first 4 bytes off `abi_encode()` output — fragile, breaks if the ABI ever gains overloads or non-standard layouts.
-- Writing deploy input as `ctor_calldata` with no `MockUSDC::BYTECODE` prepended — the original #419 root cause that started this whole investigation.
-
----
-
-## L62 — Phase-completion sweep SHA must be the post-merge HEAD, not the PR head (Issue #502)
-
-**Trigger**: Issue #502 (2026-09-01). PR #497 (Phase 2 of #495) squash-merge at `eb360c1` lost the `(Some(ref phrase), None, None)` mnemonic dispatch arm that existed at the PR head `b461d68`. The PR body recorded `25 passed; 0 failed` against the PR-head SHA. No post-merge sweep ran. Phases 3/4/5 inherited a broken parent branch; the loss went undetected until #501's full-suite sweep on the Phase 5 branch surfaced `30 passed; 3 failed` — three of which are the dead mnemonic arm plus two tests that could not have passed as merged (wrong CLI flag names, wrong PK-file on-disk format).
-
-**Rule**: When recording a phase-completion sweep in a tracker issue or PR body, the cited SHA must be the **post-merge HEAD** of the parent branch (or the squash commit itself), never the PR-head commit. PR-head evidence is unverifiable once squash erases the diff.
-
-**Why**: Squashing discards every commit between `main..PR-head`, including any commits added during review. A green sweep at PR head proves nothing about the merged state. The PR-body sweep claim in #497 was technically true for the cited SHA but false for the merged tree — and because no one re-ran the sweep post-merge, the regression survived across three subsequent phase PRs (#499, #500, #501).
-
-**Apply**:
-
-- Before citing a sweep SHA in a PR body / issue body / progress ledger, verify the SHA is the post-merge parent-branch HEAD, not the PR head:
-
-```bash
-git rev-parse HEAD               # post-merge parent-branch HEAD
-git rev-parse origin/<branch>    # remote parent-branch HEAD
-```
-
-The cited SHA MUST equal one of these, not the PR head SHA (`git rev-parse origin/<branch>~0` is still PR head if the PR is open).
-
-- For `gh pr merge --squash`, the **squash commit itself** is the verifiable evidence for a green sweep, because the PR head commit is discarded.
-- Phase-completion ledger entries should record the SHA + the merge commit SHA + the command (`gh pr merge --squash <N>`) that produced the merge — three points that any future audit can re-verify.
-- This rule covers all sweep-bearing phases (Phase 1 through N of any umbrella issue), not just #495. Audit existing phase-completion claims for similar drift before relying on them.
