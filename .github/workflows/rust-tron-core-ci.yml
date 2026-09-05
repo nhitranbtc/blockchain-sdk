@@ -66,6 +66,11 @@ jobs:
         with:
           toolchain: "1.98.1"
           components: clippy
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Mirrors the umbrella ci.yml step (Issue #403
+        # deliverable #9). Debian/Ubuntu: protobuf-compiler ships protoc 3.x.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
@@ -84,6 +89,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Mirrors the umbrella ci.yml step.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
@@ -181,6 +190,10 @@ jobs:
         with:
           toolchain: "1.98.1"
           targets: aarch64-apple-ios,aarch64-linux-android
+      - name: Install protoc (>=3.12)
+        # Not needed while the skip-guard below is active, but required the
+        # moment Phase 0 lands the crate and the cargo check actually runs.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
