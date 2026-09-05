@@ -25,3 +25,6 @@ tangem-app-ios/
 
 # Playwright MCP server cache
 .playwright-mcp/
+
+# Engineering scratch (ephemeral engineering notes — not committed)
+docs/superpowers/engineering/
