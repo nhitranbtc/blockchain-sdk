@@ -1,0 +1,37 @@
+[package]
+name = "tron-wallet-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98.1"
+license = "MIT"
+description = "TRON (TRX + TRC-20 stablecoin) wallet library built on the anychain stack. Phase 0 skeleton of plan `docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md` (tracks issue #399). Phase 1 wires address/keys/signing."
+publish = false
+
+[lib]
+# rlib for in-workspace consumers (the `tron` CLI, integration tests);
+# cdylib so the Phase 6 FFI layer can expose a C ABI to mobile hosts.
+# Mirrors bitcoin-wallet-core.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# anychain stack — exact pins inherited from [workspace.dependencies].
+# See the workspace manifest for why `=X.Y.Z` (not `^`) is mandatory.
+anychain-core = { workspace = true }
+anychain-tron = { workspace = true }
+anychain-kms = { workspace = true }
+
+# Docker-backed local-node tests (plan Task 0.5). Declared here rather than in
+# [dev-dependencies] because Cargo rejects optional dev-dependencies:
+#   "dev-dependencies are not allowed to be optional: `testcontainers`"
+# Keeping it optional + feature-gated means it stays uncompiled by default, so
+# the mobile compile-only and lean CI jobs never pull the Docker client stack.
+testcontainers = { version = "0.23", optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+# Gates tests that need a Docker daemon (local TRON node via testcontainers).
+# Off by default so mobile/CI compile-only jobs stay lean.
+desktop-tests = ["dep:testcontainers"]

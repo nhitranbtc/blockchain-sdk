@@ -1,7 +1,7 @@
 # `tron` TRON Wallet — User Stories
 
-**Date:** 2026-08-27
-**Companion to:** [TRON Rust SDK deep-dive](2026-08-27-tron-rust-sdks-deep-dive.md) + [Ethereum user stories precedent](2026-08-23-eth-wallet-user-stories.md) + [Bitcoin user stories precedent](2026-08-05-btc-wallet-user-stories.md)
+**Date:** 2026-08-27 (regenerated 2026-09-05 for the anychain stack — plan Phase 0 Task 0.4)
+**Companion to:** [TRON anychain SDK deep-dive](2026-08-27-tron-anychain-sdks-deep-dive.md) + [ADR-0001 anychain vs raw primitives](2026-09-05-adr-0001-tron-sdk-anychain-vs-raw-primitives.md) + [Ethereum user stories precedent](2026-08-23-eth-wallet-user-stories.md) + [Bitcoin user stories precedent](2026-08-05-btc-wallet-user-stories.md)
 **Surface:** `tron` CLI binary inside `rust-wallet-app/crates/tron/` next to `btc/` and `eth/`. **Default network = Nile testnet (chain id `0xcd8690dc` / 3448148188 decimal, address prefix `0x41`).** Mainnet opt-in via `--network mainnet` (chain id `0x2b6653dc` / 728126428). Shasta opt-in via `--network shasta` (chain id `0x94a9059e`). TronBox regtest opt-in via `--rpc-url http://localhost:8090`. **All production networks (Mainnet, Shasta, Nile) share address prefix `0x41`** — TRON does not use per-network prefix bytes (verified 2026-08-27 against `developers.tron.network/docs/encoding`). Network discrimination is by chain-id only, not by address prefix.
 **Tracks issue:** #399 (Q1–Q10 resolved in deep-dive; this doc maps user stories to the chosen crate surface).
 
@@ -17,53 +17,56 @@ Personas:
 
 ## Story → crate map
 
-Each story is implemented via one or more crates from the chosen surface (deep-dive §"The chosen surface — current 2026 state"). This table is the traceability link between the user-facing feature and the underlying wallet engine call. The 4th column shows which workspace primitive backs the call. The 5th column reuses `bip32` + `bip39` where they apply (mnemonic + HD derivation are identical to Bitcoin/Ethereum; only the coin type differs at 195 vs 0/60).
+Each story is implemented via one or more crates from the chosen surface (deep-dive §"The chosen surface — current 2026 state", as revised by [ADR-0001](2026-09-05-adr-0001-tron-sdk-anychain-vs-raw-primitives.md)). This table is the traceability link between the user-facing feature and the underlying wallet engine call. The 4th column shows which primitive backs the call. The 5th column records the HD/mnemonic surface — no longer `bip32`/`bip39` directly, but `anychain-kms`, which provides BIP-39 + BIP-32 with SLIP-44 coin 195.
 
-| # | Story | Crate(s) used | Primitive(s) | `bip32` / `bip39` reuse |
+**Status markers:** `REMOVED V0.1` = dropped, redesign deferred (Round-1 grill). `V0.2` = deferred to the next release. `V0.1.5` = ships with the V0.1 release train but after the v0.1 gate.
+
+| # | Story | Crate(s) used | Primitive(s) | HD / mnemonic surface |
 |---|---|---|---|---|
-| 1 | Create a new wallet | `bip39` (gen); `bip32` (derive); `k256` (sign); `tiny-keccak` (addr hash); `bs58` (encode) | `Mnemonic`, `XPrv`, `SigningKey`, `Keccak256`, base58check | `bip39::Mnemonic::generate_in(Words12, English, rng)` + `bip32::XPrv::derive_path("m/44'/195'/0'/0/0")` |
-| 2 | Import an existing wallet | `bip39`; `bip32`; `k256`; `tiny-keccak`; `bs58` | same as Story 1 | `bip39::Mnemonic::parse_in(English, s)` + same `bip32` path |
+| 1 | Create a new wallet | `anychain-kms` (mnemonic gen + HD derive + sign); `anychain-tron` (address); `argon2` + `aes-gcm` (at-rest encryption) | `Mnemonic`, `ExtendedPrivateKey`, `TronAddress`, base58check | `anychain_kms::Mnemonic::new(MnemonicType::Words12, Language::English)` then `ExtendedPrivateKey::from_seed` + `derive_child("m/44'/195'/0'/0/0")` |
+| 2 | Import an existing wallet | `anychain-kms`; `anychain-tron`; `argon2` + `aes-gcm` | same as Story 1 | `anychain_kms::Mnemonic::from_phrase(phrase, Language::English)` + same derivation path |
 | 3 | Check TRX balance | `reqwest` + `rustls` + `serde_json` | sun (1 TRX = 1_000_000 sun); 21-byte raw address | n/a |
-| 4 | Sync chain state | `reqwest` + `serde_json` | `u64` block_number; `u64` chain_id; `u64` nonce (via `wallet/getaccount`) | n/a |
-| 5 | Send native TRX | `reqwest` (RPC); `prost` (protobuf tx); `k256` (sign); `sha2` (tx-hash) | `Transaction { raw_data, signature }`, `TransferContract { owner_address, to_address, amount }` | extract `k256::SigningKey` from derived `SecretKey` (same as Story 1) |
-| 6 | Send with custom `fee_limit` | `prost`; `k256`; `sha2` | `Transaction.raw_data.fee_limit: int64` (sun) | n/a |
+| 4 | Sync chain state **[V0.1.5]** | `reqwest` + `serde_json` | `u64` block_number; `u64` chain_id; account state via `wallet/getaccount` | n/a |
+| 5 | Send native TRX | `anychain-tron` (`TransferContract` builder + protobuf envelope); `anychain-kms` (`secp256k1_sign`); `sha2` (dual-SHA256 txid workaround) | `TronTransaction { raw_data, signature }`, `TransferContract { owner_address, to_address, amount }` | signing key from the Story 1 derivation, wrapped in `Zeroizing<[u8; 32]>` before signing |
+| 6 | Send with custom `fee_limit` **[V0.1.5]** | `anychain-tron` | `raw_data.fee_limit: int64` (sun) | n/a |
 | 7 | Inspect transaction history | `reqwest` + `serde_json` | `TransactionInfo { id, blockNumber, contractResult, fee }` | n/a |
-| 8 | Get current energy/bandwidth estimates | `reqwest` + `serde_json` | `AccountResourceMessage { EnergyCurrent, BandwidthCurrent }` (V5 spike verifies exact field names) | n/a |
+| 8 | Get current energy/bandwidth estimates **[V0.2]** | `reqwest` + `serde_json` | `AccountResourceMessage { EnergyCurrent, BandwidthCurrent }` (exact field names confirmed by spike V5) | n/a |
 | 9 | List / show / delete / rename wallets | `std::fs`; `chain-traits` registry | n/a | n/a |
-| 10 | Use mainnet explicitly | `reqwest` + `serde_json` | `chainid: 0x2b6653dc` (mainnet = 42 decimal); address prefix `0x41` | n/a |
+| 10 | Use mainnet explicitly | `reqwest` + `serde_json` | `chainid: 0x2b6653dc` (728126428); address prefix `0x41` | n/a |
 | 11 | Show config + debug info | `std::env`, `version()` | n/a | n/a |
-| 12 | Persist wallet across CLI invocations | filesystem + UUID-based wallet dir; encrypted mnemonic (F5/F6) | n/a | n/a (mnemonic on disk, never re-derived) |
-| 13 | Send to multiple recipients (sequential txs) | N `send_transaction` calls; no native multi-output (TRON `Contract` array typically holds one contract per tx) | N × `Transaction` (each its own `ref_block`/`nonce`) | n/a |
-| 14 | Sweep / drain wallet to one address | `getaccount` + `TransferContract.amount = balance - fee` | sun balance arithmetic | n/a |
-| 15 | Choose ref_block strategy (auto vs manual) | `walletsolidity/getnowblock` (auto) vs caller-supplied `ref_block_bytes` + `ref_block_hash` (manual) | `bytes` + `bytes` (TAPOS) | n/a |
-| 16 | Manual override (expiration, fee_limit) | `Transaction.raw_data.expiration: int64`, `fee_limit: int64` | `int64` (ms epoch for expiration; sun for fee_limit) | n/a |
-| 17 | Replace / speed-up tx (same nonce + higher fee_limit) | new `Transaction` with same `ref_block` + higher `fee_limit` | `Signature` (different from original) | n/a |
-| 18 | Sign personal message (raw) | `k256::SigningKey::sign_prehash(msg_hash)` | `Signature`, recovered 21-byte address | n/a |
-| 19 | Export the wallet xpub + first addresses | `bip32::XPub::to_string` | T-base58check addresses (first 5 receive addresses) | `bip32::XPub` + `bip32::DerivationPath` |
-| 20 | Pick derivation path (Ledger vs custom) | `bip32::XPrv::derive_path` override | n/a | override path in config |
-| 21 | Send TRC-20 stablecoin (USDT-TRC20) | `reqwest`; `prost`; hand-rolled ABI encoder; `k256`; `sha2` | `TriggerSmartContract { owner_address, contract_address, data, call_value=0 }`; calldata = `0xa9059cbb` + padded `address` + padded `uint256` | n/a |
-| 22 | Check TRC-20 token balance | `reqwest`; hand-rolled ABI encoder; `provider.call` equivalent via `wallet/triggerconstantcontract` with `visible: true` + ABI-decode result | `balanceOfCall` selector `0x70a08231`; result `uint256` | n/a |
-| 23 | List registered TRC-20 stablecoins / tokens | token registry JSON in repo (`rust-wallet-app/crates/tron-wallet-core/tokens/{mainnet,nile}.json`) | 21-byte raw contract address, `u8` decimals, `String` symbol | n/a |
-| 24 | Add custom TRC-20 token by contract address | hand-rolled ABI encoder; `wallet/triggerconstantcontract` view call to `decimals()` + `symbol()` | `uint8` decimals, `String` symbol | n/a |
-| 25 | Approve TRC-20 spending (for DEX) | hand-rolled ABI encoder; `TriggerSmartContract` with `approve(address,uint256)` selector `0x095ea7b3` | `approveCall`, calldata | n/a |
-| 26 | Use TronBox local node for testing | `--rpc-url http://localhost:8090`; `eth_chainId` via `/jsonrpc` asserts the configured chain-id for `--network tronbox` | `u64` chain id | n/a |
-| 27 | Use Nile testnet | `--network nile`; TronGrid Nile `https://nile.trongrid.io` | `chainid: 0xcd8690dc (3448148188 decimal)` | n/a |
+| 12 | Persist wallet across CLI invocations | filesystem + UUID-based wallet dir; encrypted mnemonic via `argon2` + `aes-gcm` (F5/F6) | n/a | n/a (mnemonic on disk, never re-derived) |
+| 13 | Send to multiple recipients (sequential txs) **[REMOVED V0.1]** | — | — | — |
+| 14 | Sweep / drain wallet to one address **[REMOVED V0.1]** | — | — | — |
+| 15 | Choose ref_block strategy (auto vs manual) **[REMOVED V0.1]** | — | — | — |
+| 16 | Manual override (expiration, fee_limit) **[REMOVED V0.1]** | — | — | — |
+| 17 | Replace / speed-up tx (same ref_block + higher fee_limit) | `anychain-tron` (rebuild contract with higher `fee_limit`); `anychain-kms` (re-sign) | new `Signature` over the same `ref_block` | n/a |
+| 18 | Sign personal message (raw) **[V0.2]** | `anychain-kms` (`secp256k1_sign` over a 32-byte prehash) | `Signature`, recovered 21-byte address | n/a |
+| 19 | Export the wallet xpub + first addresses | `anychain-kms` (`ExtendedPublicKey`); `anychain-tron` (`TronAddress`) | T-base58check addresses (first 5 receive addresses); xprv/xpub serialize as `Zeroizing<String>` | `anychain_kms::ExtendedPublicKey` + derivation path |
+| 20 | Pick derivation path (Ledger vs custom) | `anychain-kms` (`derive_child` with an overridden path) | n/a | override path in config |
+| 21 | Send TRC-20 stablecoin (USDT-TRC20) | `anychain-tron` (`TriggerSmartContract` builder + `abi::encode_call`); `anychain-kms` (sign); `sha2` (txid) | `TriggerSmartContract { owner_address, contract_address, data, call_value = 0 }`; calldata = `0xa9059cbb` + padded `address` + padded `uint256` | n/a |
+| 22 | Check TRC-20 token balance | `anychain-tron` (`abi::encode_call`); `reqwest` view call via `wallet/triggerconstantcontract` with `visible: true`, then ABI-decode | `balanceOf` selector `0x70a08231`; result `uint256` | n/a |
+| 23 | List registered TRC-20 stablecoins / tokens **[V0.2]** | token registry JSON in repo (`rust-wallet-app/crates/tron-wallet-core/tokens/{local,nile,mainnet}.json`) | 21-byte raw contract address, `u8` decimals, `String` symbol | n/a |
+| 24 | Add custom TRC-20 token by contract address **[V0.2]** | `anychain-tron` (`abi::encode_call`); `wallet/triggerconstantcontract` view call to `decimals()` + `symbol()` | `uint8` decimals, `String` symbol | n/a |
+| 25 | Approve TRC-20 spending (for DEX) | `anychain-tron` (`TriggerSmartContract` + `abi::encode_call` for `approve(address,uint256)`, selector `0x095ea7b3`) | calldata | n/a |
+| 26 | Use TronBox local node for testing | `--rpc http://127.0.0.1:8090`; `eth_chainId` via `/jsonrpc` asserts the configured chain-id | `u64` chain id | n/a |
+| 27 | Use Nile testnet | `--network nile`; TronGrid Nile `https://nile.trongrid.io` | `chainid: 0xcd8690dc` (3448148188) | n/a |
 | 28 | Connect to RPC endpoint with SPKI pin (Q7) | `bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier` (reused verbatim) | 32-byte SPKI SHA-256 pin | n/a |
-| 29 | Connect to RPC endpoint without SPKI pin (system CAs only) | `reqwest::Client::new()` + `webpki-roots` (no pin) | n/a | n/a |
+| 29 | Connect to RPC endpoint without SPKI pin (system CAs only) | `reqwest::Client::new()` + system roots (no pin) | n/a | n/a |
 | Cross-cutting | `--json` everywhere; stable exit codes; no daemons | `serde_json`; `std::process::ExitCode` | n/a | n/a |
-| Cross-cutting | `Secret<Mnemonic>` zeroize (v0.2+ hygiene) | `zeroize::Zeroizing<Mnemonic>` (mirror Bitcoin Task 30) | n/a | `bip39::Mnemonic` (wrap) |
-| Cross-cutting | T-base58check address display (Q4) | `bs58` + 4-byte double-SHA-256 checksum | 21-byte raw + base58check | n/a |
+| Cross-cutting | `Zeroizing<_>` wrap on raw `sk` before every `secp256k1_sign` (closes the anychain gap) | `zeroize::Zeroizing<[u8; 32]>` | n/a | wraps the `anychain-kms` derived key |
+| Cross-cutting | T-base58check address display (Q4) | `anychain_tron::TronAddress::to_base58` (4-byte double-SHA-256 checksum) | 21-byte raw + base58check | n/a |
 
 **Layer separation summary:**
 
-- **`bip32` + `bip39` (reuse from Bitcoin + eth)** = HD derivation + mnemonic. Identical primitives; only coin type differs (195 = TRX).
-- **`k256` (workspace dep from Bitcoin)** = secp256k1 signing. Signs SHA-256 prehash of protobuf `raw_data`.
-- **`sha2` (workspace dep)** = SHA-256 for both tx-hash and base58check double-chash.
-- **`tiny-keccak` (NEW)** = Keccak-256 for address derivation (last 20 bytes of `Keccak256(pubkey_uncompressed)`).
-- **`bs58` (NEW)** = base58check encoding for T-prefix addresses.
-- **`prost` + `prost-build` (NEW)** = protobuf serialization for `Transaction` (compiled from `core/Tron.proto`).
-- **`reqwest` + `rustls` (workspace deps, reused)** = JSON-RPC transport to `wallet/*` endpoints + SPKI-pinning verifier from `bitcoin-wallet-core`.
+- **`anychain-kms` (NEW — replaces `bip32` + `bip39` + `k256` for TRON)** = BIP-39 mnemonic (8 languages), BIP-32 HD derivation at SLIP-44 coin 195, secp256k1 signing, xprv serialization as `Zeroizing<String>`.
+- **`anychain-tron` (NEW — replaces `prost` + `prost-build` + `tiny-keccak` + `bs58` + the hand-rolled ABI encoder)** = T-base58check addresses, the protobuf `Transaction` envelope (its own bundled `core/Tron.proto`, so no `build.rs` codegen on our side), 17 contract builders, and `abi::encode_call`.
+- **`anychain-core` (NEW)** = shared traits (`Address`, `PublicKey`, `Transaction`, `Format`, `Network`) plus `keccak256` / `sha256` / `func_selector` helpers and a `hex` re-export.
+- **`sha2` (workspace dep)** = SHA-256, still needed directly: `anychain-tron`'s `to_transaction_id()` returns a *single* SHA-256, so `tx/sign.rs` computes `SHA256(SHA256(raw_bytes))` itself (Q2 workaround) and a regression test asserts it.
+- **`argon2` + `aes-gcm` + `zeroize` (workspace deps)** = wallet-file encryption at rest and secret hygiene (cross-chain invariants in `CONTEXT.md`).
+- **`reqwest` + `rustls` (workspace deps, reused)** = JSON-RPC transport to `wallet/*` endpoints + the SPKI-pinning verifier reused from `bitcoin-wallet-core`.
 - **`serde_json` (workspace dep)** = JSON-RPC request/response envelope parsing.
+
+**Dependency sourcing:** all three anychain crates come **direct from crates.io at exact pins** (`=0.1.8` / `=0.2.14` / `=0.1.23`). Vendoring was considered and rejected 2026-09-05; the bus-factor-1 risk on `anychain-tron` is accepted and mitigated by the exact pin plus regression tests.
 
 **Stories NOT using the chosen crates (custom code only):**
 
@@ -73,40 +76,68 @@ Each story is implemented via one or more crates from the chosen surface (deep-d
 
 ## Crate use case coverage
 
-Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive" mapped to the user story that exercises it. Any "not covered" row is either an internal-only operation (no CLI surface needed) or a gap to add.
+Cross-check: every crate use case from the deep-dive §"Crates used in `tron-wallet-core` (V0.1)" mapped to the user story that exercises it. Any "not covered" row is either an internal-only operation (no CLI surface needed) or a gap to add.
 
 | # | Crate use case | User story that exercises it | Covered? |
 |---|---|---|---|
-| 1 | Generate BIP-39 mnemonic (`bip39::Mnemonic::generate_in`) | Story 1 (create) | ✅ |
-| 2 | Parse BIP-39 mnemonic (`bip39::Mnemonic::parse_in`) | Story 2 (import) | ✅ |
-| 3 | Derive `XPrv` via `bip32::XPrv::derive_from_path` | Story 1 + 2 | ✅ |
-| 4 | Override derivation path | Story 20 | ✅ |
-| 5 | Export `XPub` (`bip32::XPub::to_string`) | Story 19 | ✅ |
-| 6 | `k256::SigningKey::sign_prehash(tx_hash)` (returns 64 bytes r‖s) | Story 5 + 17 + 18 + 21 | ✅ |
-| 7 | Compute recovery byte `v` via `k256::ecdsa::VerifyingKey::recover_from_prehash` | Story 5 + 17 + 21 (sign-and-broadcast path) | ✅ |
-| 8 | `sha2::Sha256::digest(raw_data_bytes)` for tx-hash | Story 5 + 17 + 21 | ✅ |
-| 9 | `sha2::Sha256::double-hash` for base58check checksum | Story 4 — Q4 base58check display | ✅ |
-| 10 | `tiny-keccak::Keccak256` for address derivation | Story 1 + 2 (always); Story 19 (export) | ✅ |
-| 11 | `bs58::encode + decode + 4-byte checksum append/verify` | Story 1 + 2 + 9 (show) + 19 (export) | ✅ |
-| 12 | `prost::Message::encode_to_vec` for `Transaction` protobuf | Story 5 + 6 + 17 + 21 | ✅ |
-| 13 | `prost::Message::decode` for response parsing (e.g. `walletsolidity/getnowblock`) | Story 4 + 5 (chain state sync) | ✅ |
-| 14 | `prost-build::compile_protos` in `build.rs` for `core/Tron.proto` codegen | internal (compile-time) | ⚠️ internal |
-| 15 | `reqwest::Client` JSON-RPC POST to `wallet/*` | all RPC stories (3, 4, 5, 7, 8, 21, 22, 24, 25) | ✅ |
+| 1 | Generate BIP-39 mnemonic (`anychain_kms::Mnemonic::new`) | Story 1 (create) | ✅ |
+| 2 | Parse BIP-39 mnemonic (`anychain_kms::Mnemonic::from_phrase`) | Story 2 (import) | ✅ |
+| 3 | Mnemonic → seed (`anychain_kms::seed_from_mnemonic`), wrapped in `Zeroizing<[u8; 64]>` | Story 1 + 2 | ✅ |
+| 4 | Derive HD key (`anychain_kms::ExtendedPrivateKey::from_seed` + `derive_child`) at SLIP-44 coin 195 | Story 1 + 2 | ✅ |
+| 5 | Override derivation path | Story 20 | ✅ |
+| 6 | Export extended public key (`anychain_kms::ExtendedPublicKey`) | Story 19 | ✅ |
+| 7 | secp256k1 sign over a 32-byte prehash (`anychain_kms` `secp256k1_sign`) | Story 5 + 17 + 21 (+ Story 18, deferred V0.2) | ✅ |
+| 8 | Recovery byte `v ∈ {0, 1}` for the TRON signature envelope | Story 5 + 17 + 21 | ✅ |
+| 9 | Dual-SHA256 txid workaround — `sha2` over the protobuf `raw_data` (Q2; `to_transaction_id()` returns single SHA-256) | Story 5 + 17 + 21 | ✅ |
+| 10 | T-base58check address encode/decode (`anychain_tron::TronAddress::{from_public_key, to_base58, to_hex}`) | Story 1 + 2 + 9 (show) + 19 (export) | ✅ |
+| 11 | Protobuf `Transaction` envelope from `anychain-tron` (its own bundled `core/Tron.proto` — no `build.rs` codegen on our side) | Story 5 + 17 + 21 | ✅ |
+| 12 | `TransferContract` builder (native TRX) | Story 5 + 17 | ✅ |
+| 13 | `TriggerSmartContract` builder + `anychain_tron::abi::encode_call` (TRC-20 `transfer` / `approve` / view calls) | Story 21 + 22 + 25 (+ Story 24, deferred V0.2) | ✅ |
+| 14 | `anychain-core` shared traits + `keccak256` / `sha256` / `func_selector` helpers | internal (used by the two crates above) | ⚠️ internal |
+| 15 | `reqwest::Client` JSON-RPC POST to `wallet/*` | all RPC stories (3, 5, 7, 21, 22, 26, 27) | ✅ |
 | 16 | Custom `rustls::ServerCertVerifier` (SPKI pin) — `bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier` | Story 28 | ✅ |
 | 17 | `reqwest::Client` plain (system CAs, no pin) | Story 29 (default) | ✅ |
 | 18 | `serde_json::Value` for JSON-RPC envelope + response parse | all RPC stories | ✅ |
 | 19 | Configurable chain-id (universal `0x41` prefix across Mainnet/Shasta/Nile) — network discrimination by chain-id only | Story 10 + 27 + 9 (show) | ✅ |
-| 20 | Configurable RPC URL (`--rpc-url` flag + `pinned://` scheme) | Story 28 + 29 | ✅ |
+| 20 | Configurable RPC URL (`--rpc` flag + `pinned://` scheme) | Story 26 + 28 + 29 | ✅ |
 | 21 | TRON-PRO-API-KEY header injection (rate-limit increase) | cross-cutting (every RPC call) | ✅ |
+| 22 | Wallet-file encryption at rest — `argon2` (Argon2id KDF) + `aes-gcm` (AES-256-GCM) | Story 1 + 2 + 12 | ✅ |
 
 **Coverage summary:**
 
-- **18 of 21 use cases directly covered by user stories** (rows 1-13, 15-21)
-- **1 use case is internal-only** (`prost-build` codegen — compile-time, no CLI surface)
+- **21 of 22 use cases directly covered by user stories** (rows 1-13, 15-22)
+- **1 use case is internal-only** (row 14 — `anychain-core` helpers have no CLI surface; they are consumed by `anychain-kms` and `anychain-tron`)
 - **0 deferred to v1.x**
 - **0 explicitly rejected**
 
-(Total: 18 + 1 = 19; rows 14 is internal; rows 1-13 + 15-21 = 18 covered = all user-facing surface covered. No gaps.)
+Rows 7, 13 and 20 are also exercised by stories deferred to V0.2 (18, 24) — those rows stay covered by their V0.1 stories, so no coverage gap results from the deferral. Stories 13-16 were dropped from V0.1 without removing any row: every use case they touched is exercised by Story 5, 17 or 21.
+
+---
+
+## V0.1 CLI surface — 22 commands, 6 top-level groups
+
+Canonical layout from the deep-dive V0.1 feature map (plan §"V0.1 CLI surface"). Where an individual story below still shows an older command spelling, **this table wins**.
+
+| Top-level | Commands | Stories |
+|---|---|---|
+| `wallet`  | `create`, `import`, `show`, `list`, `delete`, `rename`, `balance`, `send`, `send-speedup` (9) | 1, 2, 3, 5, 9, 10, 11, 12, 17, 22 |
+| `address` | `new`, `xpub` (2) | 3, 19 |
+| `balance` | `--address`, `--address --token` (2) | 3, 22 |
+| `trc20`   | `send`, `approve`, `balance`, `allowance` (4) | 21, 22, 25 |
+| `tx`      | `get`, `wait` (2) | 7 |
+| `config`  | `show`, `set-rpc`, `set-network` (3) | 10, 11, 26, 27 |
+
+**Flag normalization:** the RPC override flag is `--rpc <url>` (matching the cross-chain flag table in `CONTEXT.md`). Older story text spells it `--rpc-url`; treat that as the same flag.
+
+**Release-train status** (deep-dive V0.1 feature map):
+
+| Stories | Status |
+|---|---|
+| 1, 2, 3, 5, 7, 9, 10, 11, 12, 17, 19, 21, 22, 25, 27, 28, 29 | shipped V0.1 |
+| 4, 6 | V0.1.5 (ships with the V0.1 release train, after the v0.1 gate) |
+| 8, 18, 23, 24 | deferred to V0.2 |
+| 26 (TronBox local) | shipped via `--rpc http://127.0.0.1:8090` |
+| **13 (batch), 14 (drain), 15 (ref-block), 16 (manual exp)** | **REMOVED from V0.1** — redesign deferred |
 
 ---
 
@@ -226,7 +257,7 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 
 ---
 
-## Story 8 — Get current energy/bandwidth estimates (Bob, Carol)
+## Story 8 — Get current energy/bandwidth estimates (Bob, Carol) **[DEFERRED to V0.2]**
 
 > As Carol, I want to see the current resource state (energy + bandwidth) before sending a TRC-20 transfer, so I can pick the right `fee_limit`.
 
@@ -291,11 +322,11 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 - `tron config show` prints: data dir, RPC URL, network, chain id (after `--rpc-url` lookup), address prefix byte, list of loaded wallets, derivation path default, default fee_limit.
 - `tron config show --json` outputs the same as JSON.
 - Exit 0 always.
-- Diagnostic output includes the version string `tron 0.1.0` (via `--version`) and the chosen crate versions (`prost 0.14.4`, `bs58 0.5.x`, `tiny-keccak 2.0.x`).
+- Diagnostic output includes the version string `tron 0.1.0` (via `--version`) and the chosen crate versions (`anychain-core 0.1.8`, `anychain-tron 0.2.14`, `anychain-kms 0.1.23` — exact pins).
 
 ---
 
-## Story 12 — Persist wallet across CLI invocations (Alice) **[v0.2 — per #399 B3]**
+## Story 12 — Persist wallet across CLI invocations (Alice)
 
 > As Alice, I want each CLI invocation to find my wallets without re-deriving from the mnemonic, so it's fast.
 
@@ -309,7 +340,7 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 
 ---
 
-## Story 13 — Send to multiple recipients (sequential txs) (Alice)
+## Story 13 — Send to multiple recipients (sequential txs) (Alice) **[REMOVED from V0.1]**
 
 > As Alice, I want to send to several addresses in quick succession, so I can pay multiple recipients without re-typing the command.
 
@@ -325,7 +356,7 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 
 ---
 
-## Story 14 — Sweep / drain wallet to one address (Alice)
+## Story 14 — Sweep / drain wallet to one address (Alice) **[REMOVED from V0.1]**
 
 > As Alice, I want to sweep my entire TRX balance to one address, so I can consolidate funds before re-organizing my wallets.
 
@@ -340,7 +371,7 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 
 ---
 
-## Story 15 — Choose `ref_block` strategy (auto vs manual) (Bob)
+## Story 15 — Choose `ref_block` strategy (auto vs manual) (Bob) **[REMOVED from V0.1]**
 
 > As Bob, I want to pick between auto-ref_block (read from RPC) and manual ref_block (supply my own), so I can match my back-end's tx-batching policy.
 
@@ -353,7 +384,7 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 
 ---
 
-## Story 16 — Manual `expiration` + `fee_limit` override (Bob)
+## Story 16 — Manual `expiration` + `fee_limit` override (Bob) **[REMOVED from V0.1]**
 
 > As Bob, I want to supply an exact `expiration` timestamp and `fee_limit`, so I can replace or compose transactions deterministically.
 
@@ -383,13 +414,13 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 
 ---
 
-## Story 18 — Sign personal message (raw, no EIP-191 prefix) (Alice)
+## Story 18 — Sign personal message (raw, no EIP-191 prefix) (Alice) **[DEFERRED to V0.2]**
 
 > As Alice, I want to sign an arbitrary message with my wallet's private key, so I can prove ownership of an address (e.g., for off-chain auth, TRC-516 message signing, or signed-message board).
 
 **Acceptance criteria:**
 
-- `tron sign-message --name test-wallet --message "I own this address"` signs with `k256::SigningKey::sign_prehash(SHA256(message))`. **No EIP-191 prefix** — TRON has no equivalent standard; raw SHA-256 of the message bytes is the convention (mirrors Bitcoin message signing, not Ethereum EIP-191).
+- `tron sign-message --name test-wallet --message "I own this address"` signs the 32-byte prehash `SHA256(message)` via `anychain-kms`'s `secp256k1_sign`. **No EIP-191 prefix** — TRON has no equivalent standard; raw SHA-256 of the message bytes is the convention (mirrors Bitcoin message signing, not Ethereum EIP-191).
 - Default output: hex of the 65-byte signature (`r || s || v`, recovery byte `v` computed via `VerifyingKey::recover_from_prehash`).
 - `--address <T-base58>` signs with the key for that address (must be wallet-owned); default is the first receive address.
 - Output format: `address: TXYZ...\nsignature: <130-hex> (v=<0|1>)`.
@@ -436,7 +467,7 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 **Acceptance criteria:**
 
 - `tron trc20 send --name test-wallet --token USDT --to TXYZ... --amount 1.5 --network nile --rpc-url <URL>` builds + signs + broadcasts a `TriggerSmartContract` calling `transfer(address,uint256)` on the USDT-TRC20 contract.
-- `--token USDT` resolves to `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` (mainnet) or the Nile equivalent (`TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z` per nileex.io community faucet — spike V9 verifies).
+- `--token USDT` resolves to `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` (mainnet) or `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` (Nile — canonical per TronScan, verified 2026-09-05; the older `TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z` quoted here previously was wrong). Spike V9 verifies.
 - `--amount 1.5` is interpreted as `1.5 * 10^decimals` base units. USDT-TRC20 uses 6 decimals, so `1.5 USDT = 1_500_000` base units. The CLI fetches `decimals()` once per token (cached, or read from `tokens/<network>.json`).
 - Tx shape: `TriggerSmartContract { owner_address: sender_21, contract_address: token_contract_21, data: <0xa9059cbb + padded_to_32(recipient_20) + padded_to_32(amount_256)>, call_value: 0, call_token_value: 0, token_id: 0 }`.
 - Default `fee_limit = 130_000_000` (130 TRX worth of energy allowance — covers USDT-TRC20 `transfer` comfortably per V5 spike estimate). Override via `--fee-limit`.
@@ -457,11 +488,11 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 - `tron wallet balance --name test-wallet --token USDT --network nile --rpc-url <URL>` prints `<scaled> USDT (token: TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t)` (e.g. `15.000000 USDT (token: TR7NHqje...)`), with decimals auto-detected via `decimals()` `wallet/triggerconstantcontract` call (selector `0x313ce567`) or `--decimals <N>` override.
 - Drift from spec: spec body proposed `tron trc20 balance --token USDT` as a separate subcommand; impl extends `tron wallet balance` with `--token <SYMBOL>` (single subcommand covers TRX + token). `<name>` required (balance is read against a named wallet's first address).
 - Exit 0 even if balance is 0. Exit 2 on invalid `--token` symbol (UnknownToken). Exit 3 on RPC failure (transport-layer). Exit 5 on ABI decode failure (per #399 M-ABI — contract claims to be TRC-20 but isn't).
-- **Note:** requires hand-rolled ABI decoder for `balanceOf(address)` → selector `0x70a08231`, decode 32-byte response as `uint256`. No contract binding crate needed.
+- **Note:** uses `anychain_tron::abi::encode_call` for `balanceOf(address)` → selector `0x70a08231`; the 32-byte response is decoded as `uint256`. No separate contract-binding crate and no hand-rolled encoder needed.
 
 ---
 
-## Story 23 — List registered TRC-20 stablecoins / tokens (Bob)
+## Story 23 — List registered TRC-20 stablecoins / tokens (Bob) **[DEFERRED to V0.2]**
 
 > As Bob, I want to see the list of supported TRC-20 tokens, so I know which ones I can `--token USDT` against without `--token-address`.
 
@@ -473,18 +504,18 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
   USDT    TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t                  6      mainnet
   USDC    TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8                  6      mainnet
   TUSD    TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F9                 18      mainnet
-  USDT    TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z                  6      nile
+  USDT    TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf                  6      nile
   ```
 - `--json` outputs the same as a JSON array.
 - Tokens are loaded from two sources (per eth #297 G3 + #399 Q9):
-  1. **Bundled** (compile-time via `include_str!`): `rust-wallet-app/crates/tron-wallet-core/tokens/mainnet.json` + `nile.json`.
+  1. **Bundled** (compile-time via `include_str!`): `rust-wallet-app/crates/tron-wallet-core/tokens/{local,nile,mainnet}.json` — 3 files; `local.json` added per Round-1 grill Q6 for the TronBox Docker integration test.
   2. **User** (runtime from `$XDG_CONFIG_HOME/tron/tokens/<network>.json`): operator-added tokens from Story 24.
 - **Resolution rule:** user registry wins over bundled on symbol collision. `--list --include-bundled` prints both with a source tag (`bundled` / `user`).
 - Empty registry: prints `(no tokens registered)` and exits 0.
 
 ---
 
-## Story 24 — Add custom TRC-20 token by contract address (Alice)
+## Story 24 — Add custom TRC-20 token by contract address (Alice) **[DEFERRED to V0.2]**
 
 > As Alice, I want to add a custom TRC-20 token by supplying its contract address, so I can send/receive tokens that aren't in the bundled registry.
 
@@ -613,34 +644,34 @@ Cross-check: every crate use case from the deep-dive §"Crate-by-crate deep-dive
 
 ## v0.1 release status (issue #399, in-progress)
 
-Status snapshot for the `tron-wallet-core v0.1.0` library + `tron` CLI scaffold release cut. 29 stories; all deferred until spike V1-V10 lands + plan doc resolves Q5-Q10.
+Status snapshot for the `tron-wallet-core v0.1.0` library + `tron` CLI scaffold release cut. 29 stories originally; after the 2026-09-05 anychain reversal the split is **21 in V0.1, 2 in V0.1.5 (4, 6), 4 deferred to V0.2 (8, 18, 23, 24), 4 removed (13, 14, 15, 16)**. Remaining V0.1 stories are gated on spikes V1-V10 landing.
 
-### Stories blocked on spike (29)
+### Stories blocked on spike (21 in scope; 8 out of scope, listed for traceability)
 
-- [ ] **Story 1** — Create a new wallet. Blocked on spike V10 (SLIP-44 vector) + V4 (base58check). Library surface: `bip39::Mnemonic::generate_in` + `bip32::XPrv::derive_path("m/44'/195'/0'/0/0")` + `k256::SigningKey` + `tiny-keccak::Keccak256(pubkey)` + `bs58` + configurable prefix byte.
+- [ ] **Story 1** — Create a new wallet. Blocked on spike V10 (SLIP-44 vector) + V4 (base58check). Library surface: `anychain_kms::Mnemonic::new` + `ExtendedPrivateKey::from_seed`/`derive_child("m/44'/195'/0'/0/0")` + `anychain_tron::TronAddress::from_public_key`.
 - [ ] **Story 2** — Import an existing wallet. Same primitives as Story 1.
 - [ ] **Story 3** — Check TRX balance. Blocked on V1 (reqwest + serde_json compile-check).
-- [ ] **Story 4** — Sync chain state. Blocked on V6 (Nile `eth_chainId` via `/jsonrpc` returns `0xcd8690dc`).
-- [ ] **Story 5** — Send native TRX. Blocked on V2 (prost-build protobuf round-trip) + V8 (sign-only path) + V6 (Nile broadcast).
-- [ ] **Story 6** — Send with custom `fee_limit`. Blocked on V2 + V5 (energy estimate).
+- [ ] **Story 4** — Sync chain state. **[V0.1.5]** Blocked on V6 (Nile `eth_chainId` via `/jsonrpc` returns `0xcd8690dc`).
+- [ ] **Story 5** — Send native TRX. Blocked on V2 (`anychain-tron` protobuf round-trip) + V8 (sign-only path) + V6 (Nile broadcast).
+- [ ] **Story 6** — Send with custom `fee_limit`. **[V0.1.5]** Blocked on V2 + V5 (energy estimate).
 - [ ] **Story 7** — Inspect transaction history. Blocked on V1 (RPC compile-check) + V6 (Nile tx query).
-- [ ] **Story 8** — Get current energy/bandwidth estimates. Blocked on V5 (resource model + exact field names).
+- [ ] ~~**Story 8** — Get current energy/bandwidth estimates.~~ **DEFERRED to V0.2.** (Was blocked on V5.)
 - [ ] **Story 9** — List / show / delete / rename wallets. Independent of spike. CLI scaffold can ship without Vn.
 - [ ] **Story 10** — Use mainnet explicitly. Blocked on V6 (Nile chain-id assertion) + prefix-byte configuration.
 - [ ] **Story 11** — Show config + debug info. Independent of spike.
-- [ ] **Story 12** — Persist wallet across CLI invocations. v0.2+ per #399 B3 (mirrors eth v0.3 Story 12).
-- [ ] **Story 13** — Send to multiple recipients (sequential txs). Blocked on V2 + V8.
-- [ ] **Story 14** — Sweep / drain wallet. Blocked on V1 + V2.
-- [ ] **Story 15** — Choose `ref_block` strategy (auto vs manual). Blocked on V2 + V6.
-- [ ] **Story 16** — Manual `expiration` + `fee_limit` override. Blocked on V2.
+- [x] **Story 12** — Persist wallet across CLI invocations. **Ships in V0.1** (encrypted mnemonic at rest via Argon2id + AES-256-GCM). The earlier "v0.2+ per #399 B3" deferral is withdrawn.
+- [ ] ~~**Story 13** — Send to multiple recipients (sequential txs).~~ **REMOVED from V0.1** — redesign deferred.
+- [ ] ~~**Story 14** — Sweep / drain wallet.~~ **REMOVED from V0.1** — redesign deferred.
+- [ ] ~~**Story 15** — Choose `ref_block` strategy (auto vs manual).~~ **REMOVED from V0.1** — redesign deferred.
+- [ ] ~~**Story 16** — Manual `expiration` + `fee_limit` override.~~ **REMOVED from V0.1** — redesign deferred.
 - [ ] **Story 17** — Replace / speed-up tx. Blocked on V2 + V6 + V8.
-- [ ] **Story 18** — Sign personal message (raw). Blocked on V10 (key derivation) + V4 (address encoding).
+- [ ] ~~**Story 18** — Sign personal message (raw).~~ **DEFERRED to V0.2.** (Was blocked on V10 + V4.)
 - [ ] **Story 19** — Export xpub + first addresses. Blocked on V10 + V4.
 - [ ] **Story 20** — Pick derivation path. Blocked on V10.
 - [ ] **Story 21** — Send TRC-20 stablecoin. Blocked on V2 + V3 (TRC-20 ABI encoder) + V9 (token registry).
 - [ ] **Story 22** — Check TRC-20 token balance. Blocked on V3 + V9.
-- [ ] **Story 23** — List registered TRC-20 stablecoins / tokens. Blocked on V9.
-- [ ] **Story 24** — Add custom TRC-20 token by contract address. Blocked on V3 + V9.
+- [ ] ~~**Story 23** — List registered TRC-20 stablecoins / tokens.~~ **DEFERRED to V0.2.** (Was blocked on V9.)
+- [ ] ~~**Story 24** — Add custom TRC-20 token by contract address.~~ **DEFERRED to V0.2.** (Was blocked on V3 + V9.)
 - [ ] **Story 25** — Approve TRC-20 spending. Blocked on V2 + V3.
 - [ ] **Story 26** — Use TronBox local node. Blocked on V1 (RPC compile-check) + TronBox availability.
 - [ ] **Story 27** — Use Nile testnet. Blocked on V6.
@@ -657,8 +688,8 @@ Status snapshot for the `tron-wallet-core v0.1.0` library + `tron` CLI scaffold 
 
 - `--json` everywhere — `serde_json` in CLI scaffold args
 - Stable exit codes per #399 M-EXIT (mirror eth #297 M11)
-- `Secret<Mnemonic>` zeroize — `zeroize::Zeroizing<Mnemonic>` (F47 mirror BTC Task 30)
-- T-base58check address display — `bs58` + 4-byte double-SHA-256 checksum
+- `Zeroizing<[u8; 32]>` wrap on the raw `sk` before every `secp256k1_sign` (F47 mirror BTC Task 30; closes the `anychain-kms` gap)
+- T-base58check address display — `anychain_tron::TronAddress::to_base58` (4-byte double-SHA-256 checksum)
 
 ### Try it (target surface, post-spike)
 
