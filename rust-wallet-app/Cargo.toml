@@ -9,6 +9,7 @@ members = [
     "crates/eth",
     "crates/polygon-wallet-core",
     "crates/polygon",
+    "crates/tron-wallet-core",
     "spikes/tron-v1",
     "spikes/polygon-v1",
 ]
@@ -21,6 +22,16 @@ license = "MIT"
 # repository — set per fork. Default placeholder: change to your fork URL.
 
 [workspace.dependencies]
+# TRON (anychain stack — plan Phase 0 Task 0.2 / ADR-0001).
+# EXACT pins (`=X.Y.Z`, not `^`) are mandatory per Round-1 grill Q3: bus-factor
+# is 1 for anychain-tron, and a silent minor bump could change txid derivation,
+# signing, or Zeroizing behavior. Pulled straight from crates.io — vendoring was
+# considered and rejected 2026-09-05 (operational overhead > benefit at v0.1).
+anychain-core = "=0.1.8"
+anychain-tron = "=0.2.14"
+anychain-kms = "=0.1.23"
+tron-wallet-core = { path = "crates/tron-wallet-core" }
+
 # Per-chain SDKs
 bitcoin-wallet-core = { path = "crates/bitcoin-wallet-core" }
 bitcoin = { version = "0.32", features = ["serde"] }  # F20/TD-03: serde feature required by config::WalletConfig (Network: Serialize).
