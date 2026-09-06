@@ -1,18 +1,14 @@
 {
   "mainnet": {
-    "rpc_url": "https://api.trongrid.io",
-    "spki_pin_hex": "0e43f6110bbee5e199c6775cf88a3050a9bd51f3bb4a31aeefb7122f79119f0d"
+    "rpc_url": "https://api.trongrid.io"
   },
   "shasta": {
-    "rpc_url": "https://api.shasta.trongrid.io",
-    "spki_pin_hex": null
+    "rpc_url": "https://api.shasta.trongrid.io"
   },
   "nile": {
-    "rpc_url": "https://nile.trongrid.io",
-    "spki_pin_hex": "e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f"
+    "rpc_url": "https://nile.trongrid.io"
   },
   "local": {
-    "rpc_url": "http://127.0.0.1:8090",
-    "spki_pin_hex": null
+    "rpc_url": "http://127.0.0.1:8090"
   }
 }

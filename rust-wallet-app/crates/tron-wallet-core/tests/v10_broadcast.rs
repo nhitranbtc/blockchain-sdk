@@ -111,7 +111,7 @@ async fn live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile() {
 
     // --- Fetch a fresh ref block from the live network ---
     let cfg = TronConfig::for_network(Network::Nile);
-    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
+    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None)
         .expect("TronGridClient must build against Nile config");
     let head = rpc
         .get_now_block()
@@ -208,7 +208,7 @@ async fn live_broadcast_trx_native_transfer_succeeds_on_nile() {
 
     // --- Fetch a fresh ref block from the live network ---
     let cfg = TronConfig::for_network(Network::Nile);
-    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
+    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None)
         .expect("TronGridClient must build against Nile config");
     let head = rpc
         .get_now_block()
@@ -305,7 +305,7 @@ async fn live_broadcast_rebroadcast_idempotency_on_nile() {
     let usdt_address = usdt.address.as_str();
 
     let cfg = TronConfig::for_network(Network::Nile);
-    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
+    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None)
         .expect("TronGridClient must build against Nile config");
     let head = rpc
         .get_now_block()

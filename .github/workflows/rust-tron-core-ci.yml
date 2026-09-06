@@ -161,22 +161,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: Extract live Nile SPKI pin
-        # Pulls the current nile.trongrid.io cert, extracts its SubjectPublicKeyInfo
-        # (per plan §Q5 + RFC 7469), hashes with SHA-256, and writes the hex digest
-        # to $GITHUB_ENV so the next step sees it as $TON_NILE_SPKI_PIN_HEX.
-        # This means the workflow always pins against the live cert — no operator
-        # setup in repo Secrets, no cert-rotation maintenance.
-        run: |
-          set -euo pipefail
-          TON_NILE_SPKI_PIN_HEX=$( \
-            echo | openssl s_client -servername nile.trongrid.io -connect nile.trongrid.io:443 2>/dev/null \
-              | openssl x509 -pubkey -noout \
-              | openssl pkey -pubin -outform DER \
-              | sha256sum \
-              | awk '{print $1}' )
-          echo "TON_NILE_SPKI_PIN_HEX=${TON_NILE_SPKI_PIN_HEX}" >> "$GITHUB_ENV"
-          echo "live Nile SPKI pin: ${TON_NILE_SPKI_PIN_HEX}"
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace
@@ -190,16 +174,13 @@ jobs:
         # `live_estimate_energy_lands_in_documented_band`,
         # `live_decimals_match_bundle_against_nile`,
         # `live_broadcast_*_on_nile`) from skip/panic to real round-trip.
-        # RUN_TRON_MAINNET flipped on 2026-09-06: Nile SPKI pin
-        # (`e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f`)
-        # extracted live and committed to `tokens/network.json:nile.spki_pin_hex`,
-        # closing the "stale pin" hypothesis. Mainnet legs
-        # (`spki_pin_accepts_correct_pin_against_mainnet`,
-        # `live_symbol_matches_bundle_against_mainnet`) now run on every
-        # CI push. Revert to RUN_TRON_MAINNET-only-on-workflow_dispatch if
-        # shared-runner flakiness recurs.
-        # TON_NILE_SPKI_PIN_HEX comes from the "Extract live Nile SPKI
-        # pin" step via $GITHUB_ENV.
+        # RUN_TRON_MAINNET flips the mainnet legs
+        # (`live_symbol_matches_bundle_against_mainnet`) — safe to gate
+        # on every push because the SPKI pinning machinery was removed
+        # 2026-09-06 (`TronConfig::spki_pin` field + `SpkiPinnedVerifier`
+        # enforcement against the bundled mainnet pin both gone); the
+        # mainnet handshake now uses the default webpki chain, so CDN
+        # cert rotation is no longer a hard fail.
         working-directory: rust-wallet-app
         env:
           RUN_TRON_NILE: "1"
