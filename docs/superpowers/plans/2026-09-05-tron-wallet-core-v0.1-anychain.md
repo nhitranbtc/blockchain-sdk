@@ -8,6 +8,9 @@
 - Research: `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md` (this plan's source of truth)
 - User stories (legacy, outdated — must regenerate per mismatch report): `docs/wallets/2026-08-27-tron-wallet-user-stories.md`
 - ADR capturing reversal: `docs/wallets/2026-09-05-adr-0001-tron-sdk-anychain-vs-raw-primitives.md`
+- Changelog: `rust-wallet-app/crates/tron-wallet-core/CHANGELOG.md` (per-phase pre-release entries; updated on every shipped phase per L24)
+- Estimate report (operator-local, gitignored per L14): `.superpowers/sdd/2026-09-05-tron-wallet-core-v0.1-anychain/estimate-report.md`
+- AI cost report (operator-local, gitignored per L14): `.superpowers/sdd/2026-09-05-tron-wallet-core-v0.1-anychain/ai-cost-report.md`
 - Supersedes: `docs/superpowers/plans/2026-08-27-tron-wallet-core.md` (raw-primitives plan — kept for archaeology)
 
 **Tracks:** issue #399 (Q1–Q10 closed by deep-dive Round-1 grill Q1–Q12). PR #402 (Ticket A — research) closed; this plan covers Ticket B–F (implementation).
@@ -471,6 +474,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 - [ ] `.github/workflows/rust-tron-core-ci.yml` exists and its first run concluded `success`.
 - [ ] Issue #399 carries the `tron-v0.1` milestone and a priority label.
 - [ ] The branch rule from Task S.2 is restated in the body of every v0.1 task issue, so an agent picking up a task cannot miss it.
+- [ ] `rust-wallet-app/crates/tron-wallet-core/CHANGELOG.md` exists; first entry covers Phase 0 (workspace setup) per L24 doc-update rule.
 
 **PAUSE here.** Branch creation, label edits, milestone creation, and the workflow commit are all state-modifying — per the workflow-approval-required rule, discuss before executing, and per never-auto-commit, the workflow file is committed only after approval.
 
@@ -759,7 +763,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 Five Phase 2 checkboxes were left unchecked because their evidence requires a live network or operator-driven spike V7; they migrate here rather than disappear. Each must close in Phase 3 (or be deferred again) before v0.1 ships.
 
-- [ ] **Task 2.6 — `TriggerSmartContract.data` at proto field 4**: write the Phase 3 TRC-20 `build_trc20_transfer_contract` against `anychain_tron::trx::trc20_transfer` and assert the encoded `TriggerSmartContract.data` field index is **4** (not 3). Native TRX tests don't exercise this path; closing this requires the TRC-20 fixture.
+- [x] **Task 2.6 — `TriggerSmartContract.data` at proto field 4**: write the Phase 3 TRC-20 `build_trc20_transfer_contract` against `anychain_tron::trx::trc20_transfer` and assert the encoded `TriggerSmartContract.data` field index is **4** (not 3). Native TRX tests don't exercise this path; closing this requires the TRC-20 fixture.
 - [ ] **Task 2.7 — `TronConfig::for_network(Network::Nile)` SPKI pin**: extract `nile.trongrid.io` leaf cert SPKI SHA-256 per the operator step in spike V7, then add the result to `default_spki_pin(Network::Nile)` and (optionally) ship a `constants::nile::SPKI_PIN_HEX`. Closed only by operator-supplied pin; `RUN_TRON_NILE=1` path requires it.
 - [ ] **Task 2.8 — `spki_pinned_endpoint_accepts_correct_pin` (live handshake vs `nile.trongrid.io`)**: replace the env-gated stub in `tests/v7_spki_pin.rs:spki_pin_accepts_correct_pin_against_nile` with an actual `reqwest::get("https://nile.trongrid.io/walletsolidity/getnowblock")` round trip using `SpkiPinnedVerifier::new(pin).into_client_config()` via `reqwest::ClientBuilder::use_preconfigured_tls(...)`. Required: `RUN_TRON_NILE=1` and the pin from the previous checkbox.
 - [ ] **Task 2.8 — `spki_pinned_endpoint_rejects_wrong_pin` (live wrong-pin handshake)**: sister test to the previous item: build `SpkiPinnedVerifier::new([0xff; 32])` against the same endpoint, assert the TLS handshake fails with `rustls::Error::General("spki pin mismatch ...")`. Live-with-rejection behaviour is what closes "Scenario A pin enforcement is real, not dead"; unit-only tests cannot prove it.
@@ -770,53 +774,53 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Files:** `src/tx/builder.rs` (extend)
 
-- [ ] `tx::builder::trc20_transfer(owner: Address, contract: Address, recipient: Address, amount: U256) -> TronTransactionParameters` wraps `anychain_tron::trx::build_trc20_transfer_contract + abi::trc20_transfer`.
-- [ ] Default `fee_limit = 130_000_000` sun (130 TRX energy allowance per Spike V5).
+- [x] `tx::builder::trc20_transfer(owner: Address, contract: Address, recipient: Address, amount: U256) -> TronTransactionParameters` wraps `anychain_tron::trx::build_trc20_transfer_contract + abi::trc20_transfer`.
+- [x] Default `fee_limit = 130_000_000` sun (130 TRX energy allowance per Spike V5).
 
 #### Task 3.2 — Wrap `anychain_tron::trx::build_trc20_approve_contract`
 
 **Files:** `src/tx/builder.rs` (extend)
 
-- [ ] `tx::builder::trc20_approve(owner: Address, contract: Address, spender: Address, value: U256) -> TronTransactionParameters` wraps `anychain_tron::trx::build_trc20_approve_contract + abi::trc20_approve`.
+- [x] `tx::builder::trc20_approve(owner: Address, contract: Address, spender: Address, value: U256) -> TronTransactionParameters` wraps `anychain_tron::trx::build_trc20_approve_contract + abi::trc20_approve`.
 
 #### Task 3.3 — `wallet/triggerconstantcontract` for view calls
 
 **Files:** `src/chain/mod.rs` (extend)
 
-- [ ] `chain::TronGridClient::trigger_constant_contract(&self, contract: Address, selector: [u8; 4], args: &[u8]) -> Result<Vec<u8>>`.
-- [ ] POST `{rpc_url}/wallet/triggerconstantcontract` with `{"contract_address", "function_selector", "parameter": hex(args), "visible": true}` body.
-- [ ] **Wire-format contract (corrected 2026-08-27 via #410):** the server **prepends the 4-byte selector** to `parameter`; client sends **encoded args only** (32 bytes per Solidity uint256/address).
+- [x] `chain::TronGridClient::trigger_constant_contract(&self, contract: Address, selector: [u8; 4], args: &[u8]) -> Result<Vec<u8>>`.
+- [x] POST `{rpc_url}/wallet/triggerconstantcontract` with `{"contract_address", "function_selector", "parameter": hex(args), "visible": true}` body.
+- [x] **Wire-format contract (corrected 2026-08-27 via #410):** the server **prepends the 4-byte selector** to `parameter`; client sends **encoded args only** (32 bytes per Solidity uint256/address).
 
 #### Task 3.4 — `balanceOf` + `decimals` + `symbol` ABI decoding
 
 **Files:** `src/trc20.rs`
 
-- [ ] `trc20::balance_of(rpc: &TronGridClient, contract: Address, owner: Address) -> Result<U256>`.
+- [x] `trc20::balance_of(rpc: &TronGridClient, contract: Address, owner: Address) -> Result<U256>`.
   - Selector `0x70a08231` + arg `padded_to_32(owner_20)`.
   - Decode 32-byte response as `uint256`.
-- [ ] `trc20::decimals(rpc: &TronGridClient, contract: Address) -> Result<u8>`.
+- [x] `trc20::decimals(rpc: &TronGridClient, contract: Address) -> Result<u8>`.
   - Selector `0x313ce567`. Decode response as `uint8`.
-- [ ] `trc20::symbol(rpc: &TronGridClient, contract: Address) -> Result<String>`.
+- [x] `trc20::symbol(rpc: &TronGridClient, contract: Address) -> Result<String>`.
   - Selector `0x95d89b41`. Decode response as ABI string (offset + length + bytes).
 
 #### Task 3.5 — Bundled token registry (Spike V9)
 
 **Files:** `src/tokens/mod.rs`, `tokens/local.json`, `tokens/nile.json`, `tokens/mainnet.json`
 
-- [ ] `tokens::load(network: Network) -> &[Token]` reads bundled JSON via `include_str!`.
-- [ ] **local.json:** TronBox Docker mock USDT (mock contract address from `testcontainers`).
-- [ ] **nile.json:** 1 entry — community test USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` (6 decimals).
+- [x] `tokens::load(network: Network) -> &[Token]` reads bundled JSON via `include_str!`.
+- [x] **local.json:** TronBox Docker mock USDT (mock contract address from `testcontainers`).
+- [x] **nile.json:** 1 entry — community test USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` (6 decimals).
   - **CAUTION:** user-stories.md Story 21 quotes `TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z` — WRONG. Use `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` per deep-dive canonical.
-- [ ] **mainnet.json:** 5 entries — USDT `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` (6), USDC `TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8` (6), TUSD `TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F9` (18), USDD `TXDk8mbtRbXeYuMNS83CfKPaYYT8Xvi9Hz` (18), stUSDT `TThzxNRLrW2Brp9DcTQU8i4Wd9udCWEdZ3` (6).
+- [x] **mainnet.json:** 5 entries — USDT `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` (6), USDC `TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8` (6), TUSD `TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F9` (18), USDD `TXDk8mbtRbXeYuMNS83CfKPaYYT8Xvi9Hz` (18), stUSDT `TThzxNRLrW2Brp9DcTQU8i4Wd9udCWEdZ3` (6).
 
 #### Task 3.6 — TRC-20 ABI round-trip test (Spike V3)
 
 **Files:** `tests/v3_trc20_abi.rs`
 
-- [ ] `anychain_tron::abi::contract_function_call("transfer", &[Param])` produces 68-byte calldata with `0xa9059cbb` selector at bytes [0..4].
-- [ ] `balanceOf` produces 36-byte calldata with `0x70a08231` selector at bytes [0..4].
-- [ ] `approve` produces 68-byte calldata with `0x095ea7b3` selector at bytes [0..4].
-- [ ] `decimals` produces 4-byte calldata with `0x313ce567`.
+- [x] `anychain_tron::abi::contract_function_call("transfer", &[Param])` produces 68-byte calldata with `0xa9059cbb` selector at bytes [0..4].
+- [x] `balanceOf` produces 36-byte calldata with `0x70a08231` selector at bytes [0..4].
+- [x] `approve` produces 68-byte calldata with `0x095ea7b3` selector at bytes [0..4].
+- [x] `decimals` produces 4-byte calldata with `0x313ce567`.
 
 **Verification:** `cargo test -p tron-wallet-core --test v3_trc20_abi` passes.
 
@@ -826,8 +830,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Files:** `tests/v9_token_registry.rs`
 
-- [ ] `tokens::load(Network::Nile)` returns 1 entry.
-- [ ] `tokens::load(Network::Mainnet)` returns 5 entries.
+- [x] `tokens::load(Network::Nile)` returns 1 entry.
+- [x] `tokens::load(Network::Mainnet)` returns 5 entries.
 - [ ] Live `trc20::decimals(rpc, USDT)` against Nile → `6` (GATED, `RUN_TRON_NILE=1`).
 - [ ] Live `trc20::symbol(rpc, USDT)` against Mainnet → `"USDT"` (GATED, `RUN_TRON_MAINNET=1`).
 
@@ -837,19 +841,19 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Files:** `src/resource.rs`, `tests/v5_resource.rs`
 
-- [ ] `resource::estimate_energy(rpc, contract, selector, args) -> Result<EnergyEstimate>` queries `wallet/triggerconstantcontract`, returns `energy_used` + optional `energy_penalty`.
-- [ ] Fallback: `wallet/estimateenergy` (requires `vm.estimateEnergy` enabled).
-- [ ] Apply DEM `max_factor = 3.4×` per 6-hour cycle — `getcontractinfo` returns `energy_factor` for any contract.
-- [ ] USDT-TRC20 baseline: 65,000 Energy (recipient holds USDT) up to 130,000 Energy (empty recipient).
-- [ ] Default `fee_limit = 100_000_000` sun (100 TRX) sized with `max_factor` buffer.
+- [x] `resource::estimate_energy(rpc, contract, selector, args) -> Result<EnergyEstimate>` queries `wallet/triggerconstantcontract`, returns `energy_used` + optional `energy_penalty`.
+- [x] Fallback: `wallet/estimateenergy` (requires `vm.estimateEnergy` enabled).
+- [x] Apply DEM `max_factor = 3.4×` per 6-hour cycle — `getcontractinfo` returns `energy_factor` for any contract.
+- [x] USDT-TRC20 baseline: 65,000 Energy (recipient holds USDT) up to 130,000 Energy (empty recipient).
+- [x] Default `fee_limit = 100_000_000` sun (100 TRX) sized with `max_factor` buffer.
 - [ ] Test (GATED, `RUN_TRON_NILE=1`): `estimate_energy` for MockTRC20 transfer returns 65k-130k.
 
 **Test Scenario mapping:** supports **Local row 2 (TRC-20 held recipient 65k Energy)** + **row 3 (first-time receive empty recipient 130k Energy)** + **row 4 (TRC-20 approval energy estimate)** — every TRC-20 scenario row requires `fee_limit` sizing from `wallet/triggerconstantcontract` energy_used + DEM `max_factor=3.4×` buffer. **Nile row 1 + 2**: live `getcontractinfo.energy_factor` round-trip validates DEM scaling on real network.
 
 #### Phase 3 Verification
 
-- [ ] `cargo test -p tron-wallet-core --tests` passes (V3 + V5 + V9).
-- [ ] `cargo clippy -p tron-wallet-core -- -D warnings` passes.
+- [x] `cargo test -p tron-wallet-core --tests` passes (V3 + V5 + V9).
+- [x] `cargo clippy -p tron-wallet-core -- -D warnings` passes.
 - [ ] Send 1 USDT-TRC20 from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`).
 
 **PAUSE. Verify L13 step 11.**
@@ -1376,6 +1380,57 @@ cargo run -p tron -- trc20 --help
 cargo run -p tron -- tx --help
 cargo run -p tron -- config show
 ```
+
+---
+
+## Cost Estimates — Phase 4 to v0.1 release cut
+
+**Scope:** remaining Phase 4 (test integration) → Phase 7 (V1-V11 PASS + mainnet gate) → `rust-tron-core` → `main` cut. Phase 0-3 already shipped (commits `37d499d`, `47a52d2`, `63d3e6b`, `15f3559`); their actuals are sunk.
+
+**Method:** task-hour bottoms-up per phase + agent-pass estimate per L13 step 11 (code-review, security-auditor, test-engineer, tdd-guide, build-error-resolver, etc. — typically 8-12 subagent invocations per phase for code-bearing work, 2-3 for docs-only). Token figures blend input + output at published rates; treat as ±50% until post-Phase 4 telemetry exists.
+
+### Report cost (human engineering hours)
+
+| Phase | Tasks | Owner | Engineering-hours (low) | (high) | Notes |
+|-------|-------|-------|------------------------|--------|-------|
+| 4 — Test integration | 4.1–4.7 (7 tasks) | solo | 24 h | 40 h | testcontainers Docker + 2 GH Actions files + Nile manual trigger; flaky-test triage likely eats 20% of low end |
+| 5 — PAL + crypto | 4.1–4.7 (7 tasks, mostly code) | solo | 40 h | 64 h | 4 traits × 3-4 platform impls + argon2id/AES-GCM persistence + FFI cdylib smoke; mobile compile gates hit "no Docker on mobile" repeatedly |
+| 6 — CLI scaffold | 5.1–5.3+ (22 commands) | solo | 40 h | 64 h | clap derive wiring + 22 handlers + exit-code matrix mirroring btc; round 5 L13 review × 22 surfaces likely |
+| 7 — V1-V11 + mainnet | spike V1-V11 + 0.001 USDT self-send | solo + operator | 16 h | 32 h | V1-V11 spike PASS evidence + mainnet gate operator-driven (recipient==sender pre-check hook, `RUN_TRON_MAINNET=1` env gate) |
+| Release cut | branch → main + ledger entry + tag | solo | 4 h | 8 h | L17 ledger + L13 step 15 PR review + merge + close |
+| **Subtotal — Phase 4 to v0.1 cut** | | | **124 h** | **208 h** | ~15-26 working days @ 8 h/day solo |
+
+### AI report cost (Claude Sonnet 5 token spend, blended)
+
+Rate assumption: input $3/M tokens, output $15/M tokens, blended $6/M tokens. Tokens-per-subagent-pass typical: 50K-200K (read-heavy reviews), 200K-800K (multi-file refactor agents).
+
+| Phase | Subagent passes (low) | (high) | Token total (low) | (high) | USD blended (low) | (high) |
+|-------|----------------------|--------|-------------------|--------|-------------------|--------|
+| 4 — Test integration | 24 | 40 | 2.4 M | 8.0 M | $14 | $48 |
+| 5 — PAL + crypto | 40 | 64 | 4.0 M | 12.8 M | $24 | $77 |
+| 6 — CLI scaffold | 56 | 88 | 5.6 M | 17.6 M | $34 | $106 |
+| 7 — V1-V11 + mainnet | 16 | 24 | 1.6 M | 4.8 M | $10 | $29 |
+| Release cut | 8 | 12 | 0.4 M | 0.8 M | $2 | $5 |
+| **Subtotal** | | | **14.0 M** | **44.0 M** | **$84** | **$265** |
+
+### Cost ratio
+
+- Human-hours-to-AI-USD at low end: 124 h ≈ $84 AI spend → **~$0.68 AI spend per human-hour**
+- High end: 208 h ≈ $265 AI → **~$1.27 AI spend per human-hour**
+
+Both ratios are well below typical IDE-seat costs ($25-100/h all-in). AI tooling pays for itself if it cuts wall-clock by ≥3% on routine tasks (it usually cuts more on review + test scaffolding).
+
+### Caveats — read before quoting
+
+1. **No mainnet gate cost.** The $0.001 USDT self-send costs real USDT (≈$0.001 + 130 TRX energy ≈ $20 at $0.15/TRX) + operator-driven; not in this estimate. Budget owner: operator.
+2. **TronBox Docker CI minutes.** Two GH Actions workflows + Docker-in-Docker runner on every push add ~5-8 runner-minutes per CI run. Budget 500 runs × 8 min × ubuntu-latest rate (~$0.008/min) ≈ **$20-30/mo** during active development. Goes to $0 once merged to main and Docker tests gate on `pull_request` only.
+3. **Nile testnet USDT.** Community faucet USDT is free; Nile TRX for fees requires the public Nile faucet (1-2 TRX/day per IP). Operator-supplied.
+4. **Mobile CI matrix not in plan above.** Two extra `cargo check --target aarch64-…` jobs add ~3 min × 2 per CI run. Budget 500 runs × 6 min × macOS-latest rate (~$0.08/min) ≈ **$240/mo** if macOS runner used; falls to ~$30/mo if Linux cross-target only. Choose runner per Round-1 grill Q6.
+5. **Bus-factor risk (accepted, per Q3).** If anychain-{core,tron,kms} 0.x upstream yanks a version or ships a breaking "fix", mitigation cost = revert pin + write regression test ≈ 4-8 h + $5-15 AI spend per incident. Track as out-of-band when it fires, not in this estimate.
+
+### Update rule
+
+Re-estimate after Phase 4 lands (replace low/high with actuals). Until then, treat this section as a planning checkpoint, not a quote.
 
 ---
 
