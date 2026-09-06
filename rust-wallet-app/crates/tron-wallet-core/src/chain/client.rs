@@ -25,7 +25,9 @@ use serde::Serialize;
 use crate::chain::constant_contract::ConstantContractCall;
 use crate::chain::spki::{SpkiPin, SpkiPinnedVerifier};
 use crate::error::{Error, Result};
-use crate::tx::broadcast::{BlockHeader, BroadcastReceipt, TransactionInfo};
+use crate::tx::broadcast::{
+    parse_block_header_response, BlockHeader, BroadcastReceipt, TransactionInfo,
+};
 
 /// HTTP client for TronGrid (or any other TRON fullnode speaking the same
 /// schema). Construction is cheap — the underlying `reqwest::Client` is the
@@ -153,8 +155,7 @@ impl TronGridClient {
             )));
         }
 
-        serde_json::from_slice(&bytes)
-            .map_err(|e| Error::NodeResponse(format!("getnowblock decode: {e}")))
+        parse_block_header_response(&bytes)
     }
 
     /// `POST /wallet/gettransactioninfobyid` — receipt probe.

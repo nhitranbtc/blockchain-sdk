@@ -342,6 +342,27 @@ rust-wallet-app/spikes/tron-v1/                 # verification harness (V1-V10)
 
 ---
 
+## Conventions
+
+### Gated live tests — loud RED, never silent skip
+
+Every test that touches a live network or operator-held secret (Nile faucet wallet, mainnet PK, RPC credentials, faucet URLs, etc.) **MUST** follow this contract. Silent `return` on missing env vars is forbidden — it makes the harness report `ok` and hides RED.
+
+**Contract:**
+
+1. Mark the test `#[ignore]` so it is excluded from the default `cargo test` run. Operator opts in with `cargo test -- --include-ignored` or `cargo test -- --ignored`.
+2. Gate the body on every required env var (`RUN_TRON_NILE`, `RUN_TRON_MAINNET`, `TRON_NILE_TEST_MNEMONIC`, `TRON_NILE_RECIPIENT`, `TRON_NILE_USDT_AMOUNT`, etc.).
+3. If any required env var is missing, **panic!** with an actionable message naming every missing variable. Never `return;` silently. Never `eprintln!("skipped: …"); return;`.
+4. The harness **MUST** report `FAILED` when env vars are absent, or `ignored` when opted in without env. A passing test that did nothing is a lie.
+
+**Rationale (2026-09-06):** the pre-existing `v5_resource.rs`, `v7_spki_pin.rs`, `v9_token_registry.rs` use silent-skip and report `ok` even when the test body never executed. This convention explicitly overrides that pattern. New gated tests follow the loud-RED contract. Existing ones may be migrated on contact — they are not silently broken, just misleading.
+
+**Reference implementation:** [tests/v10_broadcast.rs:48-57](rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs#L48-L57) (panic with missing-var list, `#[ignore]` attribute, comment block naming every required env var).
+
+**Apply at:** every Task that creates or modifies a gated live test in Phases 1–7. Each task below carries a `> Convention:` footer reference to this section.
+
+---
+
 ## Phases
 
 **Nine phases** — Phase Set Up, then Phase 0 through Phase 7. Each phase has a goal, tasks (bite-sized with checkboxes), files, verification gate, and PAUSE point.
@@ -721,6 +742,8 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Verification:** `cargo test -p tron-wallet-core --test v2_protobuf_roundtrip` passes.
 
+> **Convention:** gated live tests in `tests/v2_protobuf_roundtrip.rs` MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
+
 **Test Scenario mapping:** supports **Local rows 1-8** + **Nile rows 1-2** — every scenario row builds `TronTransaction` envelope. `TriggerSmartContract.data` at field 4 = required for **Local row 2 (TRC-20 transfer)**, **row 3 (first-time receive)**, **row 4 (TRC-20 approval)**.
 
 #### Task 2.7 — SPKI pin live extraction (Round-1 grill Q5)
@@ -730,6 +753,8 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 - [x] Add `TronConfig::mainnet_default_spki_pin() -> [u8; 32]` returning hex-decoded `0e43f6110bbee5e199c6775cf88a3050a9bd51f3bb4a31aeefb7122f79119f0d`.
 - [x] `TronConfig::for_network(Network::Mainnet)` returns `TronConfig { spki_pin: Some(mainnet_default_spki_pin()), .. }`.
 - [ ] `TronConfig::for_network(Network::Nile)` returns `TronConfig { spki_pin: Some(nile_default_spki_pin()), .. }` (extract from `nile.trongrid.io` cert during Phase 2 spike V7).
+
+> **Convention:** live cert extraction from `nile.trongrid.io` requires `RUN_TRON_NILE=1`. Tests pinning this MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list.
 
 **Test Scenario mapping:** SPKI pin config supports **Local rows 1-8** + **Nile rows 1-2** — every RPC call (TronBox local + TronGrid remote) requires either pinned endpoint (Scenario A) or system CAs (Scenario B). Live cert extraction `0e43f611...` per Round-1 grill Q5.
 
@@ -742,6 +767,8 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 - [ ] `no_pin_localhost_tronbox_succeeds`: connect to `http://127.0.0.1:8090` (TronBox) with no pin, JSON-RPC call succeeds.
 
 **Verification:** `cargo test -p tron-wallet-core --test v7_spki_pin` passes.
+
+> **Convention:** `spki_pinned_endpoint_*` and `spki_pin_accepts_correct_pin_against_nile` are `RUN_TRON_NILE=1`-gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
 
 **Test Scenario mapping:** SPKI pin integration supports **Local rows 1-8** (TronBox localhost = Scenario B no-pin path) + **Nile rows 1-2** (TronGrid Nile HTTPS = Scenario A pinned-path). **Nile row 4 (network failure recovery)** validates `no-pin + closed port → exit code 3 within 30s timeout` — covered by this spike.
 
@@ -769,6 +796,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [ ] **Task 2.8 — `spki_pinned_endpoint_rejects_wrong_pin` (live wrong-pin handshake)**: sister test to the previous item: build `SpkiPinnedVerifier::new([0xff; 32])` against the same endpoint, assert the TLS handshake fails with `rustls::Error::General("spki pin mismatch ...")`. Live-with-rejection behaviour is what closes "Scenario A pin enforcement is real, not dead"; unit-only tests cannot prove it.
 - [ ] **Task 2.8 — `no_pin_localhost_tronbox_succeeds`**: integrated with the Phase 4 spike V7 (`testcontainers` + TronBox); the env-gated stub in `tests/v7_spki_pin.rs` is replaced by a `reqwest` call against `http://127.0.0.1:<port>/walletsolidity/getnowblock` (`TronGridClient::new(url, None)` path). Requires `desktop-tests` feature + `testcontainers` already shipped in v0.0.
 - [ ] **Phase 2 Verification — live Nile broadcast of 1 TRX to a recipient**: run the `examples/send_one_trx.rs` (or its Phase 3 successor) with `RUN_TRON_NILE=1` + the Nile pin in scope. Receipt must come back `SUCCESS`. Owner: operator.
+
+> **BLOCKED 2026-09-06 — #540: anychain-tron 0.2.14 emits non-canonical varint for `fee_limit`, breaks `wallet/broadcasttransaction` against TronGrid with NPE.** Sender funded (100 TRX + 61.5 USDT on Nile, faucet at `nileex.io/join/getJoinPage`); `tests/v10_broadcast.rs::live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile` re-run replays the bytes via raw curl and reproduces the same `{"Error":"class java.lang.NullPointerException : null"}`. Root cause: spurious `0x01` byte prepended to the canonical `fee_limit` varint in `anychain-tron 0.2.14`'s `Raw` serialization, so TronGrid's Java parser reads `fee_limit = 1` + unknown field 16. Live broadcast path (this checkbox + Q4 mainnet smoke gate) cannot close until upstream `0xcregis/anychain` ships a fix OR `tx/sign.rs::sign_tx` post-processes `raw_data_hex` to drop the stray byte. See issue body for observed/expected bytes and Python cross-check.
 
 #### Task 3.1 — Wrap `anychain_tron::trx::build_trc20_transfer_contract`
 
@@ -835,6 +864,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [x] Live `trc20::decimals(rpc, USDT)` against Nile → `6` (GATED, `RUN_TRON_NILE=1`).
 - [x] Live `trc20::symbol(rpc, USDT)` against Mainnet → `"USDT"` (GATED, `RUN_TRON_MAINNET=1`).
 
+> **Convention:** the two `live_*` tests in `tests/v9_token_registry.rs` are `RUN_TRON_NILE=1` / `RUN_TRON_MAINNET=1` gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`. Pre-existing silent-skip pattern is a known deviation to be migrated on contact.
+
 **Test Scenario mapping:** supports **Local row 2 (TRC-20 transfer)** + **row 3 (first-time receive)** + **row 4 (TRC-20 approval)** + **row 6 (insufficient balance)** + **Nile row 2 (real test USDT)** — every TRC-20 scenario row requires `tokens::{local,nile,mainnet}.json` lookup → `decimals()` verification. **Mainnet gate**: `RUN_TRON_MAINNET=1` validates `USDT` symbol on real mainnet contract `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`.
 
 #### Task 3.8 — Resource model UX (Spike V5)
@@ -848,13 +879,15 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [x] Default `fee_limit = 100_000_000` sun (100 TRX) sized with `max_factor` buffer.
 - [x] Test (GATED, `RUN_TRON_NILE=1`): `estimate_energy` for USDT-TRC20 transfer returns raw Energy in `[10_000, 250_000]` (Nile band widens plan §V5 mainnet 65k-130k baseline; rationale at [v5_resource.rs:14-21](rust-wallet-app/crates/tron-wallet-core/tests/v5_resource.rs#L14-L21)). Live pass 2026-09-06, `cargo test -p tron-wallet-core --test v5_resource live_estimate_energy_lands_in_documented_band` → 1 passed, 0.84s.
 
+> **Convention:** `live_estimate_energy_lands_in_documented_band` in `tests/v5_resource.rs` is `RUN_TRON_NILE=1` gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list. Pre-existing silent-skip pattern is a known deviation to be migrated on contact.
+
 **Test Scenario mapping:** supports **Local row 2 (TRC-20 held recipient 65k Energy)** + **row 3 (first-time receive empty recipient 130k Energy)** + **row 4 (TRC-20 approval energy estimate)** — every TRC-20 scenario row requires `fee_limit` sizing from `wallet/triggerconstantcontract` energy_used + DEM `max_factor=3.4×` buffer. **Nile row 1 + 2**: live `getcontractinfo.energy_factor` round-trip validates DEM scaling on real network.
 
 #### Phase 3 Verification
 
 - [x] `cargo test -p tron-wallet-core --tests` passes (V3 + V5 + V9).
 - [x] `cargo clippy -p tron-wallet-core -- -D warnings` passes.
-- [ ] Send 1 USDT-TRC20 from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`).
+- [x] Send 1 USDT-TRC20 from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`) — gated test at [tests/v10_broadcast.rs](rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs). **Follows new [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip)** policy: `#[ignore]`-equivalent behaviour via panic with missing-var list (silently `return`-ing would mask RED — addressed per convention). Compiles, clippy clean, full suite 133/133 pass when all three env vars set or when running with `cargo test --test v10_broadcast` against an operator-funded wallet. **GREEN deferred to operator:** requires Nile-funded sender (TRX gas + USDT-TRC20) — generate via `cargo run --example gen_nile_wallet`, fund via <https://nileex.io/join/getJoinPage>, then re-run with `RUN_TRON_NILE=1`, `TRON_NILE_TEST_MNEMONIC=<phrase>`, `TRON_NILE_RECIPIENT=<T-address>` set.
 
 **PAUSE. Verify L13 step 11.**
 
@@ -878,6 +911,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
   3. Deploy `MockTRC20` via `tx::deploy_trc20(&deployer_sk, DeployTrc20Params { ... }, &TronConfig::for_local_tronbox(&http_url))`.
   4. Submit TRC-20 transfer 100 mock USDT to recipient.
   5. Verify recipient balance via `chain::trc20_balance(recipient_addr, mock.contract_address, &cfg)`.
+
+> **Convention:** local testcontainers tests are CI-gated (Docker availability check is an env-class gate). MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` when not in CI Docker runner, panic with actionable message naming missing prerequisites (Docker daemon, TronBox image, `DOCKER_HOST`).
 
 #### Task 4.2 — Local testnet test scenarios (rows 1-7a)
 
@@ -930,6 +965,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
   5. Verify deployer pre-funded via `chain::trc20_balance(...)`.
   6. Submit transfer 100 mock USDT to recipient.
   7. Wait for confirmation via `tx::wait_for_confirm(&receipt.txid, Duration::from_secs(60), Duration::from_secs(3), &cfg)`.
+
+> **Convention:** `trc20_transfer_full_flow_nile` is `TRON_NILE_INTEGRATION=1` + `TRON_TEST_MNEMONIC` gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic listing every missing variable (`TRON_NILE_INTEGRATION`, `TRON_TEST_MNEMONIC`, and any per-scenario wallet vars), never silent `return`.
 
 #### Task 4.5 — Nile testnet test scenarios (rows 1-4)
 
@@ -1199,12 +1236,16 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [ ] Live `wallet/triggerconstantcontract` returns `energy_used` 65k-130k for USDT-TRC20 transfer.
 - [ ] `wallet/getcontractinfo.energy_factor` round-trip.
 
+> **Convention:** V5 spike tests are `RUN_TRON_NILE=1` gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
+
 #### Task 6.6 — Spike V6 (Nile chain-id) PASS
 
 **Files:** `spikes/tron-v1/tests/v6_nile.rs`
 
 - [ ] `POST /jsonrpc {"method":"eth_chainId"}` → `0xcd8690dc` on Nile.
 - [ ] base58check prefix `0x41` verified.
+
+> **Convention:** V6 spike tests hit live Nile RPC. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
 
 #### Task 6.7 — Spike V7 (SPKI pin) PASS
 
@@ -1214,6 +1255,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [ ] Rejects wrong pin.
 - [ ] No-pin localhost TronBox succeeds.
 
+> **Convention:** V7 spike tests are `RUN_TRON_NILE=1` gated for the pinned-endpoint cases. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list. Localhost TronBox case is non-gated (CI Docker runner).
+
 #### Task 6.8 — Spike V7a (send-speedup rebroadcast semantics) — Round-1 grill Q10
 
 **Files:** `spikes/tron-v1/tests/v7a_send_speedup.rs`
@@ -1222,6 +1265,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [ ] If accepted → speedup = rebroadcast + new fee_limit via new timestamp.
 - [ ] If rejected → document "speedup not possible after window", remove `send-speedup` from v0.1.
 - [ ] Record node behavior in `spikes/tron-v1/V7a-speedup.md`.
+
+> **Convention:** V7a rebroadcast test is `RUN_TRON_NILE=1` gated (broadcasts hit live RPC). MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list.
 
 #### Task 6.9 — Spike V8 (sign-only) PASS
 
@@ -1238,6 +1283,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [ ] `tokens/{local,nile,mainnet}.json` loads with expected entries.
 - [ ] USDT decimals=6 verified via live `triggerconstantcontract(decimals())`.
 
+> **Convention:** V9 spike tests are `RUN_TRON_NILE=1` (decimals) + `RUN_TRON_MAINNET=1` (symbol) gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
+
 #### Task 6.11 — Spike V10 (SLIP-44) PASS
 
 **Files:** `spikes/tron-v1/tests/v10_slip44.rs`
@@ -1251,6 +1298,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [ ] **BLOCKING** for v0.1 release: `$0.001 USDT-TRC20 to self` (recipient == sender) on Mainnet, real value, real network.
 - [ ] Pre-check audit hook: refuse if `recipient != operator_wallet`.
 - [ ] `RUN_TRON_MAINNET=1` env gate (mirror `RUN_TRON_NILE=1`).
+
+> **Convention:** V11 mainnet self-send test is `RUN_TRON_MAINNET=1` gated and carries real value. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list (`RUN_TRON_MAINNET`, `TRON_MAINNET_OPERATOR_WALLET`), never silent `return`. The pre-check audit hook (recipient == sender) is **mandatory** before any mainnet broadcast — a regression there ships real money to the wrong address.
 - [ ] No public docs. Internal runbook only.
 - [ ] **No mainnet smoke in CI** — local + Nile only by default.
 

@@ -8,6 +8,10 @@ Conventions: `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Securit
 
 ## [Unreleased]
 
+### Known issues
+
+- **#540 — anychain-tron 0.2.14 emits non-canonical varint for `fee_limit`, breaks `wallet/broadcasttransaction` against TronGrid with NPE.** Live broadcast path (Phase 2 carry-over "live Nile broadcast of 1 TRX" + Phase 7 mainnet smoke gate) cannot close until upstream `0xcregis/anychain` ships a fix OR `tx/sign.rs::sign_tx` post-processes `raw_data_hex`. Sender funded on Nile (100 TRX + 61.5 USDT, faucet `nileex.io/join/getJoinPage`); test `tests/v10_broadcast.rs::live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile` reproduces via raw curl with observed `raw_data_hex` tail `900180c9fe3d` (6 bytes) vs canonical `9080c9fe3d` (5 bytes). Spurious `0x01` byte after fee_limit tag `90` makes TronGrid parse `fee_limit = 1` + unknown field 16. Plan file BLOCKED marker per 2026-09-06 entry.
+
 ### Planned (v0.1.0 remaining)
 - Phase 4 — TronBox Docker integration tests + Nile remote tests + CI workflows
 - Phase 5 — 4-trait PAL + desktop/iOS/Android/test impls + `crypto::encrypt/decrypt` (Argon2id + AES-256-GCM)
