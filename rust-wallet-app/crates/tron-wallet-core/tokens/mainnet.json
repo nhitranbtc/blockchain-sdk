@@ -1,0 +1,32 @@
+[
+  {
+    "symbol": "USDT",
+    "name": "Tether USD",
+    "address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    "decimals": 6
+  },
+  {
+    "symbol": "USDC",
+    "name": "USD Coin",
+    "address": "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
+    "decimals": 6
+  },
+  {
+    "symbol": "TUSD",
+    "name": "TrueUSD",
+    "address": "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F9",
+    "decimals": 18
+  },
+  {
+    "symbol": "USDD",
+    "name": "Decentralized USD",
+    "address": "TXDk8mbtRbXeYuMNS83CfKPaYYT8Xvi9Hz",
+    "decimals": 18
+  },
+  {
+    "symbol": "stUSDT",
+    "name": "Staked USDT",
+    "address": "TThzxNRLrW2Brp9DcTQU8i4Wd9udCWEdZ3",
+    "decimals": 6
+  }
+]
