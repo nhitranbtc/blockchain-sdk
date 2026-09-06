@@ -23,15 +23,30 @@ version = 2
 # alloy-primitives 1.6.1 → alloy-chains → alloy-hardforks → alloy-node-bindings
 # (eth-wallet-core dev-deps). No direct upgrade path; track upstream alloy
 # for paste-2 migration once it lands in a stable release.
+#
+# libsecp256k1 0.7.2 (RUSTSEC-2025-0161): unmaintained; maintainer
+# recommends k256. Transitive via anychain-tron 0.2.14 +
+# anychain-kms 0.1.23 (entered tree in 2026-09-05 Tron Phase 0).
+# No safe upgrade until upstream anychain migrates to k256.
+#
+# encoding 0.2.33 (RUSTSEC-2021-0153): unmaintained since 2016.
+# Transitive via anychain-kms 0.1.23. No safe upgrade; track anychain
+# for replacement crate.
 ignore = [
     "RUSTSEC-2025-0141", "RUSTSEC-2025-0134",
     "RUSTSEC-2026-0098", "RUSTSEC-2026-0099", "RUSTSEC-2026-0104",
     "RUSTSEC-2025-0111",
     "RUSTSEC-2024-0436",
+    "RUSTSEC-2025-0161",
+    "RUSTSEC-2021-0153",
 ]
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "MIT-0", "MITNFA", "CC0-1.0", "CDLA-Permissive-2.0", "Zlib", "OpenSSL", "MPL-2.0"]
+# BSD-2-Clause added (2026-09-05) for arrayref 0.3.9 transitive via
+# libsecp256k1 0.7.2 -> anychain-kms 0.1.23 / anychain-tron 0.2.14.
+# OSI approved, FSF free. No safe upgrade until upstream anychain swaps
+# libsecp256k1 for a maintained ECDSA crate.
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC", "Unicode-3.0", "MIT-0", "MITNFA", "CC0-1.0", "CDLA-Permissive-2.0", "Zlib", "OpenSSL", "MPL-2.0"]
 
 [bans]
 multiple-versions = "warn"
