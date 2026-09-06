@@ -90,7 +90,10 @@ async fn live_estimate_energy_lands_in_documented_band() {
 
     let estimate = tron_wallet_core::resource::estimate_energy(
         &rpc,
-        "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf", // canonical Nile USDT
+        tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")
+            .expect("Nile USDT must be in the bundle")
+            .address
+            .as_str(),
         tron_wallet_core::trc20::TRANSFER_SELECTOR,
         // 32-byte zero-padded recipient address. The exact recipient
         // does not affect the Energy band — only whether the recipient

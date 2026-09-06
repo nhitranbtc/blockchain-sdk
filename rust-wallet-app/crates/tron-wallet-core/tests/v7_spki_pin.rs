@@ -30,8 +30,9 @@ fn mainnet_pin_hex_constant_matches_runtime_default() {
     let pin = mainnet_spki_pin();
     assert_eq!(
         hex::encode(pin.as_bytes()),
-        MAINNET_SPKI_PIN_HEX,
-        "disambig.rs MAINNET_SPKI_PIN_HEX must decode to the runtime pin"
+        MAINNET_SPKI_PIN_HEX(),
+        "disambig.rs MAINNET_SPKI_PIN_HEX (now a function over tokens/network.json) \
+         must decode to the same bytes as mainnet_spki_pin()"
     );
 }
 

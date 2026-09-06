@@ -36,6 +36,9 @@ pub mod config;
 pub mod disambig;
 pub mod error;
 pub mod keys;
+pub mod resource;
+pub mod tokens;
+pub mod trc20;
 pub mod tx;
 
 pub use error::{Error, Result};

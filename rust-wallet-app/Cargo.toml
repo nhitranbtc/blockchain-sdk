@@ -139,3 +139,10 @@ prost = "=0.14.4"
 prost-types = "=0.14.4"
 bs58 = "0.5"
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
+
+# TRC-20 ABI (Phase 3 §D). Pinned to match anychain-tron's own pinned versions
+# (workspace-resolved via anychain's vendored Cargo.toml) so a re-export
+# of `ethereum_types::U256` and `ethabi::Token` is byte-for-byte the same
+# type anychain-tron hands back from `abi::trc20_transfer`.
+ethereum-types = "=0.13.1"
+ethabi = "=17.2.0"

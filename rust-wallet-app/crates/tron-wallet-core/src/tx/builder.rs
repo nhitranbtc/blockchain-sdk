@@ -10,8 +10,17 @@
 //! drift across the crate.
 
 use anychain_tron::{trx, TronTransactionParameters};
+use ethereum_types::U256;
 
 use crate::error::{Error, Result};
+
+/// Recommended `fee_limit` for a TRC-20 token transfer: 130 TRX (130 000 000 SUN).
+///
+/// Sized per Spike V5 — a held-recipient USDT transfer costs ~65 000 Energy;
+/// an empty-recipient transfer (first-time receive) costs ~130 000 Energy.
+/// The DEM `max_factor` 3.4× is applied by [`crate::resource::recommended_fee_limit`]
+/// rather than here; this constant is the *baseline* for a single call.
+pub const DEFAULT_TRC20_FEE_LIMIT_SUN: i64 = 130_000_000;
 
 /// Build a `TronTransactionParameters` for a native TRX transfer.
 ///
@@ -73,4 +82,62 @@ pub fn set_timestamp(params: &mut TronTransactionParameters, ts_ms: i64) {
 /// 5 minutes, which is what you get if you never call this.
 pub fn set_expiration(params: &mut TronTransactionParameters, ttl_ms: i64) {
     params.set_expiration(ttl_ms);
+}
+
+/// Build a `TronTransactionParameters` for a TRC-20 `transfer(address,uint256)`.
+///
+/// `owner` is the holder whose tokens move. `contract` is the TRC-20 token
+/// contract (e.g. `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t` for mainnet USDT).
+/// `recipient` is the destination. `amount` is the token amount in the
+/// token's smallest unit (decimals depend on the contract — `trc20::decimals`
+/// reads the value at runtime).
+///
+/// The returned parameters carry the contract envelope and the
+/// [`DEFAULT_TRC20_FEE_LIMIT_SUN`] baseline. The caller still owns
+/// reference block, timestamp, expiration, and any fee-limit override.
+///
+/// Returns `Error::TransactionBuild` if `anychain-tron` rejects the inputs
+/// (unparsable addresses, amount overflow).
+pub fn trc20_transfer(
+    owner: &str,
+    contract: &str,
+    recipient: &str,
+    amount: U256,
+) -> Result<TronTransactionParameters> {
+    let amount_str = amount.to_string();
+    let contract_enum = trx::build_trc20_transfer_contract(owner, contract, recipient, &amount_str)
+        .map_err(|e| Error::TransactionBuild(format!("trc20 transfer contract: {e}")))?;
+
+    let mut params = TronTransactionParameters::default();
+    params.set_contract(contract_enum);
+    // Apply the recommended baseline. `set_fee_limit` is a no-op when the
+    // value is already 0; here we explicitly set the TRC-20 baseline so
+    // a caller that forgets to size it gets the documented default
+    // rather than the native-transfer shape (0 = bandwidth-only).
+    params.set_fee_limit(DEFAULT_TRC20_FEE_LIMIT_SUN);
+    Ok(params)
+}
+
+/// Build a `TronTransactionParameters` for a TRC-20 `approve(address,uint256)`.
+///
+/// `spender` is the address authorised to pull tokens on behalf of `owner`.
+/// The approval is unbounded in time and amount-limited — the caller is
+/// responsible for picking an amount that matches the use case (often
+/// `U256::MAX` for one-shot infinite approvals).
+///
+/// Same baseline fee-limit as [`trc20_transfer`]; the caller may override.
+pub fn trc20_approve(
+    owner: &str,
+    contract: &str,
+    spender: &str,
+    amount: U256,
+) -> Result<TronTransactionParameters> {
+    let amount_str = amount.to_string();
+    let contract_enum = trx::build_trc20_approve_contract(owner, contract, spender, &amount_str)
+        .map_err(|e| Error::TransactionBuild(format!("trc20 approve contract: {e}")))?;
+
+    let mut params = TronTransactionParameters::default();
+    params.set_contract(contract_enum);
+    params.set_fee_limit(DEFAULT_TRC20_FEE_LIMIT_SUN);
+    Ok(params)
 }

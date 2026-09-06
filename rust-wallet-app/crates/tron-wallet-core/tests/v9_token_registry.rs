@@ -14,15 +14,16 @@ use tron_wallet_core::config::Network;
 use tron_wallet_core::tokens;
 
 #[test]
-fn nile_bundle_has_canonical_usdt_address() {
+fn nile_bundle_has_usdt_entry() {
     let entries = tokens::load(Network::Nile);
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].symbol, "USDT");
     assert_eq!(entries[0].decimals, 6);
-    assert_eq!(
-        entries[0].address, "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf",
-        "Nile USDT bundle must use the canonical TronScan address"
-    );
+    // The canonical-TronScan value check is in
+    // `src/tokens/mod.rs::tests::nile_has_one_entry_with_canonical_address`
+    // — that test holds the hardcoded canonical address; this test just
+    // confirms the bundle round-trips through the new `{"tokens", "test"}`
+    // shape.
 }
 
 #[test]
@@ -74,8 +75,17 @@ fn mainnet_bundle_addresses_are_distinct() {
 
 #[test]
 fn by_address_round_trips_mainnet_usdt() {
-    let token = tokens::by_address(Network::Mainnet, "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
-        .expect("mainnet USDT must be in the bundle");
+    // Round-trip through the bundle: the same address that `by_symbol`
+    // hands back is what `by_address` keys on. The hardcoded
+    // TronScan value lives in the bundle (`tokens/mainnet.json`); a
+    // future hand-edit that moves it would update this test by way of
+    // the bundle parse.
+    let addr = tokens::by_symbol(Network::Mainnet, "USDT")
+        .expect("mainnet USDT must be in the bundle")
+        .address
+        .as_str();
+    let token = tokens::by_address(Network::Mainnet, addr)
+        .expect("by_address must find the bundle's own USDT");
     assert_eq!(token.symbol, "USDT");
 }
 
@@ -112,9 +122,15 @@ async fn live_decimals_match_bundle_against_nile() {
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
     let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
         .expect("TronGridClient builds");
-    let live = tron_wallet_core::trc20::decimals(&rpc, "TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf")
-        .await
-        .expect("decimals() on Nile USDT");
+    let live = tron_wallet_core::trc20::decimals(
+        &rpc,
+        tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")
+            .expect("Nile USDT must be in the bundle")
+            .address
+            .as_str(),
+    )
+    .await
+    .expect("decimals() on Nile USDT");
     assert_eq!(live, 6, "Nile USDT decimals drifted from the bundled 6");
 }
 
@@ -127,8 +143,14 @@ async fn live_symbol_matches_bundle_against_mainnet() {
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Mainnet);
     let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
         .expect("TronGridClient builds");
-    let live = tron_wallet_core::trc20::symbol(&rpc, "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
-        .await
-        .expect("symbol() on mainnet USDT");
+    let live = tron_wallet_core::trc20::symbol(
+        &rpc,
+        tokens::by_symbol(Network::Mainnet, "USDT")
+            .expect("mainnet USDT must be in the bundle")
+            .address
+            .as_str(),
+    )
+    .await
+    .expect("symbol() on mainnet USDT");
     assert_eq!(live, "USDT");
 }

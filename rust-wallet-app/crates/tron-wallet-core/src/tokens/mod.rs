@@ -1,26 +1,55 @@
-//! Bundled TRC-20 token registry (plan Task 3.5).
+//! Bundled per-network configuration (plan Task 3.5).
 //!
-//! Three files ship in the crate, one per network:
+//! Each `tokens/{local,nile,mainnet}.json` file carries both the
+//! network's TRC-20 token list AND the test addresses / ref-block
+//! fixture used by the round-trip tests. Shasta has no file (no
+//! stable TRC-20 registry on the public Shasta testnet) — its
+//! `load(Shasta)` returns an empty bundle and `test_addresses(Shasta)`
+//! falls back to the mainnet fixture (so a stray `load(Shasta)` test
+//! still gets parseable bytes, not a panic).
+//!
+//! ## Why test addresses per network
+//!
+//! The original `test-vectors.json` collapsed the test fixtures into
+//! a single file used by every network's tests. After the config
+//! refactor, every network's JSON is the operator-tunable source of
+//! truth for that network — so the test wallet (owner / recipient /
+//! spender) and the ref-block fixture move next to the bundle they
+//! test. If a future operator hand-edits `nile.json` and breaks the
+//! tests, the failure is co-located with the bundle rather than
+//! bouncing between `test-vectors.json` and `nile.json`.
+//!
+//! ## Files
 //!
 //! - `tokens/local.json` — TronBox Mock USDT placeholder; Phase 4 spike
 //!   V7 swaps the address at boot to match the deployed contract.
-//! - `tokens/nile.json` — the community test USDT (canonical per TronScan
-//!   verified 2026-09-05; **CAUTION**: user-stories.md Story 21 quotes a
-//!   stale address — `TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z`. The bundled
-//!   value is the canonical one).
+//! - `tokens/nile.json` — community test USDT (canonical per TronScan
+//!   verified 2026-09-05; **CAUTION**: user-stories.md Story 21 quotes
+//!   a stale address — `TXYZopuvdm45dLTs6eYCeq8Nx6FvF2hU1z`. The
+//!   bundled value is the canonical one).
 //! - `tokens/mainnet.json` — five entries: USDT, USDC, TUSD, USDD, stUSDT.
+//! - `tokens/network.json` — RPC URLs + per-network SPKI pins
+//!   (separate file; loaded by `crate::config`).
 //!
-//! Files are loaded via [`include_str!`] at compile time, so the registry
-//! is part of the binary and there is no runtime file resolution step.
-//! Tokens are addressed by their **T-base58check contract address**, not
-//! by symbol — the symbol is for display only. Two tokens can share a
-//! symbol (different issuers); lookup by symbol would silently pick the
-//! wrong one.
+//! ## Wire format
 //!
-//! Adding a token to the registry is a code change (edit the JSON file
-//! and rebuild). v0.1 deliberately does not support a mutable registry:
-//! every entry is a real on-chain TRC-20 contract, and adding one
-//! without a corresponding operator-driven audit would be a footgun.
+//! Each per-network file is a `Bundle { tokens: Vec<Token>, test: TestAddresses }`.
+//! `tokens/*` lives at the crate root and is loaded via
+//! [`include_str!`] at compile time, so the registry is part of the
+//! binary and there is no runtime file resolution step.
+//!
+//! Tokens are addressed by their **T-base58check contract address**,
+//! not by symbol — the symbol is for display only. Two tokens can
+//! share a symbol (different issuers); lookup by symbol would
+//! silently pick the wrong one.
+//!
+//! Adding a token to the registry is a code change (edit the JSON
+//! file and rebuild). v0.1 deliberately does not support a mutable
+//! registry: every entry is a real on-chain TRC-20 contract, and
+//! adding one without a corresponding operator-driven audit would be
+//! a footgun.
+
+use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -44,22 +73,70 @@ pub struct Token {
     pub decimals: u8,
 }
 
+/// Test-only addresses and the ref-block fixture used by every
+/// round-trip test in `tests/`. Lives inside the per-network JSON
+/// (one entry per `tokens/{local,nile,mainnet}.json`) so the
+/// network's bundle + the addresses that exercise it are co-located.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestAddresses {
+    /// The "owner" wallet used by every round-trip test (signer + sender).
+    pub owner_address: String,
+    /// The "recipient" wallet used by every round-trip test.
+    pub recipient_address: String,
+    /// The "spender" used by `approve` round-trip tests.
+    pub approval_spender_address: String,
+    /// 32-byte block id of a real network block, hex-encoded.
+    pub ref_block_hex: String,
+    /// Numeric block height paired with `ref_block_hex`.
+    pub ref_block_number: i64,
+}
+
+/// On-disk shape of each `tokens/{local,nile,mainnet}.json` file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Bundle {
+    tokens: Vec<Token>,
+    test: TestAddresses,
+}
+
+/// Lazily-decoded bundle for a given network. `Box::leak`-d to
+/// produce `&'static` slices — bounded by the bundled JSON (5
+/// entries + 1 fixture on mainnet, 1 + 1 on the rest).
+static BUNDLES: OnceLock<Vec<(Network, Bundle)>> = OnceLock::new();
+
+fn bundles() -> &'static [(Network, Bundle)] {
+    BUNDLES.get_or_init(|| {
+        vec![
+            (Network::Local, parse_or_panic(LOCAL_JSON)),
+            (Network::Nile, parse_or_panic(NILE_JSON)),
+            (Network::Mainnet, parse_or_panic(MAINNET_JSON)),
+        ]
+    })
+}
+
+fn bundle_for(network: Network) -> Option<&'static Bundle> {
+    bundles()
+        .iter()
+        .find(|(n, _)| *n == network)
+        .map(|(_, b)| -> &'static Bundle { leak_bundle(b) })
+}
+
 /// Load the bundled token list for a network.
 ///
 /// The returned slice is `&'static` because the underlying strings come
 /// from `include_str!`. Callers that need a mutable list (e.g. Phase 4
 /// updating the local TronBox address at boot) must clone the entries.
 pub fn load(network: Network) -> &'static [Token] {
-    match network {
-        Network::Local => parse_or_panic(LOCAL_JSON),
-        Network::Nile => parse_or_panic(NILE_JSON),
-        Network::Mainnet => parse_or_panic(MAINNET_JSON),
-        // Shasta does not ship its own bundle — no stable TRC-20
-        // registry exists on the public Shasta testnet as of plan
-        // writing. Callers asking for Shasta get an empty list rather
-        // than a fallback to another network's data.
-        Network::Shasta => &[],
-    }
+    bundle_for(network)
+        .map(|b| -> &'static [Token] { leak_tokens(&b.tokens) })
+        .unwrap_or(&[])
+}
+
+/// Test addresses for a network. Returns `None` only for networks
+/// without a bundled file (Shasta today); the [`tokens::load`]
+/// callers that need a guaranteed non-`None` fixture should fall
+/// back to the mainnet bundle via `Network::Mainnet` first.
+pub fn test_addresses(network: Network) -> Option<&'static TestAddresses> {
+    bundle_for(network).map(|b| &b.test)
 }
 
 /// Look up a token by its T-base58check address within a network's bundle.
@@ -87,26 +164,23 @@ const LOCAL_JSON: &str = include_str!("../../tokens/local.json");
 const NILE_JSON: &str = include_str!("../../tokens/nile.json");
 const MAINNET_JSON: &str = include_str!("../../tokens/mainnet.json");
 
-fn parse_or_panic(raw: &'static str) -> &'static [Token] {
+fn parse_or_panic(raw: &'static str) -> Bundle {
     // A malformed bundled JSON is a compile-time invariant: the file is
     // `include_str!`'d, so a bug in the JSON ships with the binary and
     // would panic on first load. That is the right failure mode — the
     // registry is supposed to be a fixed table, not user data.
-    match serde_json::from_str::<Vec<Token>>(raw) {
-        Ok(list) => leak_slice(list),
+    match serde_json::from_str::<Bundle>(raw) {
+        Ok(b) => b,
         Err(e) => panic!("bundled token registry failed to parse: {e}"),
     }
 }
 
-/// `Box::leak` the parsed list into a `&'static [Token]`.
-///
-/// The list is parsed once at startup; leaking it costs ~24 bytes per
-/// Token (each entry's `String`s), and the registry is bounded by the
-/// bundled JSON (5 entries on mainnet, 1 each on the rest). The leak is
-/// intentional — it is the only way to hand back `&'static [Token]` from
-/// a runtime parse, and it removes the per-call parse cost.
-fn leak_slice(list: Vec<Token>) -> &'static [Token] {
-    Box::leak(list.into_boxed_slice())
+fn leak_tokens(tokens: &[Token]) -> &'static [Token] {
+    Box::leak(tokens.to_vec().into_boxed_slice())
+}
+
+fn leak_bundle(b: &Bundle) -> &'static Bundle {
+    Box::leak(Box::new(b.clone()))
 }
 
 #[cfg(test)]
@@ -206,5 +280,15 @@ mod tests {
             "TNotARegisteredAddressButValidBase58Check000000",
         );
         assert!(token.is_none());
+    }
+
+    #[test]
+    fn test_addresses_present_for_every_bundled_network() {
+        for n in [Network::Local, Network::Nile, Network::Mainnet] {
+            assert!(
+                test_addresses(n).is_some(),
+                "{n:?} bundle must carry a test block"
+            );
+        }
     }
 }

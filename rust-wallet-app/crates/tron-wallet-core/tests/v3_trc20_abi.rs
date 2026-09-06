@@ -11,12 +11,29 @@ use tron_wallet_core::trc20::{
     TRANSFER_SELECTOR,
 };
 
-const USDT_CONTRACT: &str = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";
-const RECIPIENT: &str = "TFk5LfscQv8hYM11mZYmi3ZcnRfFc4LLap";
+/// The mainnet USDT contract address, read from the bundled token
+/// registry (`tokens/mainnet.json`). Resolved lazily per-test
+/// instead of at module load so a missing bundle produces a
+/// per-test failure with a clear message.
+fn usdt_contract() -> &'static str {
+    tron_wallet_core::tokens::by_symbol(tron_wallet_core::config::Network::Mainnet, "USDT")
+        .expect("mainnet USDT must be in the bundle")
+        .address
+        .as_str()
+}
+
+fn mainnet_test() -> &'static tron_wallet_core::tokens::TestAddresses {
+    tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
+        .expect("mainnet test fixtures must be present")
+}
+
+fn recipient() -> &'static str {
+    mainnet_test().recipient_address.as_str()
+}
 
 #[test]
 fn transfer_calldata_starts_with_transfer_selector() {
-    let calldata = anychain_tron::abi::trc20_transfer(RECIPIENT, "1000000");
+    let calldata = anychain_tron::abi::trc20_transfer(recipient(), "1000000");
     assert_eq!(
         calldata.len(),
         68,
@@ -39,7 +56,7 @@ fn transfer_calldata_starts_with_transfer_selector() {
         &[0u8; 11],
         "address must be left-padded with 11 zero bytes"
     );
-    let recipient_bytes = RECIPIENT
+    let recipient_bytes = recipient()
         .parse::<tron_wallet_core::address::Address>()
         .unwrap();
     assert_eq!(&address_arg[11..], recipient_bytes.as_bytes());
@@ -49,7 +66,7 @@ fn transfer_calldata_starts_with_transfer_selector() {
 
 #[test]
 fn approve_calldata_starts_with_approve_selector() {
-    let calldata = anychain_tron::abi::trc20_approve(RECIPIENT, "1000000000000000000");
+    let calldata = anychain_tron::abi::trc20_approve(recipient(), "1000000000000000000");
     assert_eq!(
         calldata.len(),
         68,
@@ -61,7 +78,7 @@ fn approve_calldata_starts_with_approve_selector() {
 
 #[test]
 fn balance_of_calldata_is_36_bytes() {
-    let owner = "TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr";
+    let owner = mainnet_test().owner_address.as_str();
     let owner_bytes = owner.parse::<tron_wallet_core::address::Address>().unwrap();
 
     let arg = tron_wallet_core::trc20::balance_of_args(owner_bytes.as_bytes());
@@ -104,11 +121,11 @@ fn no_args_returns_empty_calldata_body() {
 /// encoding tests above.
 #[test]
 fn builder_trc20_transfer_produces_a_trigger_contract() {
-    let owner = "TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr";
+    let owner = mainnet_test().owner_address.as_str();
     let amount = ethereum_types::U256::from(1_000_000u64);
 
     let params =
-        tron_wallet_core::tx::builder::trc20_transfer(owner, USDT_CONTRACT, RECIPIENT, amount)
+        tron_wallet_core::tx::builder::trc20_transfer(owner, usdt_contract(), recipient(), amount)
             .expect("trc20_transfer builder succeeds");
     // The fee-limit baseline must have been applied (130 TRX = 130_000_000 SUN).
     assert_eq!(
@@ -123,12 +140,12 @@ fn builder_trc20_transfer_produces_a_trigger_contract() {
 
 #[test]
 fn builder_trc20_approve_produces_a_contract() {
-    let owner = "TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr";
-    let spender = "TFk5LfscQv8hYM11mZYmi3ZcnRfFc4LLap";
+    let owner = mainnet_test().owner_address.as_str();
+    let spender = mainnet_test().approval_spender_address.as_str();
     let amount = ethereum_types::U256::MAX; // infinite approval
 
     let params =
-        tron_wallet_core::tx::builder::trc20_approve(owner, USDT_CONTRACT, spender, amount)
+        tron_wallet_core::tx::builder::trc20_approve(owner, usdt_contract(), spender, amount)
             .expect("trc20_approve builder succeeds");
     let _ = params;
 }
