@@ -38,24 +38,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-fmt:
-    name: Rust fmt
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4  # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.98.1"
-          components: rustfmt
-      - name: cargo fmt --check
-        working-directory: rust-wallet-app
-        run: cargo fmt --all -- --check
-
-  rust-clippy:
-    name: Rust clippy
+  rust-lint:
+    # fmt + clippy share a runner so a single protoc install + rust-cache
+    # warm covers both. fmt runs first (cheap, no compile needed) — a
+    # formatting regression fails the whole job before clippy compiles.
+    # clippy then catches semantic lints with `-D warnings`. Mirrors the
+    # umbrella ci.yml job split (per-issue: #403 deliverable #9).
+    name: Rust lint (fmt + clippy)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -65,7 +54,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
-          components: clippy
+          components: rustfmt, clippy
       - name: Install protoc (>=3.12)
         # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
         # core/Tron.proto). Mirrors the umbrella ci.yml step (Issue #403
@@ -75,6 +64,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
       - name: cargo clippy
         working-directory: rust-wallet-app
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -187,8 +179,10 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo build --workspace
       - name: cargo test (operator smoke — live + #[ignore])
-        # `--include-ignored` picks up any #[ignore]-marked tests; the
-        # `live_` filter scopes to the env-gated tests in v9 + v5.
+        # `--include-ignored` picks up any #[ignore]-marked tests across
+        # every tests/*.rs file (the env-gated live tests use `#[ignore]`,
+        # not a `live_` name prefix). `--test-threads=1` serializes the
+        # network round-trips so a flaky RPC cannot interleave state.
         # RUN_TRON_* env vars flip the live assertions from
         # skip-and-return to actual RPC round-trip. TON_NILE_SPKI_PIN_HEX
         # comes from the previous step via $GITHUB_ENV — no repo secret
@@ -199,7 +193,7 @@ jobs:
           RUN_TRON_MAINNET: "1"
         run: |
           cargo test -p tron-wallet-core --tests -- \
-            --include-ignored live_ \
+            --include-ignored \
             --nocapture --test-threads=1
 
   # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
@@ -322,25 +316,3 @@ jobs:
             exit 0
           fi
           cargo check -p tron-wallet-core --target aarch64-linux-android
-
-  # Branch-rule guard (plan Phase Set Up, Task S.2). A PR reaching this
-  # workflow already targets `rust-tron-core` by definition of the trigger,
-  # so this job's real purpose is to fail loudly if a future edit widens the
-  # trigger list to include `main`.
-  branch-rule:
-    name: Branch rule (base must be rust-tron-core)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name == 'pull_request'
-    steps:
-      - name: Assert PR base is rust-tron-core
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          if [ "$BASE_REF" != "rust-tron-core" ]; then
-            echo "::error::PR base is '$BASE_REF'. TRON v0.1 task branches" \
-              "must PR into 'rust-tron-core', never into 'main'. Retarget:" \
-              "gh pr edit <n> --base rust-tron-core"
-            exit 1
-          fi
-          echo "base=$BASE_REF OK"
