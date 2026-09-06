@@ -1174,12 +1174,12 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Files:** `src/crypto/mod.rs`, `src/wallet/persist.rs`
 
-- [ ] `crypto::encrypt(plaintext: &[u8], passphrase: &str) -> Result<EncryptedWallet>` uses Argon2id KDF + AES-256-GCM.
-- [ ] `crypto::decrypt(ciphertext: &EncryptedWallet, passphrase: &str) -> Result<Vec<u8>>`.
-- [ ] `wallet::WalletManager::create(mnemonic: Mnemonic, passphrase: &str) -> Result<WalletId>` → encrypt → `WalletStorage::put`.
-- [ ] `wallet::WalletManager::unlock(id: WalletId, passphrase: &str) -> Result<UnlockedWallet>` → `WalletStorage::get` → decrypt → Zeroizing-wrapped mnemonic.
-- [ ] **Zeroizing wraps:** Argon2id-derived key (32 bytes) → `Zeroizing<[u8; 32]>`; plaintext entropy during decrypt/re-encrypt window → `Zeroizing<Vec<u8>>`.
-- [ ] Test: round-trip create → unlock returns same mnemonic.
+- [x] `crypto::encrypt(plaintext: &[u8], passphrase: &str) -> Result<EncryptedWallet>` uses Argon2id KDF + AES-256-GCM. **2026-09-07 PASS:** implemented at `src/crypto/mod.rs::encrypt` (commit `0085780`); round-trip + nonce/salt uniqueness asserted by `src/crypto/mod.rs::tests`.
+- [x] `crypto::decrypt(ciphertext: &EncryptedWallet, passphrase: &str) -> Result<Vec<u8>>`. **2026-09-07 PASS:** `src/crypto/mod.rs::decrypt` (commit `0085780`); returns `Zeroizing<Vec<u8>>` so plaintext zeroizes on drop; wrong-passphrase + truncated-blob regressions covered.
+- [x] `wallet::WalletManager::create(mnemonic: Mnemonic, passphrase: &str) -> Result<WalletId>` → encrypt → `WalletStorage::put`. **2026-09-07 PASS:** `src/wallet/persist.rs::create` (commit `0085780`); serialized `PlaintextRecord` JSON inside the ciphertext, fresh `WalletId::new()` UUID v4 per call.
+- [x] `wallet::WalletManager::unlock(id: WalletId, passphrase: &str) -> Result<UnlockedWallet>` → `WalletStorage::get` → decrypt → Zeroizing-wrapped mnemonic. **2026-09-07 PASS:** `src/wallet/persist.rs::unlock` (commit `0085780`); errors map to `Error::Wallet` (missing id) or `Error::Encryption` (wrong pass / corrupt blob) per test assertions.
+- [x] **Zeroizing wraps:** Argon2id-derived key (32 bytes) → `Zeroizing<[u8; 32]>`; plaintext entropy during decrypt/re-encrypt window → `Zeroizing<Vec<u8>>`. **2026-09-07 PASS:** `src/crypto/mod.rs::derive_key` returns `Zeroizing<Vec<u8>>`; `decrypt` returns `Zeroizing<Vec<u8>>`; intermediate keys zeroized before return. `UnlockedWallet::mnemonic` returns `&Mnemonic` (bip39's `Zeroizing` wrapper per Phase 1 finding).
+- [x] Test: round-trip create → unlock returns same mnemonic. **2026-09-07 PASS:** `tests/wallet_persistence.rs` — 6 tests passed (`in_memory_create_unlock_roundtrip`, `wrong_passphrase_rejected`, `missing_id_rejected`, `delete_makes_blobs_disappear`, `unique_wallet_ids_per_create`, `unlock_after_corrupt_blob_errors`). 41s runtime dominated by Argon2id@256MiB.
 
 **Test Scenario mapping:** supports **Local row 8 (wallet-to-wallet TRC-20)** — `WalletManager::lookup(name_or_id)` requires wallet-id resolution across CLI invocations. Persists encrypted blob via `WalletStorage` (PAL = `FileWalletStorage` desktop / `KeychainWalletStorage` iOS / `EncryptedFileWalletStorage` Android). Also enables **Nile row 3 (Mobile-specific)** — Keychain storage validates FFI boundary for Dart binding on emulator.
 
