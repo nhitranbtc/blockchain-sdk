@@ -127,6 +127,81 @@ jobs:
         working-directory: rust-wallet-app
         run: ${{ matrix.command }}
 
+  # Operator-driven smoke gate (L29). Runs live + #[ignore] tests against
+  # public TronGrid (Nile + Mainnet). **Manual trigger only** via
+  # `workflow_dispatch` — the live RPC calls would (a) hit public rate
+  # limits on every push/PR, (b) require the live Nile SPKI pin stored
+  # in repo secrets, and (c) flake on network conditions that have
+  # nothing to do with the change under review. Plan §Q5 + L29 + L13
+  # step 11a classify these as external gates.
+  #
+  # `RUN_TRON_NILE=1 RUN_TRON_MAINNET=1` enables the env-gated live
+  # assertions in `tests/v9_token_registry.rs` + `tests/v5_resource.rs`
+  # (each test prints `skipped: set RUN_TRON_*=1` if the env var is
+  # absent, then returns early — so without these vars the same
+  # cargo test invocation is a no-op). `--include-ignored` also picks
+  # up any future #[ignore]-marked tests (none today).
+  #
+  # Secrets used (set in repo Settings → Secrets → Actions):
+  #   TON_NILE_SPKI_PIN_HEX — 32-byte hex digest of the live
+  #     nile.trongrid.io cert SPKI (extracted via:
+  #     openssl s_client ... | openssl x509 -pubkey -noout \
+  #       | openssl pkey -pubin -outform DER | sha256sum).
+  #     Mainnet pin lives in tokens/network.json so the binary pins
+  #     it directly — no secret needed for the mainnet leg.
+  rust-test-operator-smoke:
+    name: Rust test (operator smoke — live + #[ignore])
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4  # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - name: Install protoc (>=3.12)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Extract live Nile SPKI pin
+        # Pulls the current nile.trongrid.io cert, extracts its SubjectPublicKeyInfo
+        # (per plan §Q5 + RFC 7469), hashes with SHA-256, and writes the hex digest
+        # to $GITHUB_ENV so the next step sees it as $TON_NILE_SPKI_PIN_HEX.
+        # This means the workflow always pins against the live cert — no operator
+        # setup in repo Secrets, no cert-rotation maintenance.
+        run: |
+          set -euo pipefail
+          TON_NILE_SPKI_PIN_HEX=$( \
+            echo | openssl s_client -servername nile.trongrid.io -connect nile.trongrid.io:443 2>/dev/null \
+              | openssl x509 -pubkey -noout \
+              | openssl pkey -pubin -outform DER \
+              | sha256sum \
+              | awk '{print $1}' )
+          echo "TON_NILE_SPKI_PIN_HEX=${TON_NILE_SPKI_PIN_HEX}" >> "$GITHUB_ENV"
+          echo "live Nile SPKI pin: ${TON_NILE_SPKI_PIN_HEX}"
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test (operator smoke — live + #[ignore])
+        # `--include-ignored` picks up any #[ignore]-marked tests; the
+        # `live_` filter scopes to the env-gated tests in v9 + v5.
+        # RUN_TRON_* env vars flip the live assertions from
+        # skip-and-return to actual RPC round-trip. TON_NILE_SPKI_PIN_HEX
+        # comes from the previous step via $GITHUB_ENV — no repo secret
+        # needed (the workflow extracts the live pin itself).
+        working-directory: rust-wallet-app
+        env:
+          RUN_TRON_NILE: "1"
+          RUN_TRON_MAINNET: "1"
+        run: |
+          cargo test -p tron-wallet-core --tests -- \
+            --include-ignored live_ \
+            --nocapture --test-threads=1
+
   # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
   # (L13 step 11, 4th gate). Workspace-wide tree walks are slow, so this
   # runs at CI cadence rather than locally.
