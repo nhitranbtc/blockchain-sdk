@@ -846,7 +846,7 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [x] Apply DEM `max_factor = 3.4×` per 6-hour cycle — `getcontractinfo` returns `energy_factor` for any contract.
 - [x] USDT-TRC20 baseline: 65,000 Energy (recipient holds USDT) up to 130,000 Energy (empty recipient).
 - [x] Default `fee_limit = 100_000_000` sun (100 TRX) sized with `max_factor` buffer.
-- [ ] Test (GATED, `RUN_TRON_NILE=1`): `estimate_energy` for MockTRC20 transfer returns 65k-130k.
+- [x] Test (GATED, `RUN_TRON_NILE=1`): `estimate_energy` for USDT-TRC20 transfer returns raw Energy in `[10_000, 250_000]` (Nile band widens plan §V5 mainnet 65k-130k baseline; rationale at [v5_resource.rs:14-21](rust-wallet-app/crates/tron-wallet-core/tests/v5_resource.rs#L14-L21)). Live pass 2026-09-06, `cargo test -p tron-wallet-core --test v5_resource live_estimate_energy_lands_in_documented_band` → 1 passed, 0.84s.
 
 **Test Scenario mapping:** supports **Local row 2 (TRC-20 held recipient 65k Energy)** + **row 3 (first-time receive empty recipient 130k Energy)** + **row 4 (TRC-20 approval energy estimate)** — every TRC-20 scenario row requires `fee_limit` sizing from `wallet/triggerconstantcontract` energy_used + DEM `max_factor=3.4×` buffer. **Nile row 1 + 2**: live `getcontractinfo.energy_factor` round-trip validates DEM scaling on real network.
 
