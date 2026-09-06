@@ -31,9 +31,12 @@ use x509_parser::prelude::FromDer;
 
 use crate::error::{Error, Result};
 
-/// SHA-256 SPKI pin. The inner field is the digest of the full
+/// SHA-256 SPKI pin. The inner field is the digest of the leaf cert's
 /// `SubjectPublicKeyInfo` DER (algorithm identifier + subjectPublicKey
-/// BIT STRING per RFC 7469), not just the raw key bytes.
+/// BIT STRING per RFC 7469), not the raw key bytes and not the
+/// whole certificate. The verifier hashes only the SPKI, so the
+/// operator can rotate the cert without losing the pin as long as
+/// the new leaf carries the same key.
 ///
 /// `Copy` is safe — the inner `[u8; 32]` is small and the pin is
 /// operator-public (its whole purpose is to be published in config).
@@ -158,9 +161,16 @@ impl ServerCertVerifier for SpkiPinnedVerifier {
             now,
         )?;
 
-        // Step 2: SPKI pin match. The leaf cert's SHA-256 must equal the
-        // operator-published pin.
-        let leaf_digest: [u8; 32] = Sha256::digest(end_entity.as_ref()).into();
+        // Step 2: SPKI pin match. The leaf cert's `SubjectPublicKeyInfo`
+        // SHA-256 must equal the operator-published pin. Hashing only the
+        // SPKI (per RFC 7469) — not the whole cert — means the operator
+        // can rotate the cert while keeping the same key without
+        // invalidating the pin. `leaf_spki_digest` soft-fails to
+        // `[0; 32]` on a parse error, so a malformed leaf cannot
+        // accidentally match a zero-byte pin (the upstream webpki
+        // chain check rejects malformed certs with a more useful
+        // message before this code runs).
+        let leaf_digest: [u8; 32] = Self::leaf_spki_digest(end_entity.as_ref());
         if leaf_digest.ct_eq(self.pin.as_bytes()).unwrap_u8() == 0 {
             return Err(TlsError::General(
                 "spki pin mismatch (leaf spki did not equal configured pin)".into(),

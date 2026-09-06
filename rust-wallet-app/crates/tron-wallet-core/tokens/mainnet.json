@@ -1,0 +1,41 @@
+{
+  "tokens": [
+    {
+      "symbol": "USDT",
+      "name": "Tether USD",
+      "address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      "decimals": 6
+    },
+    {
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "address": "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
+      "decimals": 6
+    },
+    {
+      "symbol": "TUSD",
+      "name": "TrueUSD",
+      "address": "TUpMhErZL2fhh4sVNULAbNKLokS4GjC1F9",
+      "decimals": 18
+    },
+    {
+      "symbol": "USDD",
+      "name": "Decentralized USD",
+      "address": "TXDk8mbtRbXeYuMNS83CfKPaYYT8Xvi9Hz",
+      "decimals": 18
+    },
+    {
+      "symbol": "stUSDT",
+      "name": "Staked USDT",
+      "address": "TThzxNRLrW2Brp9DcTQU8i4Wd9udCWEdZ3",
+      "decimals": 6
+    }
+  ],
+  "test": {
+    "owner_address": "TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr",
+    "recipient_address": "TFk5LfscQv8hYM11mZYmi3ZcnRfFc4LLap",
+    "approval_spender_address": "TFk5LfscQv8hYM11mZYmi3ZcnRfFc4LLap",
+    "ref_block_hex": "000000000196d21784deb05dee04c69ed112b8e078e74019f9a0b1df6adc414e",
+    "ref_block_number": 26661399
+  }
+}

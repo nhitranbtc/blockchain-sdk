@@ -20,6 +20,11 @@ anychain-core = { workspace = true }
 anychain-tron = { workspace = true }
 anychain-kms = { workspace = true }
 
+# TRC-20 ABI types (Phase 3). `U256` is the amount type the trc20
+# transfer/approve builders take and the type `balanceOf` returns.
+# Pinned at the workspace level — see workspace `Cargo.toml`.
+ethereum-types = { workspace = true }
+
 # Error surface. Our public `Error` carries owned strings rather than anychain
 # error types so an upstream `=X.Y.Z` bump cannot break our public API.
 thiserror = { workspace = true }
@@ -63,6 +68,12 @@ testcontainers = { version = "0.23", optional = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Phase 3 carry-over test (tests/v2_protobuf_roundtrip.rs) inspects the
+# inner TriggerSmartContract wire format directly to verify `data` lives
+# at proto field 4. Pinned at the same exact version anychain-tron uses
+# (`=3.7.2` per anychain workspace) so the test parses the same bytes
+# anychain writes.
+protobuf = "=3.7.2"
 
 [features]
 # Gates tests that need a Docker daemon (local TRON node via testcontainers).
