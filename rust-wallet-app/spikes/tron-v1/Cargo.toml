@@ -92,3 +92,13 @@ path = "tests/v9_token_registry.rs"
 [[test]]
 name = "v10_slip44"
 path = "tests/v10_slip44.rs"
+
+# Phase 4 §4.1-4.2 — TronBox local testnet integration (testcontainers).
+[[test]]
+name = "trc20_local"
+path = "tests/trc20_local.rs"
+
+# Phase 4 §4.4-4.5 — Nile testnet integration (operator-driven, gated).
+[[test]]
+name = "trc20_nile"
+path = "tests/trc20_nile.rs"
