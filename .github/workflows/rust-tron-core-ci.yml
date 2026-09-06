@@ -228,6 +228,8 @@ jobs:
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo check (aarch64-apple-ios)
+        # iOS toolchain (xcrun + Apple SDK) is macos-only.
+        if: runner.os == 'macOS'
         working-directory: rust-wallet-app
         run: |
           if [ ! -d crates/tron-wallet-core ]; then
@@ -236,6 +238,8 @@ jobs:
           fi
           cargo check -p tron-wallet-core --target aarch64-apple-ios
       - name: cargo check (aarch64-linux-android)
+        # Android NDK toolchain is linux-only.
+        if: runner.os == 'Linux'
         working-directory: rust-wallet-app
         run: |
           if [ ! -d crates/tron-wallet-core ]; then
