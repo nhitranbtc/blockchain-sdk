@@ -21,6 +21,8 @@
 //! `no_pin_localhost_tronbox_succeeds` slot that Phase 4 wires against
 //! a `testcontainers` TronBox (deferred per plan Task 2.8).
 
+use std::error::Error;
+
 use tron_wallet_core::chain::spki::{SpkiPin, SpkiPinnedVerifier};
 use tron_wallet_core::config::{mainnet_spki_pin, NILE_SPKI_PIN_ENV};
 use tron_wallet_core::disambig::MAINNET_SPKI_PIN_HEX;
@@ -205,12 +207,22 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
         .await
         .expect_err("wrong pin must cause a transport error");
 
-    let err_string = format!("{err}");
+    // `reqwest::Error`'s `Display` is a thin wrapper
+    // (`"error sending request for url (...)"`); the rustls
+    // `"spki pin mismatch (leaf spki did not equal configured pin)"`
+    // message lives on the `source()` chain. Walk it.
+    let mut chain = format!("{err}");
+    let mut src = err.source();
+    while let Some(e) = src {
+        chain.push_str(&format!(" :: {e}"));
+        src = e.source();
+    }
     assert!(
-        err_string.contains("spki pin mismatch")
-            || err_string.contains("certificate")
-            || err_string.contains("handshake"),
-        "unexpected wrong-pin error shape: {err_string}"
+        chain.contains("spki pin mismatch")
+            || chain.contains("certificate")
+            || chain.contains("handshake")
+            || chain.contains("TLS"),
+        "unexpected wrong-pin error shape: {chain}"
     );
 }
 

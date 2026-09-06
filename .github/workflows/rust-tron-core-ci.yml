@@ -119,28 +119,28 @@ jobs:
         working-directory: rust-wallet-app
         run: ${{ matrix.command }}
 
-  # Operator-driven smoke gate (L29). Runs live + #[ignore] tests against
-  # public TronGrid (Nile + Mainnet). **Manual trigger only** via
-  # `workflow_dispatch` — the live RPC calls would (a) hit public rate
-  # limits on every push/PR, (b) require the live Nile SPKI pin stored
-  # in repo secrets, and (c) flake on network conditions that have
-  # nothing to do with the change under review. Plan §Q5 + L29 + L13
-  # step 11a classify these as external gates.
+  # Live RPC smoke gate. Runs the full `tron-wallet-core` test suite
+  # with `--include-ignored` against public TronGrid (Nile + Mainnet).
+  # Always fires on push + PR to `rust-tron-core`. rust-test matrix
+  # runs in parallel and owns the non-`#[ignore]` coverage for the
+  # other crates (tron-v1-spike) AND for tron-wallet-core non-`#[ignore]`
+  # when the live env vars are NOT set. When RUN_TRON_* = 1 here,
+  # operator-smoke is the only path that exercises the live Nile +
+  # mainnet RPC round-trips — so we keep the full set here to avoid
+  # any silent coverage gap for env-gated tests.
   #
-  # `RUN_TRON_NILE=1 RUN_TRON_MAINNET=1` enables the env-gated live
-  # assertions in `tests/v9_token_registry.rs` + `tests/v5_resource.rs`
-  # (each test prints `skipped: set RUN_TRON_*=1` if the env var is
-  # absent, then returns early — so without these vars the same
-  # cargo test invocation is a no-op). `--include-ignored` also picks
-  # up any future #[ignore]-marked tests (none today).
+  # `--include-ignored` covers any `#[ignore]` tests (none exist today)
+  # AND the env-gated live tests in `tests/v9_token_registry.rs` +
+  # `tests/v5_resource.rs`. RUN_TRON_NILE=1 + RUN_TRON_MAINNET=1 flip
+  # those tests from skip-and-return to actual RPC round-trip.
+  # `--test-threads=1` serializes RPC round-trips so a flaky RPC
+  # cannot interleave state.
   #
-  # Secrets used (set in repo Settings → Secrets → Actions):
-  #   TON_NILE_SPKI_PIN_HEX — 32-byte hex digest of the live
-  #     nile.trongrid.io cert SPKI (extracted via:
-  #     openssl s_client ... | openssl x509 -pubkey -noout \
-  #       | openssl pkey -pubin -outform DER | sha256sum).
-  #     Mainnet pin lives in tokens/network.json so the binary pins
-  #     it directly — no secret needed for the mainnet leg.
+  # Pin handling: SPKI pin self-extracted each run from the live
+  # nile.trongrid.io cert (SHA-256 of SubjectPublicKeyInfo per RFC 7469
+  # + plan §Q5). No repo secret needed — the workflow pulls the current
+  # cert, so rotation is automatic. Mainnet pin lives in tokens/network.json
+  # and is pinned by the binary directly.
   rust-test-operator-smoke:
     name: Rust test (operator smoke — live + #[ignore])
     runs-on: ubuntu-latest
@@ -181,14 +181,13 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo build --workspace
       - name: cargo test (operator smoke — live + #[ignore])
-        # `--include-ignored` picks up any #[ignore]-marked tests across
-        # every tests/*.rs file (the env-gated live tests use `#[ignore]`,
-        # not a `live_` name prefix). `--test-threads=1` serializes the
-        # network round-trips so a flaky RPC cannot interleave state.
+        # `--include-ignored` runs every test in tests/*.rs. The env-gated
+        # live tests in `tests/v9_token_registry.rs` + `tests/v5_resource.rs`
+        # are NOT `#[ignore]`-marked — they early-return unless RUN_TRON_*
+        # is set. `--test-threads=1` serializes RPC round-trips.
         # RUN_TRON_* env vars flip the live assertions from
-        # skip-and-return to actual RPC round-trip. TON_NILE_SPKI_PIN_HEX
-        # comes from the previous step via $GITHUB_ENV — no repo secret
-        # needed (the workflow extracts the live pin itself).
+        # skip-and-return to actual round-trip; TON_NILE_SPKI_PIN_HEX
+        # comes from the previous step via $GITHUB_ENV.
         working-directory: rust-wallet-app
         env:
           RUN_TRON_NILE: "1"
