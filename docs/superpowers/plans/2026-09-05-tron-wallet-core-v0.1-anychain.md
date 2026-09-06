@@ -670,49 +670,49 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Files:** `src/tx/builder.rs`
 
-- [ ] `tx::builder::trx_transfer(owner: Address, recipient: Address, amount_sun: u64) -> TronTransactionParameters` wraps `anychain_tron::trx::build_transfer_contract`.
-- [ ] `tx::builder::set_ref_block(params: &mut TronTransactionParameters, block: BlockHeader)`.
-- [ ] `tx::builder::set_fee_limit(params: &mut TronTransactionParameters, fee_limit_sun: i64)`.
-- [ ] `tx::builder::set_timestamp(params: &mut TronTransactionParameters, ts_ms: i64)`.
-- [ ] `tx::builder::set_expiration(params: &mut TronTransactionParameters, exp_ms: i64)`.
+- [x] `tx::builder::trx_transfer(owner: Address, recipient: Address, amount_sun: u64) -> TronTransactionParameters` wraps `anychain_tron::trx::build_transfer_contract`.
+- [x] `tx::builder::set_ref_block(params: &mut TronTransactionParameters, block: BlockHeader)`.
+- [x] `tx::builder::set_fee_limit(params: &mut TronTransactionParameters, fee_limit_sun: i64)`.
+- [x] `tx::builder::set_timestamp(params: &mut TronTransactionParameters, ts_ms: i64)`.
+- [x] `tx::builder::set_expiration(params: &mut TronTransactionParameters, exp_ms: i64)`.
 
 #### Task 2.2 — Wrap `anychain_tron::TronTransaction::sign`
 
 **Files:** `src/tx/sign.rs` (extend from Task 1.5)
 
-- [ ] `tx::sign::sign_tx(sk_z: &Zeroizing<[u8; 32]>, params: TronTransactionParameters) -> SignedTransaction`.
-- [ ] Internally: `params.to_bytes()` → `anychain_core::sha256(&raw_bytes)` → `secp256k1_sign(&sk_z, msg32)` → `(sig, recid)` → `TronTransaction::sign(sig, recid)`.
-- [ ] Return `SignedTransaction { txid, raw_bytes, signature }` where `txid = SHA256(SHA256(raw_bytes))`.
+- [x] `tx::sign::sign_tx(sk_z: &Zeroizing<[u8; 32]>, params: TronTransactionParameters) -> SignedTransaction`.
+- [x] Internally: `params.to_bytes()` → `anychain_core::sha256(&raw_bytes)` → `secp256k1_sign(&sk_z, msg32)` → `(sig, recid)` → `TronTransaction::sign(sig, recid)`.
+- [x] Return `SignedTransaction { txid, raw_bytes, signature }` where `txid = SHA256(SHA256(raw_bytes))`.
 
 #### Task 2.3 — `wallet/broadcasttransaction` RPC call
 
 **Files:** `src/tx/broadcast.rs`, `src/chain/mod.rs`
 
-- [ ] `chain::TronGridClient::new(rpc_url: &str, spki_pin: Option<&[u8; 32]>) -> Result<Self>`.
-- [ ] `chain::TronGridClient::broadcast(&self, tx: &SignedTransaction) -> Result<BroadcastReceipt>`.
-- [ ] Internally: `serde_json::to_value(&tx)` → POST `{rpc_url}/wallet/broadcasttransaction` with `{"raw_data_hex": ..., "signature_hex": ...}` body.
-- [ ] Reuse `SpkiPinnedVerifier` from `bitcoin-wallet-core::chain::spki` when `spki_pin` is `Some`.
+- [x] `chain::TronGridClient::new(rpc_url: &str, spki_pin: Option<&[u8; 32]>) -> Result<Self>`.
+- [x] `chain::TronGridClient::broadcast(&self, tx: &SignedTransaction) -> Result<BroadcastReceipt>`.
+- [x] Internally: `serde_json::to_value(&tx)` → POST `{rpc_url}/wallet/broadcasttransaction` with `{"raw_data_hex": ..., "signature_hex": ...}` body.
+- [x] Reuse `SpkiPinnedVerifier` from `bitcoin-wallet-core::chain::spki` when `spki_pin` is `Some`.
 
 #### Task 2.4 — `walletsolidity/getnowblock` for TAPOS
 
 **Files:** `src/chain/mod.rs`
 
-- [ ] `chain::TronGridClient::get_now_block(&self) -> Result<BlockHeader>` queries `walletsolidity/getnowblock` (fullnode, NOT `wallet/getnowblock` which uses SolidityNode).
-- [ ] Returns `BlockHeader { ref_block_bytes: [u8; 2], ref_block_hash: [u8; 8], block_number: u64, block_id: [u8; 32] }`.
-- [ ] **Note:** TAPOS reference per deep-dive Q7 uses `walletsolidity/getnowblock` (not `wallet/getnowblock`) for finality.
+- [x] `chain::TronGridClient::get_now_block(&self) -> Result<BlockHeader>` queries `walletsolidity/getnowblock` (fullnode, NOT `wallet/getnowblock` which uses SolidityNode).
+- [x] Returns `BlockHeader { ref_block_bytes: [u8; 2], ref_block_hash: [u8; 8], block_number: u64, block_id: [u8; 32] }`.
+- [x] **Note:** TAPOS reference per deep-dive Q7 uses `walletsolidity/getnowblock` (not `wallet/getnowblock`) for finality.
 
 #### Task 2.5 — `wallet/gettransactioninfobyid` for receipt
 
 **Files:** `src/chain/mod.rs`
 
-- [ ] `chain::TronGridClient::get_tx_info(&self, txid: &str) -> Result<TransactionInfo>`.
-- [ ] Returns `TransactionInfo { id, blockNumber, contractResult, fee }`.
+- [x] `chain::TronGridClient::get_tx_info(&self, txid: &str) -> Result<TransactionInfo>`.
+- [x] Returns `TransactionInfo { id, blockNumber, contractResult, fee }`.
 
 #### Task 2.6 — Protobuf round-trip test (Spike V2)
 
 **Files:** `tests/v2_protobuf_roundtrip.rs`
 
-- [ ] `TronTransaction::encode_to_vec(&raw_data)` round-trips byte-equal via decode.
+- [x] `TronTransaction::encode_to_vec(&raw_data)` round-trips byte-equal via decode.
 - [ ] `TriggerSmartContract.data` field at proto field **4** (NOT 3) — confirmed via anychain-tron's vendored proto.
 
 **Verification:** `cargo test -p tron-wallet-core --test v2_protobuf_roundtrip` passes.
@@ -723,8 +723,8 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Files:** `src/config.rs`
 
-- [ ] Add `TronConfig::mainnet_default_spki_pin() -> [u8; 32]` returning hex-decoded `0e43f6110bbee5e199c6775cf88a3050a9bd51f3bb4a31aeefb7122f79119f0d`.
-- [ ] `TronConfig::for_network(Network::Mainnet)` returns `TronConfig { spki_pin: Some(mainnet_default_spki_pin()), .. }`.
+- [x] Add `TronConfig::mainnet_default_spki_pin() -> [u8; 32]` returning hex-decoded `0e43f6110bbee5e199c6775cf88a3050a9bd51f3bb4a31aeefb7122f79119f0d`.
+- [x] `TronConfig::for_network(Network::Mainnet)` returns `TronConfig { spki_pin: Some(mainnet_default_spki_pin()), .. }`.
 - [ ] `TronConfig::for_network(Network::Nile)` returns `TronConfig { spki_pin: Some(nile_default_spki_pin()), .. }` (extract from `nile.trongrid.io` cert during Phase 2 spike V7).
 
 **Test Scenario mapping:** SPKI pin config supports **Local rows 1-8** + **Nile rows 1-2** — every RPC call (TronBox local + TronGrid remote) requires either pinned endpoint (Scenario A) or system CAs (Scenario B). Live cert extraction `0e43f611...` per Round-1 grill Q5.
@@ -743,8 +743,9 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 #### Phase 2 Verification
 
-- [ ] `cargo test -p tron-wallet-core --tests` passes (V2 + V7 + broadcast + get_tx_info).
-- [ ] `cargo clippy -p tron-wallet-core -- -D warnings` passes.
+- [x] `cargo test -p tron-wallet-core --tests` passes (V2 + V7 + broadcast + get_tx_info).
+- [x] `cargo clippy -p tron-wallet-core -- -D warnings` passes.
+- [ ] Send 1 TRX from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`).
 - [ ] Send 1 TRX from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`).
 
 **PAUSE. Verify L13 step 11.**
