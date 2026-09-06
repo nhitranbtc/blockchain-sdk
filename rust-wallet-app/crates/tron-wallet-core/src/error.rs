@@ -52,6 +52,19 @@ pub enum Error {
     /// A cross-network guard refused an operation (e.g. mainnet → nile send).
     #[error("disambiguation guard: {0}")]
     Disambiguation(String),
+
+    /// Phase 5 — wallet persistence layer refused an operation
+    /// (missing id, storage IO failure, rename conflict). Distinct
+    /// from the KDF/AEAD `Encryption` variant below so the CLI can
+    /// map "wallet file not found" to exit code 4
+    /// (`wallet/balance issue` per plan §Phase 6).
+    #[error("wallet: {0}")]
+    Wallet(String),
+
+    /// Phase 5 — at-rest encryption failed (Argon2id KDF, AES-GCM
+    /// AEAD, wrong passphrase, truncated/corrupt blob).
+    #[error("encryption: {0}")]
+    Encryption(String),
 }
 
 /// Convenience alias used throughout the crate.

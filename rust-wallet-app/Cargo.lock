@@ -6557,19 +6557,24 @@ dependencies = [
  "testcontainers",
  "tiny-keccak",
  "tokio",
+ "tron-wallet-core",
 ]
 
 [[package]]
 name = "tron-wallet-core"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anychain-core",
  "anychain-kms",
  "anychain-tron",
+ "argon2",
+ "directories",
  "ethereum-types",
  "hex",
  "proptest",
  "protobuf",
+ "rand 0.8.7",
  "reqwest 0.12.28",
  "rustls 0.23.43",
  "rustls-native-certs 0.7.3",
@@ -6581,6 +6586,7 @@ dependencies = [
  "testcontainers",
  "thiserror 1.0.69",
  "tokio",
+ "uuid",
  "webpki",
  "x509-parser",
  "zeroize",
