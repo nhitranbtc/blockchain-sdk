@@ -79,10 +79,13 @@ pub struct EnergyEstimate {
 pub async fn estimate_energy(
     rpc: &TronGridClient,
     contract: &str,
-    selector: [u8; 4],
+    owner_address: &str,
+    function: &str,
     args: &[u8],
 ) -> Result<EnergyEstimate> {
-    let raw_energy = rpc.estimate_energy(contract, selector, args).await?;
+    let raw_energy = rpc
+        .estimate_energy(contract, owner_address, function, args)
+        .await?;
     let scaled = scale_energy(raw_energy, DEM_MAX_FACTOR);
     let fee_limit_sun = scaled.saturating_mul(ENERGY_PRICE_SUN);
     Ok(EnergyEstimate {

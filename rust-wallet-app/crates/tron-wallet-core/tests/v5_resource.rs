@@ -94,7 +94,11 @@ async fn live_estimate_energy_lands_in_documented_band() {
             .expect("Nile USDT must be in the bundle")
             .address
             .as_str(),
-        tron_wallet_core::trc20::TRANSFER_SELECTOR,
+        tron_wallet_core::tokens::test_addresses(Network::Nile)
+            .expect("Nile test fixtures must be present")
+            .owner_address
+            .as_str(),
+        tron_wallet_core::trc20::TRANSFER_SIGNATURE,
         // 32-byte zero-padded recipient address. The exact recipient
         // does not affect the Energy band — only whether the recipient
         // is a fresh account or a holder.

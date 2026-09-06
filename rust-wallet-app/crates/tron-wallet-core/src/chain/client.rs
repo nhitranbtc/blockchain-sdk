@@ -211,16 +211,32 @@ impl TronGridClient {
 
     /// `POST /wallet/triggerconstantcontract` — read-only contract call.
     ///
-    /// `selector` is the 4-byte function selector, hex-encoded without the
-    /// `0x` prefix (TronGrid takes the raw 4-byte hex). `args` is the
-    /// ABI-encoded argument block **without the selector prefix** — the
-    /// server prepends the selector to whatever bytes you send. Sending
-    /// the selector twice is the wire-format bug the plan's Task 3.3 calls
-    /// out (corrected via #410).
+    /// `function` is the **human-readable Solidity signature** of the
+    /// function being called (e.g. `"decimals()"`, `"balanceOf(address)"`),
+    /// NOT the 4-byte hex selector. TronGrid resolves the signature
+    /// against the contract's published ABI to compute the actual 4-byte
+    /// selector at call time; sending a hex selector here triggers a
+    /// silent path where the server derives a different 4-byte prefix
+    /// from your hex bytes, every simulated call reverts with
+    /// `"REVERT opcode executed"`, and the response's `constant_result`
+    /// is empty.
+    ///
+    /// `args` is the ABI-encoded argument block — empty for `decimals()` /
+    /// `symbol()` / `name()`, 32 bytes for `balanceOf(address)` (a
+    /// 32-byte slot holding the 21-byte T-address with 11 zero bytes of
+    /// left padding — see [`crate::trc20::balance_of_args`]).
+    ///
+    /// `owner_address` is a required field on TronGrid's request body
+    /// (the server uses it as the simulated caller for the read-only
+    /// call — for `view` functions the value does not affect the result,
+    /// but the field must be a valid T-address or the server rejects with
+    /// `owner_address isn't set`). Pass any valid wallet from the test
+    /// fixture for view-only calls.
     pub async fn trigger_constant_contract(
         &self,
         contract: &str,
-        selector: [u8; 4],
+        owner_address: &str,
+        function: &str,
         args: &[u8],
     ) -> Result<ConstantContractCall> {
         let url = format!("{}/wallet/triggerconstantcontract", self.rpc_url);
@@ -229,8 +245,10 @@ impl TronGridClient {
         struct Body<'a> {
             #[serde(rename = "contract_address")]
             contract_address: &'a str,
+            #[serde(rename = "owner_address")]
+            owner_address: &'a str,
             #[serde(rename = "function_selector")]
-            function_selector: String,
+            function_selector: &'a str,
             #[serde(rename = "parameter")]
             parameter: String,
             #[serde(rename = "visible")]
@@ -238,7 +256,8 @@ impl TronGridClient {
         }
         let body = Body {
             contract_address: contract,
-            function_selector: hex::encode(selector),
+            owner_address,
+            function_selector: function,
             parameter: hex::encode(args),
             visible: true,
         };
@@ -289,14 +308,18 @@ impl TronGridClient {
     /// Returns 0 if the network response omitted the field (some
     /// TronGrid variants do), which is the conservative "no overhead"
     /// value the caller can build on top of without crashing.
+    ///
+    /// `function` is the Solidity signature (see
+    /// [`Self::trigger_constant_contract`]).
     pub async fn estimate_energy(
         &self,
         contract: &str,
-        selector: [u8; 4],
+        owner_address: &str,
+        function: &str,
         args: &[u8],
     ) -> Result<u64> {
         let resp = self
-            .trigger_constant_contract(contract, selector, args)
+            .trigger_constant_contract(contract, owner_address, function, args)
             .await?;
         Ok(resp.energy_used.unwrap_or(0))
     }

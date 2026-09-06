@@ -832,8 +832,8 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 - [x] `tokens::load(Network::Nile)` returns 1 entry.
 - [x] `tokens::load(Network::Mainnet)` returns 5 entries.
-- [ ] Live `trc20::decimals(rpc, USDT)` against Nile → `6` (GATED, `RUN_TRON_NILE=1`).
-- [ ] Live `trc20::symbol(rpc, USDT)` against Mainnet → `"USDT"` (GATED, `RUN_TRON_MAINNET=1`).
+- [x] Live `trc20::decimals(rpc, USDT)` against Nile → `6` (GATED, `RUN_TRON_NILE=1`).
+- [x] Live `trc20::symbol(rpc, USDT)` against Mainnet → `"USDT"` (GATED, `RUN_TRON_MAINNET=1`).
 
 **Test Scenario mapping:** supports **Local row 2 (TRC-20 transfer)** + **row 3 (first-time receive)** + **row 4 (TRC-20 approval)** + **row 6 (insufficient balance)** + **Nile row 2 (real test USDT)** — every TRC-20 scenario row requires `tokens::{local,nile,mainnet}.json` lookup → `decimals()` verification. **Mainnet gate**: `RUN_TRON_MAINNET=1` validates `USDT` symbol on real mainnet contract `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`.
 

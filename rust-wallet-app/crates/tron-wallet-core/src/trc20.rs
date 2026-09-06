@@ -6,17 +6,23 @@
 //! [`crate::tx::builder`], where the rest of the transaction-parameter
 //! helpers are concentrated.
 //!
-//! ## Wire-format contract (plan Task 3.3, corrected via #410)
+//! ## Wire-format contract (plan Task 3.3, corrected via #410 + live-revert fix)
 //!
-//! The TronGrid `wallet/triggerconstantcontract` endpoint takes:
+//! TronGrid's `wallet/triggerconstantcontract` endpoint takes:
 //!
-//! - `function_selector`: the 4-byte hex selector, separate field.
-//! - `parameter`: hex-encoded ABI argument block **without the selector
-//!   prefix**. The server prepends the selector to whatever bytes you send.
+//! - `function_selector`: the **human-readable Solidity signature** of the
+//!   function being called (e.g. `"decimals()"`, `"balanceOf(address)"`).
+//!   The server resolves the signature against the contract's published
+//!   ABI to derive the 4-byte selector at call time.
+//! - `parameter`: hex-encoded ABI argument block (no selector prefix).
+//! - `owner_address`: required even for view calls (server uses it as the
+//!   simulated caller). Pass any valid T-address for read-only paths.
 //!
-//! Sending the selector twice was the bug #410 fixed — the server then
-//! prefixed your call with another 4 bytes, and the call went to a non
-//! existent method on every contract.
+//! Earlier we sent a 4-byte hex selector in `function_selector` — the
+//! server then derived a different 4-byte prefix from those hex bytes,
+//! the simulated call reverted with `REVERT opcode executed`, and
+//! `constant_result` came back empty. Sending the signature string fixes
+//! the call (verified live against mainnet USDT).
 //!
 //! ## ABI encoding rules we rely on
 //!
@@ -28,7 +34,7 @@
 //! The decoder in this module only handles the subset TRC-20 tokens emit:
 //! single `uint256` for `balanceOf` / `decimals`, and a single `string` for
 //! `symbol` / `name`. A general ABI decoder is out of scope for v0.1 — we
-//! only read what we also encode, and the four selectors above are the
+//! only read what we also encode, and the four signatures below are the
 //! ones the bundled registry exposes.
 
 use anychain_tron::abi;
@@ -39,21 +45,36 @@ use crate::error::{Error, Result};
 
 /// `transfer(address,uint256)` — used to build TRC-20 transfer calldata.
 pub const TRANSFER_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
+/// Solidity signature for `transfer(address,uint256)`. Pass this to
+/// [`crate::chain::TronGridClient::trigger_constant_contract`] /
+/// `estimate_energy` as the `function` argument; the server resolves it
+/// against the contract's ABI to derive the actual selector.
+pub const TRANSFER_SIGNATURE: &str = "transfer(address,uint256)";
 
 /// `approve(address,uint256)` — used to build TRC-20 approval calldata.
 pub const APPROVE_SELECTOR: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
+/// Solidity signature for `approve(address,uint256)`.
+pub const APPROVE_SIGNATURE: &str = "approve(address,uint256)";
 
 /// `balanceOf(address)` — view call that returns the holder's token balance.
 pub const BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
+/// Solidity signature for `balanceOf(address)`.
+pub const BALANCE_OF_SIGNATURE: &str = "balanceOf(address)";
 
 /// `decimals()` — view call that returns the token's decimal precision.
 pub const DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
+/// Solidity signature for `decimals()`.
+pub const DECIMALS_SIGNATURE: &str = "decimals()";
 
 /// `symbol()` — view call that returns the token's ticker symbol.
 pub const SYMBOL_SELECTOR: [u8; 4] = [0x95, 0xd8, 0x9b, 0x41];
+/// Solidity signature for `symbol()`.
+pub const SYMBOL_SIGNATURE: &str = "symbol()";
 
 /// `name()` — view call that returns the token's human-readable name.
 pub const NAME_SELECTOR: [u8; 4] = [0x06, 0xfd, 0xde, 0x03];
+/// Solidity signature for `name()`.
+pub const NAME_SIGNATURE: &str = "name()";
 
 /// 32-byte slot size used by the ABI for both static and dynamic encodings.
 const ABI_WORD: usize = 32;
@@ -115,7 +136,7 @@ pub async fn balance_of(rpc: &TronGridClient, contract: &str, owner: &str) -> Re
     let arg = balance_of_args(owner_addr.as_bytes());
 
     let response = rpc
-        .trigger_constant_contract(contract, BALANCE_OF_SELECTOR, &arg)
+        .trigger_constant_contract(contract, owner, "balanceOf(address)", &arg)
         .await?;
 
     let raw = response.constant_result_bytes()?;
@@ -127,9 +148,14 @@ pub async fn balance_of(rpc: &TronGridClient, contract: &str, owner: &str) -> Re
 /// TUSD/USDD. The bundled registry already records this value; the live
 /// call exists so a token can be sanity-checked before the registry is
 /// updated (and to catch a misconfigured registry entry).
-pub async fn decimals(rpc: &TronGridClient, contract: &str) -> Result<u8> {
+///
+/// `owner` is the simulated caller TronGrid requires on every
+/// `triggerconstantcontract` request — for a view call like `decimals`
+/// the value does not affect the result, but the server rejects with
+/// `owner_address isn't set` if the field is empty.
+pub async fn decimals(rpc: &TronGridClient, contract: &str, owner: &str) -> Result<u8> {
     let response = rpc
-        .trigger_constant_contract(contract, DECIMALS_SELECTOR, &no_args())
+        .trigger_constant_contract(contract, owner, "decimals()", &no_args())
         .await?;
 
     let raw = response.constant_result_bytes()?;
@@ -147,9 +173,12 @@ pub async fn decimals(rpc: &TronGridClient, contract: &str) -> Result<u8> {
 
 /// Read `symbol()` from `contract`. Returns the ABI-decoded string (e.g.
 /// `"USDT"`).
-pub async fn symbol(rpc: &TronGridClient, contract: &str) -> Result<String> {
+///
+/// See [`decimals`] for why `owner` is required — TronGrid rejects the
+/// request without it.
+pub async fn symbol(rpc: &TronGridClient, contract: &str, owner: &str) -> Result<String> {
     let response = rpc
-        .trigger_constant_contract(contract, SYMBOL_SELECTOR, &no_args())
+        .trigger_constant_contract(contract, owner, "symbol()", &no_args())
         .await?;
 
     let raw = response.constant_result_bytes()?;
@@ -159,9 +188,12 @@ pub async fn symbol(rpc: &TronGridClient, contract: &str) -> Result<String> {
 
 /// Read `name()` from `contract`. Mirrors [`symbol`] for the full display
 /// name (e.g. `"Tether USD"`).
-pub async fn name(rpc: &TronGridClient, contract: &str) -> Result<String> {
+///
+/// See [`decimals`] for why `owner` is required — TronGrid rejects the
+/// request without it.
+pub async fn name(rpc: &TronGridClient, contract: &str, owner: &str) -> Result<String> {
     let response = rpc
-        .trigger_constant_contract(contract, NAME_SELECTOR, &no_args())
+        .trigger_constant_contract(contract, owner, "name()", &no_args())
         .await?;
 
     let raw = response.constant_result_bytes()?;
