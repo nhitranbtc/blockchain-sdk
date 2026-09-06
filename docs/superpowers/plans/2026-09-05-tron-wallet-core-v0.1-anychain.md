@@ -4,7 +4,7 @@
 >
 > **2026-09-06 REVISION (issue #540):** anychain direct from crates.io → **VENDORED**. See Q13 + Q3 (revised) + Section B (CHOSEN). Vendoring decision was REJECTED on 2026-09-05 — #540 (non-canonical varint in `fee_limit` from `anychain-tron 0.2.14`, bus-factor = 1, upstream fix turnaround unknown) flipped the cost/benefit. Local copy gives us the fix without waiting on upstream. ADR update follows in a follow-up commit (see "Open follow-up" below).
 
-**Goal:** Deliver `rust-wallet-app/crates/tron-wallet-core/` — a TRON (TRX + TRC-20 stablecoin) wallet library built on **`anychain-tron 0.2.14` + `anychain-kms 0.1.23` + `anychain-core 0.1.8`** (decision locked 2026-09-05, supersedes 2026-08-27 raw-primitives plan), plus a `tron` CLI in the umbrella workspace. **Vendored** under `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` — source pulled from `https://github.com/0xcregis/anychain` tag `v0.2.14` / `v0.1.23` / `v0.1.8` (commit SHA pinned in `anychain-vendored/SOURCE.md`), per-file `SPDX-License-Identifier: MIT OR Apache-2.0` preserved, local patches applied for #540 + dual-SHA256 txid + Zeroizing gap. **Bumps MSRV to 1.98.1** (anychain workspace toolchain). Compiles for desktop (Linux/macOS/Windows) + mobile (iOS arm64 + Android arm64) via 4-trait PAL.
+**Goal:** Deliver `rust-wallet-app/crates/tron-wallet-core/` — a TRON (TRX + TRC-20 stablecoin) wallet library built on **`anychain-{core,tron,kms}`** (revision 2026-09-06, supersedes 2026-08-27 raw-primitives plan), plus a `tron` CLI in the umbrella workspace. **Vendored** under `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` — source pulled from `https://github.com/0xcregis/anychain` commit **`cf3aa2d59afb2c50dc961919fca011c401238ed6`** (HEAD of `main`, 2026-09-04; upstream tags `v0.1.8` / `v0.2.14` / `v0.1.23` do NOT exist on remote — `git ls-remote --tags` returned only `0.0.2` and `0.1.5` as of 2026-09-06), per file `SPDX-License-Identifier: MIT OR Apache-2.0` preserved, local patches applied for #540 (endpoint switch to `/wallet/broadcasthex`) + dual-SHA256 txid (Q2) + Zeroizing gap (Risk #3). PR #541 closed Phase 0. **Bumps MSRV to 1.98.1** (anychain workspace toolchain). Compiles for desktop (Linux/macOS/Windows) + mobile (iOS arm64 + Android arm64) via 4-trait PAL.
 
 **Companion docs:**
 - Research: `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md` (this plan's source of truth)
@@ -29,7 +29,7 @@ Locked by user ("do it") against the grill Round-1 frontier:
 |---|----------|--------|
 | Q1 | Vendor scope | **(a) all three** (`anychain-core`, `anychain-tron`, `anychain-kms`) — bus-factor is project-wide, partial vendor creates false mitigation |
 | Q2 | Patch application form | **(a) in-tree edits** to vendored `src/**` — agents read fix in place; no second-file hunt |
-| Q3 | Upstream sync cadence | **(a) quarterly** — `vendor/0xcregis-upstream` fetch + regression test gate + manual diff review |
+| Q3 | Upstream sync cadence | **(a) quarterly** — `.local/anychain` working-copy fetch (`git -C .local/anychain fetch origin && git reset --hard origin/main`) + regression test gate + manual diff review |
 | Q4 | ADR form | **(a) amend** ADR-0001 with `## 2026-09-06 Revision` section — single-document audit trail |
 
 Downstream Round 2 (pending): vendored-tree git location, version-suffix style, patch-bundling per PR, lockfile `source =` policy.
@@ -38,10 +38,10 @@ Downstream Round 2 (pending): vendored-tree git location, version-suffix style, 
 
 ## Global Constraints (verbatim from deep-dive Round-1 grill Q1–Q12)
 
-- **Q1 — SDK choice.** **anychain-tron 0.2.14 + anychain-kms 0.1.23 + anychain-core 0.1.8**, **vendored** under `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` (revision 2026-09-06, see Q3 + Q13 + Section B). Trades ~250 lines of `reqwest` glue for ~1000 lines of hand-rolled protobuf + base58check + Keccak-256 + ABI encoder + Stake 2.0 contract builders. Raw `reqwest` + `prost` 0.14.4 plan (2026-08-27) **REJECTED** by Round-1 audit — see ADR-0001.
+- **Q1 — SDK choice.** **anychain-{core,tron,kms} @ `cf3aa2d59afb2c50dc961919fca011c401238ed6`** (HEAD of upstream `main`, 2026-09-04), **vendored** under `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` (revision 2026-09-06, see Q3 + Q13 + Section B). Trades ~250 lines of `reqwest` glue for ~1000 lines of hand-rolled protobuf + base58check + Keccak-256 + ABI encoder + Stake 2.0 contract builders. Raw `reqwest` + `prost` 0.14.4 plan (2026-08-27) **REJECTED** by Round-1 audit — see ADR-0001.
 - **Q2 — Transaction format.** Protobuf via vendored `anychain-tron/src/protocol/Tron.proto`. Signing: `SHA256(raw_bytes)` then `secp256k1_sign` → `TronTransaction::sign(sig, recid)`. **txid BUG fix lives in vendored copy:** vendored `anychain-tron/src/transaction.rs::TronTransaction::to_transaction_id()` is patched to return `SHA256(SHA256(raw_bytes))` (canonical TRX double-hash). Caller no longer computes it manually. **Pinned to vendored SHA** (commit recorded in `anychain-vendored/SOURCE.md`) — vendored `[patch.crates-io]` is NOT used; consumers reference via local `path = "...anychain-vendored/..."`. Regression test in `tron-wallet-core/tests/varint_and_txid.rs` asserts `txid == SHA256(SHA256(raw_bytes))` for canonical `fee_limit = 130_000_000` so future vendored "fixes" or upstream syncs get caught in CI.
-- **Q3 — Bus-factor risk (mitigated by vendoring).** `0xcregis/anychain` author diversity trailing 12 months: `anychain-tron` = **1 author (`loki-cmu`), 3 commits**; `anychain-kms` = 2 authors, 8 commits. Bus-factor = 1. **Mitigation = vendor (revision 2026-09-06, #540).** Vendored copy under `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` lets us (a) apply local patches without waiting for upstream turnaround (Q13 varint fix shipped without upstream ack); (b) audit every commit we import via `git log` from the pinned source commit; (c) reject silent upstream behavior changes by exact `path =` reference — no version drift, no `cargo update`-induced surprise. Upstream is still tracked on a `vendor/0xcregis-upstream` git remote inside `anychain-vendored/.git/` for security-fix back-port, but consumer builds never touch crates.io. Per-file `SPDX-License-Identifier: MIT OR Apache-2.0` headers preserved; `SOURCE.md` records pinned commit SHAs + any local patches. **Revision history:** REJECTED 2026-09-05 (cost/benefit); ACCEPTED 2026-09-06 (bus-factor combined with #540 bug = no-cost mitigation; local patch turnaround < 1 day vs unknown upstream turnaround).
-- **Q13 — Varint fix in vendored copy (NEW 2026-09-06, issue #540).** `anychain-tron 0.2.14`'s `Raw` proto serialization emits spurious leading `0x01` byte before canonical varint for `fee_limit >= 2^27`, e.g. `130_000_000` encodes as `90 01 80 c9 fe 3d` (6 bytes) instead of canonical `90 80 c9 fe 3d` (5 bytes). TronGrid's Java gateway reads `fee_limit = 1` AND trips on unknown field 16 → NPE → `{"Error": "class java.lang.NullPointerException : null"}`. **Fix:** vendored `anychain-tron/src/protocol/Tron.rs::Raw::write_to_with_cached_sizes` patched to emit canonical varint for `fee_limit` (strip spurious `0x01` byte). **Regression test:** `tests/varint_and_txid.rs::fee_limit_canonical_varint` builds `Raw` with `fee_limit = 130_000_000`, asserts serialized bytes end with `9080c9fe3d` (NOT `900180c9fe3d`). Belt-and-suspenders test on `tx/sign.rs::sign_tx` output: `assert!(raw_data_hex.ends_with("9080c9fe3d"))` before `wallet/broadcasttransaction` POST. **Tracking:** varint fix is local-only, lives in `anychain-vendored/anychain-tron/CHANGELOG.md` with reference to issue #540. Upstream PR may follow; vendor copy diverges only if upstream rejects the patch.
+- **Q3 — Bus-factor risk (mitigated by vendoring).** `0xcregis/anychain` author diversity trailing 12 months: `anychain-tron` = **1 author (`loki-cmu`), 3 commits**; `anychain-kms` = 2 authors, 8 commits. Bus-factor = 1. **Mitigation = vendor (revision 2026-09-06, #540).** Vendored copy under `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` lets us (a) apply local patches without waiting for upstream turnaround (Q13 varint fix shipped without upstream ack); (b) audit every commit we import via `git log` from the pinned source commit; (c) reject silent upstream behavior changes by exact `path =` reference — no version drift, no `cargo update`-induced surprise. Upstream is tracked via a `.local/anychain` working-copy clone under `.local/` (kept untracked, convention-gitignored, single source-of-truth for the inspection mirror; relocated from repo root 2026-09-06 per operator decision) for security-fix back-port. The original plan to spin up `vendor/0xcregis-upstream` git remote inside `anychain-vendored/.git/` was **dropped 2026-09-06** (per PR #541 amendment) — `.local/anychain` keeps the workflow simple (one checkout, no nested submodule). Consumer builds never touch crates.io. Per-file `SPDX-License-Identifier: MIT OR Apache-2.0` headers preserved; `SOURCE.md` records pinned commit SHAs + any local patches. **Revision history:** REJECTED 2026-09-05 (cost/benefit); ACCEPTED 2026-09-06 (bus-factor combined with #540 bug = no-cost mitigation; local patch turnaround < 1 day vs unknown upstream turnaround).
+- **Q13 — Varint hypothesis DISPROVED; broadcast endpoint SWITCHED (REVISION 2026-09-06 per PR #541, issue #540).** Original hypothesis (anychain-tron `0.2.14` `Raw` proto emitted spurious leading `0x01` byte in canonical varint for `fee_limit >= 2^27`, e.g. observed `90 01 80 c9 fe 3d` instead of canonical `90 80 c9 fe 3d`; TronGrid Java gateway reading `fee_limit = 1` + tripping on unknown field 16 → NPE) was NOT the root cause. **Live broadcast investigation 2026-09-06** (Nile, sender funded 100 TRX + 61.5 USDT, recipient address `TJdcLjM1KvzGotZ5MxEAZZbnT6YCuAYRaf`) showed BOTH the 6-byte form (`90 01 80 c9 fe 3d`) AND the 5-byte canonical form (`90 80 c9 fe 3d`) FAIL against TronGrid — the 6-byte form triggers NPE on `/wallet/broadcasttransaction` and `InvalidProtocolBufferException` on `/wallet/broadcasthex`; the canonical 5-byte form triggers NPE on `/wallet/broadcasttransaction` and `InvalidProtocolBufferException` on `/wallet/broadcasthex`. `fee_limit` was a red herring. **Actual fix (PR #541):** switch broadcast endpoint from `/wallet/broadcasttransaction` (split-form `{raw_data_hex, signature_hex}` body) to `/wallet/broadcasthex` (single-blob `{transaction: "<full-TronTransaction-envelope-hex>"}` body). This matches Tangem's `TronTarget.broadcastHex` Swift impl that works against the same TronGrid endpoints. Vendored `Tron.rs` left unmodified — Q13 varint patch was **REVERTED 2026-09-06** before this plan-amendment commit. **Regression test:** `tests/varint_and_txid.rs::fee_limit_canonical_varint` now pins the standard 6-byte form (`90 01 80 c9 fe 3d`) which is the correct protobuf wire format for tag 18 (5-byte form is impossible for tag 18 — varint of header byte `90` needs 2 bytes per protobuf wire spec). Test comments explain the standard form IS the baseline; the test's job is to catch any accidental Q13-style 5-byte patch reintroduction. **Verified live:** `RUN_TRON_NILE=1 cargo test -p tron-wallet-core --test v10_broadcast` succeeds — Nile txid `3cb6657601449ccca510949f025bdf8de186aac1ea291d091c8148fe05c08e74` accepted by TronGrid. **Tracking:** endpoint switch documented at `rust-wallet-app/crates/tron-wallet-core/src/chain/client.rs:86-104` (post-PR #541).
 - **Q4 — Mainnet smoke gate.** **v0.1 release GATED on one mainnet self-send — $0.001 USDT to self (recipient == sender), real value, real network.** Local + Nile is emulation. Without a real-value smoke, V1-V10 PASS evidence = "looks like real network" not "real network". Add to acceptance criteria NOW, not post-Phase 4. Pre-check audit hook (refuse if recipient != operator_wallet) + `RUN_TRON_MAINNET=1` env gate.
 - **Q5 — SPKI pin live extraction.** `api.trongrid.io` TLS cert SPKI SHA-256 = `0e43f6110bbee5e199c6775cf88a3050a9bd51f3bb4a31aeefb7122f79119f0d` (verified 2026-09-05). Pin in `TronConfig::for_network(Network::Mainnet)` SPKI list. Reuse `bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier` shape-compatible.
 - **Q6 — Testnet.** **Nile** for v0.1. Chain-id `0xcd8690dc` / 3448148188. Use `POST /jsonrpc {"method":"eth_chainId"}` (TronGrid's `/wallet/getchainid` returns HTTP 405). Address prefix byte `0x41` universal across Mainnet/Shasta/Nile — network discrimination by chain-id only.
@@ -135,7 +135,7 @@ tx::sign::sign_tx(&sk, raw_data_bytes)
 
 tx::broadcast::serialize_for_broadcast(&tx)
     → serde_json::to_value(&tx)
-    → POST wallet/broadcasttransaction             [caller reqwest]
+    → POST wallet/broadcasthex                    [caller reqwest] # AMENDED 2026-09-06 per PR #541 — broadcast transaction POSTed as full-envelope hex, not split raw_data_hex + signature_hex
 ```
 
 ---
@@ -150,9 +150,9 @@ tx::broadcast::serialize_for_broadcast(&tx)
 
 | Crate           | Source tag (pinned) | Local path                                                              | Purpose                                                                                |
 |-----------------|---------------------|-------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| `anychain-core` | `v0.1.8`            | `rust-wallet-app/crates/anychain-vendored/anychain-core`               | Shared traits (`Address`, `PublicKey`, `Transaction`, `Format`, `Network`), crypto utilities (`keccak256`, `sha256`, `func_selector`), `hex` re-export |
-| `anychain-tron` | `v0.2.14`           | `rust-wallet-app/crates/anychain-vendored/anychain-tron`               | Wire format — T-base58check address, protobuf `Transaction` envelope, **17 contract builders** (TRX transfer, TRC-20 transfer/approve, Stake 2.0 freeze/unfreeze/delegate/cancel/withdraw, witness vote, withdraw vote, account create, generic trigger), `abi::encode_call` |
-| `anychain-kms`  | `v0.1.23`           | `rust-wallet-app/crates/anychain-vendored/anychain-kms`                | BIP-39 mnemonic (8 languages), BIP-32 HD (SLIP-44 coin 195), secp256k1 sign, xprv serialize with `Zeroizing<String>` |
+| `anychain-core` | `cf3aa2d` (upstream `main` HEAD, 2026-09-04 — tags `0.1.8`/`0.2.14`/`0.1.23` do NOT exist on remote) | `rust-wallet-app/crates/anychain-vendored/anychain-core` (`0.1.0-local.0`) | Shared traits (`Address`, `PublicKey`, `Transaction`, `Format`, `Network`), crypto utilities (`keccak256`, `sha256`, `func_selector`), `hex` re-export |
+| `anychain-tron` | `cf3aa2d` (same — vendored together as one snapshot, 2026-09-04) | `rust-wallet-app/crates/anychain-vendored/anychain-tron` (`0.2.0-local.0`) | Wire format — T-base58check address, protobuf `Transaction` envelope, **17 contract builders** (TRX transfer, TRC-20 transfer/approve, Stake 2.0 freeze/unfreeze/delegate/cancel/withdraw, witness vote, withdraw vote, account create, generic trigger), `abi::encode_call` |
+| `anychain-kms`  | `cf3aa2d` (same — vendored together as one snapshot, 2026-09-04) | `rust-wallet-app/crates/anychain-vendored/anychain-kms` (`0.1.0-local.0`) | BIP-39 mnemonic (8 languages), BIP-32 HD (SLIP-44 coin 195), secp256k1 sign, xprv serialize with `Zeroizing<String>` |
 
 **Pin to vendored commit (NOT `^`, NOT crates.io).** Phase 0 Task 0.2 replaces crates.io pins with vendored `path =` references in `[workspace.dependencies]`. Consumers NEVER see `crates.io/index` for these names — local-path wins deterministically.
 
@@ -160,7 +160,7 @@ tx::broadcast::serialize_for_broadcast(&tx)
 
 | Source repo         | Vendored path                                              | Outcome                                                                                  |
 |---------------------|------------------------------------------------------------|------------------------------------------------------------------------------------------|
-| `0xcregis/anychain` | `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` | **CHOSEN 2026-09-06** — bus-factor = 1 for `anychain-tron` (1 author, 3 commits trailing 12 months) was an accepted risk on 2026-09-05, but issue #540 (non-canonical varint for `fee_limit` in `anychain-tron 0.2.14`, NPE on TronGrid) flipped the cost/benefit: local copy lets us apply the varint fix without waiting on upstream turnaround. Local patches layered on top per Q13 + Q2 + Zeroizing gap. Per-file `SPDX-License-Identifier: MIT OR Apache-2.0` preserved. `anychain-vendored/SOURCE.md` records pinned commit SHAs. Upstream tracked on a `vendor/0xcregis-upstream` git remote inside `anychain-vendored/.git/` for security-fix back-port — but consumer builds never touch crates.io. **Update cadence:** sync vendored copy with upstream `main` on a quarterly schedule, gate on (a) no breaking wire-format change, (b) regression tests in `tron-wallet-core/tests/` still PASS, (c) manual review of diff. |
+| `0xcregis/anychain` | `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` | **CHOSEN 2026-09-06** — bus-factor = 1 for `anychain-tron` (1 author, 3 commits trailing 12 months) was an accepted risk on 2026-09-05, but issue #540 (non-canonical varint for `fee_limit` in `anychain-tron 0.2.14`, NPE on TronGrid) flipped the cost/benefit: local copy lets us apply the varint fix without waiting on upstream turnaround. Local patches layered on top per Q13 + Q2 + Zeroizing gap. Per-file `SPDX-License-Identifier: MIT OR Apache-2.0` preserved. `anychain-vendored/SOURCE.md` records pinned commit SHAs. Upstream tracked via the `.local/anychain` working-copy clone under `.local/` (kept untracked via convention-gitignore; spun up 2026-09-06 per PR #541 amendment as a replacement for the original `vendor/0xcregis-upstream` git remote plan; relocated from repo root `/anychain` → `.local/anychain` 2026-09-06) for security-fix back-port — but consumer builds never touch crates.io. **Update cadence:** sync vendored copy with upstream `main` on a quarterly schedule, gate on (a) no breaking wire-format change, (b) regression tests in `tron-wallet-core/tests/` still PASS, (c) manual review of diff. |
 
 **Open follow-up (not blocking v0.1 release):** update `docs/wallets/2026-09-05-adr-0001-tron-sdk-anychain-vs-raw-primitives.md` → ADR-0002 (or amend ADR-0001 with `## 2026-09-06 Revision` section) capturing the vendoring reversal. Filed as issue #541 (or follow-up edit in same PR). PR author to decide whether to amend or supersede; the ADR should record both the original 2026-09-05 decision (crates.io exact pin, bus-factor accepted) AND the 2026-09-06 revision (vendor, bus-factor mitigated, #540 fix locally).
 
@@ -258,18 +258,22 @@ MIT OR Apache-2.0 (anychain-*, argon2, aes-gcm, sha2, sha3, bs58, hex), Apache-2
 
 ```text
 rust-wallet-app/crates/anychain-vendored/      # VENDORED anychain stack (Task 0.2) — pinned SHA per SOURCE.md
-├── .git/                                       # separate git repo with vendor/0xcregis-upstream remote
+│
+│   # NOTE (2026-09-06 amendment per PR #541):
+│   # - Removed nested `.git/` subtree (was: separate git repo with vendor/0xcregis-upstream remote)
+│   #   → replaced by /anychain working-copy at repo root as the inspection mirror.
+│   # - Vendored Cargo.toml versions set to 0.1.0-local.0 / 0.2.0-local.0 (distinguishable from upstream tag pins).
 ├── anychain-core/
 │   ├── Cargo.toml                              # version = "0.1.0-local.0", deps = local anychain-{tron,kms} via path
-│   ├── SOURCE.md                               # pinned commit SHA + upstream URL + tag
-│   └── src/                                    # copied verbatim from 0xcregis/anychain tag v0.1.8; SPDX headers preserved
+│   ├── SOURCE.md                               # pinned commit SHA cf3aa2d… + upstream URL + git ls-remote output
+│   └── src/                                    # copied verbatim from /anychain @ cf3aa2d… ; SPDX headers preserved
 ├── anychain-tron/
-│   ├── Cargo.toml                              # version = "0.2.14-local.0"
+│   ├── Cargo.toml                              # version = "0.2.0-local.0"
 │   ├── SOURCE.md
-│   ├── CHANGELOG.md                            # local patches (Task 0.7: Q13 varint + Q2 txid)
-│   └── src/                                    # vendored + patched (Q2/Q13/Zeroizing gap)
+│   ├── CHANGELOG.md                            # local patches (Task 0.7: Q2 txid + Zeroizing; Q13 REVERTED 2026-09-06)
+│   └── src/                                    # vendored + patched (Q2 + Zeroizing; Q13 NOT applied)
 └── anychain-kms/
-    ├── Cargo.toml                              # version = "0.1.23-local.0"
+    ├── Cargo.toml                              # version = "0.1.0-local.0"
     ├── SOURCE.md
     └── src/                                    # vendored + patched (Zeroizing gap, Task 0.7)
 
@@ -286,7 +290,7 @@ rust-wallet-app/crates/tron-wallet-core/        # V0.1 — fat standalone (~4525
 │   ├── tx/
 │   │   ├── builder.rs                          # 17+ contract builders via anychain_tron::trx
 │   │   ├── sign.rs                             # secp256k1_sign + Zeroizing wrapper + dual-SHA256 txid workaround
-│   │   ├── broadcast.rs                        # POST wallet/broadcasttransaction via reqwest
+│   │   ├── broadcast.rs                        # POST wallet/broadcasthex via reqwest (single-blob full envelope) — AMENDED 2026-09-06 per PR #541
 │   │   └── summary.rs                          # TxSummary struct (transfer log)
 │   ├── chain/                                  # TronGridClient HTTP client + SPKI pin verifier
 │   ├── wallet/                                 # UUID id + encrypted store + atomic write (PAL-bound)
@@ -365,7 +369,7 @@ rust-wallet-app/spikes/tron-v1/                 # verification harness (V1-V10)
 
 | # | Risk                                                                                  | Severity | Mitigation                                                                                  |
 |---|---------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------------------------------|
-| 1 | anychain-tron bus-factor = 1 (loki-cmu)                                              | **MITIGATED** | **Vendored 2026-09-06** under `rust-wallet-app/crates/anychain-vendored/`. Local patches applied without upstream turnaround (Q13 varint fix shipped in <1 day). Upstream tracked on `vendor/0xcregis-upstream` git remote for security-fix back-port, but consumer builds never touch crates.io. |
+| 1 | anychain-tron bus-factor = 1 (loki-cmu)                                              | **MITIGATED** | **Vendored 2026-09-06** under `rust-wallet-app/crates/anychain-vendored/`. Local patches applied without upstream turnaround (Q2 + Zeroizing applied; Q13 varint hypothesis disproved by live broadcast 2026-09-06 → REVERTED → broadcast endpoint switched to `/wallet/broadcasthex`). Upstream tracked via `.local/anychain` working-copy clone under `.local/` for security-fix back-port (relocated from repo root 2026-09-06), but consumer builds never touch crates.io. |
 | 2 | `TronTransaction::to_transaction_id()` returns single-SHA256                          | **MITIGATED** | **Fixed in vendored copy** (Task 0.7): `anychain-tron/src/transaction.rs::to_transaction_id` patched to return `SHA256(SHA256(raw_bytes))`. Regression test `tests/varint_and_txid.rs::txid_is_double_sha256` guards against silent revert. |
 | 3 | `secp256k1_sign(sk: &[u8])` does NOT Zeroize its sk param                              | **MITIGATED** | Patched in vendored `anychain-kms/src/sign.rs` (Task 0.7) — `Zeroizing` wrap inside function scope. Belt-and-suspenders: caller also wraps `sk_bytes` in `Zeroizing<Vec<u8>>` (Task 1.2). |
 | 4 | MSRV bump 1.85 → 1.98.1 breaks workspace MSRV contract                                 | MEDIUM   | Pin `rust-toolchain.toml` to 1.98.1; if 1.94 check passes, advertise 1.94 — no fake MSRV    |
@@ -373,9 +377,9 @@ rust-wallet-app/spikes/tron-v1/                 # verification harness (V1-V10)
 | 6 | `protobuf` wire format diverges from `serde_json` default                              | LOW      | Use `serde_json::to_value(&tx)` not `tx.to_string()` (Debug)                                |
 | 7 | Mobile CI matrix has no Docker fallback                                                | MEDIUM   | Round-1 grill Q6: `cargo build --target aarch64-apple-ios` + `cargo build --target aarch64-linux-android` FFI compile only; NO mobile runtime smoke in v0.1; add Nile-based runtime mobile smoke in v0.2 |
 | 8 | user-stories.md diverges from deep-dive on 11 stories + Nile USDT address              | MEDIUM   | Phase 0 Task 0.4 — regenerate user-stories.md from this plan                                |
-| 9 | send-speedup rebroadcast semantics not verified (Round-1 grill Q10)                    | MEDIUM   | Spike V7a: verify `wallet/broadcasttransaction` idempotency before row 7 ships              |
+| 9 | send-speedup rebroadcast semantics not verified (Round-1 grill Q10)                    | MEDIUM   | Spike V7a: verify `wallet/broadcasthex` idempotency before row 7 ships              |
 | 10 | Mainnet smoke not implemented                                                          | HIGH     | Q4 gate: $0.001 USDT self-send with pre-check audit hook + `RUN_TRON_MAINNET=1` env gate. Unblocked 2026-09-06 by Q13 varint fix in vendored copy. |
-| 11 | **NEW 2026-09-06** — vendored anychain diverges from upstream; security-fix back-port lag | MEDIUM | Quarterly `vendor/0xcregis-upstream` sync gate: (a) no breaking wire-format change, (b) `cargo test -p tron-wallet-core` PASS, (c) manual diff review. Track in `anychain-vendored/CHANGELOG.md`. |
+| 11 | **NEW 2026-09-06** — vendored anychain diverges from upstream; security-fix back-port lag | MEDIUM | Quarterly `.local/anychain` working-copy sync gate (`git -C .local/anychain fetch origin && git -C .local/anychain reset --hard origin/main`, then re-vendor if HEAD changed): (a) no breaking wire-format change, (b) `cargo test -p tron-wallet-core` PASS, (c) manual diff review. Track in `anychain-vendored/CHANGELOG.md`. |
 
 ---
 
@@ -560,15 +564,15 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 **Files:** `rust-wallet-app/Cargo.toml` (workspace root), `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/{Cargo.toml,SOURCE.md,src/**}` (new)
 
 - [ ] Create `rust-wallet-app/crates/anychain-vendored/` with subdirs `anychain-core`, `anychain-tron`, `anychain-kms`.
-- [ ] `git clone --depth 1 --branch v0.1.8 https://github.com/0xcregis/anychain /tmp/anychain-core-0.1.8`; copy `core/src/**` (excluding `core/tests/**` per upstream test runner) → `rust-wallet-app/crates/anychain-vendored/anychain-core/src/`. Record commit SHA in `anychain-vendored/anychain-core/SOURCE.md`.
-- [ ] `git clone --depth 1 --branch v0.2.14 https://github.com/0xcregis/anychain /tmp/anychain-tron-0.2.14`; copy `tron/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/`. Record commit SHA in `SOURCE.md`.
-- [ ] `git clone --depth 1 --branch v0.1.23 https://github.com/0xcregis/anychain /tmp/anychain-kms-0.1.23`; copy `kms/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-kms/src/`. Record commit SHA in `SOURCE.md`.
+- [ ] `cd /anychain && git checkout cf3aa2d59afb2c50dc961919fca011c401238ed6`; copy `crates/anychain-core/src/**` (excluding `crates/anychain-core/tests/**` per upstream test runner) → `rust-wallet-app/crates/anychain-vendored/anychain-core/src/`. Record commit SHA + `git -C /anychain rev-parse HEAD` + `git ls-remote https://github.com/0xcregis/anychain cf3aa2d` output in `anychain-vendored/anychain-core/SOURCE.md`.
+- [ ] (same `.local/anychain` working copy, single checkout) copy `crates/anychain-tron/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/`. Record commit SHA in `anychain-vendored/anychain-tron/SOURCE.md`.
+- [ ] (same `.local/anychain` working copy, single checkout) copy `crates/anychain-kms/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-kms/src/`. Record commit SHA in `anychain-vendored/anychain-kms/SOURCE.md`.
 - [ ] Add `SPDX-License-Identifier: MIT OR Apache-2.0` to top of every vendored source file (preserve per upstream license).
 - [ ] Add vendored crates to workspace `[members]`: `crates/anychain-vendored/anychain-core`, `crates/anychain-vendored/anychain-tron`, `crates/anychain-vendored/anychain-kms`.
 - [ ] Rewrite each vendored `Cargo.toml` so it depends on local-path siblings (e.g. `anychain-core` for `anychain-tron`, `anychain-core` for `anychain-kms`) — no `anychain-* = "=..."` from crates.io.
 - [ ] In workspace root `Cargo.toml` `[workspace.dependencies]`, replace `anychain-* = "=..."` pins with path references: `anychain-core = { path = "crates/anychain-vendored/anychain-core" }`, `anychain-tron = { path = "crates/anychain-vendored/anychain-tron" }`, `anychain-kms = { path = "crates/anychain-vendored/anychain-kms" }`.
 - [ ] Set vendored `version` fields to `0.1.0-local.0` (or similar — distinguishable from crates.io upstream).
-- [ ] Add upstream-tracking git remote: `cd rust-wallet-app/crates/anychain-vendored && git init && git remote add vendor/0xcregis-upstream https://github.com/0xcregis/anychain.git` (no fetch yet — quarterly cadence).
+- [x] ~~Add upstream-tracking git remote: `cd rust-wallet-app/crates/anychain-vendored && git init && git remote add vendor/0xcregis-upstream https://github.com/0xcregis/anychain.git`~~ **DROPPED 2026-09-06 per PR #541 amendment.** Replaced by `.local/anychain` working-copy clone under `.local/` (tracking `origin/main`, kept untracked via convention-gitignore — see follow-up note).
 - [ ] Commit message body: "vendor anychain-{core,tron,kms} from 0xcregis/anychain — bus-factor mitigation per #540, local patches live in vendored copy per Q2+Q13".
 
 **Verification:** `cargo build` succeeds at workspace root. `cargo tree -p tron-wallet-core | grep anychain` shows paths under `crates/anychain-vendored/`, NO entries from `crates.io/index`. `grep -r "anychain" rust-wallet-app/Cargo.lock` shows no `version = "0."` from registry for anychain names.
@@ -626,7 +630,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 - [x] Add "anychain-tron" entry: wire-format + 17 contract builders (TRX/TRC-20/Stake 2.0/Vote).
 - [x] Add "anychain-kms" entry: BIP-39 + BIP-32 HD + secp256k1 sign + Zeroizing xprv.
 - [x] Add "anychain-core" entry: shared traits + crypto utilities.
-- [x] Add "anychain-vendored" entry: local copy of `0xcregis/anychain` v0.1.8/v0.2.14/v0.1.23 with Q2+Q13 local patches; tracked in `anychain-vendored/SOURCE.md`.
+- [x] Add "anychain-vendored" entry: local copy of `0xcregis/anychain` @ `cf3aa2d59afb2c50dc961919fca011c401238ed6` with **Q2** (dual-SHA256 txid) + **Zeroizing** (Risk #3) local patches; **Q13 (varint fix) REVERTED** 2026-09-06 after live broadcast investigation showed root cause was the broadcast endpoint, not the varint encoding — see audit issue #542, PR #541, and ADR-0001 (revision 2026-09-06). Broadcast endpoint switched to `/wallet/broadcasthex`. Tracked in `anychain-vendored/SOURCE.md`.
 
 **Verification:** `CONTEXT.md` covers anychain vocabulary without contradicting deep-dive.
 
@@ -636,7 +640,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Files:** `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/protocol/Tron.rs`, `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/transaction.rs`, `rust-wallet-app/crates/tron-wallet-core/tests/varint_and_txid.rs`, `rust-wallet-app/crates/anychain-vendored/anychain-kms/src/sign.rs`
 
-- [ ] **Q13 varint fix:** in `anychain-tron/src/protocol/Tron.rs`, locate `Raw::write_to_with_cached_sizes` and the `os.write_int64(18, self.fee_limit)` call. Patch `os.write_int64` to use canonical varint encoding for `fee_limit` (strip spurious `0x01` prefix). Reference implementation: replace the call with `write_canonical_varint_int64` helper that matches `encode_varint64` in `rust-protobuf 3.7.2::varint` semantics. Add comment block citing issue #540 + observed/expected bytes (`900180c9fe3d` vs canonical `9080c9fe3d`).
+- [x] ~~Q13 varint fix: in `anychain-tron/src/protocol/Tron.rs`…~~ **REVERTED 2026-09-06** — hypothesis disproved by live broadcast investigation (5-byte form ALSO fails TronGrid). Actual fix is the broadcast endpoint switch to `/wallet/broadcasthex` (next checkbox below). Vendored `Tron.rs` left unmodified; see audit issue #542 + PR #541 amendment.
 - [ ] **Q2 dual-SHA256 txid fix:** in `anychain-tron/src/transaction.rs::TronTransaction::to_transaction_id`, replace single `sha256(raw_bytes)` with `sha256(sha256(raw_bytes))`. Add comment citing issue #399 historical bug + upstream `to_transaction_id` pre-fix state.
 - [ ] **Zeroizing gap fix:** in `anychain-kms/src/sign.rs::secp256k1_sign`, wrap the `sk` byte slice in `Zeroizing` for the function body scope and call `zeroize::Zeroize::zeroize(&mut sk_buf)` before return. Add comment citing Risk Register item (originally Risk #3).
 - [ ] Add `anychain-vendored/anychain-tron/CHANGELOG.md` with three sections: `## 2026-09-06 local patches`, each patch lists issue number, what changed, observed vs expected bytes (for #540), test citation.
@@ -646,7 +650,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
   - `#[test] fn secp256k1_sign_zeroizes_sk()`: call `secp256k1_sign(&sk[..], msg)`, after return assert `sk.iter().any(|b| *b != 0)` is false OR (better) call into kms via mock sk + assert kms clears its internal scratch buffer. Pragmatic: skip if kms internals opaque; rely on caller-side `Zeroizing<Vec<u8>>` wrap (Risk #3 mitigation already in caller per Task 1.2).
 - [ ] `cargo test -p tron-wallet-core --test varint_and_txid` passes.
 
-**Verification:** regression tests PASS in CI. Manual re-run of `tests/v10_broadcast.rs::live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile` against Nile no longer reproduces NPE; raw `curl -X POST -d '{"raw_data_hex":"<…>"}' https://nile.trongrid.io/wallet/broadcasttransaction` returns `{"result":true,"txid":"<…>"}`.
+**Verification (REVISED 2026-09-06 per PR #541):** regression tests PASS in CI. Manual re-run of `tests/v10_broadcast.rs::live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile` against Nile via `TronGridClient::broadcast(signed_envelope_hex)` succeeds — Nile txid accepted by `/wallet/broadcasthex` (e.g. `3cb6657601449ccca510949f025bdf8de186aac1ea291d091c8148fe05c08e74`). Raw curl cross-check: `curl -X POST -d '{"transaction":"<full-envelope-hex>"}' https://nile.trongrid.io/wallet/broadcasthex` returns `{"result":true,"txid":"<…>"}`.
 
 **PAUSE here per never-auto-commit. Show test PASS output before commit.** Per L13 step 11.
 
@@ -754,7 +758,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 ### Phase 2 — Transaction: builder + sign + broadcast
 
-**Goal:** `tron-wallet-core` builds `TronTransaction` for TRX native transfer + broadcasts via `wallet/broadcasttransaction`. **CI gate:** Spike V2 (protobuf round-trip) + V7 (SPKI pin) PASS.
+**Goal:** `tron-wallet-core` builds `TronTransaction` for TRX native transfer + broadcasts via `/wallet/broadcasthex` (single-blob envelope POST — REVISED 2026-09-06 per PR #541). **CI gate:** Spike V2 (protobuf round-trip) + V7 (SPKI pin) PASS.
 
 #### Task 2.1 — Wrap `anychain_tron::trx::build_transfer_contract`
 
@@ -774,13 +778,13 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 - [x] Internally: `params.to_bytes()` → `anychain_core::sha256(&raw_bytes)` → `secp256k1_sign(&sk_z, msg32)` → `(sig, recid)` → `TronTransaction::sign(sig, recid)`.
 - [x] Return `SignedTransaction { txid, raw_bytes, signature }` where `txid = SHA256(SHA256(raw_bytes))`.
 
-#### Task 2.3 — `wallet/broadcasttransaction` RPC call
+#### Task 2.3 — `/wallet/broadcasthex` RPC call (REVISED 2026-09-06)
 
 **Files:** `src/tx/broadcast.rs`, `src/chain/mod.rs`
 
 - [x] `chain::TronGridClient::new(rpc_url: &str, spki_pin: Option<&[u8; 32]>) -> Result<Self>`.
 - [x] `chain::TronGridClient::broadcast(&self, tx: &SignedTransaction) -> Result<BroadcastReceipt>`.
-- [x] Internally: `serde_json::to_value(&tx)` → POST `{rpc_url}/wallet/broadcasttransaction` with `{"raw_data_hex": ..., "signature_hex": ...}` body.
+- [x] Internally: POST `{rpc_url}/wallet/broadcasthex` with `{"transaction": "<full-TronTransaction-envelope-hex>"}` body (REVISED 2026-09-06 per PR #541, issue #540). The full envelope = `SignedTransaction::signed_envelope_hex` from `tx/sign.rs::sign_tx`. (Was: `/wallet/broadcasttransaction` with `{"raw_data_hex", "signature_hex"}` split — caused NPE on TronGrid Java gateway, root-caused 2026-09-06.)
 - [x] Reuse `SpkiPinnedVerifier` from `bitcoin-wallet-core::chain::spki` when `spki_pin` is `Some`.
 
 #### Task 2.4 — `walletsolidity/getnowblock` for TAPOS
@@ -862,7 +866,7 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 - [ ] **Task 2.8 — `no_pin_localhost_tronbox_succeeds`**: integrated with the Phase 4 spike V7 (`testcontainers` + TronBox); the env-gated stub in `tests/v7_spki_pin.rs` is replaced by a `reqwest` call against `http://127.0.0.1:<port>/walletsolidity/getnowblock` (`TronGridClient::new(url, None)` path). Requires `desktop-tests` feature + `testcontainers` already shipped in v0.0.
 - [ ] **Phase 2 Verification — live Nile broadcast of 1 TRX to a recipient**: run the `examples/send_one_trx.rs` (or its Phase 3 successor) with `RUN_TRON_NILE=1` + the Nile pin in scope. Receipt must come back `SUCCESS`. Owner: operator.
 
-> **BLOCKED 2026-09-06 — #540: anychain-tron 0.2.14 emits non-canonical varint for `fee_limit`, breaks `wallet/broadcasttransaction` against TronGrid with NPE.** Sender funded (100 TRX + 61.5 USDT on Nile, faucet at `nileex.io/join/getJoinPage`); `tests/v10_broadcast.rs::live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile` re-run replays the bytes via raw curl and reproduces the same `{"Error":"class java.lang.NullPointerException : null"}`. Root cause: spurious `0x01` byte prepended to the canonical `fee_limit` varint in `anychain-tron 0.2.14`'s `Raw` serialization, so TronGrid's Java parser reads `fee_limit = 1` + unknown field 16. Live broadcast path (this checkbox + Q4 mainnet smoke gate) cannot close until upstream `0xcregis/anychain` ships a fix OR `tx/sign.rs::sign_tx` post-processes `raw_data_hex` to drop the stray byte. See issue body for observed/expected bytes and Python cross-check.
+> **UNBLOCKED 2026-09-06 per PR #541 — actual fix was the broadcast endpoint switch, not the varint hypothesis.** Original hypothesis (anychain-tron `0.2.14` emits non-canonical varint for `fee_limit`, breaks `wallet/broadcasttransaction` against TronGrid with NPE) was DISPROVED by live broadcast investigation 2026-09-06: BOTH the 6-byte form (`90 01 80 c9 fe 3d`) AND the 5-byte canonical form (`90 80 c9 fe 3d`) FAIL against TronGrid — NPE on `/wallet/broadcasttransaction`, `InvalidProtocolBufferException` on `/wallet/broadcasthex`. Actual fix (PR #541): switch broadcast endpoint to `/wallet/broadcasthex` with single-blob `{transaction: "<full-envelope-hex>"}` body. Nile txid `3cb6657601449ccca510949f025bdf8de186aac1ea291d091c8148fe05c08e74` accepted. Q13 varint patch was REVERTED before this amendment; vendored `Tron.rs` left unmodified. Sender funded (100 TRX + 61.5 USDT on Nile, faucet at `nileex.io/join/getJoinPage`); `tests/v10_broadcast.rs::live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile` re-run replays the bytes via raw curl to `/wallet/broadcasthex` and returns `{"result":true,"txid":"<…>"}`. Live broadcast path (this checkbox + Q4 mainnet smoke gate) closes against `/wallet/broadcasthex`. Audit + drift document: issue #542.
 
 #### Task 3.1 — Wrap `anychain_tron::trx::build_trc20_transfer_contract`
 
@@ -992,7 +996,7 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 | 5 | Stake 2.0 freeze/unfreeze | `tron stake freeze --amount 1000000000 --unit sun` (V0.1.5) | tx accepted; resource query shows frozen balance |
 | 6 | Insufficient balance | `tron trc20 send ... --amount 999999999` | tx REVERTED with explicit error (exit code 5) |
 | 7 | Send-speedup (RBF) | `tron wallet send-speedup --wallet-id ... --txid <stuck> --fee-limit 200000000` | new tx accepted with higher `fee_limit`; original tx shows superseded |
-| 7a | **Send-speedup rebroadcast semantics** (Round-1 grill Q10) | Verify `wallet/broadcasttransaction` idempotency: rebroadcast identical `(raw_bytes)` after 60s window — accepted/ignored/error? If accepted, speedup = rebroadcast + new fee_limit via new timestamp. If rejected, document "speedup not possible after window", remove `send-speedup` from v0.1. Block on this before row 7 ships. | node behavior recorded in `spikes/tron-v1/V7-speedup.md` |
+| 7a | **Send-speedup rebroadcast semantics** (Round-1 grill Q10) | Verify `/wallet/broadcasthex` idempotency (endpoint per PR #541 amendment): rebroadcast identical `(full-envelope-hex)` after 60s window — accepted/ignored/error? If accepted, speedup = rebroadcast + new fee_limit via new timestamp. If rejected, document "speedup not possible after window", remove `send-speedup` from v0.1. Block on this before row 7 ships. | node behavior recorded in `spikes/tron-v1/V7-speedup.md` |
 | 8 | Wallet-to-wallet TRC-20 | `tron wallet send --wallet-id "$HOT" --to-wallet cold --contract "$MOCK_USDT" --amount 100` | resolves `cold` wallet name → address via `WalletManager::lookup()`; tx accepted |
 
 #### Task 4.3 — CI integration: `tron-integration.yml`
@@ -1326,7 +1330,7 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Files:** `spikes/tron-v1/tests/v7a_send_speedup.rs`
 
-- [ ] Verify `wallet/broadcasttransaction` idempotency: rebroadcast identical `(raw_bytes)` after 60s window — accepted/ignored/error?
+- [ ] Verify `/wallet/broadcasthex` idempotency (REVISED 2026-09-06 per PR #541): rebroadcast identical `(full-envelope-hex)` after 60s window — accepted/ignored/error?
 - [ ] If accepted → speedup = rebroadcast + new fee_limit via new timestamp.
 - [ ] If rejected → document "speedup not possible after window", remove `send-speedup` from v0.1.
 - [ ] Record node behavior in `spikes/tron-v1/V7a-speedup.md`.
@@ -1450,7 +1454,7 @@ Per issue #399: "All 10 open questions either answered (with chosen path + ratio
 
 | Q | Resolution | Source |
 |---|------------|--------|
-| Q1 | anychain-tron 0.2.14 + anychain-kms 0.1.23 + anychain-core 0.1.8, **vendored** under `rust-wallet-app/crates/anychain-vendored/` (REVISION 2026-09-06) | Round-1 grill + ADR-0001 + issue #540 |
+| Q1 | `anychain-{core,tron,kms}` @ `cf3aa2d59afb2c50dc961919fca011c401238ed6` (HEAD of upstream `main`, 2026-09-04), **vendored** under `rust-wallet-app/crates/anychain-vendored/` (REVISION 2026-09-06); upstream tags `v0.1.8`/`v0.2.14`/`v0.1.23` do NOT exist on remote | Round-1 grill + ADR-0001 + issue #540 |
 | Q2 | Protobuf via vendored `anychain-tron` types + dual-SHA256 txid fix in vendored copy (Task 0.7) | Round-1 grill Q2 (revised 2026-09-06) |
 | Q3 | **Vendored** — bus-factor mitigated by local copy (REVISION 2026-09-06, was REJECTED 2026-09-05) | Round-1 grill Q3 + issue #540 |
 | Q4 | Mainnet self-send gate `$0.001 USDT` (unblocked 2026-09-06 by Q13 varint fix) | Round-1 grill Q4 |
@@ -1462,7 +1466,7 @@ Per issue #399: "All 10 open questions either answered (with chosen path + ratio
 | Q10 | SLIP-44 coin 195, path m/44'/195'/0'/0/0 | deep-dive Q10 |
 | Q11 | Stake 1.0 deferred; Stake 2.0 only | Round-1 grill Q11 |
 | Q12 | Disambiguation guards | Round-1 grill Q12 |
-| Q13 | **NEW 2026-09-06** — varint fix in vendored copy (Task 0.7); `fee_limit = 130_000_000` encodes canonically `9080c9fe3d` not `900180c9fe3d`; regression test in `tests/varint_and_txid.rs` | Issue #540 |
+| Q13 | **REVISED 2026-09-06 per PR #541** — original hypothesis (varint fix in vendored copy) DISPROVED; actual fix was the broadcast endpoint switch to `/wallet/broadcasthex`. Q13 varint patch REVERTED before this amendment; vendored `Tron.rs` left unmodified. Regression test `tests/varint_and_txid.rs::fee_limit_canonical_varint` now pins the standard 6-byte form (`90 01 80 c9 fe 3d`) as the baseline (test comments explain 5-byte form is impossible for tag 18). | Issue #540 + audit issue #542 |
 
 **#399 closes when:** Phases 0-6 complete + V11 mainnet self-send PASS + Round-1 grill Q8 audit (every "Status: ready" row verified against Vn spike PASS block). Q13 regression test in Task 0.7 must PASS before #399 can close.
 

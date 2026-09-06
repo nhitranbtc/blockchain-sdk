@@ -19,7 +19,7 @@ Plan amendment deferred (post-Phase 0).
 
 ## Source path
 
-Files copied from `/anychain/crates/anychain-core/src/**` at commit `cf3aa2d`
+Files copied from `.local/anychain/crates/anychain-core/src/**` at commit `cf3aa2d`
 (repo at repo root, kept as read-only reference for inspection; not used by
 consumer builds).
 
@@ -35,8 +35,8 @@ Zeroizing gap) layered on top per `CHANGELOG.md` (Task 0.7).
 
 ## Upstream tracking
 
-Upstream is not pinned in git; the `/anychain` working copy at repo root serves
+Upstream is not pinned in git; the `.local/anychain` working copy under `.local/` serves
 as the inspection mirror. Quarterly sync cadence per plan Q3 (revised 2026-09-06):
-fetch `/anychain` from `origin`, manually diff against `crates/anychain-vendored/`,
+fetch `.local/anychain` from `origin`, manually diff against `crates/anychain-vendored/`,
 gate on (a) no breaking wire-format change, (b) regression tests PASS, (c) manual
 review.
