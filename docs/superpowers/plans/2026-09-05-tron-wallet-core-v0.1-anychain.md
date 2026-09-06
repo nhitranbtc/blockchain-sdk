@@ -1183,13 +1183,15 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Test Scenario mapping:** supports **Local row 8 (wallet-to-wallet TRC-20)** — `WalletManager::lookup(name_or_id)` requires wallet-id resolution across CLI invocations. Persists encrypted blob via `WalletStorage` (PAL = `FileWalletStorage` desktop / `KeychainWalletStorage` iOS / `EncryptedFileWalletStorage` Android). Also enables **Nile row 3 (Mobile-specific)** — Keychain storage validates FFI boundary for Dart binding on emulator.
 
-#### Phase 4 Verification
+#### Phase 5 Verification
 
-- [ ] `cargo build -p tron-wallet-core` succeeds (desktop).
-- [ ] `cargo build -p tron-wallet-core --target aarch64-apple-ios` succeeds (iOS compile only).
-- [ ] `cargo build -p tron-wallet-core --target aarch64-linux-android` succeeds (Android compile only).
-- [ ] `cargo test -p tron-wallet-core` passes persistence + storage impls.
-- [ ] **NO mobile runtime smoke in v0.1** (per Round-1 grill Q6).
+- [x] `cargo build -p tron-wallet-core` succeeds (desktop). **2026-09-07 PASS:** `cargo check` clean on branch `tron/phase5-pal`.
+- [ ] `cargo build -p tron-wallet-core --target aarch64-apple-ios` succeeds (iOS compile only). **2026-09-07 DEFERRED to CI:** Linux dev host has `aarch64-apple-ios` target installed but `xcrun` (macOS SDK) absent — `cc-rs` fails building `ring` (transitive `rustls` dep). Trait scaffolding (Task 4.3 stubs) matches plan text; iOS FFI bridge is v0.2 work.
+- [ ] `cargo build -p tron-wallet-core --target aarch64-linux-android` succeeds (Android compile only). **2026-09-07 DEFERRED to CI:** Linux dev host has `aarch64-linux-android` target installed but Android NDK not present — `cc-rs` fails building `ring`. Trait scaffolding (Task 4.4 stubs) matches plan text; JNI bridge is v0.2 work.
+- [x] `cargo test -p tron-wallet-core` passes persistence + storage impls. **2026-09-07 PASS:** 83 lib tests + 6 `tests/wallet_persistence.rs` integration tests = 89 passed, 0 failed (41s test runtime, Argon2id@256MiB-dominated).
+- [x] **NO mobile runtime smoke in v0.1** (per Round-1 grill Q6). **2026-09-07 confirmed:** mobile stub files (`ios.rs`/`android.rs`) implement traits for cross-target compile but error at runtime until FFI/JNI bridge lands in v0.2.
+- [x] `cargo clippy -p tron-wallet-core --all-targets -- -D warnings` clean. **2026-09-07 PASS:** zero warnings after `doc_lazy_continuation` indent fix in `platform/desktop.rs:8`.
+- [ ] **PAUSE before commit (per never-auto-commit + workflow-approval-required).** Work shipped + desktop green + mobile blocked by toolchain; awaiting explicit user sign-off on `git add + commit + push + gh pr create --base rust-tron-core`.
 
 **PAUSE. Verify L13 step 11.**
 

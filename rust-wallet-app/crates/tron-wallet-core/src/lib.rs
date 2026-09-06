@@ -33,15 +33,21 @@
 pub mod address;
 pub mod chain;
 pub mod config;
+pub mod crypto;
 pub mod disambig;
 pub mod error;
 pub mod keys;
+pub mod platform;
 pub mod resource;
 pub mod tokens;
 pub mod trc20;
 pub mod tx;
+pub mod wallet;
 
 pub use error::{Error, Result};
 
 pub use chain::{SpkiPin, SpkiPinnedVerifier, TronGridClient};
 pub use config::{Network, TronConfig};
+pub use crypto::{decrypt, encrypt, EncryptedWallet};
+pub use platform::{Clock, NetworkClient, PlatformInfo, WalletStorage};
+pub use wallet::{WalletId, WalletManager};
