@@ -15,6 +15,9 @@ pub const TRANSFER_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
 /// `balanceOf(address owner)` selector = 0x70a08231.
 pub const BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
 
+/// `approve(address,uint256)` selector = 0x095ea7b3.
+pub const APPROVE_SELECTOR: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
+
 /// `decimals()` selector = 0x313ce567.
 pub const DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
 
