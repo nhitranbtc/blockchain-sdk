@@ -6560,10 +6560,18 @@ dependencies = [
  "anychain-tron",
  "hex",
  "proptest",
+ "reqwest 0.12.28",
+ "rustls 0.23.43",
+ "rustls-native-certs 0.7.3",
+ "serde",
+ "serde_json",
  "sha2 0.10.9",
+ "subtle",
  "tempfile",
  "testcontainers",
  "thiserror 1.0.69",
+ "tokio",
+ "webpki",
  "zeroize",
 ]
 
