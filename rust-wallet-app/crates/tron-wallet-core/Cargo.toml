@@ -64,6 +64,24 @@ x509-parser = { workspace = true }
 # the mobile compile-only and lean CI jobs never pull the Docker client stack.
 testcontainers = { version = "0.23", optional = true }
 
+# Phase 5 — at-rest encryption for wallet blobs (Task 4.7).
+# `argon2` derives the AES key (m=256MiB / t=10 / p=4 per F5), `aes-gcm`
+# is the AEAD primitive for the per-blob blob, `rand` powers
+# `OsRng`-backed salt + nonce generation.
+argon2 = { workspace = true }
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+
+# Phase 5 — UUID v4 for `WalletId`. Re-exported through `serde`'s
+# `v4, serde` features already declared in workspace deps.
+uuid = { workspace = true }
+
+# Phase 5 — desktop-only filesystem dir resolution (SystemDirsInfo
+# platform impl). Gated out for v0.1.5 mobile via cfg-attr on the
+# `desktop` module, but the workspace dep is here so the desktop
+# impl compiles without a features gate today.
+directories = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = { workspace = true }

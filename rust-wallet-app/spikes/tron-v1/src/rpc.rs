@@ -30,17 +30,26 @@ pub struct JsonRpcResponse<T> {
     pub error: Option<serde_json::Value>,
 }
 
-/// SPKI-pinned JSON-RPC client to a TronGrid endpoint (Nile or mainnet).
+/// JSON-RPC client to a TronBox (local, plain HTTP) or TronGrid (remote, TLS)
+/// endpoint.
 ///
-/// Constructed from a `pinned://<pin-hex>@host[:port]` URL per plan §Q7. The
-/// pin is the SHA-256 of the DER-encoded SubjectPublicKeyInfo of the host's
-/// TLS certificate, lower-case hex. All outbound HTTP requests pass through
-/// the SPKI pin verifier (V7 cross-crate reuse).
+/// Constructed from either:
+/// - `pinned://<pin-hex>@host[:port]` — SPKI-pinned TLS, used for Nile/mainnet
+///   per plan §Q7. Pin is SHA-256 of DER SubjectPublicKeyInfo, lowercase hex.
+/// - `http://host[:port]` — plain-HTTP local TronBox (Phase 4 testcontainers
+///   integration); no SPKI pin (loopback is implicitly trusted).
+///
+/// All outbound HTTP requests pass through whatever verification was wired at
+/// construction time. For pinned clients, the rustls verifier enforces
+/// `bitcoin_wallet_core::chain::spki::SpkiPinnedVerifier` (V7 cross-crate
+/// reuse). For local clients, default webpki roots + loopback trust applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonRpcClient {
     pub host: String,
     pub port: u16,
     pub pin_hex: String,
+    /// `"https"` for pinned, `"http"` for local TronBox.
+    pub scheme: String,
 }
 
 /// Errors that can surface from `JsonRpcClient::new_pinned`.
@@ -58,6 +67,8 @@ pub enum ClientParseError {
     EmptyHost,
     /// Port was not a valid `u16`.
     BadPort,
+    /// `new_local` URL did not start with `http://` (use `new_pinned` for HTTPS).
+    LocalMustBeHttp,
 }
 
 impl std::fmt::Display for ClientParseError {
@@ -69,6 +80,9 @@ impl std::fmt::Display for ClientParseError {
             Self::BadPin => "pin must be 64 lowercase hex chars (SHA-256 of SPKI)",
             Self::EmptyHost => "host section after `@` must be non-empty",
             Self::BadPort => "port must be a valid u16",
+            Self::LocalMustBeHttp => {
+                "new_local URL must start with `http://` (use new_pinned for HTTPS)"
+            }
         };
         f.write_str(s)
     }
@@ -158,12 +172,47 @@ impl JsonRpcClient {
             host,
             port,
             pin_hex: pin_hex.to_string(),
+            scheme: "https".to_string(),
         })
     }
 
-    /// Base URL with scheme. Defaults to HTTPS since TronGrid endpoints are TLS.
+    /// Construct a plain-HTTP client for a local TronBox node (Phase 4
+    /// testcontainers integration). Loopback is trusted implicitly — no SPKI
+    /// pin is required or accepted.
+    ///
+    /// Accepts `http://host[:port]` (defaults to port 9090, the
+    /// `tronbox/tre` default). HTTPS URLs are rejected with
+    /// [`ClientParseError::LocalMustBeHttp`] — use [`Self::new_pinned`] for
+    /// remote TLS endpoints.
+    pub fn new_local(url: &str) -> Result<Self, ClientParseError> {
+        let rest = url
+            .strip_prefix("http://")
+            .ok_or(ClientParseError::LocalMustBeHttp)?;
+
+        if rest.is_empty() {
+            return Err(ClientParseError::EmptyHost);
+        }
+
+        let (host, port) = match rest.rsplit_once(':') {
+            Some((h, p)) => {
+                let port: u16 = p.parse().map_err(|_| ClientParseError::BadPort)?;
+                (h.to_string(), port)
+            }
+            None => (rest.to_string(), 9090),
+        };
+
+        Ok(Self {
+            host,
+            port,
+            pin_hex: String::new(),
+            scheme: "http".to_string(),
+        })
+    }
+
+    /// Base URL with scheme. `https` for pinned (TronGrid), `http` for local
+    /// TronBox.
     pub fn base_url(&self) -> String {
-        format!("https://{}:{}", self.host, self.port)
+        format!("{}://{}:{}", self.scheme, self.host, self.port)
     }
 
     /// POST `/wallet/triggerconstantcontract` with the given JSON body and

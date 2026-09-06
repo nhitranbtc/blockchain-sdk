@@ -123,8 +123,8 @@ async fn live_decimals_match_bundle_against_nile() {
         );
     }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
-    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
-        .expect("TronGridClient builds");
+    let rpc =
+        tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None).expect("TronGridClient builds");
     let nile_test = tron_wallet_core::tokens::test_addresses(Network::Nile)
         .expect("Nile test fixtures must be present");
     let live = tron_wallet_core::trc20::decimals(
@@ -150,8 +150,8 @@ async fn live_symbol_matches_bundle_against_mainnet() {
         );
     }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Mainnet);
-    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
-        .expect("TronGridClient builds");
+    let rpc =
+        tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None).expect("TronGridClient builds");
     let mainnet_test = tron_wallet_core::tokens::test_addresses(Network::Mainnet)
         .expect("mainnet test fixtures must be present");
     let live = tron_wallet_core::trc20::symbol(

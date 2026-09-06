@@ -34,6 +34,10 @@ hex = { workspace = true }
 # Bitcoin SPKI verifier (Q7 cross-crate reuse)
 bitcoin-wallet-core = { workspace = true }
 
+# TRON cross-crate reuse (Phase 4 §4.5 row_1 — live TRX native transfer mirror
+# of `tron-wallet-core/tests/v10_broadcast.rs::live_broadcast_trx_native_transfer_succeeds_on_nile`).
+tron-wallet-core = { workspace = true }
+
 # Serde (Q9 token registry JSON)
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -92,3 +96,13 @@ path = "tests/v9_token_registry.rs"
 [[test]]
 name = "v10_slip44"
 path = "tests/v10_slip44.rs"
+
+# Phase 4 §4.1-4.2 — TronBox local testnet integration (testcontainers).
+[[test]]
+name = "trc20_local"
+path = "tests/trc20_local.rs"
+
+# Phase 4 §4.4-4.5 — Nile testnet integration (operator-driven, gated).
+[[test]]
+name = "trc20_nile"
+path = "tests/trc20_nile.rs"

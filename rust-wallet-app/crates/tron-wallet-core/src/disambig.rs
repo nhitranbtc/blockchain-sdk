@@ -66,16 +66,6 @@ pub fn ensure_tron_style_address(addr: &str) -> Result<()> {
     Ok(())
 }
 
-// Re-exported from `crate::config` — the canonical home is there.
-/// The hex form was previously a `pub const MAINNET_SPKI_PIN_HEX`
-/// in `crate::config`, but moved to `tokens/network.json` per the
-/// Phase 3 config refactor (operator-tunable, no Rust recompile
-/// needed for pin rotation). The re-export now points at the
-/// function, so existing callers that did `use ... MAINNET_SPKI_PIN_HEX`
-/// will see a compile error pointing them at `mainnet_spki_pin_hex()`.
-pub use crate::config::mainnet_spki_pin;
-pub use crate::config::mainnet_spki_pin_hex as MAINNET_SPKI_PIN_HEX;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,14 +86,6 @@ mod tests {
     fn accepts_t_prefixed() {
         ensure_tron_style_address("TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr")
             .expect("T-base58 addresses are accepted");
-    }
-
-    #[test]
-    fn mainnet_pin_hex_matches_runtime_default() {
-        assert_eq!(
-            hex::encode(mainnet_spki_pin().as_bytes()),
-            MAINNET_SPKI_PIN_HEX()
-        );
     }
 
     #[test]

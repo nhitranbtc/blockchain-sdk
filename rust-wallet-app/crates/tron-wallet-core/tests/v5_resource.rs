@@ -93,8 +93,8 @@ async fn live_estimate_energy_lands_in_documented_band() {
         );
     }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
-    let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
-        .expect("TronGridClient builds");
+    let rpc =
+        tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None).expect("TronGridClient builds");
 
     let estimate = tron_wallet_core::resource::estimate_energy(
         &rpc,

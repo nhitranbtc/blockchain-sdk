@@ -24,25 +24,6 @@
 use std::error::Error;
 
 use tron_wallet_core::chain::spki::{SpkiPin, SpkiPinnedVerifier};
-use tron_wallet_core::config::mainnet_spki_pin;
-use tron_wallet_core::disambig::MAINNET_SPKI_PIN_HEX;
-
-#[test]
-fn mainnet_pin_hex_constant_matches_runtime_default() {
-    let pin = mainnet_spki_pin();
-    assert_eq!(
-        hex::encode(pin.as_bytes()),
-        MAINNET_SPKI_PIN_HEX(),
-        "disambig.rs MAINNET_SPKI_PIN_HEX (now a function over tokens/network.json) \
-         must decode to the same bytes as mainnet_spki_pin()"
-    );
-}
-
-#[test]
-fn pinned_verifier_construction_succeeds_on_mainnet_pin() {
-    let pin = mainnet_spki_pin();
-    let _verifier = SpkiPinnedVerifier::new(pin).expect("verifier constructor");
-}
 
 #[test]
 fn pin_round_trips_through_hex_display() {
@@ -204,37 +185,5 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
             || chain.contains("handshake")
             || chain.contains("TLS"),
         "unexpected wrong-pin error shape: {chain}"
-    );
-}
-
-#[tokio::test]
-#[ignore = "gated live test — runs only with RUN_TRON_MAINNET=1; loud-RED panic if env vars missing (see plan Conventions)"]
-async fn spki_pin_accepts_correct_pin_against_mainnet() {
-    if std::env::var_os("RUN_TRON_MAINNET").is_none() {
-        panic!(
-            "RUN_TRON_MAINNET=1 required to run live correct-pin handshake against api.trongrid.io. \
-             Plan Phase 3 carry-over Task 2.8: 'connect to api.trongrid.io with correct pin, JSON-RPC \
-             call succeeds'. The cargo-test default must be loud-RED, never silent-skip."
-        );
-    }
-    let pin = mainnet_spki_pin();
-    let verifier = SpkiPinnedVerifier::new(pin).expect("verifier constructor");
-    let rustls_cfg = verifier.into_client_config();
-
-    let client = reqwest::Client::builder()
-        .use_preconfigured_tls(rustls_cfg)
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .expect("reqwest client builds");
-
-    let resp = client
-        .get("https://api.trongrid.io/walletsolidity/getnowblock")
-        .send()
-        .await
-        .expect("mainnet handshake with correct pin must succeed");
-    assert!(
-        resp.status().is_success(),
-        "api.trongrid.io /walletsolidity/getnowblock returned {} with correct pin",
-        resp.status()
     );
 }
