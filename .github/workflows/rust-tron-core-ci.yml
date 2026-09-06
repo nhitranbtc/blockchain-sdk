@@ -193,16 +193,21 @@ jobs:
   # changes — this catches platform-incompatible deps (e.g. `directories`)
   # the moment they enter the tree, long before V0.1.5 needs them.
   #
-  # `cargo check` does not invoke a linker, so both targets are checkable
-  # from a Linux runner using the rustup-provided std. Runtime smoke on a
-  # real device is explicitly out of scope for v0.1 (deep-dive: mobile CI
-  # is compile-only; runtime smoke lands in v0.2 via Nile).
+  # `cargo check` does not invoke a linker, but iOS target builds with
+  # `ring` (rustls default crypto) need `xcrun` (macOS SDK tool) at the
+  # build step; only macos-* runners carry it. Android arm64 stays
+  # checkable from the same runner. Phase 2 failed run 34005032399 job
+  # 101410541738 on Linux for that exact reason; fixing here.
+  #
+  # Runtime smoke on a real device is explicitly out of scope for v0.1
+  # (deep-dive: mobile CI is compile-only; runtime smoke lands in v0.2
+  # via Nile).
   #
   # Skips cleanly until Phase 0 creates the crate, so the Phase Set Up
   # no-op PR can go green before any Rust code exists.
   mobile-check:
     name: Mobile compile-only (iOS + Android arm64)
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4  # v4
