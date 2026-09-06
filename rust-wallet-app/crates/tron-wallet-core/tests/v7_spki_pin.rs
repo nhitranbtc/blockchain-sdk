@@ -24,7 +24,7 @@
 use std::error::Error;
 
 use tron_wallet_core::chain::spki::{SpkiPin, SpkiPinnedVerifier};
-use tron_wallet_core::config::{mainnet_spki_pin, NILE_SPKI_PIN_ENV};
+use tron_wallet_core::config::mainnet_spki_pin;
 use tron_wallet_core::disambig::MAINNET_SPKI_PIN_HEX;
 
 #[test]
@@ -145,29 +145,6 @@ fn spki_pin_helper_hashes_only_the_spki_not_the_whole_cert() {
     );
     let _ = verifier_with_wrong_pin;
     let _ = verifier_with_right_pin;
-}
-
-#[tokio::test]
-async fn spki_pin_accepts_correct_pin_against_nile() {
-    if std::env::var_os("RUN_TRON_NILE").is_none() {
-        eprintln!(
-            "skipped: set RUN_TRON_NILE=1 (and the Nile pin via TON_NILE_SPKI_PIN_HEX) to run this"
-        );
-        return;
-    }
-
-    let hex_pin = std::env::var(NILE_SPKI_PIN_ENV)
-        .expect("RUN_TRON_NILE=1 set but TON_NILE_SPKI_PIN_HEX missing");
-    let raw = hex::decode(&hex_pin).expect("pin hex must be 32 bytes");
-    let pin = SpkiPin::from_bytes(raw.try_into().expect("32-byte pin"));
-
-    let _cfg = SpkiPinnedVerifier::new(pin)
-        .expect("verifier")
-        .into_client_config();
-
-    // The actual reqwest handshake assertion lives in Phase 4 spike V7.
-    // This test proves verifier construction against an operator-supplied
-    // pin.
 }
 
 #[tokio::test]
