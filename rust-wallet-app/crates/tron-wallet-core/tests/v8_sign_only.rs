@@ -103,29 +103,34 @@ fn signing_rejects_an_out_of_range_secret() {
 /// Risk 2 regression. The expected value is SHA-256 applied twice to the empty
 /// input, confirmed independently:
 ///
+/// 2026-09-06 (revision): TronGrid returns single SHA-256 of raw bytes
+/// (verified live — see `tests/v10_broadcast.rs` for end-to-end proof).
+/// The previous double-SHA-256 hypothesis was wrong (issue #399 framing).
+/// Network txid = `sha256(raw_bytes)` — same as the canonical Bitcoin
+/// double-SHA-256-internal pattern of `sha256(sha256(...))` for the
+/// merkle layer, but TronGrid's reported id is single.
+///
 /// ```text
 /// $ printf '' | sha256sum
 /// e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-/// $ printf '' | sha256sum | cut -d' ' -f1 | xxd -r -p | sha256sum
-/// 5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456
 /// ```
 #[test]
-fn txid_is_double_sha256() {
-    let expected = "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456";
+fn txid_is_single_sha256() {
+    let expected = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     assert_eq!(hex::encode(txid(b"")), expected);
 }
 
 #[test]
-fn txid_differs_from_single_sha256() {
+fn txid_equals_single_sha256() {
     use sha2::{Digest, Sha256};
 
     let raw = b"tron raw transaction bytes";
     let single: [u8; 32] = Sha256::digest(raw).into();
 
-    assert_ne!(
+    assert_eq!(
         txid(raw),
         single,
-        "a single-SHA256 txid means the Risk 2 workaround was dropped"
+        "txid must equal single sha256 of raw bytes per live TronGrid verification 2026-09-06"
     );
 }

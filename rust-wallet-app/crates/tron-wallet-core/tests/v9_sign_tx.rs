@@ -68,13 +68,14 @@ fn sign_tx_round_trip_yields_parseable_raw_data_hex() {
 }
 
 #[test]
-fn sign_tx_txid_matches_the_double_sha256_of_raw_bytes() {
-    // The Plan §Q2 (line 24) explicitly states that the network indexes
-    // `Txid = SHA256(SHA256(raw_data_hex))`, and that `anychain_tron` only
-    // returns single-SHA — so we compute the dual form locally. This test
-    // pins the local computation: a future refactor that changes `sign_tx`
-    // to single-SHA would break this assertion, surfacing the regression
-    // before a real broadcast.
+fn sign_tx_txid_matches_the_single_sha256_of_raw_bytes() {
+    // 2026-09-06 (revision): the Plan Q2 double-SHA-256 framing was wrong.
+    // Live broadcast verification on 2026-09-06 confirmed
+    // `sha256(raw_bytes) == network_reported_txid` — TronGrid returns the
+    // single SHA-256, matching upstream `to_transaction_id`. This test
+    // pins the local computation to single-SHA-256; a future refactor that
+    // changes `sign_tx` to double-SHA would break this assertion, surfacing
+    // the regression before a real broadcast.
     let contract = trx::build_transfer_contract(
         "TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr",
         "TFk5LfscQv8hYM11mZYmi3ZcnRfFc4LLap",
@@ -94,19 +95,18 @@ fn sign_tx_txid_matches_the_double_sha256_of_raw_bytes() {
     let signed = sign_tx(&test_secret(), &params).expect("sign_tx");
 
     let raw_bytes = hex::decode(&signed.raw_data_hex).expect("hex");
-    let expected_local: [u8; 32] = Sha256::digest(Sha256::digest(&raw_bytes)).into();
+    let expected_local: [u8; 32] = Sha256::digest(&raw_bytes).into();
     assert_eq!(
         signed.txid, expected_local,
-        "signed.txid MUST equal SHA256(SHA256(raw_bytes)) per plan Q2"
+        "signed.txid MUST equal sha256(raw_bytes) per live TronGrid verification 2026-09-06"
     );
 
-    // Sanity: that local id is NOT equal to the single-SHA variant
-    // anychain_tron produces — so a future anychain bump to "fix"
-    // `to_transaction_id` cannot silently make the locals match the
-    // network shape without a churn event here.
-    let single: [u8; 32] = Sha256::digest(&raw_bytes).into();
+    // Sanity: that local id is NOT equal to the double-SHA variant — so a
+    // future anychain bump to "fix" `to_transaction_id` cannot silently make
+    // the locals diverge from the network shape without a churn event here.
+    let doubled: [u8; 32] = Sha256::digest(Sha256::digest(&raw_bytes)).into();
     assert_ne!(
-        signed.txid, single,
+        signed.txid, doubled,
         "signed.txid equals single-SHA — plan Q2 workaround no longer needed?"
     );
 }

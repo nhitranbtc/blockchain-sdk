@@ -37,19 +37,20 @@ pub struct TronGridClient {
     http: reqwest::Client,
 }
 
-/// Body TronGrid expects at `wallet/broadcasttransaction`.
+/// Body TronGrid expects at `wallet/broadcasthex`.
 ///
-/// `raw_data_hex` and `signature_hex` are the two pieces a
-/// [`crate::tx::sign::SignedTransaction`] hands back. The wire envelope is
-/// what TronGrid inspects; we do not invent a different layout.
+/// `transaction` is the hex-encoded full `TronTransaction` envelope
+/// (raw_data + signature inside), the exact byte-exact payload that
+/// `anychain_tron::TronTransaction::sign(...)` returns. We use
+/// `/wallet/broadcasthex` (single-blob) rather than the older
+/// `/wallet/broadcasttransaction` (split-form raw_data_hex +
+/// signature_hex) because the split-form endpoint triggers a NPE in
+/// TronGrid's Java gateway for our wire format (see plan §Q13 +
+/// issue #540 investigation).
 #[derive(Debug, Serialize)]
 struct BroadcastBody<'a> {
-    #[serde(rename = "raw_data_hex")]
-    raw_data_hex: &'a str,
-    #[serde(rename = "signature_hex")]
-    signature_hex: &'a str,
-    #[serde(rename = "visible")]
-    visible: bool,
+    #[serde(rename = "transaction")]
+    transaction: &'a str,
 }
 
 impl TronGridClient {
@@ -82,22 +83,23 @@ impl TronGridClient {
         })
     }
 
-    /// `POST /wallet/broadcasttransaction`.
+    /// `POST /wallet/broadcasthex`.
     ///
     /// A `success = false` return on HTTP 200 happens when the node accepted
     /// the request but rejected the chain state (e.g. balance check). Both
     /// surfaces are surfaced as [`Error::Node`] with the `code` field
     /// embedded, so the caller can branch on `is_success` if they need to.
-    pub async fn broadcast(
-        &self,
-        raw_data_hex: &str,
-        signature_hex: &str,
-    ) -> Result<BroadcastReceipt> {
-        let url = format!("{}/wallet/broadcasttransaction", self.rpc_url);
+    ///
+    /// The single-blob `/wallet/broadcasthex` endpoint is preferred over the
+    /// split-form `/wallet/broadcasttransaction` because the split-form
+    /// endpoint triggers a NPE in TronGrid's Java gateway for our wire
+    /// format (plan §Q13 / issue #540). The full `TronTransaction`
+    /// envelope (`SignedTransaction::signed_envelope_hex`) is byte-exact
+    /// what TronGrid's parser expects.
+    pub async fn broadcast(&self, signed_envelope_hex: &str) -> Result<BroadcastReceipt> {
+        let url = format!("{}/wallet/broadcasthex", self.rpc_url);
         let body = BroadcastBody {
-            raw_data_hex,
-            signature_hex,
-            visible: false,
+            transaction: signed_envelope_hex,
         };
 
         let resp = self
