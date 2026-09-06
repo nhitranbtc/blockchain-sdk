@@ -78,10 +78,29 @@ jobs:
         working-directory: rust-wallet-app
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # Per-crate parallel matrix. Tron integration branch owns only tron
+  # crates; bitcoin/evm/polygon/eth test suites stay on the umbrella
+  # `ci.yml` and per-chain workflows (`rust-eth-core-ci.yml`,
+  # `evm-polygon-ci.yml`). This split (a) keeps tron PR turnaround
+  # ~5min faster than main-branch PRs, (b) sidesteps the 40-min GH
+  # default cap that the bitcoin crypto suite (Argon2id KDF x 18 tests
+  # at ~80s each) was tripping, and (c) gives fail-fast:false behaviour
+  # so a single crate regression doesn't hide the other crate's signal.
+  # Mirrors the `cd03724` workflow-split precedent.
   rust-test:
-    name: Rust test
+    name: Rust test (${{ matrix.crate }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: tron-wallet-core
+            command: cargo test -p tron-wallet-core --tests
+            timeout: 30
+          - crate: tron-v1-spike
+            command: cargo test -p tron-v1-spike --tests
+            timeout: 15
     steps:
       - uses: actions/checkout@v4  # v4
         with:
@@ -97,11 +116,14 @@ jobs:
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo build
+        # Workspace build so rust-cache warms all crates; the matrix entry
+        # then narrows to its own crate's tests. Build redundancy across
+        # matrix runners is the cost of parallelism (~5min x 2 runners).
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: cargo test
+      - name: cargo test (${{ matrix.crate }})
         working-directory: rust-wallet-app
-        run: cargo test --workspace --all-targets
+        run: ${{ matrix.command }}
 
   # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
   # (L13 step 11, 4th gate). Workspace-wide tree walks are slow, so this
