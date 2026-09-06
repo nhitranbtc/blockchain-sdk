@@ -43,3 +43,23 @@ exist on the upstream remote; vendored copy is sourced from
   now expected to fail against the patched code. See test references in
   `tests/varint_and_txid.rs::txid_is_double_sha256` for the new expected
   behavior.
+
+### Risk #3 — Zeroizing sk buffer in `secp256k1_sign` (plan Risk Register)
+
+- **What:** in `anychain-kms/src/lib.rs::secp256k1_sign`, the raw `sk` byte
+  slice is now copied into a `Zeroizing<[u8; 32]>` buffer for the function
+  body scope. `Zeroizing::Drop` overwrites the buffer on scope exit, closing
+  the post-sign key-residue window in the upstream implementation. (Plan
+  Task 0.7 box wording cited `src/sign.rs::secp256k1_sign`; actual location
+  is `src/lib.rs::secp256k1_sign` — captured as plan-vs-code deviation, not
+  blocking.)
+- **Why:** upstream `secp256k1_sign` accepted `&[u8]` and forwarded it to the
+  `secp256k1` crate's sign API, leaving a copy of the secret key material in
+  the caller's stack frame until the function returned. With long-lived
+  callers (HD-wallet child derivation, batch signing) this left key residue
+  in process memory after the API call returned. Risk Register item #3.
+- **Test:** `rust-wallet-app/crates/tron-wallet-core/tests/varint_and_txid.rs::secp256k1_sign_smoke_after_zeroizing_patch`
+  — sanity check that the patched path still produces a valid recoverable
+  signature. Caller-side `Zeroizing<Vec<u8>>` wrap (Risk #3 mitigation in
+  `tron-wallet-core::tx::sign` per Task 1.2) is layered on top of this
+  in-kms zeroize.

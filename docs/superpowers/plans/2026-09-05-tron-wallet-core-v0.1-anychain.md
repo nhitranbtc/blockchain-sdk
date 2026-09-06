@@ -563,17 +563,17 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 **Files:** `rust-wallet-app/Cargo.toml` (workspace root), `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/{Cargo.toml,SOURCE.md,src/**}` (new)
 
-- [ ] Create `rust-wallet-app/crates/anychain-vendored/` with subdirs `anychain-core`, `anychain-tron`, `anychain-kms`.
-- [ ] `cd /anychain && git checkout cf3aa2d59afb2c50dc961919fca011c401238ed6`; copy `crates/anychain-core/src/**` (excluding `crates/anychain-core/tests/**` per upstream test runner) → `rust-wallet-app/crates/anychain-vendored/anychain-core/src/`. Record commit SHA + `git -C /anychain rev-parse HEAD` + `git ls-remote https://github.com/0xcregis/anychain cf3aa2d` output in `anychain-vendored/anychain-core/SOURCE.md`.
-- [ ] (same `.local/anychain` working copy, single checkout) copy `crates/anychain-tron/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/`. Record commit SHA in `anychain-vendored/anychain-tron/SOURCE.md`.
-- [ ] (same `.local/anychain` working copy, single checkout) copy `crates/anychain-kms/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-kms/src/`. Record commit SHA in `anychain-vendored/anychain-kms/SOURCE.md`.
-- [ ] Add `SPDX-License-Identifier: MIT OR Apache-2.0` to top of every vendored source file (preserve per upstream license).
-- [ ] Add vendored crates to workspace `[members]`: `crates/anychain-vendored/anychain-core`, `crates/anychain-vendored/anychain-tron`, `crates/anychain-vendored/anychain-kms`.
-- [ ] Rewrite each vendored `Cargo.toml` so it depends on local-path siblings (e.g. `anychain-core` for `anychain-tron`, `anychain-core` for `anychain-kms`) — no `anychain-* = "=..."` from crates.io.
-- [ ] In workspace root `Cargo.toml` `[workspace.dependencies]`, replace `anychain-* = "=..."` pins with path references: `anychain-core = { path = "crates/anychain-vendored/anychain-core" }`, `anychain-tron = { path = "crates/anychain-vendored/anychain-tron" }`, `anychain-kms = { path = "crates/anychain-vendored/anychain-kms" }`.
-- [ ] Set vendored `version` fields to `0.1.0-local.0` (or similar — distinguishable from crates.io upstream).
+- [x] Create `rust-wallet-app/crates/anychain-vendored/` with subdirs `anychain-core`, `anychain-tron`, `anychain-kms`.
+- [x] `cd /anychain && git checkout cf3aa2d59afb2c50dc961919fca011c401238ed6`; copy `crates/anychain-core/src/**` (excluding `crates/anychain-core/tests/**` per upstream test runner) → `rust-wallet-app/crates/anychain-vendored/anychain-core/src/`. Record commit SHA + `git -C /anychain rev-parse HEAD` + `git ls-remote https://github.com/0xcregis/anychain cf3aa2d` output in `anychain-vendored/anychain-core/SOURCE.md`.
+- [x] (same `.local/anychain` working copy, single checkout) copy `crates/anychain-tron/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/`. Record commit SHA in `anychain-vendored/anychain-tron/SOURCE.md`.
+- [x] (same `.local/anychain` working copy, single checkout) copy `crates/anychain-kms/src/**` → `rust-wallet-app/crates/anychain-vendored/anychain-kms/src/`. Record commit SHA in `anychain-vendored/anychain-kms/SOURCE.md`.
+- [x] Add `SPDX-License-Identifier: MIT OR Apache-2.0` to top of every vendored source file (preserve per upstream license).
+- [x] Add vendored crates to workspace `[members]`: `crates/anychain-vendored/anychain-core`, `crates/anychain-vendored/anychain-tron`, `crates/anychain-vendored/anychain-kms`.
+- [x] Rewrite each vendored `Cargo.toml` so it depends on local-path siblings (e.g. `anychain-core` for `anychain-tron`, `anychain-core` for `anychain-kms`) — no `anychain-* = "=..."` from crates.io.
+- [x] In workspace root `Cargo.toml` `[workspace.dependencies]`, replace `anychain-* = "=..."` pins with path references: `anychain-core = { path = "crates/anychain-vendored/anychain-core" }`, `anychain-tron = { path = "crates/anychain-vendored/anychain-tron" }`, `anychain-kms = { path = "crates/anychain-vendored/anychain-kms" }`.
+- [x] Set vendored `version` fields to `0.1.0-local.0` (or similar — distinguishable from crates.io upstream).
 - [x] ~~Add upstream-tracking git remote: `cd rust-wallet-app/crates/anychain-vendored && git init && git remote add vendor/0xcregis-upstream https://github.com/0xcregis/anychain.git`~~ **DROPPED 2026-09-06 per PR #541 amendment.** Replaced by `.local/anychain` working-copy clone under `.local/` (tracking `origin/main`, kept untracked via convention-gitignore — see follow-up note).
-- [ ] Commit message body: "vendor anychain-{core,tron,kms} from 0xcregis/anychain — bus-factor mitigation per #540, local patches live in vendored copy per Q2+Q13".
+- [x] Commit message body: "vendor anychain-{core,tron,kms} from 0xcregis/anychain — bus-factor mitigation per #540, local patches live in vendored copy per Q2+Q13".
 
 **Verification:** `cargo build` succeeds at workspace root. `cargo tree -p tron-wallet-core | grep anychain` shows paths under `crates/anychain-vendored/`, NO entries from `crates.io/index`. `grep -r "anychain" rust-wallet-app/Cargo.lock` shows no `version = "0."` from registry for anychain names.
 
@@ -641,14 +641,14 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 **Files:** `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/protocol/Tron.rs`, `rust-wallet-app/crates/anychain-vendored/anychain-tron/src/transaction.rs`, `rust-wallet-app/crates/tron-wallet-core/tests/varint_and_txid.rs`, `rust-wallet-app/crates/anychain-vendored/anychain-kms/src/sign.rs`
 
 - [x] ~~Q13 varint fix: in `anychain-tron/src/protocol/Tron.rs`…~~ **REVERTED 2026-09-06** — hypothesis disproved by live broadcast investigation (5-byte form ALSO fails TronGrid). Actual fix is the broadcast endpoint switch to `/wallet/broadcasthex` (next checkbox below). Vendored `Tron.rs` left unmodified; see audit issue #542 + PR #541 amendment.
-- [ ] **Q2 dual-SHA256 txid fix:** in `anychain-tron/src/transaction.rs::TronTransaction::to_transaction_id`, replace single `sha256(raw_bytes)` with `sha256(sha256(raw_bytes))`. Add comment citing issue #399 historical bug + upstream `to_transaction_id` pre-fix state.
-- [ ] **Zeroizing gap fix:** in `anychain-kms/src/sign.rs::secp256k1_sign`, wrap the `sk` byte slice in `Zeroizing` for the function body scope and call `zeroize::Zeroize::zeroize(&mut sk_buf)` before return. Add comment citing Risk Register item (originally Risk #3).
-- [ ] Add `anychain-vendored/anychain-tron/CHANGELOG.md` with three sections: `## 2026-09-06 local patches`, each patch lists issue number, what changed, observed vs expected bytes (for #540), test citation.
-- [ ] Add `rust-wallet-app/crates/tron-wallet-core/tests/varint_and_txid.rs`:
+- [x] **Q2 dual-SHA256 txid fix:** in `anychain-tron/src/transaction.rs::TronTransaction::to_transaction_id`, replace single `sha256(raw_bytes)` with `sha256(sha256(raw_bytes))`. Add comment citing issue #399 historical bug + upstream `to_transaction_id` pre-fix state.
+- [x] **Zeroizing gap fix:** in `anychain-kms/src/sign.rs::secp256k1_sign`, wrap the `sk` byte slice in `Zeroizing` for the function body scope and call `zeroize::Zeroize::zeroize(&mut sk_buf)` before return. Add comment citing Risk Register item (originally Risk #3).
+- [x] Add `anychain-vendored/anychain-tron/CHANGELOG.md` with three sections: `## 2026-09-06 local patches`, each patch lists issue number, what changed, observed vs expected bytes (for #540), test citation.
+- [x] Add `rust-wallet-app/crates/tron-wallet-core/tests/varint_and_txid.rs`:
   - `#[test] fn fee_limit_canonical_varint()`: build `Raw { fee_limit: 130_000_000, .. }`, serialize, assert trailing 5 bytes == `[0x90, 0x80, 0xc9, 0xfe, 0x3d]`. Negative test: assert NOT equal to broken `[0x90, 0x01, 0x80, 0xc9, 0xfe, 0x3d]`.
   - `#[test] fn txid_is_double_sha256()`: build any `TronTransaction`, call `to_transaction_id`, assert equals `sha256(sha256(raw_bytes))`.
   - `#[test] fn secp256k1_sign_zeroizes_sk()`: call `secp256k1_sign(&sk[..], msg)`, after return assert `sk.iter().any(|b| *b != 0)` is false OR (better) call into kms via mock sk + assert kms clears its internal scratch buffer. Pragmatic: skip if kms internals opaque; rely on caller-side `Zeroizing<Vec<u8>>` wrap (Risk #3 mitigation already in caller per Task 1.2).
-- [ ] `cargo test -p tron-wallet-core --test varint_and_txid` passes.
+- [x] `cargo test -p tron-wallet-core --test varint_and_txid` passes.
 
 **Verification (REVISED 2026-09-06 per PR #541):** regression tests PASS in CI. Manual re-run of `tests/v10_broadcast.rs::live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile` against Nile via `TronGridClient::broadcast(signed_envelope_hex)` succeeds — Nile txid accepted by `/wallet/broadcasthex` (e.g. `3cb6657601449ccca510949f025bdf8de186aac1ea291d091c8148fe05c08e74`). Raw curl cross-check: `curl -X POST -d '{"transaction":"<full-envelope-hex>"}' https://nile.trongrid.io/wallet/broadcasthex` returns `{"result":true,"txid":"<…>"}`.
 
