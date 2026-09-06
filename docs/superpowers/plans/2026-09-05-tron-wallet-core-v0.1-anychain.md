@@ -745,8 +745,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 - [x] `cargo test -p tron-wallet-core --tests` passes (V2 + V7 + broadcast + get_tx_info).
 - [x] `cargo clippy -p tron-wallet-core -- -D warnings` passes.
-- [ ] Send 1 TRX from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`).
-- [ ] Send 1 TRX from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`).
+- [ ] ~~Send 1 TRX from test wallet to recipient via `TronGridClient::broadcast` (Nile, `RUN_TRON_NILE=1`).~~ **Moved to Phase 3 carry-over** (per `9930bf9`): the live-Nile broadcast and three related Phase 2 deferrals live in `### Phase 3 — carry-over from Phase 2` below.
 
 **PAUSE. Verify L13 step 11.**
 
@@ -755,6 +754,17 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 ### Phase 3 — TRC-20 + ABI + token registry
 
 **Goal:** `tron-wallet-core` sends USDT-TRC20 via `TriggerSmartContract` + reads balances via `wallet/triggerconstantcontract` + bundled token registry. **CI gate:** Spike V3 (TRC-20 ABI) + V9 (token registry) + V5 (resource model) PASS.
+
+#### Phase 3 carry-over from Phase 2 (per commit `9930bf9`)
+
+Five Phase 2 checkboxes were left unchecked because their evidence requires a live network or operator-driven spike V7; they migrate here rather than disappear. Each must close in Phase 3 (or be deferred again) before v0.1 ships.
+
+- [ ] **Task 2.6 — `TriggerSmartContract.data` at proto field 4**: write the Phase 3 TRC-20 `build_trc20_transfer_contract` against `anychain_tron::trx::trc20_transfer` and assert the encoded `TriggerSmartContract.data` field index is **4** (not 3). Native TRX tests don't exercise this path; closing this requires the TRC-20 fixture.
+- [ ] **Task 2.7 — `TronConfig::for_network(Network::Nile)` SPKI pin**: extract `nile.trongrid.io` leaf cert SPKI SHA-256 per the operator step in spike V7, then add the result to `default_spki_pin(Network::Nile)` and (optionally) ship a `constants::nile::SPKI_PIN_HEX`. Closed only by operator-supplied pin; `RUN_TRON_NILE=1` path requires it.
+- [ ] **Task 2.8 — `spki_pinned_endpoint_accepts_correct_pin` (live handshake vs `nile.trongrid.io`)**: replace the env-gated stub in `tests/v7_spki_pin.rs:spki_pin_accepts_correct_pin_against_nile` with an actual `reqwest::get("https://nile.trongrid.io/walletsolidity/getnowblock")` round trip using `SpkiPinnedVerifier::new(pin).into_client_config()` via `reqwest::ClientBuilder::use_preconfigured_tls(...)`. Required: `RUN_TRON_NILE=1` and the pin from the previous checkbox.
+- [ ] **Task 2.8 — `spki_pinned_endpoint_rejects_wrong_pin` (live wrong-pin handshake)**: sister test to the previous item: build `SpkiPinnedVerifier::new([0xff; 32])` against the same endpoint, assert the TLS handshake fails with `rustls::Error::General("spki pin mismatch ...")`. Live-with-rejection behaviour is what closes "Scenario A pin enforcement is real, not dead"; unit-only tests cannot prove it.
+- [ ] **Task 2.8 — `no_pin_localhost_tronbox_succeeds`**: integrated with the Phase 4 spike V7 (`testcontainers` + TronBox); the env-gated stub in `tests/v7_spki_pin.rs` is replaced by a `reqwest` call against `http://127.0.0.1:<port>/walletsolidity/getnowblock` (`TronGridClient::new(url, None)` path). Requires `desktop-tests` feature + `testcontainers` already shipped in v0.0.
+- [ ] **Phase 2 Verification — live Nile broadcast of 1 TRX to a recipient**: run the `examples/send_one_trx.rs` (or its Phase 3 successor) with `RUN_TRON_NILE=1` + the Nile pin in scope. Receipt must come back `SUCCESS`. Owner: operator.
 
 #### Task 3.1 — Wrap `anychain_tron::trx::build_trc20_transfer_contract`
 
