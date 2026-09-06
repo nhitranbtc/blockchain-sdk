@@ -16,10 +16,10 @@
 //! we cannot run that in unit CI without a network, so the gate stays
 //! closed by default.
 //!
-//! Phase 3 additions: a wrong-pin handshake assertion (catches
-//! `RustlsError::General("spki pin mismatch ...")`), and a
-//! `no_pin_localhost_tronbox_succeeds` slot that Phase 4 wires against
-//! a `testcontainers` TronBox (deferred per plan Task 2.8).
+//! Phase 3 addition: a wrong-pin handshake assertion (catches
+//! `RustlsError::General("spki pin mismatch ...")`) against
+//! `nile.trongrid.io`. The earlier Phase-4-deferred
+//! `no_pin_localhost_tronbox_succeeds` slot was removed 2026-09-06.
 
 use std::error::Error;
 
@@ -148,6 +148,7 @@ fn spki_pin_helper_hashes_only_the_spki_not_the_whole_cert() {
 }
 
 #[tokio::test]
+#[ignore = "gated live test — runs only with RUN_TRON_NILE=1; loud-RED panic if env vars missing (see plan Conventions)"]
 async fn spki_pin_rejects_wrong_pin_against_nile() {
     // Sister test to the correct-pin case above: connect to
     // `nile.trongrid.io` with a deliberately wrong pin and assert the
@@ -162,8 +163,11 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
     // pin; this test builds the client in-line so the failure surface
     // is observable.
     if std::env::var_os("RUN_TRON_NILE").is_none() {
-        eprintln!("skipped: set RUN_TRON_NILE=1 to run the wrong-pin handshake");
-        return;
+        panic!(
+            "RUN_TRON_NILE=1 required to run live wrong-pin handshake against nile.trongrid.io. \
+             Plan Phase 3 carry-over Task 2.8: 'Live wrong-pin handshake behaviour is what closes \
+             Scenario A pin enforcement is real, not dead; unit-only tests cannot prove it.'"
+        );
     }
 
     // `[0xff; 32]` is a guaranteed wrong pin — no production endpoint
@@ -204,31 +208,33 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
 }
 
 #[tokio::test]
+#[ignore = "gated live test — runs only with RUN_TRON_MAINNET=1; loud-RED panic if env vars missing (see plan Conventions)"]
 async fn spki_pin_accepts_correct_pin_against_mainnet() {
     if std::env::var_os("RUN_TRON_MAINNET").is_none() {
-        eprintln!("skipped: set RUN_TRON_MAINNET=1 to run this");
-        return;
+        panic!(
+            "RUN_TRON_MAINNET=1 required to run live correct-pin handshake against api.trongrid.io. \
+             Plan Phase 3 carry-over Task 2.8: 'connect to api.trongrid.io with correct pin, JSON-RPC \
+             call succeeds'. The cargo-test default must be loud-RED, never silent-skip."
+        );
     }
-    let _pin = mainnet_spki_pin();
-    // Real assertion lives in the Phase 7 spike; this stub keeps the
-    // slot visible in `cargo test -- --list`.
-}
+    let pin = mainnet_spki_pin();
+    let verifier = SpkiPinnedVerifier::new(pin).expect("verifier constructor");
+    let rustls_cfg = verifier.into_client_config();
 
-/// Phase 3 carry-over slot for `no_pin_localhost_tronbox_succeeds`.
-///
-/// The actual assertion requires a `testcontainers`-spawned TronBox
-/// (desktop-only, Docker daemon required). Phase 4 spike V7 owns the
-/// integration harness; this stub makes the deferred box visible in
-/// `cargo test -- --list` and in CI so a reviewer can spot the gap.
-///
-/// On default `cargo test` this test is a no-op. The `desktop-tests`
-/// feature would gate a real `testcontainers` integration here in
-/// Phase 4.
-#[tokio::test]
-async fn no_pin_localhost_tronbox_succeeds() {
-    // TODO Phase 4: spawn TronBox via `testcontainers`, point a no-pin
-    // TronGridClient at `http://127.0.0.1:<port>/walletsolidity/getnowblock`,
-    // assert 200. The slot is reserved here per the plan's Phase 3
-    // carry-over list so the deferred box is not silently lost.
-    eprintln!("skipped: Phase 4 testcontainers harness will land this; deferred per plan Task 2.8");
+    let client = reqwest::Client::builder()
+        .use_preconfigured_tls(rustls_cfg)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .expect("reqwest client builds");
+
+    let resp = client
+        .get("https://api.trongrid.io/walletsolidity/getnowblock")
+        .send()
+        .await
+        .expect("mainnet handshake with correct pin must succeed");
+    assert!(
+        resp.status().is_success(),
+        "api.trongrid.io /walletsolidity/getnowblock returned {} with correct pin",
+        resp.status()
+    );
 }

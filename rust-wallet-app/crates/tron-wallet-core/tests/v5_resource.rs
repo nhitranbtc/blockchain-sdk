@@ -79,6 +79,7 @@ fn recommended_fee_limit_at_max_dem_never_underflows() {
 }
 
 #[tokio::test]
+#[ignore = "gated live test — runs only with RUN_TRON_NILE=1; loud-RED panic if env vars missing (see plan Conventions)"]
 async fn live_estimate_energy_lands_in_documented_band() {
     // Live against Nile USDT. Held-recipient transfers cost ~65 000
     // Energy; empty-recipient transfers cost ~130 000. Either end of
@@ -86,8 +87,10 @@ async fn live_estimate_energy_lands_in_documented_band() {
     // value, because the network's exact figure depends on the current
     // DEM cycle.
     if std::env::var_os("RUN_TRON_NILE").is_none() {
-        eprintln!("skipped: set RUN_TRON_NILE=1 to run this live check");
-        return;
+        panic!(
+            "RUN_TRON_NILE=1 required to run live USDT-TRC20 energy estimate against nile.trongrid.io. \
+             Plan Phase 3 Task 3.8 — live band check is the Spike V5 evidence gate."
+        );
     }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
     let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)

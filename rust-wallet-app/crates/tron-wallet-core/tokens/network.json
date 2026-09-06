@@ -9,7 +9,7 @@
   },
   "nile": {
     "rpc_url": "https://nile.trongrid.io",
-    "spki_pin_hex": null
+    "spki_pin_hex": "e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f"
   },
   "local": {
     "rpc_url": "http://127.0.0.1:8090",

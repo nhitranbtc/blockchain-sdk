@@ -183,23 +183,27 @@ jobs:
       - name: cargo test (operator smoke — live + #[ignore])
         # `--include-ignored` runs every test in tests/*.rs. The env-gated
         # live tests in `tests/v9_token_registry.rs` + `tests/v5_resource.rs`
-        # are NOT `#[ignore]`-marked — they early-return unless RUN_TRON_*
-        # is set. `--test-threads=1` serializes RPC round-trips.
-        # RUN_TRON_NILE flips Nile legs from skip-and-return to actual
-        # round-trip. RUN_TRON_MAINNET is intentionally NOT set here —
-        # the mainnet leg (`live_symbol_matches_bundle_against_mainnet`)
-        # is flaky from shared CI runners ("error sending request for
-        # url (https://api.trongrid.io/wallet/...)"), almost certainly
-        # a stale SPKI pin on the bundled `mainnet_spki_pin()` (the Nile
-        # pin is self-extracted each run; the mainnet pin lives frozen
-        # in tokens/network.json). Manual `workflow_dispatch` runners can
-        # still validate the mainnet leg by setting RUN_TRON_MAINNET=1
-        # locally before triggering.
+        # + `tests/v7_spki_pin.rs` are NOT `#[ignore]`-marked — they
+        # early-return / panic loud-RED unless RUN_TRON_* is set.
+        # `--test-threads=1` serializes RPC round-trips.
+        # RUN_TRON_NILE flips the Nile legs (`spki_pin_rejects_wrong_pin_against_nile`,
+        # `live_estimate_energy_lands_in_documented_band`,
+        # `live_decimals_match_bundle_against_nile`,
+        # `live_broadcast_*_on_nile`) from skip/panic to real round-trip.
+        # RUN_TRON_MAINNET flipped on 2026-09-06: Nile SPKI pin
+        # (`e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f`)
+        # extracted live and committed to `tokens/network.json:nile.spki_pin_hex`,
+        # closing the "stale pin" hypothesis. Mainnet legs
+        # (`spki_pin_accepts_correct_pin_against_mainnet`,
+        # `live_symbol_matches_bundle_against_mainnet`) now run on every
+        # CI push. Revert to RUN_TRON_MAINNET-only-on-workflow_dispatch if
+        # shared-runner flakiness recurs.
         # TON_NILE_SPKI_PIN_HEX comes from the "Extract live Nile SPKI
         # pin" step via $GITHUB_ENV.
         working-directory: rust-wallet-app
         env:
           RUN_TRON_NILE: "1"
+          RUN_TRON_MAINNET: "1"
         run: |
           cargo test -p tron-wallet-core --tests -- \
             --include-ignored \

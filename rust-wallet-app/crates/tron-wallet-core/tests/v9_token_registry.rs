@@ -114,10 +114,13 @@ fn local_bundle_has_mockusdt_placeholder() {
 // --- GATED live checks (RUN_TRON_NILE=1 / RUN_TRON_MAINNET=1) ----------
 
 #[tokio::test]
+#[ignore = "gated live test — runs only with RUN_TRON_NILE=1; loud-RED panic if env vars missing (see plan Conventions)"]
 async fn live_decimals_match_bundle_against_nile() {
     if std::env::var_os("RUN_TRON_NILE").is_none() {
-        eprintln!("skipped: set RUN_TRON_NILE=1 to run this live check");
-        return;
+        panic!(
+            "RUN_TRON_NILE=1 required to run live Nile USDT decimals check. \
+             Plan Phase 3 Task 3.7 / Spike V9 — bundle value must match on-chain decimals."
+        );
     }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
     let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)
@@ -138,10 +141,13 @@ async fn live_decimals_match_bundle_against_nile() {
 }
 
 #[tokio::test]
+#[ignore = "gated live test — runs only with RUN_TRON_MAINNET=1; loud-RED panic if env vars missing (see plan Conventions)"]
 async fn live_symbol_matches_bundle_against_mainnet() {
     if std::env::var_os("RUN_TRON_MAINNET").is_none() {
-        eprintln!("skipped: set RUN_TRON_MAINNET=1 to run this live check");
-        return;
+        panic!(
+            "RUN_TRON_MAINNET=1 required to run live mainnet USDT symbol check. \
+             Plan Phase 3 Task 3.7 / Spike V9 — bundle symbol must match on-chain name."
+        );
     }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Mainnet);
     let rpc = tron_wallet_core::TronGridClient::new(&cfg.rpc_url, cfg.spki_pin)

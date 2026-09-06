@@ -337,14 +337,21 @@ mod tests {
         }
     }
 
-    /// The mainnet SPKI pin is the only one with a non-null value in
-    /// the JSON (Nile is operator-supplied, Shasta/Local have no
-    /// stable pin). This test pins that contract.
+    /// Mainnet AND Nile ship default SPKI pins in the JSON. Shasta
+    /// and Local have no stable pin (operator-supplied or test-only).
+    /// This test pins that contract as of 2026-09-06 when the Nile
+    /// pin was extracted live and committed to the JSON (Phase 3
+    /// carry-over Task 2.7 close).
     #[test]
-    fn only_mainnet_has_a_default_spki_pin_in_json() {
+    fn only_mainnet_and_nile_have_default_spki_pins_in_json() {
         let t = network_table();
         assert!(t[&Network::Mainnet].spki_pin_hex.is_some());
-        for n in [Network::Shasta, Network::Nile, Network::Local] {
+        assert!(
+            t[&Network::Nile].spki_pin_hex.is_some(),
+            "Nile ships with a SPKI pin now (live-extracted 2026-09-06, \
+             Phase 3 carry-over Task 2.7); the JSON must hold the pin"
+        );
+        for n in [Network::Shasta, Network::Local] {
             assert!(
                 t[&n].spki_pin_hex.is_none(),
                 "{n:?} ships a default SPKI pin — the JSON should mark it null \
