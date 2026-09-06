@@ -36,6 +36,22 @@ sha2 = { workspace = true }
 # Hex rendering for address round-trips and canonical-vector assertions.
 hex = { workspace = true }
 
+# Phase 2 — tx builder wrappers + tx/sign::sign_tx + chain::TronGridClient.
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+
+# Phase 2 — SPKI pin crypto (chain/spki.rs). rustls 0.23 + webpki 0.22 +
+# rustls-native-certs 0.7 + subtle 2 + x509-parser 0.16 — explicitly
+# pulled so an upstream bump cannot silently strip SPKI pinning from
+# our build. `x509-parser` is what extracts the SubjectPublicKeyInfo
+# BIT STRING per RFC 7469 from the leaf cert.
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+webpki = { workspace = true }
+subtle = { workspace = true }
+x509-parser = { workspace = true }
+
 # Docker-backed local-node tests (plan Task 0.5). Declared here rather than in
 # [dev-dependencies] because Cargo rejects optional dev-dependencies:
 #   "dev-dependencies are not allowed to be optional: `testcontainers`"
@@ -46,6 +62,7 @@ testcontainers = { version = "0.23", optional = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 # Gates tests that need a Docker daemon (local TRON node via testcontainers).

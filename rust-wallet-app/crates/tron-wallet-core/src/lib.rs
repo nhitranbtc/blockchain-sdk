@@ -31,8 +31,14 @@
 //! has to be maintained on this side of the boundary.
 
 pub mod address;
+pub mod chain;
+pub mod config;
+pub mod disambig;
 pub mod error;
 pub mod keys;
 pub mod tx;
 
 pub use error::{Error, Result};
+
+pub use chain::{SpkiPin, SpkiPinnedVerifier, TronGridClient};
+pub use config::{Network, TronConfig};

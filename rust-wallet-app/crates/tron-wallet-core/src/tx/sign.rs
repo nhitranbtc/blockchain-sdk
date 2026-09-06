@@ -12,8 +12,12 @@
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+use anychain_core::Transaction;
+use anychain_tron::TronTransaction;
+
 use crate::error::{Error, Result};
 use crate::keys::SECRET_KEY_LEN;
+use crate::tx::summary::TxSummary;
 
 /// Length of a compact secp256k1 signature: `r || s`, 32 bytes each.
 pub const SIGNATURE_LEN: usize = 64;
@@ -146,6 +150,128 @@ pub fn sign_hash(
 /// an `anychain` bump ever changes that behaviour underneath us.
 pub fn txid(raw_bytes: &[u8]) -> [u8; MESSAGE_LEN] {
     Sha256::digest(Sha256::digest(raw_bytes)).into()
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — full-transaction signing (plan Task 2.2).
+// ---------------------------------------------------------------------------
+
+/// A fully signed TRON transaction, ready to broadcast.
+///
+/// `raw_data_hex` is the hex-encoded body of the wire format — `TronTransaction`
+/// minus the signature field, exactly what TronGrid expects alongside
+/// `signature_hex` at `wallet/broadcasttransaction`. The two together are the
+/// "signed payload".
+#[derive(Debug, Clone, PartialEq)]
+pub struct SignedTransaction {
+    /// True transaction id (double-SHA-256 over the *signed* wire bytes —
+    /// see [`txid`] for why we don't trust
+    /// `anychain_tron::TronTransaction::to_transaction_id`).
+    pub txid: [u8; MESSAGE_LEN],
+    /// Hex-encoded raw-data portion of the signed wire format.
+    pub raw_data_hex: String,
+    /// Hex-encoded 65-byte `r ‖ s ‖ v` signature.
+    pub signature_hex: String,
+}
+
+impl SignedTransaction {
+    /// Convenience accessors used by the CLI / FFI layer so callers never
+    /// reach into the fields directly.
+    pub fn txid_hex(&self) -> String {
+        hex::encode(self.txid)
+    }
+
+    /// Convert into a [`TxSummary`] suitable for JSON output or stdout print.
+    pub fn into_summary(self) -> TxSummary {
+        TxSummary {
+            txid: hex::encode(self.txid),
+            raw_data_hex: self.raw_data_hex,
+            signature_hex: self.signature_hex,
+        }
+    }
+}
+
+/// Sign an entire [`TronTransactionParameters`] and produce the wire bytes
+/// the network expects.
+///
+/// The mechanics:
+///
+/// 1. Build a `TronTransaction` from `params` (no signature yet).
+/// 2. Compute `SHA-256(raw_data_bytes)` — the message the network will check
+///    against when verifying the signature.
+/// 3. Sign that digest with caller-supplied secret ([`sign_hash`], which
+///    keeps the secret in `Zeroizing`).
+/// 4. Hand `(r ‖ s, v)` back to `anychain_tron::Transaction::sign`, which
+///    sets `signature` and serialises the full signed envelope.
+/// 5. Tear the wire bytes apart into `raw_data_hex` (the bytes before the
+///    signature was applied, needed alongside the signature for broadcast)
+///    and `signature_hex`. We re-derive `txid` over the *raw* bytes
+///    because that's what the network indexes — running it over the signed
+///    envelope would give a different id than the one `getnowblock` reports.
+///
+/// The split between "raw" and "signature" is mandated by TronGrid's HTTP
+/// shape (`{"raw_data_hex": "...", "signature_hex": "..."}`); we do not get
+/// to choose a different layout.
+///
+/// # Errors
+///
+/// Returns [`Error::TransactionBuild`] if `TronTransaction::new` rejects the
+/// parameters (e.g. unset contract), [`Error::Signing`] on secp256k1 failure,
+/// or [`Error::TransactionBuild`] if the resulting wire bytes are not
+/// repaintable through [`TronTransaction::from_bytes`] (the round-trip guard).
+pub fn sign_tx(
+    secret: &Zeroizing<[u8; SECRET_KEY_LEN]>,
+    params: &anychain_tron::TronTransactionParameters,
+) -> Result<SignedTransaction> {
+    let mut tx = TronTransaction::new(params)
+        .map_err(|e| Error::TransactionBuild(format!("TronTransaction::new: {e}")))?;
+
+    // Step 1: pull out raw-data bytes from the *unsigned* envelope. Anychain's
+    // `to_bytes` returns the raw proto when signature is None — which it is,
+    // because we just constructed `tx` without signing.
+    let raw_bytes = tx
+        .to_bytes()
+        .map_err(|e| Error::TransactionBuild(format!("unsigned to_bytes: {e}")))?;
+
+    // Step 2: SHA-256 over the raw bytes — the message digest.
+    let msg32: [u8; MESSAGE_LEN] = Sha256::digest(&raw_bytes).into();
+
+    // Step 3 + 4: sign + attach to the envelope.
+    let signed = sign_hash(secret, &msg32)?;
+    let signed_bytes = tx
+        .sign(
+            signed.signature().as_bytes().to_vec(),
+            signed.recovery_id().to_u8(),
+        )
+        .map_err(|e| Error::TransactionBuild(format!("TronTransaction::sign: {e}")))?;
+
+    // Step 5: split the signed envelope back into raw + signature components.
+    // anychain-tron exposes `signature` as a public field — we reach in once
+    // here rather than re-implementing proto layout. The 65-byte form is the
+    // contract; anything else is a regression in the upstream pin.
+    let signature = tx.signature.as_ref().ok_or_else(|| {
+        Error::TransactionBuild("anychain-tron did not attach a signature to the envelope".into())
+    })?;
+    if signature.to_bytes().len() != SIGNATURE_LEN + 1 {
+        return Err(Error::TransactionBuild(format!(
+            "expected {}-byte signature envelope, got {}",
+            SIGNATURE_LEN + 1,
+            signature.to_bytes().len()
+        )));
+    }
+
+    // Round-trip guard: any future anychain change that alters the wire
+    // shape fails here, before a single SUN is spent on a broken broadcast.
+    TronTransaction::from_bytes(&signed_bytes)
+        .map_err(|e| Error::TransactionBuild(format!("signed bytes not parseable: {e}")))?;
+
+    let txid = txid(&raw_bytes);
+
+    Ok(SignedTransaction {
+        txid,
+        raw_data_hex: hex::encode(&raw_bytes),
+        signature_hex: hex::encode(signature.to_bytes()),
+    })
 }
 
 #[cfg(test)]
