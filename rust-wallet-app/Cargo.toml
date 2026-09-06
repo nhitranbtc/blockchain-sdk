@@ -10,6 +10,9 @@ members = [
     "crates/polygon-wallet-core",
     "crates/polygon",
     "crates/tron-wallet-core",
+    "crates/anychain-vendored/anychain-core",
+    "crates/anychain-vendored/anychain-tron",
+    "crates/anychain-vendored/anychain-kms",
     "spikes/tron-v1",
     "spikes/polygon-v1",
 ]
@@ -23,13 +26,13 @@ license = "MIT"
 
 [workspace.dependencies]
 # TRON (anychain stack — plan Phase 0 Task 0.2 / ADR-0001).
-# EXACT pins (`=X.Y.Z`, not `^`) are mandatory per Round-1 grill Q3: bus-factor
-# is 1 for anychain-tron, and a silent minor bump could change txid derivation,
-# signing, or Zeroizing behavior. Pulled straight from crates.io — vendoring was
-# considered and rejected 2026-09-05 (operational overhead > benefit at v0.1).
-anychain-core = "=0.1.8"
-anychain-tron = "=0.2.14"
-anychain-kms = "=0.1.23"
+# VENDORED from 0xcregis/anychain @ cf3aa2d (revision 2026-09-06, flipped by
+# issue #540). Local-path references replace crates.io pins so consumer builds
+# NEVER see `crates.io/index` for these names — local-path wins deterministically.
+# SOURCE.md per vendored crate records pinned commit SHA + patch log.
+anychain-core = { path = "crates/anychain-vendored/anychain-core" }
+anychain-tron = { path = "crates/anychain-vendored/anychain-tron" }
+anychain-kms = { path = "crates/anychain-vendored/anychain-kms" }
 tron-wallet-core = { path = "crates/tron-wallet-core" }
 
 # Per-chain SDKs

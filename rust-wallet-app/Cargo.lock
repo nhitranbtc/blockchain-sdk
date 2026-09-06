@@ -816,12 +816,10 @@ dependencies = [
 
 [[package]]
 name = "anychain-core"
-version = "0.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e146f6b6b6a92a3264a566c804935d0ebcb8486390cd84581324c851c9e1bece"
+version = "0.1.0-local.0"
 dependencies = [
  "base58",
- "bech32 0.9.1",
+ "bech32 0.7.3",
  "hex",
  "rand_core 0.6.4",
  "ripemd",
@@ -833,9 +831,7 @@ dependencies = [
 
 [[package]]
 name = "anychain-kms"
-version = "0.1.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "594990594e86bb18489465a3b5a8fa2c3169f0d20c348a3cca0c2c920ab6085b"
+version = "0.1.0-local.0"
 dependencies = [
  "anychain-core",
  "anyhow",
@@ -845,6 +841,7 @@ dependencies = [
  "encoding",
  "group",
  "hex",
+ "hex-literal",
  "hmac 0.12.1",
  "libsecp256k1",
  "once_cell",
@@ -861,9 +858,7 @@ dependencies = [
 
 [[package]]
 name = "anychain-tron"
-version = "0.2.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e709558ca5408ab179945d00028bacbb9d74b4e69cefe4927361689a750dbf3"
+version = "0.2.0-local.0"
 dependencies = [
  "anychain-core",
  "base58",
@@ -874,6 +869,7 @@ dependencies = [
  "libsecp256k1",
  "protobuf",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "sha3 0.10.9",
 ]
@@ -1392,6 +1388,12 @@ dependencies = [
  "serde",
  "serde_json",
 ]
+
+[[package]]
+name = "bech32"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2dabbe35f96fb9507f7330793dc490461b2962659ac5d427181e451a623751d1"
 
 [[package]]
 name = "bech32"
@@ -3245,6 +3247,12 @@ checksum = "35431185f361ccf3ffc58254628af5f1f5d5f28531da2e02e5d6c82bbc282a10"
 dependencies = [
  "arrayvec",
 ]
+
+[[package]]
+name = "hex-literal"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
 
 [[package]]
 name = "hex_lit"

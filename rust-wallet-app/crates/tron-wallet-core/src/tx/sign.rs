@@ -159,9 +159,16 @@ pub fn txid(raw_bytes: &[u8]) -> [u8; MESSAGE_LEN] {
 /// A fully signed TRON transaction, ready to broadcast.
 ///
 /// `raw_data_hex` is the hex-encoded body of the wire format — `TronTransaction`
-/// minus the signature field, exactly what TronGrid expects alongside
-/// `signature_hex` at `wallet/broadcasttransaction`. The two together are the
-/// "signed payload".
+/// minus the signature field. `signature_hex` is the hex-encoded 65-byte
+/// `r ‖ s ‖ v` signature. `signed_envelope_hex` is the hex-encoded full
+/// `TronTransaction` envelope (raw_data + signature), the exact payload
+/// TronGrid's `wallet/broadcasthex` endpoint expects.
+///
+/// Both envelopes are kept for compatibility: `raw_data_hex` +
+/// `signature_hex` for the split-form `wallet/broadcasttransaction`
+/// endpoint (deprecated — see [`crate::chain::TronGridClient::broadcast`]),
+/// and `signed_envelope_hex` for the canonical single-blob
+/// `wallet/broadcasthex` endpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignedTransaction {
     /// True transaction id (double-SHA-256 over the *signed* wire bytes —
@@ -172,6 +179,9 @@ pub struct SignedTransaction {
     pub raw_data_hex: String,
     /// Hex-encoded 65-byte `r ‖ s ‖ v` signature.
     pub signature_hex: String,
+    /// Hex-encoded full `TronTransaction` envelope (raw_data + signature).
+    /// POST body for `wallet/broadcasthex`.
+    pub signed_envelope_hex: String,
 }
 
 impl SignedTransaction {
@@ -271,6 +281,7 @@ pub fn sign_tx(
         txid,
         raw_data_hex: hex::encode(&raw_bytes),
         signature_hex: hex::encode(signature.to_bytes()),
+        signed_envelope_hex: hex::encode(&signed_bytes),
     })
 }
 
