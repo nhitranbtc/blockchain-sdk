@@ -27,6 +27,7 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error as TlsError, RootCertStore, SignatureScheme};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
+use x509_parser::prelude::FromDer;
 
 use crate::error::{Error, Result};
 
@@ -118,17 +119,24 @@ impl SpkiPinnedVerifier {
             .with_no_client_auth()
     }
 
-    /// Compute the SHA-256 digest of a DER-encoded cert.
+    /// Compute the SHA-256 digest of the leaf cert's `SubjectPublicKeyInfo`
+    /// per RFC 7469 — what the operator-supplied pin records.
     ///
     /// Exposed for the [`tests::v7_spki_pin`] integration test, which
     /// constructs a pin from a known DER blob and asserts the verifier
     /// accepts the chain.
     pub fn leaf_spki_digest(leaf_der: &[u8]) -> [u8; 32] {
-        // Per operator convention (and the plan's quoted `0e43f6…` value),
-        // we hash the entire leaf cert. A subsequent iteration could
-        // extract the SPKI bit string properly; that's a precision change,
-        // not a v0.1 semantic.
-        Sha256::digest(leaf_der).into()
+        // RFC 7469: pin is the SHA-256 of the full SPKI DER (algorithm
+        // identifier + the public-key BIT STRING). `tbs_certificate.public_key().raw`
+        // exposes that exact DER blob.
+        match x509_parser::certificate::X509Certificate::from_der(leaf_der) {
+            Ok((_, cert)) => Sha256::digest(cert.tbs_certificate.public_key().raw).into(),
+            // Parse failure here is a soft-fail: the upstream webpki
+            // chain check will reject the certificate with a more useful
+            // error. We return a digest-of-zero so the verifier never
+            // accidentally matches.
+            Err(_) => [0u8; 32],
+        }
     }
 }
 

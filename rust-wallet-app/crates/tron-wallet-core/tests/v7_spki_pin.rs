@@ -45,14 +45,14 @@ fn pin_round_trips_through_hex_display() {
 }
 
 #[test]
-fn leaf_spki_digest_is_sha256_over_input() {
-    // `printf 'ab' | sha256sum`
-    //   fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603
+fn leaf_spki_digest_returns_zero_on_invalid_der() {
+    // The soft-fail path: `b"ab"` is not a valid DER blob, so x509-parser
+    // returns `Err`, and the verifier falls through to `[0u8; 32]` so the
+    // pin check cannot accidentally accept a malformed cert (the webpki
+    // chain check fires first, with a more informative error, in
+    // `verify_server_cert`).
     let digest = SpkiPinnedVerifier::leaf_spki_digest(b"ab");
-    assert_eq!(
-        hex::encode(digest),
-        "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603"
-    );
+    assert_eq!(digest, [0u8; 32]);
 }
 
 #[tokio::test]

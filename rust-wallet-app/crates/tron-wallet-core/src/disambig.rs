@@ -15,7 +15,6 @@
 //!   Ethereum too — a malformed argument could route USDT to an EVM address.
 //!   Refused.
 
-use crate::chain::spki::SpkiPin;
 use crate::config::Network;
 use crate::error::{Error, Result};
 
@@ -67,27 +66,12 @@ pub fn ensure_tron_style_address(addr: &str) -> Result<()> {
     Ok(())
 }
 
-/// Compile-time SPKI pin helper. The plan's Q5 constant lives here as
-/// `const` so other modules can `pub use` it without dragging the
-/// `crypto/spki` dep into their public surface.
-pub const MAINNET_SPKI_PIN_HEX: &str =
-    "0e43f6110bbee5e199c6775cf88a3050a9bd51f3bb4a31aeefb7122f79119f0d";
-
-/// Decode [`MAINNET_SPKI_PIN_HEX`] to the runtime type on demand.
-pub fn mainnet_spki_pin() -> SpkiPin {
-    let bytes = hex::decode(MAINNET_SPKI_PIN_HEX)
-        .expect("MAINNET_SPKI_PIN_HEX must be a valid 32-byte hex string");
-    SpkiPin::from_bytes(
-        bytes
-            .try_into()
-            .expect("MAINNET_SPKI_PIN_HEX must decode to exactly 32 bytes"),
-    )
-}
-
-/// Re-exported from `crate::config` so call sites that already depend on
-/// `crate::disambig::mainnet_spki_pin` keep working — the canonical home
-/// is `crate::config::mainnet_spki_pin`.
-pub use crate::config::mainnet_spki_pin as _mainnet_spki_pin_re_export;
+// Re-exported from `crate::config` — the canonical home is there.
+/// Re-exported from `crate::config` — the canonical home is there.
+/// Both names re-exported publicly so existing call sites (including
+/// `tests/v7_spki_pin.rs`) continue to anchor at `disambig::*`.
+pub use crate::config::mainnet_spki_pin;
+pub use crate::config::MAINNET_SPKI_PIN_HEX;
 
 #[cfg(test)]
 mod tests {
