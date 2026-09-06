@@ -13,20 +13,29 @@
 //!   - sender: TRX (gas) + USDT-TRC20 (transfer amount).
 //!   - recipient: receives 1 USDT-TRC20.
 //!
+//! Per full `--include-ignored` run the suite spends 2 USDT-TRC20 (USDT happy-path +
+//! rebroadcast idempotency), about 130k Energy (≈0.06 TRX), and 1 TRX of bandwidth
+//! (native-TRX happy-path). The Nile faucet has a 24h cooldown — plan test
+//! sequencing accordingly.
+//!
 //! Run:
 //! ```bash
 //! RUN_TRON_NILE=1 \
 //!   cargo test -p tron-wallet-core --test v10_broadcast \
-//!     -- --include-ignored --nocapture
+//!     -- --include-ignored --test-threads=1
 //! ```
 //!
 //! Pass criterion: `receipt.is_success() == true` AND `receipt.txid` non-empty.
 //! A non-SUCCESS code with a `message` (e.g. `TRANSACTION_EXPIRED`,
 //! `BALANCE_INSUFFICIENT`) fails loudly — operator must investigate.
 //!
-//! RED-honest: `#[ignore]` (excluded from default `cargo test`); panics with
-//! actionable message if `RUN_TRON_NILE` absent. Follows plan
-//! [Conventions → Gated live tests](../superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md#gated-live-tests-loud-red-never-silent-skip).
+//! RED-honest: `#[ignore]` excludes this from default `cargo test`. Run with
+//! `cargo test -p tron-wallet-core --test v10_broadcast -- --include-ignored`
+//! after funding the wallet. RPC/network failures now surface directly via
+//! `.expect(...)` and `assert!` — no separate loud-RED panic gate (removed
+//! 2026-09-06 per operator direction). Plan Conventions §Gated live tests
+//! remains in force for `tests/v5_resource.rs`, `tests/v7_spki_pin.rs`,
+//! `tests/v9_token_registry.rs`; this file is the documented exception.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -127,21 +136,8 @@ async fn live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile() {
 
     // --- Sign the transfer with the sender's secret ---
     let signed = sign_tx(keypair.secret_bytes(), &params).expect("sign_tx must succeed");
-    eprintln!("local txid: {}", hex::encode(signed.txid));
-    eprintln!(
-        "raw_data_hex ({} bytes): {}",
-        signed.raw_data_hex.len() / 2,
-        signed.raw_data_hex
-    );
-    eprintln!(
-        "tail bytes (last 8): {}",
-        &signed.raw_data_hex[signed.raw_data_hex.len().saturating_sub(16)..]
-    );
-    eprintln!(
-        "signature_hex ({} bytes): {}",
-        signed.signature_hex.len() / 2,
-        signed.signature_hex
-    );
+    let local_txid_hex = hex::encode(signed.txid);
+    eprintln!("local txid: {local_txid_hex}");
 
     // --- Broadcast against the live Nile node ---
     let receipt = rpc
@@ -164,6 +160,18 @@ async fn live_broadcast_usdt_trc20_to_recipient_succeeds_on_nile() {
     assert!(
         !txid_hex.is_empty(),
         "successful broadcast returned empty txid"
+    );
+    // Pin the wire-form txid contract: locally-computed
+    // (sha256(raw_bytes) per tx::sign::txid — live Nile verification
+    // 2026-09-06) must match the network-reported txid. Regression target
+    // for the original single-vs-double SHA-256 confusion (Q2 plan
+    // hypothesis was wrong; the actual algorithm is single SHA-256,
+    // matching upstream).
+    assert_eq!(
+        local_txid_hex.to_ascii_lowercase(),
+        txid_hex.to_ascii_lowercase(),
+        "locally-computed txid {local_txid_hex} != network-reported txid {txid_hex} \
+         — local txid computation regressed? See tx::sign::txid = sha256(raw_bytes) per live Nile verification 2026-09-06."
     );
     eprintln!("Nile txid: {txid_hex}");
 }
@@ -221,7 +229,8 @@ async fn live_broadcast_trx_native_transfer_succeeds_on_nile() {
 
     // --- Sign the transfer with the sender's secret ---
     let signed = sign_tx(keypair.secret_bytes(), &params).expect("sign_tx must succeed");
-    eprintln!("[trx] local txid: {}", hex::encode(signed.txid));
+    let local_txid_hex = hex::encode(signed.txid);
+    eprintln!("[trx] local txid: {local_txid_hex}");
 
     // --- Broadcast against the live Nile node ---
     let receipt = rpc
@@ -244,6 +253,18 @@ async fn live_broadcast_trx_native_transfer_succeeds_on_nile() {
     assert!(
         !txid_hex.is_empty(),
         "successful TRX broadcast returned empty txid"
+    );
+    // Pin the wire-form txid contract: locally-computed
+    // (sha256(raw_bytes) per tx::sign::txid — live Nile verification
+    // 2026-09-06) must match the network-reported txid. Regression target
+    // for the original single-vs-double SHA-256 confusion (Q2 plan
+    // hypothesis was wrong; the actual algorithm is single SHA-256,
+    // matching upstream).
+    assert_eq!(
+        local_txid_hex.to_ascii_lowercase(),
+        txid_hex.to_ascii_lowercase(),
+        "locally-computed txid {local_txid_hex} != network-reported txid {txid_hex} \
+         — local txid computation regressed? See tx::sign::txid = sha256(raw_bytes) per live Nile verification 2026-09-06."
     );
     eprintln!("[trx] Nile txid: {txid_hex}");
 }
@@ -303,7 +324,8 @@ async fn live_broadcast_rebroadcast_idempotency_on_nile() {
         .as_millis() as i64;
     builder::set_timestamp(&mut params, ts_ms);
     let signed = sign_tx(keypair.secret_bytes(), &params).expect("sign_tx must succeed");
-    eprintln!("[re] local txid: {}", hex::encode(signed.txid));
+    let local_txid_hex = hex::encode(signed.txid);
+    eprintln!("[re] local txid: {local_txid_hex}");
 
     // --- First broadcast (must succeed) ---
     let receipt1 = rpc
@@ -324,6 +346,19 @@ async fn live_broadcast_rebroadcast_idempotency_on_nile() {
         .to_owned();
     eprintln!("[re] first  Nile txid: {txid1}");
 
+    // Pin the wire-form txid contract: locally-computed
+    // (sha256(raw_bytes) per tx::sign::txid — live Nile verification
+    // 2026-09-06) must match the first broadcast's network-reported txid.
+    // Regression target for the original single-vs-double SHA-256
+    // confusion (Q2 plan hypothesis was wrong; the actual algorithm is
+    // single SHA-256, matching upstream).
+    assert_eq!(
+        local_txid_hex.to_ascii_lowercase(),
+        txid1.to_ascii_lowercase(),
+        "locally-computed txid {local_txid_hex} != first-broadcast network txid {txid1} \
+         — local txid computation regressed? See tx::sign::txid = sha256(raw_bytes) per live Nile verification 2026-09-06."
+    );
+
     // --- Re-POST the SAME signed envelope ---
     let receipt2 = rpc
         .broadcast(&signed.signed_envelope_hex)
@@ -334,22 +369,33 @@ async fn live_broadcast_rebroadcast_idempotency_on_nile() {
         receipt2.code, receipt2.message, receipt2.txid
     );
 
-    // Idempotency: either (a) node returns the same txid again, or
-    // (b) node returns explicit non-SUCCESS with a `code`/`message`
-    // explaining the prior broadcast. Either is safe — no double-charge.
-    // What we MUST NOT see is SUCCESS with a *different* txid.
+    // Idempotency contract (plan Phase 7 Task 6.8 V7a empirical finding,
+    // live verified 2026-09-06 on Nile): pure envelope rebroadcast returns
+    // `code = "DUP_TRANSACTION_ERROR"`, `message = "Dup transaction."` with
+    // the SAME txid echoed back. Sender is NOT double-charged.
+    //
+    // Pin both branches:
+    //   - SUCCESS path: txid MUST equal the first broadcast's txid
+    //     (no double-charge). Any other txid = bug.
+    //   - non-SUCCESS path: code OR message MUST mention DUP_TRANSACTION.
+    //     A generic "FAILED" or empty rejection is a regression (the operator
+    //     should investigate).
     let same_txid = receipt2.txid.as_deref() == Some(txid1.as_str());
     if receipt2.is_success() {
         assert!(
             same_txid,
-            "rebroadcast returned SUCCESS with a different txid (potential double-charge): first={txid1} second={:?}",
+            "rebroadcast returned SUCCESS with a different txid (potential double-charge): \
+             first={txid1} second={:?}",
             receipt2.txid
         );
     } else {
+        let code = receipt2.code.as_deref().unwrap_or_default();
+        let msg = receipt2.message.as_deref().unwrap_or_default();
         assert!(
-            receipt2.message.is_some() || receipt2.code.is_some(),
-            "rebroadcast failure returned no code/message: {:?}",
-            receipt2
+            code.contains("DUP_TRANSACTION_ERROR")
+                || msg.to_ascii_uppercase().contains("DUP TRANSACTION"),
+            "rebroadcast failure does not look like DUP_TRANSACTION_ERROR \
+             (operator should re-investigate canonical node contract): code={code:?} message={msg:?}",
         );
     }
 }

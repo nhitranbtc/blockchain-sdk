@@ -206,15 +206,15 @@ impl Transaction for TronTransaction {
     }
 
     fn to_transaction_id(&self) -> Result<Self::TransactionId, TransactionError> {
-        // Q2 PATCH (issue #399 historical bug + plan Q2): compute txid as
-        // SHA256(SHA256(raw_bytes)) — canonical TRX double-hash. Upstream
-        // `anychain-tron 0.2.14` computed a single SHA-256 here, which
-        // produced a hash that did NOT match TronGrid's reported txid.
-        // Caller no longer has to recompute this manually.
-        let raw = self.to_bytes()?;
-        let single = crypto::sha256(&raw);
+        // 2026-09-06 (revision): the previous "Q2 PATCH" (double-SHA-256
+        // framing of issue #399) was wrong — live broadcast verification on
+        // 2026-09-06 showed TronGrid returns the **single** SHA-256 of
+        // raw bytes, matching upstream behaviour. Reverted to upstream's
+        // single-SHA-256. (Note: this method is dead code in our consumer;
+        // the live computation lives in `tron-wallet-core::tx::sign::txid`.
+        // Pinned here for parity with the canonical `self.to_bytes()` raw.)
         Ok(Self::TransactionId {
-            txid: crypto::sha256(&single).to_vec(),
+            txid: crypto::sha256(&self.to_bytes()?).to_vec(),
         })
     }
 }

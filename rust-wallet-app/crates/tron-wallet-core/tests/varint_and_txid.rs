@@ -89,10 +89,14 @@ fn signed_tx_raw_data_hex_ends_with_canonical_varint() {
     );
 }
 
-/// Q2: `TronTransaction::to_transaction_id` returns SHA-256(SHA-256(raw)),
-/// canonical TRX double-hash.
+/// 2026-09-06 (revision): Q2 hypothesis (issue #399 historical-bug framing)
+/// was wrong — TronGrid returns **single** SHA-256 of raw bytes, NOT the
+/// double-hash. Live broadcast verification on 2026-09-06 confirmed
+/// `sha256(raw_bytes) == network_reported_txid`. This test pins the
+/// vendored `TronTransaction::to_transaction_id` to single-SHA-256 (the
+/// dead-code method; the live computation lives in `tx::sign::txid`).
 #[test]
-fn txid_is_double_sha256() {
+fn txid_is_single_sha256() {
     let fixture =
         tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
             .expect("mainnet test fixtures");
@@ -113,20 +117,13 @@ fn txid_is_double_sha256() {
     let raw_bytes = tx.to_bytes().expect("to_bytes");
 
     use sha2::{Digest, Sha256};
-    let single: [u8; 32] = Sha256::digest(&raw_bytes).into();
-    let expected: [u8; 32] = Sha256::digest(single).into();
+    let expected: [u8; 32] = Sha256::digest(&raw_bytes).into();
 
     let actual = tx.to_transaction_id().expect("to_transaction_id").txid;
     assert_eq!(
         actual.as_slice(),
         expected.as_slice(),
-        "to_transaction_id is NOT sha256(sha256(raw)) — Q2 patch regressed?",
-    );
-    // Negative test: must NOT equal single SHA-256.
-    assert_ne!(
-        actual.as_slice(),
-        single.as_slice(),
-        "to_transaction_id returned single-SHA-256 — Q2 patch regressed?",
+        "to_transaction_id is NOT sha256(raw) — single-SHA-256 expected per live TronGrid verification 2026-09-06",
     );
 }
 

@@ -148,8 +148,16 @@ pub fn sign_hash(
 /// not match what the network indexes. Any caller that needs an id must use
 /// this function; `txid_is_double_sha256` in `tests/v8_sign_only.rs` fails if
 /// an `anychain` bump ever changes that behaviour underneath us.
+///
+/// 2026-09-06 (revision): TronGrid's `/wallet/broadcasthex` returns the
+/// **single** SHA-256 of the unsigned raw bytes, NOT the double-hash
+/// previously claimed by the plan (Q2 hypothesis). The vendored
+/// `TronTransaction::to_transaction_id` method was patched to double-hash
+/// in error (issue #399 historical-bug framing was wrong — same shape as
+/// Q13 varint, also reverted). Live broadcast verification on 2026-09-06
+/// confirmed `sha256(raw_bytes) == network_reported_txid`.
 pub fn txid(raw_bytes: &[u8]) -> [u8; MESSAGE_LEN] {
-    Sha256::digest(Sha256::digest(raw_bytes)).into()
+    Sha256::digest(raw_bytes).into()
 }
 
 // ---------------------------------------------------------------------------
@@ -366,22 +374,22 @@ mod tests {
     /// Independently confirmed:
     ///
     /// ```text
-    /// $ printf '' | sha256sum | cut -d' ' -f1 | xxd -r -p | sha256sum
-    /// 5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456
+    /// $ printf '' | sha256sum
+    /// e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
     /// ```
     #[test]
-    fn txid_hashes_twice() {
+    fn txid_is_single_sha256() {
         assert_eq!(
             hex::encode(txid(b"")),
-            "5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
     }
 
     #[test]
-    fn txid_is_not_a_single_hash() {
+    fn txid_is_a_single_hash() {
         let raw = b"some raw transaction bytes";
         let single: [u8; MESSAGE_LEN] = Sha256::digest(raw).into();
 
-        assert_ne!(txid(raw), single);
+        assert_eq!(txid(raw), single);
     }
 }
