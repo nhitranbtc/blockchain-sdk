@@ -49,6 +49,28 @@ impl fmt::Debug for KeyPair {
     }
 }
 
+/// Builds a keypair from a raw 32-byte secp256k1 secret scalar.
+///
+/// The path for imported keys that were never derived from a mnemonic (paper
+/// wallets, exchange exports). Validation is delegated to `libsecp256k1`, so a
+/// zero scalar or one ≥ the curve order is rejected here rather than producing
+/// an address nobody can spend from.
+pub fn keypair_from_secret_bytes(bytes: &[u8]) -> Result<KeyPair> {
+    if bytes.len() != SECRET_KEY_LEN {
+        return Err(Error::Derivation(format!(
+            "a secp256k1 secret is {SECRET_KEY_LEN} bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let sk = libsecp256k1::SecretKey::parse_slice(bytes)
+        .map_err(|e| Error::Derivation(format!("not a valid secp256k1 scalar: {e}")))?;
+    let public = TronPublicKey::from_secret_key(&sk);
+
+    let mut secret = Zeroizing::new([0u8; SECRET_KEY_LEN]);
+    secret.copy_from_slice(bytes);
+    Ok(KeyPair { secret, public })
+}
+
 /// Derives a keypair at `path` from `mnemonic`.
 ///
 /// `passphrase` is the BIP-39 passphrase; pass `""` for the common case. The

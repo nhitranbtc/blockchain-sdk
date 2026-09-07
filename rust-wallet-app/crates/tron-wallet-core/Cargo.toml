@@ -19,6 +19,15 @@ crate-type = ["rlib", "cdylib"]
 anychain-core = { workspace = true }
 anychain-tron = { workspace = true }
 anychain-kms = { workspace = true }
+# Raw-key wallet import (`WalletManager::import_private_key`) must turn 32
+# secret bytes into a `libsecp256k1::SecretKey` — the associated type
+# `TronPublicKey::from_secret_key` takes. Same `0.7` line the vendored
+# anychain-{tron,kms} crates already use, so the graph keeps one version.
+libsecp256k1 = "0.7"
+# `tx::submit::wait_for_confirm` sleeps between polls. Only the `time` feature:
+# a wallet library has no business pulling in the whole runtime, and the binary
+# that drives it already chooses its own.
+tokio = { version = "1", features = ["time"] }
 
 # TRC-20 ABI types (Phase 3). `U256` is the amount type the trc20
 # transfer/approve builders take and the type `balanceOf` returns.

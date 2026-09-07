@@ -1,0 +1,318 @@
+//! `tron trc20` handlers — plan §Phase 6 Task 5.5.
+//!
+//! All four subcommands are wired against the core: `balance` and `allowance`
+//! are constant-contract reads, `send` and `approve` go through
+//! `tx::submit_trc20{,_approve}`.
+//!
+//! The unlimited-approval confirmation lives here: an allowance near
+//! `U256::MAX` lets the spender drain the balance at any future time, which is
+//! the most common way TRC-20 holders lose funds.
+
+use std::path::Path;
+
+use ethereum_types::U256;
+use tron_wallet_core::address::Address;
+use tron_wallet_core::config::Network;
+use tron_wallet_core::keys::{derive_keypair, KeyPair};
+use tron_wallet_core::tx::submit::{self, SubmitOptions};
+use tron_wallet_core::wallet::WalletManager;
+
+use super::{
+    confirm, derivation_path, effective_network, emit, format_units, open_client, open_storage,
+    parse_decimal_amount, parse_wallet_id, resolve_mnemonic, resolve_password, resolve_token,
+    CliError, Result,
+};
+use crate::cli::NetworkArg;
+use crate::handlers::wallet::report_broadcast;
+
+/// Decimals for a contract: the bundled registry first, the live `decimals()`
+/// call as a fallback for tokens the registry does not carry.
+async fn decimals_of(
+    client: &tron_wallet_core::chain::TronGridClient,
+    network: Network,
+    contract: &str,
+    owner: &str,
+) -> Result<u8> {
+    if let Some(token) = tron_wallet_core::tokens::by_address(network, contract) {
+        return Ok(token.decimals);
+    }
+    Ok(tron_wallet_core::trc20::decimals(client, contract, owner).await?)
+}
+
+/// Shared `balanceOf` reader used by both `trc20 balance` and
+/// `wallet balance --token`.
+pub async fn print_balance(
+    data_dir: &Path,
+    owner: String,
+    token: String,
+    network: Option<NetworkArg>,
+    rpc_url: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let net = effective_network(data_dir, network)?;
+    let contract = resolve_token(net, &token)?;
+    let client = open_client(data_dir, network, rpc_url)?;
+    let raw = tron_wallet_core::trc20::balance_of(&client, &contract, &owner).await?;
+    let decimals = decimals_of(&client, net, &contract, &owner).await?;
+    let (raw_str, formatted) = render_amount(raw, decimals);
+
+    emit(
+        json,
+        serde_json::json!({
+            "address": owner,
+            "contract": contract,
+            "decimals": decimals,
+            "raw": raw_str,
+            "amount": formatted,
+        }),
+        formatted.as_deref().unwrap_or(&raw_str),
+    );
+    Ok(())
+}
+
+/// `U256` can exceed `u128`; a 2^128 balance is pathological but formatting must
+/// not panic on it, so the human-readable form is omitted rather than wrapped.
+fn render_amount(raw: U256, decimals: u8) -> (String, Option<String>) {
+    let raw_str = raw.to_string();
+    let formatted = raw_str
+        .parse::<u128>()
+        .ok()
+        .map(|v| format_units(v, u32::from(decimals)));
+    (raw_str, formatted)
+}
+
+/// `tron trc20 balance`.
+pub async fn balance(
+    data_dir: &Path,
+    address: String,
+    contract: String,
+    network: Option<NetworkArg>,
+    rpc_url: Option<String>,
+    json: bool,
+) -> Result<()> {
+    print_balance(data_dir, address, contract, network, rpc_url, json).await
+}
+
+/// `tron trc20 allowance` — remaining spender allowance.
+pub async fn allowance(
+    data_dir: &Path,
+    contract: String,
+    owner: String,
+    spender: String,
+    network: Option<NetworkArg>,
+    rpc_url: Option<String>,
+    json: bool,
+) -> Result<()> {
+    let net = effective_network(data_dir, network)?;
+    let contract = resolve_token(net, &contract)?;
+    let client = open_client(data_dir, network, rpc_url)?;
+    let raw = tron_wallet_core::trc20::allowance(&client, &contract, &owner, &spender).await?;
+    let decimals = decimals_of(&client, net, &contract, &owner).await?;
+    let (raw_str, formatted) = render_amount(raw, decimals);
+
+    emit(
+        json,
+        serde_json::json!({
+            "contract": contract,
+            "owner": owner,
+            "spender": spender,
+            "decimals": decimals,
+            "raw": raw_str,
+            "amount": formatted,
+            "unlimited": is_unlimited_approval(&raw_str),
+        }),
+        formatted.as_deref().unwrap_or(&raw_str),
+    );
+    Ok(())
+}
+
+/// Resolve the signing keypair + owner address from `--wallet-id` or
+/// `--mnemonic`.
+fn signer(
+    data_dir: &Path,
+    wallet_id: Option<String>,
+    mnemonic: Option<String>,
+    password: Option<String>,
+) -> Result<(String, KeyPair)> {
+    let path = derivation_path(None, 0)?;
+    match (wallet_id, mnemonic) {
+        (Some(id), _) => {
+            let storage = open_storage(data_dir)?;
+            let manager = WalletManager::new(&storage);
+            let wallet_id = parse_wallet_id(&id)?;
+            let password = resolve_password(password, "wallet passphrase: ")?;
+            let keypair = manager.unlock(wallet_id, &password)?.keypair(&path)?;
+            let owner = Address::from_public_key(keypair.public_key())?.to_base58();
+            Ok((owner, keypair))
+        }
+        (None, Some(phrase)) => {
+            let mnemonic = resolve_mnemonic(Some(phrase), None)?;
+            let keypair = derive_keypair(&mnemonic, "", &path)?;
+            let owner = Address::from_public_key(keypair.public_key())?.to_base58();
+            Ok((owner, keypair))
+        }
+        (None, None) => Err(CliError::BadInput(
+            "one of --wallet-id or --mnemonic is required".into(),
+        )),
+    }
+}
+
+/// Token amount in the contract's smallest unit.
+async fn token_amount(
+    client: &tron_wallet_core::chain::TronGridClient,
+    net: Network,
+    contract: &str,
+    owner: &str,
+    amount: &str,
+) -> Result<U256> {
+    let decimals = decimals_of(client, net, contract, owner).await?;
+    let scaled = parse_decimal_amount(amount, u32::from(decimals))?;
+    U256::from_dec_str(&scaled.to_string())
+        .map_err(|e| CliError::BadInput(format!("amount out of range: {e}")))
+}
+
+/// `tron trc20 send` — TRC-20 transfer.
+#[allow(clippy::too_many_arguments)]
+pub async fn send(
+    data_dir: &Path,
+    mnemonic: Option<String>,
+    wallet_id: Option<String>,
+    contract: String,
+    to: String,
+    amount: String,
+    fee_limit: Option<i64>,
+    password: Option<String>,
+    network: Option<NetworkArg>,
+    rpc_url: Option<String>,
+    confirm_yes: bool,
+    json: bool,
+) -> Result<()> {
+    let net = effective_network(data_dir, network)?;
+    let contract = resolve_token(net, &contract)?;
+    if !Address::is_valid(&to) {
+        return Err(CliError::BadInput(format!(
+            "recipient {to:?} is not a TRON address"
+        )));
+    }
+    let (owner, keypair) = signer(data_dir, wallet_id, mnemonic, password)?;
+    let client = open_client(data_dir, network, rpc_url)?;
+    let value = token_amount(&client, net, &contract, &owner, &amount).await?;
+
+    if net == Network::Mainnet && !confirm_yes {
+        confirm(&format!(
+            "send {amount} of {contract} from {owner} to {to} on MAINNET"
+        ))?;
+    }
+
+    let opts = SubmitOptions {
+        fee_limit_sun: fee_limit,
+        ..SubmitOptions::default()
+    };
+    let submitted = submit::submit_trc20(
+        &client,
+        keypair.secret_bytes(),
+        &owner,
+        &contract,
+        &to,
+        value,
+        opts,
+    )
+    .await?;
+    report_broadcast(&submitted.signed.txid_hex(), &submitted.receipt, json)
+}
+
+/// `tron trc20 approve` — set a spender allowance.
+#[allow(clippy::too_many_arguments)]
+pub async fn approve(
+    data_dir: &Path,
+    mnemonic: Option<String>,
+    wallet_id: Option<String>,
+    contract: String,
+    spender: String,
+    amount: String,
+    fee_limit: Option<i64>,
+    password: Option<String>,
+    network: Option<NetworkArg>,
+    rpc_url: Option<String>,
+    confirm_yes: bool,
+    json: bool,
+) -> Result<()> {
+    let net = effective_network(data_dir, network)?;
+    let contract = resolve_token(net, &contract)?;
+    if !Address::is_valid(&spender) {
+        return Err(CliError::BadInput(format!(
+            "spender {spender:?} is not a TRON address"
+        )));
+    }
+    let (owner, keypair) = signer(data_dir, wallet_id, mnemonic, password)?;
+    let client = open_client(data_dir, network, rpc_url)?;
+
+    // `max` is accepted as a spelling of "unlimited" so operators do not have
+    // to paste 78 digits — and so the guard below has something to match on.
+    let value = if amount.trim().eq_ignore_ascii_case("max") {
+        U256::MAX
+    } else {
+        token_amount(&client, net, &contract, &owner, &amount).await?
+    };
+
+    if !confirm_yes && is_unlimited_approval(&value.to_string()) {
+        confirm(&format!(
+            "grant {spender} an UNLIMITED allowance over {owner}'s {contract} balance"
+        ))?;
+    } else if net == Network::Mainnet && !confirm_yes {
+        confirm(&format!(
+            "approve {amount} of {contract} for {spender} on MAINNET"
+        ))?;
+    }
+
+    let opts = SubmitOptions {
+        fee_limit_sun: fee_limit,
+        ..SubmitOptions::default()
+    };
+    let submitted = submit::submit_trc20_approve(
+        &client,
+        keypair.secret_bytes(),
+        &owner,
+        &contract,
+        &spender,
+        value,
+        opts,
+    )
+    .await?;
+    report_broadcast(&submitted.signed.txid_hex(), &submitted.receipt, json)
+}
+
+/// Whether a decimal amount string is effectively an unlimited allowance.
+///
+/// 2^128 has 39 digits; a real token balance never approaches that, so anything
+/// that long is "forever" in practice.
+pub fn is_unlimited_approval(amount: &str) -> bool {
+    let digits = amount.trim().trim_start_matches('0');
+    digits.len() >= 39
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unlimited_approval_detection() {
+        assert!(is_unlimited_approval(&U256::MAX.to_string()));
+        assert!(is_unlimited_approval(&"9".repeat(39)));
+        assert!(!is_unlimited_approval("1000"));
+        assert!(!is_unlimited_approval("0"));
+    }
+
+    #[test]
+    fn render_amount_falls_back_to_raw_beyond_u128() {
+        let (raw, formatted) = render_amount(U256::MAX, 6);
+        assert!(formatted.is_none(), "must not wrap a value beyond u128");
+        assert_eq!(raw, U256::MAX.to_string());
+    }
+
+    #[test]
+    fn render_amount_scales_by_decimals() {
+        let (_, formatted) = render_amount(U256::from(1_500_000u64), 6);
+        assert_eq!(formatted.as_deref(), Some("1.5"));
+    }
+}

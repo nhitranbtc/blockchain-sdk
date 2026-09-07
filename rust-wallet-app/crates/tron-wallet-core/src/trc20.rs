@@ -61,6 +61,12 @@ pub const BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
 /// Solidity signature for `balanceOf(address)`.
 pub const BALANCE_OF_SIGNATURE: &str = "balanceOf(address)";
 
+/// `allowance(address,address)` — remaining spender allowance.
+pub const ALLOWANCE_SELECTOR: [u8; 4] = [0xdd, 0x62, 0xed, 0x3e];
+
+/// Human-readable signature TronGrid resolves against the contract ABI.
+pub const ALLOWANCE_SIGNATURE: &str = "allowance(address,address)";
+
 /// `decimals()` — view call that returns the token's decimal precision.
 pub const DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
 /// Solidity signature for `decimals()`.
@@ -119,6 +125,16 @@ pub fn balance_of_args(owner_bytes: &[u8]) -> [u8; ABI_WORD] {
     encode_address_arg(owner_bytes)
 }
 
+/// `allowance(address,address)` calldata body — two 32-byte address slots,
+/// owner first, spender second. Order matters: swapping them silently reads a
+/// different allowance instead of failing.
+pub fn allowance_args(owner_bytes: &[u8], spender_bytes: &[u8]) -> [u8; ABI_WORD * 2] {
+    let mut out = [0u8; ABI_WORD * 2];
+    out[..ABI_WORD].copy_from_slice(&encode_address_arg(owner_bytes));
+    out[ABI_WORD..].copy_from_slice(&encode_address_arg(spender_bytes));
+    out
+}
+
 /// Calldata body for selectors that take no arguments (`decimals`, `symbol`,
 /// `name`). Returned as a `Vec` so callers can borrow it without a slice
 /// conversion.
@@ -142,6 +158,34 @@ pub async fn balance_of(rpc: &TronGridClient, contract: &str, owner: &str) -> Re
     let raw = response.constant_result_bytes()?;
     decode_uint256(&raw)
         .map_err(|e| Error::NodeResponse(format!("balanceOf({contract}, {owner}) decode: {e}")))
+}
+
+/// Read the remaining allowance `owner` has granted `spender` on `contract`.
+///
+/// Same smallest-unit convention as [`balance_of`]. A fresh pair reads 0; an
+/// "infinite" approval reads a value near `U256::MAX`.
+pub async fn allowance(
+    rpc: &TronGridClient,
+    contract: &str,
+    owner: &str,
+    spender: &str,
+) -> Result<U256> {
+    let owner_addr: crate::address::Address = owner.parse()?;
+    let spender_addr: crate::address::Address = spender.parse()?;
+    let args = allowance_args(owner_addr.as_bytes(), spender_addr.as_bytes());
+
+    // `owner` doubles as the simulated caller — a view call, so it does not
+    // affect the result, but TronGrid rejects an empty `owner_address`.
+    let response = rpc
+        .trigger_constant_contract(contract, owner, ALLOWANCE_SIGNATURE, &args)
+        .await?;
+
+    let raw = response.constant_result_bytes()?;
+    decode_uint256(&raw).map_err(|e| {
+        Error::NodeResponse(format!(
+            "allowance({contract}, {owner}, {spender}) decode: {e}"
+        ))
+    })
 }
 
 /// Read `decimals()` from `contract`. Returns 6 for USDT/USDC, 18 for

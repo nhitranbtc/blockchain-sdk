@@ -13,6 +13,6 @@ pub mod client;
 pub mod constant_contract;
 pub mod spki;
 
-pub use client::TronGridClient;
+pub use client::{AccountInfo, OriginalCall, TronGridClient};
 pub use constant_contract::{ConstantCallResult, ConstantContractCall};
 pub use spki::{SpkiPin, SpkiPinnedVerifier};

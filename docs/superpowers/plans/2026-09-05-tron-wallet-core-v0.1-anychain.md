@@ -1211,19 +1211,21 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Goal:** `tron` CLI binary with 22 commands across 6 top-level (wallet 9, address 2, balance 2, trc20 4, tx 2, config 3). **CI gate:** `cargo run -p tron -- --help` shows all subcommands.
 
+**2026-09-07 Phase 6 status:** COMPLETE. All 22 commands wired end-to-end. The Phase 2/3/5 core carry-overs the send/balance/rename paths needed landed with it: `chain::get_account`, `chain::get_transaction_by_id`, `tx::submit::{prepare_*,submit_trx,submit_trc20,submit_trc20_approve,submit_send_speedup,wait_for_confirm,decode_trc20_call}`, `trc20::allowance`, `keys::keypair_from_secret_bytes`, and wallet-record metadata (`create_with_meta` / `rename` / `import_private_key` / `summary` / `list_summaries`). The encrypted-record format gained `name` / `network` / `private_key_hex` as `#[serde(default)]` fields, so pre-Phase-6 blobs still open (regression-tested by `a_legacy_phrase_only_blob_still_unlocks`). Verified: `cargo clippy -D warnings` clean; 46 `tron` tests + 114 `tron-wallet-core` tests green.
+
 #### Task 5.1 — Clap parser
 
 **Files:** `crates/tron/src/main.rs`, `crates/tron/Cargo.toml`
 
-- [ ] `clap` derive-based parser with subcommand tree:
+- [x] `clap` derive-based parser with subcommand tree (`crates/tron/src/cli.rs`):
   - `wallet { create, import, show, list, delete, rename, balance, send, send-speedup }`
   - `address { new, xpub }`
   - `balance { --address, --token }`
   - `trc20 { send, approve, balance, allowance }`
   - `tx { get, wait }`
   - `config { show, set-rpc, set-network }`
-- [ ] Each subcommand accepts `--json` flag.
-- [ ] Exit codes (matches btc/src/main.rs:151-169 pattern):
+- [x] Each data-producing subcommand accepts `--json` flag.
+- [x] Exit codes (matches btc/src/main.rs:151-169 pattern; mapped in `handlers::exit_code`, unit-tested by `exit_codes_match_the_plan_table`):
   - 0 = success
   - 1 = user abort
   - 2 = bad input
@@ -1235,71 +1237,71 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Files:** `crates/tron/src/handlers/wallet.rs`
 
-- [ ] `wallet create --words 12|24 --name --network --password` → `WalletManager::create_with_mnemonic`.
-- [ ] `wallet import --name --network --password --mnemonic|--mnemonic-file|--private-key-file` → `WalletManager::import_from_phrase` or `import_from_pk`.
-- [ ] `wallet show --id [--json]` → `WalletManager::unlock(id, pw).summary()`.
-- [ ] `wallet list [--json] [--all-networks]` → `WalletManager::list()`.
-- [ ] `wallet delete --id` → `WalletManager::delete(id)`.
-- [ ] `wallet rename --id --to` → `WalletManager::rename(id, name)`.
-- [ ] `wallet balance --wallet-id [--token USDT|<addr>] | --address [--token <addr>]` → `chain::get_account` or `WalletManager::unlock(id).balance()`.
-- [ ] `wallet send --wallet-id|--mnemonic --to <addr>|--to-wallet <name|id> --amount [--unit] [--fee-limit] [--dry-run] [--sign-only] [--wait]` → `tx::submit_trx`.
-- [ ] `wallet send-speedup --wallet-id --txid --fee-limit` → `tx::submit_send_speedup`.
+- [x] `wallet create --words 12|24 --name --network --password` → `WalletManager::create_with_meta`.
+- [x] `wallet import --name --network --password --mnemonic|--mnemonic-file|--private-key-file` → `WalletManager::create_with_meta` or `import_private_key`. A raw key is read from a file only (argv would leak it to `ps`), and the CLI warns that such a wallet has no phrase backup.
+- [x] `wallet show --id [--json]` → `WalletManager::unlock(id, pw)` + `UnlockedWallet::{keypair,summary}`.
+- [x] `wallet list [--json] [--all-networks] [--password]` → `WalletManager::list()` (ids only) or `list_summaries()` (names + networks, filtered by `--network`).
+- [x] `wallet delete --id` → `WalletManager::delete(id)`, behind a typed-`yes` confirmation (`--confirm-yes` to skip).
+- [x] `wallet rename --id --to --password` → `WalletManager::rename(id, pw, name)`. Takes the passphrase because the label lives inside the ciphertext (decrypt → edit → re-encrypt via `put_atomic`).
+- [x] `wallet balance --wallet-id|--address [--token USDT|<addr>]` → `chain::get_account` (native TRX) or `trc20::balance_of` (token).
+- [x] `wallet send --wallet-id|--mnemonic --to <addr>|--to-wallet <id> --amount [--unit] [--fee-limit] [--dry-run] [--sign-only] [--wait]` → `tx::submit::prepare_trx` → `sign_prepared` → `broadcast_signed`. Mainnet asks for a typed `yes` unless `--confirm-yes`; a node-side rejection is exit 5, not a warning.
+- [x] `wallet send-speedup --wallet-id --txid --fee-limit` → `tx::submit::submit_send_speedup` (fetches the original via `gettransactionbyid`, rebuilds it at the higher fee limit). TRON has no replace-by-fee, so this is a **new txid** and the CLI says so.
 
 #### Task 5.3 — `address` subcommand handlers
 
 **Files:** `crates/tron/src/handlers/address.rs`
 
-- [ ] `address new --mnemonic [--mnemonic-file] --index [--path]` → `keys::derive_keypair`.
-- [ ] `address xpub --wallet-id` → `WalletManager::xpub(id)`.
+- [x] `address new --mnemonic|--mnemonic-file --index [--path]` → `keys::derive_keypair` + `Address::from_public_key`.
+- [x] `address xpub --wallet-id [--path]` → `WalletManager::unlock` + `keys::xpub`.
 
 #### Task 5.4 — `balance` subcommand handlers
 
 **Files:** `crates/tron/src/handlers/balance.rs`
 
-- [ ] `balance --address <addr> [--unit trx|sun]` → `chain::get_account(addr)`.
-- [ ] `balance --address <addr> --token USDT|<addr>` → `chain::trc20_balance(addr, contract)`.
+- [x] `balance --address <addr> [--unit trx|sun]` → `chain::get_account(addr)`. An address the chain has never seen reads as 0 with an explicit note, not as an error.
+- [x] `balance --address <addr> --token USDT|<addr>` → `trc20::balance_of`, decimals from the bundled registry with a live `decimals()` fallback.
 
 #### Task 5.5 — `trc20` subcommand handlers
 
 **Files:** `crates/tron/src/handlers/trc20.rs`
 
-- [ ] `trc20 send --mnemonic --contract USDT|<addr> --to --amount` → `tx::submit_trc20`.
-- [ ] `trc20 approve --mnemonic --contract --spender --amount` → `tx::submit_trc20_approve`.
-- [ ] `trc20 balance --address --contract USDT|<addr>` → `chain::trc20_balance`.
-- [ ] `trc20 allowance --contract --owner --spender` → view-call `allowance(owner, spender)`.
+- [x] `trc20 send --wallet-id|--mnemonic --contract USDT|<addr> --to --amount` → `tx::submit::submit_trc20`, with decimals from the bundled registry (live `decimals()` fallback).
+- [x] `trc20 approve --contract --spender --amount|max` → `tx::submit::submit_trc20_approve`. An unlimited allowance requires a typed `yes` (`is_unlimited_approval`).
+- [x] `trc20 balance --address --contract USDT|<addr>` → `trc20::balance_of`.
+- [x] `trc20 allowance --contract --owner --spender` → `trc20::allowance` view call (`allowance(address,address)`, selector `0xdd62ed3e`), flagging an unlimited grant.
 
 #### Task 5.6 — `tx` subcommand handlers
 
 **Files:** `crates/tron/src/handlers/tx.rs`
 
-- [ ] `tx get --txid` → `chain::get_tx_info(txid)`.
-- [ ] `tx wait --txid --timeout --poll-interval` → `tx::wait_for_confirm(txid, timeout)`.
+- [x] `tx get --txid` → `TronGridClient::get_tx_info(txid)`.
+- [x] `tx wait --txid --timeout --poll-interval` → `tx::submit::wait_for_confirm`; a timeout is exit 3, never a silent success.
 
 #### Task 5.7 — `config` subcommand handlers
 
 **Files:** `crates/tron/src/handlers/config.rs`
 
-- [ ] `config show [--json]` → `config::TronConfig::load().display()`.
-- [ ] `config set-rpc <url>` → `config::set_rpc(url)` + save.
-- [ ] `config set-network mainnet|shasta|nile` → `config::set_network(net)` + save.
+- [x] `config show [--json]` → CLI-local `config.json` → `TronConfig`. Core `TronConfig` is not `Serialize`, so the CLI owns the on-disk shape until `TronConfig::load`/`save` land.
+- [x] `config set-rpc <url>` → validated (`http`/`https`, trailing slash stripped) + atomic temp-file rename.
+- [x] `config set-network mainnet|shasta|nile|local` → also resets `rpc_url` to that network's default (a mainnet URL under a `nile` label is how funds land on the wrong chain).
 
 #### Task 5.8 — Confirmation prompts + output formatting
 
 **Files:** `crates/tron/src/handlers/mod.rs`
 
-- [ ] Confirmation prompts for `mainnet`, `drain`, `unlimited approval`: require `yes` (not `y`); default abort; exit 1 on abort.
-- [ ] `--json` flag on every data-producing command.
-- [ ] Stderr for diagnostics; stdout for requested data only.
-- [ ] Mnemonic output → STDERR with red highlight; wallet_id → STDOUT.
+- [x] Confirmation prompts require typed `yes` (not `y`); default abort; exit 1 on abort. Wired on `wallet delete`, mainnet `wallet send` / `trc20 send` / `trc20 approve`, and any unlimited approval.
+- [x] `--json` flag on every data-producing command.
+- [x] Stderr for diagnostics; stdout for requested data only (asserted by `config_set_network_then_show_reflects_it` + the unsupported-path tests).
+- [x] Mnemonic output → STDERR; wallet_id → STDOUT (asserted by `wallet_create_routes_the_mnemonic_to_stderr_not_stdout`).
 
 #### Phase 6 Verification
 
-- [ ] `cargo build -p tron` succeeds.
-- [ ] `cargo run -p tron -- --help` shows all 6 top-level commands.
-- [ ] `cargo run -p tron -- wallet --help` shows 9 subcommands.
-- [ ] `cargo run -p tron -- trc20 --help` shows 4 subcommands.
-- [ ] `cargo run -p tron -- tx --help` shows 2 subcommands.
-- [ ] `cargo run -p tron -- config show` exits 0 with valid output.
+- [x] `cargo build -p tron` succeeds.
+- [x] `cargo run -p tron -- --help` shows all 6 top-level commands.
+- [x] `cargo run -p tron -- wallet --help` shows 9 subcommands.
+- [x] `cargo run -p tron -- trc20 --help` shows 4 subcommands.
+- [x] `cargo run -p tron -- tx --help` shows 2 subcommands.
+- [x] `cargo run -p tron -- config show` exits 0 with valid output.
 
 **PAUSE. Verify L13 step 11.**
 

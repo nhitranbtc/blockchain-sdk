@@ -28,7 +28,7 @@ mod derivation;
 mod mnemonic;
 mod xpub;
 
-pub use derivation::{derive_keypair, KeyPair, SECRET_KEY_LEN};
+pub use derivation::{derive_keypair, keypair_from_secret_bytes, KeyPair, SECRET_KEY_LEN};
 pub use mnemonic::{Mnemonic, SEED_LEN};
 pub use xpub::xpub;
 
