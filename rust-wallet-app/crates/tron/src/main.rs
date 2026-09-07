@@ -100,6 +100,7 @@ async fn run(cli: Cli) -> Result<()> {
             WalletAction::Send {
                 wallet_id,
                 mnemonic,
+                mnemonic_file,
                 to,
                 to_wallet,
                 amount,
@@ -108,6 +109,8 @@ async fn run(cli: Cli) -> Result<()> {
                 dry_run,
                 sign_only,
                 wait,
+                wait_timeout,
+                wait_poll_interval,
                 confirm_yes,
                 password,
                 network,
@@ -119,6 +122,7 @@ async fn run(cli: Cli) -> Result<()> {
                     handlers::wallet::SendArgs {
                         wallet_id,
                         mnemonic,
+                        mnemonic_file,
                         to,
                         to_wallet,
                         amount,
@@ -127,6 +131,8 @@ async fn run(cli: Cli) -> Result<()> {
                         dry_run,
                         sign_only,
                         wait,
+                        wait_timeout,
+                        wait_poll_interval,
                         confirm_yes,
                         password,
                         network,
@@ -140,13 +146,22 @@ async fn run(cli: Cli) -> Result<()> {
                 wallet_id,
                 txid,
                 fee_limit,
+                confirm_yes,
                 password,
                 network,
                 rpc_url,
                 json,
             } => {
                 handlers::wallet::send_speedup(
-                    &data_dir, wallet_id, txid, fee_limit, password, network, rpc_url, json,
+                    &data_dir,
+                    wallet_id,
+                    txid,
+                    fee_limit,
+                    password,
+                    confirm_yes,
+                    network,
+                    rpc_url,
+                    json,
                 )
                 .await
             }
@@ -176,6 +191,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Trc20(cmd) => match cmd.action {
             Trc20Action::Send {
                 mnemonic,
+                mnemonic_file,
                 wallet_id,
                 contract,
                 to,
@@ -190,6 +206,7 @@ async fn run(cli: Cli) -> Result<()> {
                 handlers::trc20::send(
                     &data_dir,
                     mnemonic,
+                    mnemonic_file,
                     wallet_id,
                     contract,
                     to,
@@ -205,6 +222,7 @@ async fn run(cli: Cli) -> Result<()> {
             }
             Trc20Action::Approve {
                 mnemonic,
+                mnemonic_file,
                 wallet_id,
                 contract,
                 spender,
@@ -219,6 +237,7 @@ async fn run(cli: Cli) -> Result<()> {
                 handlers::trc20::approve(
                     &data_dir,
                     mnemonic,
+                    mnemonic_file,
                     wallet_id,
                     contract,
                     spender,

@@ -10,20 +10,23 @@
 //! - a mainnet send asks for a typed `yes`;
 //! - the recovery phrase goes to STDERR, never STDOUT.
 
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tron_wallet_core::address::Address;
-use tron_wallet_core::keys::{derive_keypair, KeyPair, Language, Mnemonic, MnemonicType};
+use tron_wallet_core::config::Network;
+use tron_wallet_core::keys::{derive_keypair, Language, Mnemonic, MnemonicType, SECRET_KEY_LEN};
 use tron_wallet_core::tx::submit::{self, SubmitOptions};
-use tron_wallet_core::wallet::WalletManager;
+use tron_wallet_core::wallet::{WalletKind, WalletManager};
 
 use super::{
     confirm, derivation_path, effective_network, emit, format_units, network_of, open_client,
     open_storage, parse_decimal_amount, parse_wallet_id, resolve_mnemonic, resolve_password,
     unlock, CliError, Result,
 };
-use crate::cli::{NetworkArg, UnitArg};
+use crate::cli::{Network as NetworkArg, UnitArg};
+use zeroize::Zeroizing;
 
 /// Derives the account-0 (or `path`-overridden) T-address for a mnemonic.
 fn address_of(mnemonic: &Mnemonic, path: Option<&str>) -> Result<String> {
@@ -111,7 +114,7 @@ pub fn import(
         let id =
             manager.import_private_key(raw.trim(), &password, name.as_deref(), Some(net.tag()))?;
         let unlocked = manager.unlock(id, &password)?;
-        let keypair = unlocked.keypair(&derivation_path(None, 0)?)?;
+        let keypair = unlocked.raw_keypair()?;
         let address = Address::from_public_key(keypair.public_key())?.to_base58();
         eprintln!("imported a raw-key wallet: it has no recovery phrase to back up");
         emit(
@@ -121,7 +124,7 @@ pub fn import(
                 "address": address,
                 "name": name,
                 "network": net.tag(),
-                "is_private_key": true,
+                "kind": "private_key",
             }),
             &id.to_hex(),
         );
@@ -139,7 +142,7 @@ pub fn import(
             "address": address,
             "name": name,
             "network": net.tag(),
-            "is_private_key": false,
+            "kind": "mnemonic",
         }),
         &id.to_hex(),
     );
@@ -161,8 +164,16 @@ pub fn show(
     let unlocked = manager.unlock(wallet_id, &password)?;
 
     let derivation = derivation_path(path.as_deref(), 0)?;
-    let keypair = unlocked.keypair(&derivation)?;
-    let address = Address::from_public_key(keypair.public_key())?.to_base58();
+    let address = match unlocked.kind() {
+        WalletKind::Mnemonic => {
+            let keypair = unlocked.keypair(&derivation)?;
+            Address::from_public_key(keypair.public_key())?.to_base58()
+        }
+        WalletKind::PrivateKey => {
+            let keypair = unlocked.raw_keypair()?;
+            Address::from_public_key(keypair.public_key())?.to_base58()
+        }
+    };
     let summary = unlocked.summary();
 
     emit(
@@ -172,7 +183,7 @@ pub fn show(
             "address": address,
             "name": summary.name,
             "network": summary.network,
-            "is_private_key": summary.is_private_key,
+            "is_private_key": summary.is_private_key(),
             "path": derivation.to_string(),
         }),
         &address,
@@ -232,7 +243,7 @@ pub fn list(
                     "wallet_id": s.id.to_hex(),
                     "name": s.name,
                     "network": s.network,
-                    "is_private_key": s.is_private_key,
+                    "is_private_key": s.is_private_key(),
                 })
             })
             .collect();
@@ -256,11 +267,10 @@ pub fn list(
 /// holds.
 pub fn delete(data_dir: &Path, id: String, confirm_yes: bool) -> Result<()> {
     let wallet_id = parse_wallet_id(&id)?;
-    if !confirm_yes {
-        confirm(&format!(
-            "delete wallet {id}? the encrypted phrase cannot be recovered"
-        ))?;
-    }
+    confirm(
+        &format!("delete wallet {id}? the encrypted phrase cannot be recovered"),
+        confirm_yes,
+    )?;
     let storage = open_storage(data_dir)?;
     WalletManager::new(&storage).delete(wallet_id)?;
     eprintln!("deleted {id}");
@@ -321,13 +331,13 @@ pub async fn balance(
                 json,
                 serde_json::json!({
                     "address": owner,
-                    "exists": account.exists,
+                    "exists": account.exists(),
                     "balance_sun": account.balance_sun,
                     "balance_trx": trx,
                 }),
                 &trx,
             );
-            if !account.exists {
+            if !account.exists() {
                 eprintln!("note: this address has no on-chain record yet (never funded)");
             }
             Ok(())
@@ -340,6 +350,7 @@ pub async fn balance(
 pub struct SendArgs {
     pub wallet_id: Option<String>,
     pub mnemonic: Option<String>,
+    pub mnemonic_file: Option<PathBuf>,
     pub to: Option<String>,
     pub to_wallet: Option<String>,
     pub amount: String,
@@ -348,6 +359,8 @@ pub struct SendArgs {
     pub dry_run: bool,
     pub sign_only: bool,
     pub wait: bool,
+    pub wait_timeout: u64,
+    pub wait_poll_interval: u64,
     pub confirm_yes: bool,
     pub password: Option<String>,
     pub network: Option<NetworkArg>,
@@ -380,18 +393,21 @@ pub async fn send(data_dir: &Path, args: SendArgs, json: bool) -> Result<()> {
     }
 
     let amount_sun = parse_trx_amount(&args.amount, args.unit)?;
-    let (owner, keypair) = signer(data_dir, &args)?;
+    let (owner, secret) = signer(data_dir, &args)?;
 
-    if net == tron_wallet_core::config::Network::Mainnet && !args.confirm_yes {
-        confirm(&format!(
-            "send {} TRX from {owner} to {recipient} on MAINNET",
-            format_units(u128::from(amount_sun), 6)
-        ))?;
+    if net == Network::Mainnet {
+        confirm(
+            &format!(
+                "send {} TRX from {owner} to {recipient} on MAINNET",
+                format_units(u128::from(amount_sun), 6)
+            ),
+            args.confirm_yes,
+        )?;
     }
 
     let client = open_client(data_dir, args.network, args.rpc_url.clone())?;
     let opts = SubmitOptions {
-        fee_limit_sun: args.fee_limit,
+        fee_limit_sun: crate::handlers::wallet::fee_limit_sun(args.fee_limit)?,
         ..SubmitOptions::default()
     };
 
@@ -410,7 +426,7 @@ pub async fn send(data_dir: &Path, args: SendArgs, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let signed = submit::sign_prepared(keypair.secret_bytes(), &params)?;
+    let signed = submit::sign_prepared(&secret, &params)?;
     if args.sign_only {
         emit(
             json,
@@ -429,9 +445,35 @@ pub async fn send(data_dir: &Path, args: SendArgs, json: bool) -> Result<()> {
     report_broadcast(&signed.txid_hex(), &receipt, json)?;
 
     if args.wait {
-        wait_and_report(&client, &signed.txid_hex(), json).await?;
+        wait_and_report(
+            &client,
+            &signed.txid_hex(),
+            args.wait_timeout,
+            args.wait_poll_interval,
+            json,
+        )
+        .await?;
     }
     Ok(())
+}
+
+/// Convert a CLI `--fee-limit` into the core's non-zero type.
+///
+/// The flag stays `i64` at the CLI surface (that is what operators and existing
+/// scripts pass), and this is the one place a negative or zero value is refused
+/// — so `SubmitOptions` never has to represent "a fee limit of zero", which is
+/// indistinguishable from "no override" once it reaches the builder.
+pub(crate) fn fee_limit_sun(fee_limit: Option<i64>) -> Result<Option<NonZeroU64>> {
+    match fee_limit {
+        None => Ok(None),
+        Some(raw) => u64::try_from(raw)
+            .ok()
+            .and_then(NonZeroU64::new)
+            .map(Some)
+            .ok_or_else(|| {
+                CliError::BadInput(format!("--fee-limit must be greater than zero, got {raw}"))
+            }),
+    }
 }
 
 /// Parse an amount in TRX or SUN into SUN.
@@ -446,37 +488,71 @@ pub(crate) fn parse_trx_amount(amount: &str, unit: UnitArg) -> Result<u64> {
     }
 }
 
-/// Resolve the signing keypair and its address from `--wallet-id` or
-/// `--mnemonic`.
-fn signer(data_dir: &Path, args: &SendArgs) -> Result<(String, KeyPair)> {
+/// Resolve the signing secret and its owner address from `--wallet-id`,
+/// `--mnemonic`, or `--mnemonic-file`.
+///
+/// Returns the **secret bytes** rather than a `KeyPair` so a raw-key
+/// wallet (no derivation path) and a mnemonic wallet (derive fresh at
+/// `path`) can both flow through the same return type — `KeyPair` no
+/// longer derives `Clone` (PR #545 review finding G), so we cannot
+/// hand back an owned `KeyPair` from a borrowed raw-key one. The bytes
+/// live inside `Zeroizing`, so the wrapper's own zero-on-drop applies
+/// to this copy independently of the source.
+fn signer(data_dir: &Path, args: &SendArgs) -> Result<(String, Zeroizing<[u8; SECRET_KEY_LEN]>)> {
     let path = derivation_path(None, 0)?;
-    match (&args.wallet_id, &args.mnemonic) {
-        (Some(id), _) => {
+    match (&args.wallet_id, &args.mnemonic, &args.mnemonic_file) {
+        (Some(id), _, _) => {
             let storage = open_storage(data_dir)?;
             let manager = WalletManager::new(&storage);
             let wallet_id = parse_wallet_id(id)?;
             let password = resolve_password(args.password.clone(), "wallet passphrase: ")?;
             let unlocked = manager.unlock(wallet_id, &password)?;
-            let keypair = unlocked.keypair(&path)?;
-            let owner = Address::from_public_key(keypair.public_key())?.to_base58();
-            Ok((owner, keypair))
+            let owner = match unlocked.kind() {
+                WalletKind::Mnemonic => {
+                    let keypair = unlocked.keypair(&path)?;
+                    Address::from_public_key(keypair.public_key())?.to_base58()
+                }
+                WalletKind::PrivateKey => {
+                    let keypair = unlocked.raw_keypair()?;
+                    Address::from_public_key(keypair.public_key())?.to_base58()
+                }
+            };
+            let secret = match unlocked.kind() {
+                WalletKind::Mnemonic => {
+                    let keypair = unlocked.keypair(&path)?;
+                    keypair.secret_bytes().clone()
+                }
+                WalletKind::PrivateKey => unlocked.raw_keypair()?.secret_bytes().clone(),
+            };
+            Ok((owner, secret))
         }
-        (None, Some(phrase)) => {
+        (None, Some(phrase), _) => {
             let mnemonic = resolve_mnemonic(Some(phrase.clone()), None)?;
             let keypair = derive_keypair(&mnemonic, "", &path)?;
             let owner = Address::from_public_key(keypair.public_key())?.to_base58();
-            Ok((owner, keypair))
+            Ok((owner, keypair.secret_bytes().clone()))
         }
-        (None, None) => Err(CliError::BadInput(
-            "one of --wallet-id or --mnemonic is required".into(),
+        (None, None, Some(path_buf)) => {
+            let mnemonic = resolve_mnemonic(None, Some(path_buf.clone()))?;
+            let keypair = derive_keypair(&mnemonic, "", &path)?;
+            let owner = Address::from_public_key(keypair.public_key())?.to_base58();
+            Ok((owner, keypair.secret_bytes().clone()))
+        }
+        (None, None, None) => Err(CliError::BadInput(
+            "one of --wallet-id, --mnemonic, or --mnemonic-file is required".into(),
         )),
     }
 }
 
-/// Print a broadcast result, and turn a node-side rejection into exit 5.
+/// Print a broadcast result, and turn a node-side rejection into exit 3.
 ///
 /// A rejected transaction is not a success with a warning: a script reading
 /// exit 0 as "sent" would ship goods for a transfer the chain refused.
+///
+/// [`CoreError::Node`] rather than `TransactionBuild`: the envelope was built
+/// and signed correctly, and the refusal is the *node's* answer about chain
+/// state (insufficient balance, bandwidth). Exit 3 sends operators to the chain
+/// and their funding, where the fix is; exit 5 would send them to this code.
 pub(crate) fn report_broadcast(
     txid: &str,
     receipt: &tron_wallet_core::tx::broadcast::BroadcastReceipt,
@@ -495,27 +571,33 @@ pub(crate) fn report_broadcast(
     if receipt.is_success() {
         Ok(())
     } else {
-        Err(CliError::Core(tron_wallet_core::Error::TransactionBuild(
-            format!(
-                "node rejected {txid}: {} {}",
-                receipt.code.clone().unwrap_or_default(),
-                receipt.message.clone().unwrap_or_default()
-            ),
-        )))
+        Err(CliError::Core(tron_wallet_core::Error::Node(format!(
+            "node rejected {txid}: {} {}",
+            receipt.code.clone().unwrap_or_default(),
+            receipt.message.clone().unwrap_or_default()
+        ))))
     }
 }
 
 /// Poll until the transaction confirms, then print the receipt.
+///
+/// The interval is validated through the core helper so `wallet send --wait`
+/// and `tx wait` cannot disagree about what a zero interval means; the core
+/// returns [`tron_wallet_core::Error::Config`], which maps to exit 2.
 pub(crate) async fn wait_and_report(
     client: &tron_wallet_core::chain::TronGridClient,
     txid: &str,
+    timeout_secs: u64,
+    poll_interval_secs: u64,
     json: bool,
 ) -> Result<()> {
+    let poll_interval = Duration::from_secs(poll_interval_secs);
+    submit::validate_poll_interval(poll_interval)?;
     let info = submit::wait_for_confirm(
         client,
         txid,
-        Duration::from_secs(90),
-        Duration::from_secs(3),
+        Duration::from_secs(timeout_secs),
+        poll_interval,
     )
     .await?;
     emit(
@@ -544,29 +626,37 @@ pub async fn send_speedup(
     txid: String,
     fee_limit: i64,
     password: Option<String>,
+    confirm_yes: bool,
     network: Option<NetworkArg>,
     rpc_url: Option<String>,
     json: bool,
 ) -> Result<()> {
-    if fee_limit <= 0 {
-        return Err(CliError::BadInput(
-            "--fee-limit must be greater than zero".into(),
-        ));
+    let net = effective_network(data_dir, network)?;
+    if net == Network::Mainnet {
+        confirm(
+            &format!("re-broadcast {txid} from {wallet_id} on MAINNET with fee_limit {fee_limit}"),
+            confirm_yes,
+        )?;
     }
     let storage = open_storage(data_dir)?;
     let manager = WalletManager::new(&storage);
     let id = parse_wallet_id(&wallet_id)?;
     let password = resolve_password(password, "wallet passphrase: ")?;
-    let keypair = manager
-        .unlock(id, &password)?
-        .keypair(&derivation_path(None, 0)?)?;
+    let unlocked = manager.unlock(id, &password)?;
+    let secret = match unlocked.kind() {
+        WalletKind::Mnemonic => {
+            let keypair = unlocked.keypair(&derivation_path(None, 0)?)?;
+            keypair.secret_bytes().clone()
+        }
+        WalletKind::PrivateKey => unlocked.raw_keypair()?.secret_bytes().clone(),
+    };
 
     let client = open_client(data_dir, network, rpc_url)?;
     // TRON has no replace-by-fee: this is a *new* transaction with a new txid.
     eprintln!("note: TRON has no replace-by-fee — this broadcasts a new transaction");
-    let submitted =
-        submit::submit_send_speedup(&client, keypair.secret_bytes(), &txid, fee_limit).await?;
-    report_broadcast(&submitted.signed.txid_hex(), &submitted.receipt, json)
+    let limit = fee_limit_sun(Some(fee_limit))?.expect("non-zero already checked above");
+    let submitted = submit::submit_send_speedup(&client, &secret, &txid, limit).await?;
+    report_broadcast(&submitted.txid(), submitted.receipt(), json)
 }
 
 #[cfg(test)]
@@ -630,5 +720,90 @@ mod tests {
             error: None,
         };
         assert!(report_broadcast("deadbeef", &receipt, true).is_err());
+    }
+
+    #[test]
+    fn report_broadcast_rejection_uses_node_exit() {
+        let receipt = tron_wallet_core::tx::broadcast::BroadcastReceipt {
+            code: Some("CONTRACT_VALIDATE_ERROR".into()),
+            txid: Some("deadbeef".into()),
+            message: Some("balance is not sufficient".into()),
+            error: None,
+        };
+        let err = report_broadcast("deadbeef", &receipt, true).expect_err("rejection is an error");
+        // The envelope was fine; the chain refused it. Exit 3 points the
+        // operator at the node and their funding, not at this code (exit 5).
+        assert!(matches!(
+            err,
+            CliError::Core(tron_wallet_core::Error::Node(_))
+        ));
+        assert_eq!(super::super::exit_code(&err), 3);
+    }
+
+    #[test]
+    fn fee_limit_must_be_positive() {
+        // The CLI keeps `i64`; this is the single place zero and negative are
+        // refused, so `SubmitOptions` never carries a meaningless zero ceiling.
+        assert!(fee_limit_sun(None).expect("none is allowed").is_none());
+        assert_eq!(
+            fee_limit_sun(Some(1_000_000))
+                .expect("positive")
+                .map(|n| n.get()),
+            Some(1_000_000)
+        );
+        assert!(matches!(fee_limit_sun(Some(0)), Err(CliError::BadInput(_))));
+        assert!(matches!(
+            fee_limit_sun(Some(-1)),
+            Err(CliError::BadInput(_))
+        ));
+    }
+
+    #[test]
+    fn send_speedup_requires_confirm_on_mainnet() {
+        // `confirm` is the gate both mainnet paths share: with `confirm_yes` it
+        // returns Ok without reading STDIN, without it a non-tty aborts. That
+        // is the whole conditional `send_speedup` relies on, and it is checked
+        // before any broadcast.
+        confirm("speed-up on MAINNET", true).expect("--confirm-yes skips the prompt");
+        assert!(
+            matches!(
+                confirm("speed-up on MAINNET", false),
+                Err(CliError::BadInput(_))
+            ),
+            "a non-interactive run must refuse rather than broadcast unattended"
+        );
+    }
+
+    /// `signer` accepts a mnemonic supplied via file path, not just argv.
+    #[test]
+    fn signer_accepts_mnemonic_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let phrase_file = dir.path().join("phrase.txt");
+        std::fs::write(&phrase_file, VECTOR).expect("write phrase");
+
+        let args = SendArgs {
+            wallet_id: None,
+            mnemonic: None,
+            mnemonic_file: Some(phrase_file),
+            to: None,
+            to_wallet: None,
+            amount: "0".to_string(),
+            unit: UnitArg::Trx,
+            fee_limit: None,
+            dry_run: false,
+            sign_only: false,
+            wait: false,
+            wait_timeout: 90,
+            wait_poll_interval: 3,
+            confirm_yes: false,
+            password: None,
+            network: None,
+            rpc_url: None,
+        };
+        let (owner, secret) = signer(dir.path(), &args).expect("signer from file");
+        assert!(owner.starts_with('T'));
+        // Signer hands back the 32-byte secret wrapped in `Zeroizing`; the
+        // public key is recoverable through the core's `keypair_from_secret_bytes`.
+        assert_eq!(secret.len(), 32);
     }
 }

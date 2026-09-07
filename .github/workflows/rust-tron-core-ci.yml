@@ -145,6 +145,13 @@ jobs:
     name: Rust test (operator smoke — live + #[ignore])
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # `needs: rust-lint` breaks parallelism with the lint job so a failed
+    # fmt/clippy run does NOT cancel this 15-minute live-RPC job mid-flight.
+    # Without `needs`, GH cancels pending parallel jobs when the workflow
+    # fails — the smoke test burns 15 minutes of operator RPC quota for
+    # nothing if lint has already red. Sequential ordering means smoke is
+    # SKIPPED on lint fail (cheaper) and runs to completion on lint pass.
+    needs: rust-lint
     # Always run on push + PR + dispatch: live Nile + mainnet RPC smoke is a
     # required CI gate. Flip RUN_TRON_* env vars below to enable live legs;
     # SPKI pin self-extracted each run (no operator secret needed).

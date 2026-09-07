@@ -13,11 +13,12 @@
 //! Each backend gets its own `#[test]` so a failure pinpoints which
 //! PAL impl regressed.
 
-use tron_wallet_core::keys::{Language, Mnemonic};
+use tron_wallet_core::keys::{Language, Mnemonic, SECRET_KEY_LEN};
 use tron_wallet_core::wallet::{WalletId, WalletManager};
 use tron_wallet_core::WalletStorage;
 
 use tron_wallet_core::platform::test::InMemoryStorage;
+use zeroize::Zeroizing;
 
 const PHRASE: &str = "abandon abandon abandon abandon abandon abandon \
                       abandon abandon abandon abandon abandon about";
@@ -141,12 +142,15 @@ fn create_with_meta_round_trips_name_and_network() {
     let summary = mgr.summary(id, "pw").expect("summary");
     assert_eq!(summary.name.as_deref(), Some("cold"));
     assert_eq!(summary.network.as_deref(), Some("nile"));
-    assert!(!summary.is_private_key);
+    assert!(!summary.is_private_key());
+    assert_eq!(summary.kind, tron_wallet_core::wallet::WalletKind::Mnemonic);
 }
 
 #[test]
 fn a_legacy_phrase_only_blob_still_unlocks() {
     // Written the way v0.1 wrote it: `{"phrase": "..."}` and nothing else.
+    // The new untagged enum must decode this as `Mnemonic` (PR #545
+    // review finding F) without any code knowing the field names changed.
     let storage = InMemoryStorage::new();
     let mgr = WalletManager::new(&storage);
     let id = WalletId::new();
@@ -160,6 +164,35 @@ fn a_legacy_phrase_only_blob_still_unlocks() {
     assert_eq!(unlocked.mnemonic().expect("phrase").phrase(), PHRASE);
     assert_eq!(unlocked.name(), None);
     assert_eq!(unlocked.network(), None);
+    assert_eq!(
+        unlocked.kind(),
+        tron_wallet_core::wallet::WalletKind::Mnemonic
+    );
+}
+
+#[test]
+fn a_legacy_private_key_hex_blob_still_unlocks() {
+    // Older v0.1 wrote `{"private_key_hex": "..."}` (camelCase). The new
+    // `hex` field accepts that as an alias; this guards the alias path.
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let id = WalletId::new();
+    let legacy =
+        r#"{"private_key_hex":"e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35"}"#;
+    let blob = tron_wallet_core::crypto::encrypt(legacy.as_bytes(), b"pw").expect("encrypt");
+    storage.put_atomic(&id, blob.as_bytes()).expect("put");
+
+    let unlocked = mgr
+        .unlock(id, "pw")
+        .expect("a legacy private_key_hex blob must still open");
+    assert_eq!(
+        unlocked.kind(),
+        tron_wallet_core::wallet::WalletKind::PrivateKey
+    );
+    assert!(
+        unlocked.mnemonic().is_none(),
+        "a raw-key wallet has no phrase"
+    );
 }
 
 #[test]
@@ -220,16 +253,31 @@ fn imported_raw_key_unlocks_with_no_phrase() {
         unlocked.mnemonic().is_none(),
         "a raw-key wallet has no recovery phrase to hand back"
     );
-    assert!(mgr.summary(id, "pw").expect("summary").is_private_key);
+    let summary = mgr.summary(id, "pw").expect("summary");
+    assert!(summary.is_private_key());
+    assert_eq!(
+        summary.kind,
+        tron_wallet_core::wallet::WalletKind::PrivateKey
+    );
 
-    // The key must still produce a usable signing keypair.
+    // The key must still produce a usable signing keypair via the borrowed
+    // accessor (PR #545 finding G — `keypair(path)` errors for raw-key wallets).
     let path = tron_wallet_core::keys::DEFAULT_DERIVATION_PATH
         .parse()
         .expect("path");
-    let keypair = unlocked.keypair(&path).expect("keypair");
+    assert!(
+        unlocked.keypair(&path).is_err(),
+        "keypair(path) must reject raw-key wallets"
+    );
+    let keypair = unlocked.raw_keypair().expect("raw_keypair");
     let address =
         tron_wallet_core::address::Address::from_public_key(keypair.public_key()).expect("address");
     assert!(address.to_base58().starts_with('T'));
+
+    // And the secret bytes are reachable straight from the borrowed keypair
+    // for `submit::sign_prepared`.
+    let secret: Zeroizing<[u8; SECRET_KEY_LEN]> = keypair.secret_bytes().clone();
+    assert_eq!(secret.len(), SECRET_KEY_LEN);
 }
 
 #[test]

@@ -36,7 +36,7 @@ use tron_wallet_core::wallet::{WalletId, WalletManager};
 use tron_wallet_core::Error as CoreError;
 use zeroize::Zeroizing;
 
-use crate::cli::{NetworkArg, UnitArg};
+use crate::cli::UnitArg;
 
 /// CLI-level error. Wraps the core error so the exit-code mapping lives in
 /// exactly one place, and adds the two cases the core has no variant for:
@@ -126,29 +126,60 @@ pub fn parse_wallet_id(raw: &str) -> Result<WalletId> {
     WalletId::from_str(raw).map_err(CliError::Core)
 }
 
-/// `NetworkArg` → core `Network`.
-pub fn network_of(arg: NetworkArg) -> Network {
-    match arg {
-        NetworkArg::Mainnet => Network::Mainnet,
-        NetworkArg::Shasta => Network::Shasta,
-        NetworkArg::Nile => Network::Nile,
-        NetworkArg::Local => Network::Local,
-    }
+/// `NetworkArg` → core `Network`. Identity now that the two types are the same
+/// — kept so existing call sites compile unchanged while `cli::NetworkArg` is
+/// mid-removal.
+pub fn network_of(arg: Network) -> Network {
+    arg
 }
 
-/// Resolves the RPC client for a command.
+/// Default TronGrid hosts that ship with v0.1. Anything else emits the
+/// non-default-RPC warning gate (see [`open_client`]).
+fn is_default_trongrid_host(host: &str) -> bool {
+    matches!(
+        host,
+        "api.trongrid.io"
+            | "api.shasta.trongrid.io"
+            | "api.nile.trongrid.io"
+            | "localhost"
+            | "127.0.0.1"
+            | "::1"
+    )
+}
+
+/// Extracts the host portion from a URL, lowercased and port-stripped, or
+/// `None` if the URL cannot be parsed. Used only for the non-default-RPC
+/// warning — never as a security boundary (full SPKI pinning is the
+/// follow-up).
+fn host_of(url: &str) -> Option<String> {
+    // `url::Url::parse` would pull a heavyweight dep; the simple scheme +
+    // host extraction is enough for the STDERR warning we emit.
+    let after_scheme = url.split_once("://")?.1;
+    let host_part = after_scheme.split('/').next()?;
+    let host_only = host_part.split(':').next()?;
+    Some(host_only.to_ascii_lowercase())
+}
+
+/// Opens the RPC client for a command.
 ///
 /// Priority: `--rpc-url` → `--network`'s default URL → the persisted config.
 /// No SPKI pin is passed; the pin machinery was stripped from config in
 /// `631a90f`, so pinning is not a v0.1 CLI surface.
+///
+/// When the RPC URL targets anything other than the four bundled TronGrid
+/// hosts (mainnet, shasta, nile) or a loopback, a STDERR warning is emitted:
+/// a signed envelope posted to an unknown host can be exfiltrated and
+/// replayed inside its 60-second TAPOS window. We do not refuse, so
+/// integration tests and operator scripts that point at a self-hosted node
+/// keep working — but the warning is loud.
 pub fn open_client(
     data_dir: &Path,
-    network: Option<NetworkArg>,
+    network: Option<Network>,
     rpc_url: Option<String>,
 ) -> Result<TronGridClient> {
     let url = match (rpc_url, network) {
         (Some(u), _) => u,
-        (None, Some(n)) => tron_wallet_core::config::default_rpc_url(network_of(n)).to_string(),
+        (None, Some(n)) => tron_wallet_core::config::default_rpc_url(n).to_string(),
         (None, None) => config::load(data_dir)?.rpc_url,
     };
     if url.trim().is_empty() {
@@ -156,13 +187,21 @@ pub fn open_client(
             "no RPC url: pass --rpc-url, --network, or run `tron config set-rpc <url>`".into(),
         ));
     }
+    if let Some(host) = host_of(&url) {
+        if !is_default_trongrid_host(&host) {
+            eprintln!(
+                "warning: connecting to non-default RPC {host}; \
+                 signed envelope exfiltration risk for the 60s replay window"
+            );
+        }
+    }
     Ok(TronGridClient::new(&url, None)?)
 }
 
 /// The network a command operates on: explicit flag, else persisted config.
-pub fn effective_network(data_dir: &Path, network: Option<NetworkArg>) -> Result<Network> {
+pub fn effective_network(data_dir: &Path, network: Option<Network>) -> Result<Network> {
     match network {
-        Some(n) => Ok(network_of(n)),
+        Some(n) => Ok(n),
         None => Ok(config::load(data_dir)?.network),
     }
 }
@@ -329,7 +368,20 @@ pub fn render_trx(sun: u128, unit: UnitArg) -> String {
 ///
 /// `yes`, not `y`: the prompt guards mainnet sends, wallet deletion, and
 /// unlimited approvals, where a stray keystroke should not be enough.
-pub fn confirm(prompt: &str) -> Result<()> {
+///
+/// TTY gate: a piped stdin (script context) cannot answer `yes` interactively,
+/// and silently treating EOF as "no" is how scripts lose mainnet money. When
+/// `--confirm-yes` is set the caller has already accepted the prompt on the
+/// operator's behalf, so the TTY is bypassed.
+pub fn confirm(prompt: &str, confirm_yes: bool) -> Result<()> {
+    if confirm_yes {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(CliError::BadInput(
+            "typed confirmation requires a TTY; pass --confirm-yes for scripts".into(),
+        ));
+    }
     use std::io::Write;
     eprint!("{prompt} [type 'yes' to proceed]: ");
     std::io::stderr().flush().ok();
@@ -440,5 +492,58 @@ mod tests {
     fn render_trx_honours_unit() {
         assert_eq!(render_trx(1_500_000, UnitArg::Trx), "1.5");
         assert_eq!(render_trx(1_500_000, UnitArg::Sun), "1500000");
+    }
+
+    /// The typed-yes gate must refuse when stdin isn't a TTY. `cargo test`
+    /// runs the child process with stdout/stderr captured to a pipe rather
+    /// than a terminal, which is the non-TTY case we want to exercise.
+    #[test]
+    fn confirm_requires_tty_or_flag() {
+        let err = confirm("ship to mainnet?", false).expect_err("piped stdin must refuse");
+        let msg = match err {
+            CliError::BadInput(m) => m,
+            other => panic!("expected BadInput, got {other:?}"),
+        };
+        assert!(msg.contains("TTY"), "error must mention TTY, got {msg:?}");
+        assert!(
+            msg.contains("--confirm-yes"),
+            "error must mention --confirm-yes, got {msg:?}"
+        );
+    }
+
+    /// `--confirm-yes` short-circuits the TTY gate, so a piped stdin is
+    /// enough to authorise a mainnet send.
+    #[test]
+    fn confirm_bypass_when_flag_is_set() {
+        assert!(confirm("ship to mainnet?", true).is_ok());
+    }
+
+    #[test]
+    fn host_of_extracts_lowercased_authority() {
+        assert_eq!(
+            host_of("https://api.trongrid.io/foo"),
+            Some("api.trongrid.io".into())
+        );
+        assert_eq!(
+            host_of("https://API.SHASTA.trongrid.io:443/v1"),
+            Some("api.shasta.trongrid.io".into())
+        );
+        assert_eq!(host_of("not a url"), None);
+    }
+
+    #[test]
+    fn is_default_trongrid_host_lists_loopback_and_public_endpoints() {
+        for h in [
+            "api.trongrid.io",
+            "api.shasta.trongrid.io",
+            "api.nile.trongrid.io",
+            "localhost",
+            "127.0.0.1",
+        ] {
+            assert!(is_default_trongrid_host(h), "{h} should be default");
+        }
+        for h in ["attacker.example", "evil.trongrid.io.attacker.example"] {
+            assert!(!is_default_trongrid_host(h), "{h} must NOT be default");
+        }
     }
 }

@@ -22,6 +22,7 @@
 //! was signed correctly, and it arrives with a txid the operator may need. The
 //! caller decides how loudly to fail.
 
+use std::num::{NonZeroU32, NonZeroU64};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anychain_tron::TronTransactionParameters;
@@ -42,15 +43,31 @@ use crate::tx::sign::{sign_tx, SignedTransaction};
 pub const DEFAULT_EXPIRATION_MS: i64 = 60_000;
 
 /// Per-call knobs that are not part of the contract itself.
+///
+/// Both fields are non-zero by construction. A zero fee limit expressed as
+/// `Some(0)` and "no override" (`None`) are different instructions that the
+/// builder cannot distinguish once they reach it, and a zero expiration window
+/// signs a transaction that is already expired; the types make both
+/// unrepresentable rather than validated at every call site.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SubmitOptions {
     /// Energy ceiling in SUN. `None` keeps the builder's default: 0 for native
     /// TRX (bandwidth only), [`builder::DEFAULT_TRC20_FEE_LIMIT_SUN`] for
     /// contract calls.
-    pub fee_limit_sun: Option<i64>,
+    pub fee_limit_sun: Option<NonZeroU64>,
     /// Validity window in ms after the timestamp. `None` ⇒
     /// [`DEFAULT_EXPIRATION_MS`].
-    pub expiration_ms: Option<i64>,
+    pub expiration_ms: Option<NonZeroU32>,
+}
+
+impl SubmitOptions {
+    /// Both knobs at once, for callers that set them together.
+    pub fn new(fee_limit_sun: Option<NonZeroU64>, expiration_ms: Option<NonZeroU32>) -> Self {
+        Self {
+            fee_limit_sun,
+            expiration_ms,
+        }
+    }
 }
 
 /// A signed transaction plus whatever the node said about it.
@@ -58,8 +75,51 @@ pub struct SubmitOptions {
 pub struct Submitted {
     /// The signed envelope. `signed.txid_hex()` is the id to poll.
     pub signed: SignedTransaction,
-    /// The node's answer. Check `receipt.is_success()`.
+    /// The node's answer. Prefer [`Submitted::is_success`].
     pub receipt: BroadcastReceipt,
+}
+
+impl Submitted {
+    /// Pairs a signed envelope with the node's answer about *that* envelope.
+    ///
+    /// The debug assertion pins the one invariant the rest of this type rests
+    /// on: [`Submitted::txid`] reads the locally-computed txid, so a receipt
+    /// belonging to a different transaction would make it report an id the
+    /// node never acknowledged. TronGrid omits `txid` on some rejections,
+    /// which is why only a present-and-different id trips it.
+    pub(crate) fn new(signed: SignedTransaction, receipt: BroadcastReceipt) -> Self {
+        debug_assert!(
+            receipt
+                .txid
+                .as_deref()
+                .is_none_or(|id| id == signed.txid_hex()),
+            "receipt txid {:?} does not match the signed transaction {}",
+            receipt.txid,
+            signed.txid_hex()
+        );
+        Self { signed, receipt }
+    }
+
+    /// Whether the node accepted the broadcast. A `false` here is a
+    /// chain-state answer, not a transport failure.
+    pub fn is_success(&self) -> bool {
+        self.receipt.is_success()
+    }
+
+    /// The locally-computed transaction id — the one to poll.
+    pub fn txid(&self) -> String {
+        self.signed.txid_hex()
+    }
+
+    /// The node's verbatim answer.
+    pub fn receipt(&self) -> &BroadcastReceipt {
+        &self.receipt
+    }
+
+    /// Consume the pair, keeping only the node's answer.
+    pub fn into_receipt(self) -> BroadcastReceipt {
+        self.receipt
+    }
 }
 
 /// Wall-clock milliseconds. A transaction whose timestamp is in the future
@@ -87,13 +147,16 @@ async fn finalise(
     })?;
     builder::set_ref_block(params, height, &head.block_id)?;
     builder::set_timestamp(params, now_ms()?);
-    builder::set_expiration(params, opts.expiration_ms.unwrap_or(DEFAULT_EXPIRATION_MS));
+    let expiration = opts
+        .expiration_ms
+        .unwrap_or_else(|| NonZeroU32::new(60_000).expect("const nonzero"));
+    builder::set_expiration(params, i64::from(expiration.get()));
     if let Some(limit) = opts.fee_limit_sun {
-        if limit < 0 {
-            return Err(Error::TransactionBuild(format!(
-                "fee limit must not be negative, got {limit}"
-            )));
-        }
+        // `NonZeroU64` is already bounded below; the cast is the only remaining
+        // hazard, and a fee limit past `i64::MAX` SUN is not a real ceiling.
+        let limit: i64 = i64::try_from(limit.get()).map_err(|_| {
+            Error::TransactionBuild(format!("fee limit {} exceeds i64 SUN", limit.get()))
+        })?;
         builder::set_fee_limit(params, limit);
     }
     Ok(())
@@ -181,7 +244,7 @@ pub async fn submit_trx(
     let params = prepare_trx(rpc, owner, to, amount_sun, opts).await?;
     let signed = sign_prepared(secret, &params)?;
     let receipt = broadcast_signed(rpc, &signed).await?;
-    Ok(Submitted { signed, receipt })
+    Ok(Submitted::new(signed, receipt))
 }
 
 /// TRC-20 transfer: prepare → sign → broadcast.
@@ -197,7 +260,7 @@ pub async fn submit_trc20(
     let params = prepare_trc20(rpc, owner, contract, to, amount, opts).await?;
     let signed = sign_prepared(secret, &params)?;
     let receipt = broadcast_signed(rpc, &signed).await?;
-    Ok(Submitted { signed, receipt })
+    Ok(Submitted::new(signed, receipt))
 }
 
 /// TRC-20 approve: prepare → sign → broadcast.
@@ -213,7 +276,7 @@ pub async fn submit_trc20_approve(
     let params = prepare_trc20_approve(rpc, owner, contract, spender, amount, opts).await?;
     let signed = sign_prepared(secret, &params)?;
     let receipt = broadcast_signed(rpc, &signed).await?;
-    Ok(Submitted { signed, receipt })
+    Ok(Submitted::new(signed, receipt))
 }
 
 /// A TRC-20 call recovered from raw calldata.
@@ -292,17 +355,28 @@ fn evm_word_to_t_address(word: &[u8]) -> Result<String> {
 /// broadcasts a **new** transaction with a **new txid**. If the original later
 /// confirms, both may execute — so this is for calls that failed on
 /// `OUT_OF_ENERGY`, not for ones merely waiting.
+///
+/// The supplied key must be the original owner's. A speed-up rebuilds the
+/// original *intent* — recipient and amount come from the chain, not from the
+/// caller — so signing it with a different key would move that key's own funds
+/// to a recipient the operator never named in this command.
 pub async fn submit_send_speedup(
     rpc: &TronGridClient,
     secret: &Zeroizing<[u8; SECRET_KEY_LEN]>,
     txid_hex: &str,
-    fee_limit_sun: i64,
+    fee_limit_sun: NonZeroU64,
 ) -> Result<Submitted> {
     let opts = SubmitOptions {
         fee_limit_sun: Some(fee_limit_sun),
         ..SubmitOptions::default()
     };
-    match rpc.get_transaction_by_id(txid_hex).await? {
+    let original = rpc.get_transaction_by_id(txid_hex).await?;
+    let owner = match &original {
+        OriginalCall::Transfer { owner, .. } => owner,
+        OriginalCall::TriggerSmartContract { owner, .. } => owner,
+    };
+    verify_owner(secret, owner)?;
+    match original {
         OriginalCall::Transfer {
             owner,
             to,
@@ -323,6 +397,34 @@ pub async fn submit_send_speedup(
     }
 }
 
+/// Refuse a rebuild whose signing key is not the original owner.
+///
+/// [`Error::Disambiguation`] rather than `Signing`: nothing is wrong with the
+/// key or the envelope — the operator pointed the wrong wallet at a txid.
+fn verify_owner(secret: &Zeroizing<[u8; SECRET_KEY_LEN]>, owner: &str) -> Result<()> {
+    let keypair = crate::keys::keypair_from_secret_bytes(secret.as_slice())?;
+    let derived = crate::address::Address::from_public_key(keypair.public_key())?.to_base58();
+    if derived != owner {
+        return Err(Error::Disambiguation(format!(
+            "the supplied key controls {derived}, but that transaction was sent by {owner}"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject a poll interval that would spin the loop below without ever sleeping.
+///
+/// Single source of truth for the check so the CLI can refuse the flag before
+/// opening a client and [`wait_for_confirm`] still cannot be entered with a
+/// zero interval by an FFI caller. Always [`Error::Config`] — the CLI maps that
+/// to exit 2 (operator input) via `handlers::exit_code`.
+pub fn validate_poll_interval(poll_interval: Duration) -> Result<()> {
+    if poll_interval.is_zero() {
+        return Err(Error::Config("poll interval must be non-zero".into()));
+    }
+    Ok(())
+}
+
 /// Poll `gettransactioninfobyid` until the transaction lands in a block.
 ///
 /// A timeout is an error, never an `Ok` with an empty receipt: a caller that
@@ -333,9 +435,7 @@ pub async fn wait_for_confirm(
     timeout: Duration,
     poll_interval: Duration,
 ) -> Result<TransactionInfo> {
-    if poll_interval.is_zero() {
-        return Err(Error::Config("poll interval must be non-zero".into()));
-    }
+    validate_poll_interval(poll_interval)?;
     let deadline = SystemTime::now() + timeout;
     loop {
         let info = rpc.get_tx_info(txid_hex).await?;
@@ -443,6 +543,93 @@ mod tests {
             .await
             .expect_err("zero interval is a config error");
         assert!(matches!(err, Error::Config(_)));
+    }
+
+    #[test]
+    fn wait_for_confirm_zero_interval_returns_config_error() {
+        // The lifted helper is the single source of truth for the rule, so the
+        // CLI can refuse the flag without constructing a client.
+        assert!(matches!(
+            validate_poll_interval(Duration::ZERO),
+            Err(Error::Config(_))
+        ));
+        assert!(validate_poll_interval(Duration::from_secs(1)).is_ok());
+    }
+
+    /// A signed envelope with a known txid, for the [`Submitted`] accessors.
+    /// Signing is exercised in `tx::sign`; here only the txid matters.
+    fn signed_with(txid_byte: u8) -> SignedTransaction {
+        SignedTransaction {
+            txid: [txid_byte; 32],
+            raw_data_hex: "00".into(),
+            signature_hex: "00".into(),
+            signed_envelope_hex: "00".into(),
+        }
+    }
+
+    fn receipt(code: &str, txid: Option<String>) -> BroadcastReceipt {
+        BroadcastReceipt {
+            code: Some(code.into()),
+            txid,
+            message: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn submitted_is_success_reflects_receipt() {
+        let signed = signed_with(0xab);
+        let id = signed.txid_hex();
+        assert!(Submitted::new(signed.clone(), receipt("SUCCESS", Some(id))).is_success());
+        // A rejection is still a well-formed `Submitted` — the caller decides
+        // how loudly to fail.
+        let rejected = Submitted::new(signed, receipt("CONTRACT_VALIDATE_ERROR", None));
+        assert!(!rejected.is_success());
+        assert!(!rejected.into_receipt().is_success());
+    }
+
+    #[test]
+    fn submitted_txid_matches_signed() {
+        let signed = signed_with(0x11);
+        let id = signed.txid_hex();
+        let submitted = Submitted::new(signed, receipt("SUCCESS", Some(id.clone())));
+        // `txid()` reads the locally-computed id, which is what the debug
+        // assertion in `new` pins against the receipt.
+        assert_eq!(submitted.txid(), id);
+        assert_eq!(submitted.receipt().txid.as_deref(), Some(id.as_str()));
+    }
+
+    #[test]
+    fn submit_options_new_validates_non_zero() {
+        // Zero is unrepresentable: `NonZeroU64::new(0)` is the rejection, so a
+        // handler mapping a CLI `0` through it cannot reach the builder.
+        assert!(NonZeroU64::new(0).is_none());
+        assert!(NonZeroU32::new(0).is_none());
+
+        let opts = SubmitOptions::new(NonZeroU64::new(1_000_000), NonZeroU32::new(30_000));
+        assert_eq!(opts.fee_limit_sun.map(|n| n.get()), Some(1_000_000));
+        assert_eq!(opts.expiration_ms.map(|n| n.get()), Some(30_000));
+
+        let empty = SubmitOptions::new(NonZeroU64::new(0), NonZeroU32::new(0));
+        assert!(empty.fee_limit_sun.is_none() && empty.expiration_ms.is_none());
+        assert!(SubmitOptions::default().fee_limit_sun.is_none());
+    }
+
+    #[tokio::test]
+    async fn submit_send_speedup_owner_mismatch_is_disambiguation() {
+        // `verify_owner` is the gate: rebuilding an intent recovered from the
+        // chain with someone else's key would move *that* key's funds to a
+        // recipient this command never named.
+        let secret = Zeroizing::new([7u8; SECRET_KEY_LEN]);
+        let err = verify_owner(&secret, USDT).expect_err("wrong owner must be refused");
+        assert!(matches!(err, Error::Disambiguation(_)));
+
+        // The matching owner passes, so the guard is not simply always-on.
+        let keypair = crate::keys::keypair_from_secret_bytes(secret.as_slice()).expect("keypair");
+        let derived = crate::address::Address::from_public_key(keypair.public_key())
+            .expect("address")
+            .to_base58();
+        verify_owner(&secret, &derived).expect("the real owner is accepted");
     }
 
     /// A `const` assertion rather than a runtime one: the point is to make a

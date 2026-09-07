@@ -58,6 +58,25 @@ pub const APPROVE_SIGNATURE: &str = "approve(address,uint256)";
 
 /// `balanceOf(address)` — view call that returns the holder's token balance.
 pub const BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
+
+/// An allowance above this is treated as effectively unlimited.
+///
+/// `U256::MAX >> 128` = `2^128 - 1`. A real TRC-20 supply never reaches that,
+/// so anything larger is "the spender can drain the balance forever" in
+/// practice. Written out as limbs because `Shr` is not a `const fn`; the test
+/// below pins it against the shift it stands for.
+///
+/// Shared by the CLI `trc20 approve` confirmation gate so the rule lives next
+/// to the ABI it protects rather than in `handlers/`. Compared numerically
+/// rather than by decimal-digit count: a digit-length test silently reclassifies
+/// values whose string form is padded or grouped.
+pub const UNLIMITED_APPROVAL_THRESHOLD: U256 = U256([u64::MAX, u64::MAX, 0, 0]);
+
+/// Whether `amount` is an effectively-unlimited allowance.
+pub fn is_unlimited(amount: U256) -> bool {
+    amount > UNLIMITED_APPROVAL_THRESHOLD
+}
+
 /// Solidity signature for `balanceOf(address)`.
 pub const BALANCE_OF_SIGNATURE: &str = "balanceOf(address)";
 
@@ -312,6 +331,24 @@ fn decode_abi_string(bytes: &[u8], selector_label: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unlimited_threshold_is_the_shift_it_documents() {
+        // The const is written as limbs because `Shr` is not `const fn`; this
+        // is the equality that makes that rewrite safe.
+        assert_eq!(UNLIMITED_APPROVAL_THRESHOLD, U256::MAX >> 128);
+    }
+
+    #[test]
+    fn is_unlimited_boundary() {
+        // Strictly-greater: the threshold itself is still a bounded allowance.
+        assert!(!is_unlimited(UNLIMITED_APPROVAL_THRESHOLD));
+        assert!(!is_unlimited(UNLIMITED_APPROVAL_THRESHOLD - 1));
+        assert!(is_unlimited(UNLIMITED_APPROVAL_THRESHOLD + 1));
+        assert!(is_unlimited(U256::MAX));
+        assert!(!is_unlimited(U256::zero()));
+        assert!(!is_unlimited(U256::from(1000u64)));
+    }
 
     #[test]
     fn balance_of_selector_is_correct() {

@@ -6585,6 +6585,7 @@ dependencies = [
  "anychain-kms",
  "anychain-tron",
  "argon2",
+ "clap",
  "directories",
  "ethereum-types",
  "hex",

@@ -9,7 +9,9 @@
 use std::path::PathBuf;
 
 use clap::builder::{PossibleValuesParser, TypedValueParser};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
+
+pub use tron_wallet_core::config::Network;
 
 /// `tron` — TRON (TRX + TRC-20) wallet CLI.
 #[derive(Debug, Parser)]
@@ -40,17 +42,8 @@ pub enum Commands {
     Config(ConfigCmd),
 }
 
-/// TRON network selector. `local` expects `--rpc-url` or a configured RPC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum NetworkArg {
-    Mainnet,
-    Shasta,
-    Nile,
-    Local,
-}
-
 /// Amount unit for TRX-denominated values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum UnitArg {
     /// 1 TRX = 1_000_000 SUN.
     Trx,
@@ -84,8 +77,8 @@ pub enum WalletAction {
         #[arg(long)]
         name: Option<String>,
         /// Network this wallet is intended for.
-        #[arg(long, value_enum, default_value_t = NetworkArg::Nile)]
-        network: NetworkArg,
+        #[arg(long, value_enum, default_value_t)]
+        network: Network,
         /// Encryption passphrase. Prefer `TRON_PASSWORD` or the TTY prompt.
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
@@ -107,8 +100,8 @@ pub enum WalletAction {
         /// Human-readable label (needs wallet metadata — not in v0.1 core).
         #[arg(long)]
         name: Option<String>,
-        #[arg(long, value_enum, default_value_t = NetworkArg::Nile)]
-        network: NetworkArg,
+        #[arg(long, value_enum, default_value_t)]
+        network: Network,
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long)]
@@ -139,7 +132,7 @@ pub enum WalletAction {
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
     },
     /// Delete a stored wallet blob.
     Delete {
@@ -172,7 +165,7 @@ pub enum WalletAction {
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         #[arg(long)]
@@ -182,8 +175,10 @@ pub enum WalletAction {
     Send {
         #[arg(long)]
         wallet_id: Option<String>,
-        #[arg(long, conflicts_with = "wallet_id")]
+        #[arg(long, conflicts_with_all = ["wallet_id", "mnemonic_file"])]
         mnemonic: Option<String>,
+        #[arg(long, conflicts_with_all = ["wallet_id", "mnemonic"])]
+        mnemonic_file: Option<PathBuf>,
         #[arg(long)]
         to: Option<String>,
         /// Send to another stored wallet by id.
@@ -204,13 +199,19 @@ pub enum WalletAction {
         /// Block until the transaction confirms.
         #[arg(long)]
         wait: bool,
+        /// With `--wait`: seconds to wait before giving up.
+        #[arg(long, default_value_t = 90)]
+        wait_timeout: u64,
+        /// With `--wait`: seconds between confirmation polls.
+        #[arg(long, default_value_t = 3)]
+        wait_poll_interval: u64,
         /// Skip the mainnet confirmation prompt (for scripts).
         #[arg(long)]
         confirm_yes: bool,
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         #[arg(long)]
@@ -224,10 +225,13 @@ pub enum WalletAction {
         txid: String,
         #[arg(long)]
         fee_limit: i64,
+        /// Skip the mainnet confirmation prompt (for scripts).
+        #[arg(long)]
+        confirm_yes: bool,
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         #[arg(long)]
@@ -258,13 +262,13 @@ pub enum AddressAction {
         /// Full derivation path override, e.g. `m/44'/195'/0'/0/3`.
         #[arg(long)]
         path: Option<String>,
-        /// BIP-39 passphrase (not the wallet encryption passphrase).
+        /// BIP-39 passphrase (not the the password).
         #[arg(long, default_value = "")]
         bip39_passphrase: String,
         #[arg(long)]
         json: bool,
     },
-    /// Export the extended public key for a stored wallet.
+    /// Export the the extended public key for a stored wallet.
     Xpub {
         #[arg(long)]
         wallet_id: String,
@@ -291,7 +295,7 @@ pub struct BalanceArgs {
     #[arg(long, value_enum, default_value_t = UnitArg::Trx)]
     pub unit: UnitArg,
     #[arg(long, value_enum)]
-    pub network: Option<NetworkArg>,
+    pub network: Option<Network>,
     #[arg(long)]
     pub rpc_url: Option<String>,
     #[arg(long)]
@@ -313,8 +317,10 @@ pub enum Trc20Action {
     Send {
         #[arg(long)]
         mnemonic: Option<String>,
-        #[arg(long, conflicts_with = "mnemonic")]
+        #[arg(long, conflicts_with_all = ["mnemonic", "mnemonic_file"])]
         wallet_id: Option<String>,
+        #[arg(long, conflicts_with_all = ["wallet_id", "mnemonic"])]
+        mnemonic_file: Option<PathBuf>,
         /// `USDT` or a contract address.
         #[arg(long)]
         contract: String,
@@ -327,7 +333,7 @@ pub enum Trc20Action {
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         /// Skip the mainnet confirmation prompt (for scripts).
@@ -340,8 +346,10 @@ pub enum Trc20Action {
     Approve {
         #[arg(long)]
         mnemonic: Option<String>,
-        #[arg(long, conflicts_with = "mnemonic")]
+        #[arg(long, conflicts_with_all = ["mnemonic", "mnemonic_file"])]
         wallet_id: Option<String>,
+        #[arg(long, conflicts_with_all = ["wallet_id", "mnemonic"])]
+        mnemonic_file: Option<PathBuf>,
         #[arg(long)]
         contract: String,
         #[arg(long)]
@@ -354,7 +362,7 @@ pub enum Trc20Action {
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         /// Skip the unlimited-approval and mainnet prompts (for scripts).
@@ -370,7 +378,7 @@ pub enum Trc20Action {
         #[arg(long)]
         contract: String,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         #[arg(long)]
@@ -385,7 +393,7 @@ pub enum Trc20Action {
         #[arg(long)]
         spender: String,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         #[arg(long)]
@@ -409,7 +417,7 @@ pub enum TxAction {
         #[arg(long)]
         txid: String,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         #[arg(long)]
@@ -426,7 +434,7 @@ pub enum TxAction {
         #[arg(long, default_value_t = 3)]
         poll_interval: u64,
         #[arg(long, value_enum)]
-        network: Option<NetworkArg>,
+        network: Option<Network>,
         #[arg(long)]
         rpc_url: Option<String>,
         #[arg(long)]
@@ -458,6 +466,6 @@ pub enum ConfigAction {
     /// Persist the active network (resets `rpc_url` to that network's default).
     SetNetwork {
         #[arg(value_enum)]
-        network: NetworkArg,
+        network: Network,
     },
 }

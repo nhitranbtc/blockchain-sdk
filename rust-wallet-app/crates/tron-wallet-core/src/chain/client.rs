@@ -331,7 +331,8 @@ impl TronGridClient {
     ///
     /// An address that has never received funds is not an error: TronGrid
     /// answers HTTP 200 with `{}`, which this maps to
-    /// `AccountInfo { exists: false, balance_sun: 0 }`. Collapsing that into
+    /// `AccountInfo { address: None, balance_sun: 0 }` (so
+    /// `AccountInfo::exists()` returns `false`). Collapsing that into
     /// an error would make "empty wallet" indistinguishable from "node down",
     /// and those two need different operator responses.
     pub async fn get_account(&self, address: &str) -> Result<AccountInfo> {
@@ -414,9 +415,18 @@ pub struct AccountInfo {
     pub address: Option<String>,
     /// Native balance in SUN (1 TRX = 1_000_000 SUN).
     pub balance_sun: u64,
-    /// Whether the chain holds a record for this address at all. An activated
-    /// account holding exactly 0 TRX still reports `true`.
-    pub exists: bool,
+}
+
+impl AccountInfo {
+    /// Whether the chain holds a record for this address at all.
+    ///
+    /// An activated account holding exactly 0 TRX still has a record, so
+    /// `address.is_some()` is the right proxy — keeping a separate
+    /// `exists: bool` field would let the two drift out of sync (PR #545
+    /// review finding).
+    pub fn exists(&self) -> bool {
+        self.address.is_some()
+    }
 }
 
 /// The contract call inside an already-broadcast transaction, reduced to the
@@ -444,7 +454,6 @@ fn parse_account_response(bytes: &[u8]) -> Result<AccountInfo> {
         return Ok(AccountInfo {
             address: None,
             balance_sun: 0,
-            exists: false,
         });
     }
     let value: serde_json::Value = serde_json::from_slice(bytes)
@@ -465,7 +474,6 @@ fn parse_account_response(bytes: &[u8]) -> Result<AccountInfo> {
             .and_then(|a| a.as_str())
             .map(str::to_owned),
         balance_sun,
-        exists: true,
     })
 }
 
@@ -528,7 +536,7 @@ mod response_decoding_tests {
     #[test]
     fn unseen_account_is_zero_balance_not_an_error() {
         let info = parse_account_response(b"{}").expect("empty body is a valid answer");
-        assert!(!info.exists);
+        assert!(!info.exists());
         assert_eq!(info.balance_sun, 0);
     }
 
@@ -537,7 +545,7 @@ mod response_decoding_tests {
         let info =
             parse_account_response(br#"{"address":"TAbc","create_time":1}"#).expect("decode");
         assert!(
-            info.exists,
+            info.exists(),
             "the node returned a record, so the account exists"
         );
         assert_eq!(info.balance_sun, 0);
@@ -549,6 +557,23 @@ mod response_decoding_tests {
             parse_account_response(br#"{"address":"TAbc","balance":1500000}"#).expect("decode");
         assert_eq!(info.balance_sun, 1_500_000);
         assert_eq!(info.address.as_deref(), Some("TAbc"));
+    }
+
+    /// Regression for Finding K: `exists()` is a method, derived from
+    /// `address.is_some()`, never a stored field — PR #545 review.
+    #[test]
+    fn account_info_exists_derives_from_address() {
+        let seen = AccountInfo {
+            address: Some("TAbc".into()),
+            balance_sun: 0,
+        };
+        assert!(seen.exists(), "address.is_some() implies exists()");
+
+        let unseen = AccountInfo {
+            address: None,
+            balance_sun: 0,
+        };
+        assert!(!unseen.exists(), "address.is_none() implies !exists()");
     }
 
     #[test]

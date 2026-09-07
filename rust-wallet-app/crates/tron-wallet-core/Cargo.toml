@@ -50,6 +50,12 @@ sha2 = { workspace = true }
 # Hex rendering for address round-trips and canonical-vector assertions.
 hex = { workspace = true }
 
+# CLI integration: `Network` derives `clap::ValueEnum` so the `tron` binary
+# can `#[arg(value_enum)]` against the core type rather than a parallel
+# `NetworkArg` newtype. Pulled in here so a future FFI host that wants to
+# expose network selection can reuse the same derive.
+clap = { workspace = true }
+
 # Phase 2 — tx builder wrappers + tx/sign::sign_tx + chain::TronGridClient.
 serde = { workspace = true }
 serde_json = { workspace = true }

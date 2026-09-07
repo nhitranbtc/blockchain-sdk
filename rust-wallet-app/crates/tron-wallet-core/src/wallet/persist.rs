@@ -17,11 +17,14 @@
 //!   → UnlockedWallet { mnemonic: Zeroizing<...> }
 //! ```
 //!
-//! **Plaintext format inside the encrypted blob:** JSON-encoded
-//! `PlaintextRecord { phrase: String }`. A v0.1 blob is exactly one
-//! phrase; later versions will add a `version` + `network` +
-//! `derivation_path` header. Single-phrase-per-wallet is fine because
-//! the CLI enforces "one wallet per logical account".
+//! **Plaintext format inside the encrypted blob:** a `#[serde(untagged)]`
+//! `PlaintextRecord` enum with one variant per secret shape. A
+//! `{"phrase": "..."}` blob (any v0.1 version) decodes as `Mnemonic`;
+//! a `{"hex": "..."}` blob decodes as `PrivateKey`. The "phrase-AND-hex"
+//! state is unrepresentable — both variants carry `#[serde(deny_unknown_fields)]`,
+//! so a JSON object with both keys fails to decode rather than silently
+//! dropping one. An older `{"private_key_hex": "..."}` blob still decodes as
+//! `PrivateKey` via the `alias` on the `hex` field.
 //!
 //! **Zeroizing wrap:** the `Mnemonic` returned by `unlock` is rebuilt
 //! from the decrypted phrase bytes and lives inside `bip39::Mnemonic`,
@@ -58,6 +61,19 @@ pub struct UnlockedWallet {
     network: Option<String>,
 }
 
+/// What kind of secret a [`UnlockedWallet`] holds.
+///
+/// `is_private_key() -> bool` is the bool accessor — callers that already
+/// branch on `kind` should match directly; the bool helper exists for
+/// JSON output that wants a single field rather than a discriminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalletKind {
+    /// Derived from a BIP-39 phrase; every keypair comes from `derive_keypair`.
+    Mnemonic,
+    /// Imported as a raw 32-byte secp256k1 scalar; no derivation path applies.
+    PrivateKey,
+}
+
 /// The spending secret inside a wallet record.
 ///
 /// Two variants rather than "mnemonic, sometimes empty": a raw-key wallet has
@@ -72,7 +88,13 @@ pub enum WalletSecret {
 }
 
 /// Non-secret description of a stored wallet.
+///
+/// `#[non_exhaustive]` so future fields (created_at, last_unlocked_at,
+/// derivation_path, …) can be added without breaking downstream code that
+/// pattern-matches or constructs it. Construction stays possible from inside
+/// the crate via explicit field init.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WalletSummary {
     /// Storage handle.
     pub id: WalletId,
@@ -81,9 +103,15 @@ pub struct WalletSummary {
     /// Network tag (`mainnet` / `shasta` / `nile` / `local`) the wallet was
     /// created for, if recorded.
     pub network: Option<String>,
-    /// Whether the secret is a raw key rather than a mnemonic. Surfaced
-    /// because a raw-key wallet cannot be backed up as a phrase.
-    pub is_private_key: bool,
+    /// What kind of secret backs this wallet.
+    pub kind: WalletKind,
+}
+
+impl WalletSummary {
+    /// `true` for an imported raw-key wallet, `false` for a mnemonic-derived one.
+    pub fn is_private_key(&self) -> bool {
+        matches!(self.kind, WalletKind::PrivateKey)
+    }
 }
 
 impl UnlockedWallet {
@@ -109,6 +137,14 @@ impl UnlockedWallet {
         &self.secret
     }
 
+    /// What kind of secret backs this wallet.
+    pub fn kind(&self) -> WalletKind {
+        match &self.secret {
+            WalletSecret::Mnemonic(_) => WalletKind::Mnemonic,
+            WalletSecret::PrivateKey(_) => WalletKind::PrivateKey,
+        }
+    }
+
     /// Operator-supplied label, if any.
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
@@ -125,19 +161,48 @@ impl UnlockedWallet {
             id: self.id,
             name: self.name.clone(),
             network: self.network.clone(),
-            is_private_key: matches!(self.secret, WalletSecret::PrivateKey(_)),
+            kind: self.kind(),
         }
     }
 
     /// The signing keypair for this wallet.
     ///
-    /// Derived wallets take `path`; raw-key wallets ignore it, because there is
-    /// nothing to derive — passing a path for one is a caller mistake worth
-    /// surfacing rather than silently honouring.
+    /// **Mnemonic wallets:** `path` is honoured — a fresh derivation is
+    /// performed each call, and the returned `KeyPair` is owned by the
+    /// caller (with its secret inside `Zeroizing`).
+    ///
+    /// **Raw-key wallets:** this method errors out. A raw-key wallet has no
+    /// derivation path — the secret scalar IS the account — so asking for
+    /// "the keypair at path" is a category mistake. Use [`Self::raw_keypair`]
+    /// to borrow the imported keypair directly.
     pub fn keypair(&self, path: &DerivationPath) -> Result<KeyPair> {
         match &self.secret {
             WalletSecret::Mnemonic(m) => derive_keypair(m, "", path),
-            WalletSecret::PrivateKey(kp) => Ok(kp.clone()),
+            WalletSecret::PrivateKey(_) => Err(Error::Derivation(
+                "raw-key wallets have no derivation path; use raw_keypair() instead".into(),
+            )),
+        }
+    }
+
+    /// Borrow the imported keypair for a raw-key wallet.
+    ///
+    /// **Raw-key wallets:** returns `&KeyPair` (zeroizing on drop). The
+    /// returned reference is tied to `&self`; it does not extend the
+    /// `KeyPair`'s lifetime, just exposes it.
+    ///
+    /// **Mnemonic wallets:** this method errors out. Use [`Self::keypair`]
+    /// to derive a keypair at a path.
+    ///
+    /// `sign_prepared(&Zeroizing<[u8; SECRET_KEY_LEN]>)` callers can pass
+    /// `raw_keypair().secret_bytes()` straight through; the borrow lasts
+    /// as long as the `UnlockedWallet` does, which is longer than any
+    /// single signing call.
+    pub fn raw_keypair(&self) -> Result<&KeyPair> {
+        match &self.secret {
+            WalletSecret::PrivateKey(kp) => Ok(kp),
+            WalletSecret::Mnemonic(_) => Err(Error::Derivation(
+                "mnemonic wallets have no raw keypair to borrow; use keypair(path) instead".into(),
+            )),
         }
     }
 }
@@ -155,71 +220,101 @@ impl fmt::Debug for UnlockedWallet {
 
 /// Plaintext record encrypted at rest.
 ///
-/// Backward compatible with the v0.1 phrase-only shape: every field added
-/// after `phrase` is `#[serde(default)]`, so a blob written before this change
-/// still decodes (as an unnamed, network-less mnemonic wallet). That is why
-/// there is no version byte — adding one would have made those blobs
-/// unreadable, and the wallets they hold are the only copy of their funds.
+/// Two variants, not "phrase + optional hex": the "phrase-AND-hex-present"
+/// state would be ambiguous (which one is the spending key?). Newtype
+/// variants wrapping inner `#[serde(deny_unknown_fields)]` structs make
+/// that ambiguity unrepresentable on the wire — `{"phrase":"x","hex":"y"}`
+/// fails to decode because both inner types reject unknown fields, rather
+/// than silently dropping one. Serde `untagged` then tries the next variant
+/// after each failure, and the overall parse errors.
+///
+/// Backward compatibility:
+/// - `{"phrase":"..."}` (any v0.1 version) → `Mnemonic`
+/// - `{"private_key_hex":"..."}` (older camelCase) → `PrivateKey` via the
+///   `alias` on the new `hex` field
+/// - `{"hex":"..."}` → `PrivateKey`
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct PlaintextRecord {
-    /// BIP-39 phrase. Empty string for a raw-key record.
+#[serde(untagged)]
+enum PlaintextRecord {
+    /// BIP-39 phrase plus optional label and network tag.
+    Mnemonic(MnemonicRecord),
+    /// Raw 32-byte secp256k1 scalar as hex, plus optional label and network tag.
+    PrivateKey(PrivateKeyRecord),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MnemonicRecord {
     phrase: String,
-    /// Raw secp256k1 scalar as hex, for imported keys.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    private_key_hex: Option<String>,
-    /// Operator-supplied label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
-    /// Network tag this wallet was created for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    network: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateKeyRecord {
+    /// Accepts both the new field name and the older `private_key_hex`
+    /// (the field name before v0.1 added `name`/`network`).
+    #[serde(alias = "private_key_hex")]
+    hex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network: Option<String>,
 }
 
 impl PlaintextRecord {
-    fn from_mnemonic(m: &Mnemonic) -> Self {
-        Self {
+    fn from_mnemonic(m: &Mnemonic, name: Option<&str>, network: Option<&str>) -> Self {
+        Self::Mnemonic(MnemonicRecord {
             phrase: m.phrase().to_owned(),
-            private_key_hex: None,
-            name: None,
-            network: None,
+            name: name.map(str::to_owned),
+            network: network.map(str::to_owned),
+        })
+    }
+
+    fn from_private_key_hex(hex_key: &str, name: Option<&str>, network: Option<&str>) -> Self {
+        Self::PrivateKey(PrivateKeyRecord {
+            hex: hex_key.to_owned(),
+            name: name.map(str::to_owned),
+            network: network.map(str::to_owned),
+        })
+    }
+
+    fn name(&self) -> Option<&str> {
+        match self {
+            Self::Mnemonic(r) => r.name.as_deref(),
+            Self::PrivateKey(r) => r.name.as_deref(),
         }
     }
 
-    fn with_meta(mut self, name: Option<&str>, network: Option<&str>) -> Self {
-        self.name = name.map(str::to_owned);
-        self.network = network.map(str::to_owned);
-        self
-    }
-
-    fn from_private_key_hex(hex_key: &str) -> Self {
-        Self {
-            phrase: String::new(),
-            private_key_hex: Some(hex_key.to_owned()),
-            name: None,
-            network: None,
+    fn network(&self) -> Option<&str> {
+        match self {
+            Self::Mnemonic(r) => r.network.as_deref(),
+            Self::PrivateKey(r) => r.network.as_deref(),
         }
     }
 
     /// Rebuild the secret, re-validating it in the process.
     fn to_secret(&self, language: Language) -> Result<WalletSecret> {
-        match &self.private_key_hex {
-            Some(hex_key) => {
-                let bytes = Zeroizing::new(hex::decode(hex_key).map_err(|e| {
+        match self {
+            Self::Mnemonic(MnemonicRecord { phrase, .. }) => Ok(WalletSecret::Mnemonic(
+                Mnemonic::from_phrase(phrase, language)?,
+            )),
+            Self::PrivateKey(PrivateKeyRecord { hex, .. }) => {
+                let bytes = Zeroizing::new(hex::decode(hex).map_err(|e| {
                     Error::Config(format!("wallet record private key is not hex: {e}"))
                 })?);
                 Ok(WalletSecret::PrivateKey(keypair_from_secret_bytes(&bytes)?))
             }
-            None => Ok(WalletSecret::Mnemonic(Mnemonic::from_phrase(
-                &self.phrase,
-                language,
-            )?)),
         }
     }
 }
 
 /// Encrypted-wallet persistence layer. Takes any `WalletStorage` impl
 /// at construction; the same instance is usable across many wallet
-/// create/unlock cycles.
+// create/unlock cycles.
 pub struct WalletManager<'a> {
     storage: &'a dyn WalletStorage,
 }
@@ -251,7 +346,7 @@ impl<'a> WalletManager<'a> {
         name: Option<&str>,
         network: Option<&str>,
     ) -> Result<WalletId> {
-        let record = PlaintextRecord::from_mnemonic(mnemonic).with_meta(name, network);
+        let record = PlaintextRecord::from_mnemonic(mnemonic, name, network);
         self.persist_new(&record, passphrase)
     }
 
@@ -277,7 +372,7 @@ impl<'a> WalletManager<'a> {
         );
         keypair_from_secret_bytes(&bytes)?;
 
-        let record = PlaintextRecord::from_private_key_hex(&normalised).with_meta(name, network);
+        let record = PlaintextRecord::from_private_key_hex(&normalised, name, network);
         self.persist_new(&record, passphrase)
     }
 
@@ -309,8 +404,8 @@ impl<'a> WalletManager<'a> {
         Ok(UnlockedWallet {
             id,
             secret,
-            name: record.name.clone(),
-            network: record.network.clone(),
+            name: record.name().map(str::to_owned),
+            network: record.network().map(str::to_owned),
         })
     }
 
@@ -343,7 +438,11 @@ impl<'a> WalletManager<'a> {
             return Err(Error::Wallet("wallet name must not be empty".into()));
         }
         let mut record = self.read_record(id, passphrase)?;
-        record.name = Some(trimmed.to_owned());
+        let owned = trimmed.to_owned();
+        match &mut record {
+            PlaintextRecord::Mnemonic(r) => r.name = Some(owned),
+            PlaintextRecord::PrivateKey(r) => r.name = Some(owned),
+        }
 
         let plaintext = Zeroizing::new(
             serde_json::to_vec(&record)
@@ -360,9 +459,12 @@ impl<'a> WalletManager<'a> {
         let record = self.read_record(id, passphrase)?;
         Ok(WalletSummary {
             id,
-            name: record.name.clone(),
-            network: record.network.clone(),
-            is_private_key: record.private_key_hex.is_some(),
+            name: record.name().map(str::to_owned),
+            network: record.network().map(str::to_owned),
+            kind: match &record {
+                PlaintextRecord::Mnemonic(_) => WalletKind::Mnemonic,
+                PlaintextRecord::PrivateKey(_) => WalletKind::PrivateKey,
+            },
         })
     }
 
@@ -395,5 +497,132 @@ impl<'a> WalletManager<'a> {
     /// does not error on missing id (per the trait contract).
     pub fn delete(&self, id: WalletId) -> Result<()> {
         self.storage.delete(&id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A legacy phrase-only blob (the v0.1 wire format) must round-trip
+    /// through the new untagged enum without any code knowing the field
+    /// names changed. Decoded as `Mnemonic(MnemonicRecord { phrase, name: None, network: None })`.
+    #[test]
+    fn a_legacy_phrase_only_blob_decodes_as_mnemonic() {
+        let legacy = r#"{"phrase":"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"}"#;
+        let decoded: PlaintextRecord = serde_json::from_str(legacy).expect("legacy blob decodes");
+        match decoded {
+            PlaintextRecord::Mnemonic(MnemonicRecord {
+                phrase,
+                name,
+                network,
+            }) => {
+                assert!(phrase.starts_with("abandon"));
+                assert!(name.is_none());
+                assert!(network.is_none());
+            }
+            PlaintextRecord::PrivateKey(_) => panic!("expected Mnemonic variant"),
+        }
+    }
+
+    /// A blob carrying both a phrase and a hex key is a corrupt record.
+    /// The new enum must reject it rather than silently picking one.
+    #[test]
+    fn a_wallet_record_cannot_carry_both_phrase_and_hex() {
+        let both = r#"{"phrase":"x","hex":"00"}"#;
+        assert!(
+            serde_json::from_str::<PlaintextRecord>(both).is_err(),
+            "phrase+hex must fail to decode (deny_unknown_fields on both inner structs)"
+        );
+    }
+
+    /// A legacy camelCase `private_key_hex` blob decodes as `PrivateKey`
+    /// via the alias on the new `hex` field.
+    #[test]
+    fn a_legacy_private_key_hex_alias_still_decodes() {
+        let legacy = r#"{"private_key_hex":"00"}"#;
+        let decoded: PlaintextRecord =
+            serde_json::from_str(legacy).expect("legacy private_key_hex alias decodes");
+        match decoded {
+            PlaintextRecord::PrivateKey(PrivateKeyRecord { hex, .. }) => assert_eq!(hex, "00"),
+            PlaintextRecord::Mnemonic(_) => panic!("expected PrivateKey variant"),
+        }
+    }
+
+    /// Mnemonic variant round-trips through serde with no `hex` field appearing
+    /// in the output.
+    #[test]
+    fn a_mnemonic_record_round_trips() {
+        let rec = PlaintextRecord::from_mnemonic(
+            &Mnemonic::from_phrase(
+                "abandon abandon abandon abandon abandon abandon \
+                 abandon abandon abandon abandon abandon about",
+                Language::English,
+            )
+            .expect("valid phrase"),
+            Some("cold"),
+            Some("nile"),
+        );
+        let s = serde_json::to_string(&rec).expect("serialize");
+        assert!(
+            s.contains("\"phrase\""),
+            "mnemonic record contains phrase field: {s}"
+        );
+        assert!(
+            !s.contains("\"hex\""),
+            "mnemonic record must not leak a hex field: {s}"
+        );
+
+        let back: PlaintextRecord = serde_json::from_str(&s).expect("round-trip");
+        assert!(matches!(back, PlaintextRecord::Mnemonic(_)));
+        assert_eq!(back.name(), Some("cold"));
+        assert_eq!(back.network(), Some("nile"));
+    }
+
+    /// PrivateKey variant round-trips through serde with no `phrase` field.
+    #[test]
+    fn a_raw_key_record_round_trips() {
+        let rec = PlaintextRecord::from_private_key_hex(
+            "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35",
+            Some("paper"),
+            Some("mainnet"),
+        );
+        let s = serde_json::to_string(&rec).expect("serialize");
+        assert!(
+            s.contains("\"hex\""),
+            "private-key record contains hex field: {s}"
+        );
+        assert!(
+            !s.contains("\"phrase\""),
+            "private-key record must not leak a phrase field: {s}"
+        );
+
+        let back: PlaintextRecord = serde_json::from_str(&s).expect("round-trip");
+        assert!(matches!(back, PlaintextRecord::PrivateKey(_)));
+        assert_eq!(back.name(), Some("paper"));
+        assert_eq!(back.network(), Some("mainnet"));
+    }
+
+    /// `WalletSummary::is_private_key` mirrors `kind` for the bool accessor
+    /// that JSON callers rely on.
+    #[test]
+    fn wallet_summary_kind_reflects_secret() {
+        let mnemonic_summary = WalletSummary {
+            id: WalletId::new(),
+            name: None,
+            network: None,
+            kind: WalletKind::Mnemonic,
+        };
+        assert!(!mnemonic_summary.is_private_key());
+        assert_eq!(mnemonic_summary.kind, WalletKind::Mnemonic);
+
+        let raw_summary = WalletSummary {
+            id: WalletId::new(),
+            name: None,
+            network: None,
+            kind: WalletKind::PrivateKey,
+        };
+        assert!(raw_summary.is_private_key());
+        assert_eq!(raw_summary.kind, WalletKind::PrivateKey);
     }
 }

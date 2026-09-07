@@ -10,6 +10,6 @@ pub mod id;
 pub mod persist;
 
 pub use id::WalletId;
-pub use persist::{UnlockedWallet, WalletManager, WalletSecret, WalletSummary};
+pub use persist::{UnlockedWallet, WalletKind, WalletManager, WalletSecret, WalletSummary};
 // `EncryptedWallet` lives in `crate::crypto`; re-exporting it here
 // would shadow that path. Callers should import it from `crate::crypto`.

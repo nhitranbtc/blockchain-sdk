@@ -30,7 +30,7 @@ pub async fn run(data_dir: &Path, args: BalanceArgs) -> Result<()> {
         args.json,
         serde_json::json!({
             "address": args.address,
-            "exists": account.exists,
+            "exists": account.exists(),
             "balance_sun": account.balance_sun,
             "balance_trx": format_units(sun, 6),
         }),
@@ -38,7 +38,7 @@ pub async fn run(data_dir: &Path, args: BalanceArgs) -> Result<()> {
     );
     // An unfunded address is a valid answer, not an error — but saying so keeps
     // an operator from reading "0" as "the node is broken".
-    if !account.exists {
+    if !account.exists() {
         eprintln!("note: this address has no on-chain record yet (never funded)");
     }
     Ok(())

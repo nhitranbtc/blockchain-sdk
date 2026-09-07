@@ -5,49 +5,57 @@
 //! on-disk shape and converts. When the core grows `TronConfig::load`/`save`
 //! (plan §Phase 3 carry-over) this module becomes a thin delegate.
 
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tron_wallet_core::config::{default_rpc_url, Network, TronConfig};
 use tron_wallet_core::Error as CoreError;
 
-use super::{network_of, CliError, Result};
-use crate::cli::NetworkArg;
+use super::{CliError, Result};
 
 /// File name under the data dir.
 const CONFIG_FILE: &str = "config.json";
 
-/// On-disk config shape. `network` is the lower-case tag from
-/// `Network::tag()` so the file stays readable and stable across refactors
-/// of the enum's discriminants.
+/// On-disk config shape. `network` reuses the core enum's `lowercase` serde
+/// tags so a hand-edited `config.json` with `"network": "mainnet"` round-trips
+/// without any custom (de)serialisation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredConfig {
-    pub network: String,
+    #[serde(default)]
+    pub network: Network,
     pub rpc_url: String,
-    pub fee_limit_sun: i64,
+    /// Per-tx energy ceiling in SUN. Zero is nonsensical (the chain would
+    /// refuse the transaction) and survives a serialise round-trip as the
+    /// same non-zero value.
+    #[serde(deserialize_with = "de_nonzero_u64")]
+    pub fee_limit_sun: NonZeroU64,
+}
+
+/// Custom deserialiser: reject `0` at the JSON layer so a hand-edited config
+/// file cannot slip past `TronConfig::validate`. `NonZeroU64`'s serde impl
+/// already does this; we only need it because the field's stored form is
+/// `u64` (forward-compatible with the prior schema).
+fn de_nonzero_u64<'de, D>(de: D) -> std::result::Result<NonZeroU64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = u64::deserialize(de)?;
+    NonZeroU64::new(raw).ok_or_else(|| serde::de::Error::custom("fee_limit_sun must be > 0"))
 }
 
 impl StoredConfig {
     fn for_network(network: Network) -> Self {
         let base = TronConfig::for_network(network);
         Self {
-            network: network.tag().to_string(),
+            network,
             rpc_url: base.rpc_url,
-            fee_limit_sun: base.fee_limit_sun,
+            // `TronConfig::for_network` always sets 100_000_000 SUN, which is
+            // strictly non-zero by construction. The `unwrap` documents that
+            // invariant.
+            fee_limit_sun: NonZeroU64::new(base.fee_limit_sun as u64)
+                .expect("TronConfig::for_network fee_limit_sun is non-zero"),
         }
-    }
-}
-
-/// Parses a stored network tag back to the enum.
-fn network_from_tag(tag: &str) -> Result<Network> {
-    match tag {
-        "mainnet" => Ok(Network::Mainnet),
-        "shasta" => Ok(Network::Shasta),
-        "nile" => Ok(Network::Nile),
-        "local" => Ok(Network::Local),
-        other => Err(CliError::Core(CoreError::Config(format!(
-            "unknown network tag {other:?} in {CONFIG_FILE}"
-        )))),
     }
 }
 
@@ -74,11 +82,10 @@ pub fn load(data_dir: &Path) -> Result<TronConfig> {
             ))))
         }
     };
-    let network = network_from_tag(&stored.network)?;
     let cfg = TronConfig {
-        network,
+        network: stored.network,
         rpc_url: stored.rpc_url,
-        fee_limit_sun: stored.fee_limit_sun,
+        fee_limit_sun: stored.fee_limit_sun.get() as i64,
         data_dir: Some(data_dir.to_path_buf()),
     };
     cfg.validate()?;
@@ -89,9 +96,14 @@ pub fn load(data_dir: &Path) -> Result<TronConfig> {
 /// mid-write cannot leave a half-parsed config behind.
 fn save(data_dir: &Path, cfg: &TronConfig) -> Result<()> {
     let stored = StoredConfig {
-        network: cfg.network.tag().to_string(),
+        network: cfg.network,
         rpc_url: cfg.rpc_url.clone(),
-        fee_limit_sun: cfg.fee_limit_sun,
+        fee_limit_sun: NonZeroU64::new(cfg.fee_limit_sun as u64).ok_or_else(|| {
+            CliError::BadInput(format!(
+                "fee_limit_sun must be > 0 (got {})",
+                cfg.fee_limit_sun
+            ))
+        })?,
     };
     let body = serde_json::to_string_pretty(&stored)
         .map_err(|e| CliError::Core(CoreError::Config(format!("serialise config: {e}"))))?;
@@ -128,13 +140,24 @@ pub fn show(data_dir: &Path, json: bool) -> Result<()> {
 }
 
 /// `tron config set-rpc <url>`.
+///
+/// Only `https://` is accepted: a signed TRON envelope sent over plaintext
+/// HTTP can be intercepted and replayed inside its 60s window. The plan
+/// (Risk Register #2 — single-SHA256 txid) leaves no margin for an
+/// attacker who also gets to rebroadcast.
 pub fn set_rpc(data_dir: &Path, url: String) -> Result<()> {
     if url.trim().is_empty() {
         return Err(CliError::BadInput("rpc url must not be empty".into()));
     }
-    if !(url.starts_with("http://") || url.starts_with("https://")) {
+    if url.starts_with("http://") {
+        return Err(CliError::BadInput(
+            "rpc url must use https:// — http:// exposes the signed envelope to interception"
+                .into(),
+        ));
+    }
+    if !url.starts_with("https://") {
         return Err(CliError::BadInput(format!(
-            "rpc url {url:?} must start with http:// or https://"
+            "rpc url {url:?} must start with https://"
         )));
     }
     let mut cfg = load(data_dir)?;
@@ -148,13 +171,12 @@ pub fn set_rpc(data_dir: &Path, url: String) -> Result<()> {
 ///
 /// Resets `rpc_url` to that network's default. Keeping a mainnet URL under a
 /// `nile` label is how funds end up on the wrong chain.
-pub fn set_network(data_dir: &Path, network: NetworkArg) -> Result<()> {
-    let net = network_of(network);
+pub fn set_network(data_dir: &Path, network: Network) -> Result<()> {
     let mut cfg = load(data_dir)?;
-    cfg.network = net;
-    cfg.rpc_url = default_rpc_url(net).to_string();
+    cfg.network = network;
+    cfg.rpc_url = default_rpc_url(network).to_string();
     save(data_dir, &cfg)?;
-    eprintln!("network set to {} (rpc_url {})", net.tag(), cfg.rpc_url);
+    eprintln!("network set to {} (rpc_url {})", network.tag(), cfg.rpc_url);
     Ok(())
 }
 
@@ -174,14 +196,32 @@ mod tests {
     fn set_network_rewrites_rpc_url() {
         let dir = tempfile::tempdir().expect("tempdir");
         set_rpc(dir.path(), "https://example.invalid".into()).expect("set-rpc");
-        set_network(dir.path(), NetworkArg::Mainnet).expect("set-network");
+        set_network(dir.path(), Network::Mainnet).expect("set-network");
         let cfg = load(dir.path()).expect("load");
         assert_eq!(cfg.network, Network::Mainnet);
         assert_eq!(cfg.rpc_url, default_rpc_url(Network::Mainnet));
     }
 
     #[test]
-    fn set_rpc_rejects_non_http() {
+    fn set_rpc_rejects_http() {
+        // http:// exposes the signed envelope to on-path interception and
+        // replay. The set-rpc gate exists to make that mistake loud, not
+        // silent.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let err = set_rpc(dir.path(), "http://example.invalid".into())
+            .expect_err("http:// must be refused");
+        let msg = match err {
+            CliError::BadInput(m) => m,
+            other => panic!("expected BadInput, got {other:?}"),
+        };
+        assert!(
+            msg.contains("https://"),
+            "error must mention https://, got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn set_rpc_rejects_ftp() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(matches!(
             set_rpc(dir.path(), "ftp://example.invalid".into()),
@@ -198,5 +238,56 @@ mod tests {
             load(dir.path()).expect("load").rpc_url,
             "https://nile.example"
         );
+    }
+
+    #[test]
+    fn stored_config_network_round_trips_as_enum() {
+        // The on-disk shape uses the lowercase tag from `Network::tag()` so a
+        // hand-edited `config.json` with `"network": "mainnet"` still loads.
+        let body = r#"{
+            "network": "mainnet",
+            "rpc_url": "https://example.invalid",
+            "fee_limit_sun": 100000000
+        }"#;
+        let parsed: StoredConfig = serde_json::from_str(body).expect("parse");
+        assert_eq!(parsed.network, Network::Mainnet);
+        assert_eq!(parsed.fee_limit_sun.get(), 100_000_000);
+
+        // Serialise back and confirm the tag survives the round-trip.
+        let again = serde_json::to_string(&parsed).expect("serialise");
+        assert!(again.contains(r#""network":"mainnet""#));
+    }
+
+    #[test]
+    fn stored_config_rejects_zero_fee_limit() {
+        // Zero is not a legal fee limit; it would fail later at the chain
+        // anyway, but catching it at parse time gives a clearer error.
+        let body = r#"{
+            "network": "nile",
+            "rpc_url": "https://example.invalid",
+            "fee_limit_sun": 0
+        }"#;
+        assert!(serde_json::from_str::<StoredConfig>(body).is_err());
+    }
+
+    #[test]
+    fn load_hand_edited_config_with_mainnet_tag() {
+        // The lowercase serde tags let a CLI operator write a config by hand
+        // without going through `set-network`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(CONFIG_FILE);
+        std::fs::write(
+            &path,
+            r#"{
+                "network": "mainnet",
+                "rpc_url": "https://custom.example",
+                "fee_limit_sun": 200000000
+            }"#,
+        )
+        .expect("write");
+        let cfg = load(dir.path()).expect("load");
+        assert_eq!(cfg.network, Network::Mainnet);
+        assert_eq!(cfg.rpc_url, "https://custom.example");
+        assert_eq!(cfg.fee_limit_sun, 200_000_000);
     }
 }

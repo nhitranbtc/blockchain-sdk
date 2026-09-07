@@ -9,9 +9,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use tron_wallet_core::tx::broadcast::TransactionInfo;
+use tron_wallet_core::tx::submit;
 
 use super::{emit, open_client, CliError, Result};
-use crate::cli::NetworkArg;
+use crate::cli::Network;
 
 /// Renders a `TransactionInfo` for both `get` and `wait`.
 fn render(info: &TransactionInfo, json: bool) {
@@ -48,7 +49,7 @@ fn is_confirmed(info: &TransactionInfo) -> bool {
 pub async fn get(
     data_dir: &Path,
     txid: String,
-    network: Option<NetworkArg>,
+    network: Option<Network>,
     rpc_url: Option<String>,
     json: bool,
 ) -> Result<()> {
@@ -68,18 +69,18 @@ pub async fn wait(
     txid: String,
     timeout_secs: u64,
     poll_interval_secs: u64,
-    network: Option<NetworkArg>,
+    network: Option<Network>,
     rpc_url: Option<String>,
     json: bool,
 ) -> Result<()> {
-    if poll_interval_secs == 0 {
-        return Err(CliError::BadInput(
-            "--poll-interval must be at least 1 second".into(),
-        ));
-    }
+    let interval = Duration::from_secs(poll_interval_secs);
+    // Validated through the core helper so `tx wait` and `wallet send --wait`
+    // cannot disagree about what a zero interval means. The core answers with
+    // `Error::Config`, which `exit_code` maps to 2 (operator input) — the same
+    // class as the `BadInput` this used to return.
+    submit::validate_poll_interval(interval)?;
     let client = open_client(data_dir, network, rpc_url)?;
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let interval = Duration::from_secs(poll_interval_secs);
 
     loop {
         // A not-yet-indexed txid comes back as an empty body rather than an
@@ -126,12 +127,18 @@ mod tests {
             "deadbeef".into(),
             10,
             0,
-            Some(NetworkArg::Nile),
+            Some(Network::Nile),
             None,
             false,
         )
         .await
         .expect_err("zero interval must be rejected before any network call");
-        assert!(matches!(err, CliError::BadInput(_)));
+        // Now sourced from the core helper: `Config` maps to exit 2, the same
+        // operator-input class as the `BadInput` this used to return.
+        assert!(matches!(
+            err,
+            CliError::Core(tron_wallet_core::Error::Config(_))
+        ));
+        assert_eq!(super::super::exit_code(&err), 2);
     }
 }

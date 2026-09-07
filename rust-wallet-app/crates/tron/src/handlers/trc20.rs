@@ -8,22 +8,23 @@
 //! `U256::MAX` lets the spender drain the balance at any future time, which is
 //! the most common way TRC-20 holders lose funds.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use ethereum_types::U256;
 use tron_wallet_core::address::Address;
 use tron_wallet_core::config::Network;
-use tron_wallet_core::keys::{derive_keypair, KeyPair};
+use tron_wallet_core::keys::{derive_keypair, SECRET_KEY_LEN};
 use tron_wallet_core::tx::submit::{self, SubmitOptions};
-use tron_wallet_core::wallet::WalletManager;
+use tron_wallet_core::wallet::{WalletKind, WalletManager};
+use zeroize::Zeroizing;
 
 use super::{
     confirm, derivation_path, effective_network, emit, format_units, open_client, open_storage,
     parse_decimal_amount, parse_wallet_id, resolve_mnemonic, resolve_password, resolve_token,
     CliError, Result,
 };
-use crate::cli::NetworkArg;
-use crate::handlers::wallet::report_broadcast;
+use crate::cli::Network as NetworkArg;
+use crate::handlers::wallet::{fee_limit_sun, report_broadcast};
 
 /// Decimals for a contract: the bundled registry first, the live `decimals()`
 /// call as a fallback for tokens the registry does not carry.
@@ -119,40 +120,68 @@ pub async fn allowance(
             "decimals": decimals,
             "raw": raw_str,
             "amount": formatted,
-            "unlimited": is_unlimited_approval(&raw_str),
+            "unlimited": is_unlimited_approval(raw),
         }),
         formatted.as_deref().unwrap_or(&raw_str),
     );
     Ok(())
 }
 
-/// Resolve the signing keypair + owner address from `--wallet-id` or
-/// `--mnemonic`.
+/// Resolve the signing secret + owner address from `--wallet-id`,
+/// `--mnemonic`, or `--mnemonic-file`.
+///
+/// Returns the secret bytes rather than a `KeyPair` for the same reason
+/// `handlers::wallet::signer` does: `KeyPair` is no longer `Clone`,
+/// so we cannot hand an owned `KeyPair` back from a borrowed raw-key one
+/// (PR #545 review finding G).
 fn signer(
     data_dir: &Path,
     wallet_id: Option<String>,
     mnemonic: Option<String>,
+    mnemonic_file: Option<PathBuf>,
     password: Option<String>,
-) -> Result<(String, KeyPair)> {
+) -> Result<(String, Zeroizing<[u8; SECRET_KEY_LEN]>)> {
     let path = derivation_path(None, 0)?;
-    match (wallet_id, mnemonic) {
-        (Some(id), _) => {
+    match (wallet_id, mnemonic, mnemonic_file) {
+        (Some(id), _, _) => {
             let storage = open_storage(data_dir)?;
             let manager = WalletManager::new(&storage);
             let wallet_id = parse_wallet_id(&id)?;
             let password = resolve_password(password, "wallet passphrase: ")?;
-            let keypair = manager.unlock(wallet_id, &password)?.keypair(&path)?;
-            let owner = Address::from_public_key(keypair.public_key())?.to_base58();
-            Ok((owner, keypair))
+            let unlocked = manager.unlock(wallet_id, &password)?;
+            let owner = match unlocked.kind() {
+                WalletKind::Mnemonic => {
+                    let keypair = unlocked.keypair(&path)?;
+                    Address::from_public_key(keypair.public_key())?.to_base58()
+                }
+                WalletKind::PrivateKey => {
+                    let keypair = unlocked.raw_keypair()?;
+                    Address::from_public_key(keypair.public_key())?.to_base58()
+                }
+            };
+            let secret = match unlocked.kind() {
+                WalletKind::Mnemonic => {
+                    let keypair = unlocked.keypair(&path)?;
+                    keypair.secret_bytes().clone()
+                }
+                WalletKind::PrivateKey => unlocked.raw_keypair()?.secret_bytes().clone(),
+            };
+            Ok((owner, secret))
         }
-        (None, Some(phrase)) => {
+        (None, Some(phrase), _) => {
             let mnemonic = resolve_mnemonic(Some(phrase), None)?;
             let keypair = derive_keypair(&mnemonic, "", &path)?;
             let owner = Address::from_public_key(keypair.public_key())?.to_base58();
-            Ok((owner, keypair))
+            Ok((owner, keypair.secret_bytes().clone()))
         }
-        (None, None) => Err(CliError::BadInput(
-            "one of --wallet-id or --mnemonic is required".into(),
+        (None, None, Some(path_buf)) => {
+            let mnemonic = resolve_mnemonic(None, Some(path_buf))?;
+            let keypair = derive_keypair(&mnemonic, "", &path)?;
+            let owner = Address::from_public_key(keypair.public_key())?.to_base58();
+            Ok((owner, keypair.secret_bytes().clone()))
+        }
+        (None, None, None) => Err(CliError::BadInput(
+            "one of --wallet-id, --mnemonic, or --mnemonic-file is required".into(),
         )),
     }
 }
@@ -176,6 +205,7 @@ async fn token_amount(
 pub async fn send(
     data_dir: &Path,
     mnemonic: Option<String>,
+    mnemonic_file: Option<PathBuf>,
     wallet_id: Option<String>,
     contract: String,
     to: String,
@@ -194,31 +224,24 @@ pub async fn send(
             "recipient {to:?} is not a TRON address"
         )));
     }
-    let (owner, keypair) = signer(data_dir, wallet_id, mnemonic, password)?;
+    let (owner, secret) = signer(data_dir, wallet_id, mnemonic, mnemonic_file, password)?;
     let client = open_client(data_dir, network, rpc_url)?;
     let value = token_amount(&client, net, &contract, &owner, &amount).await?;
 
-    if net == Network::Mainnet && !confirm_yes {
-        confirm(&format!(
-            "send {amount} of {contract} from {owner} to {to} on MAINNET"
-        ))?;
+    if net == Network::Mainnet {
+        confirm(
+            &format!("send {amount} of {contract} from {owner} to {to} on MAINNET"),
+            confirm_yes,
+        )?;
     }
 
     let opts = SubmitOptions {
-        fee_limit_sun: fee_limit,
+        fee_limit_sun: fee_limit_sun(fee_limit)?,
         ..SubmitOptions::default()
     };
-    let submitted = submit::submit_trc20(
-        &client,
-        keypair.secret_bytes(),
-        &owner,
-        &contract,
-        &to,
-        value,
-        opts,
-    )
-    .await?;
-    report_broadcast(&submitted.signed.txid_hex(), &submitted.receipt, json)
+    let submitted =
+        submit::submit_trc20(&client, &secret, &owner, &contract, &to, value, opts).await?;
+    report_broadcast(&submitted.txid(), submitted.receipt(), json)
 }
 
 /// `tron trc20 approve` — set a spender allowance.
@@ -226,6 +249,7 @@ pub async fn send(
 pub async fn approve(
     data_dir: &Path,
     mnemonic: Option<String>,
+    mnemonic_file: Option<PathBuf>,
     wallet_id: Option<String>,
     contract: String,
     spender: String,
@@ -244,7 +268,7 @@ pub async fn approve(
             "spender {spender:?} is not a TRON address"
         )));
     }
-    let (owner, keypair) = signer(data_dir, wallet_id, mnemonic, password)?;
+    let (owner, secret) = signer(data_dir, wallet_id, mnemonic, mnemonic_file, password)?;
     let client = open_client(data_dir, network, rpc_url)?;
 
     // `max` is accepted as a spelling of "unlimited" so operators do not have
@@ -255,40 +279,38 @@ pub async fn approve(
         token_amount(&client, net, &contract, &owner, &amount).await?
     };
 
-    if !confirm_yes && is_unlimited_approval(&value.to_string()) {
-        confirm(&format!(
-            "grant {spender} an UNLIMITED allowance over {owner}'s {contract} balance"
-        ))?;
-    } else if net == Network::Mainnet && !confirm_yes {
-        confirm(&format!(
-            "approve {amount} of {contract} for {spender} on MAINNET"
-        ))?;
+    if is_unlimited_approval(value) {
+        confirm(
+            &format!("grant {spender} an UNLIMITED allowance over {owner}'s {contract} balance"),
+            confirm_yes,
+        )?;
+    } else if net == Network::Mainnet {
+        confirm(
+            &format!("approve {amount} of {contract} for {spender} on MAINNET"),
+            confirm_yes,
+        )?;
     }
 
     let opts = SubmitOptions {
-        fee_limit_sun: fee_limit,
+        fee_limit_sun: fee_limit_sun(fee_limit)?,
         ..SubmitOptions::default()
     };
-    let submitted = submit::submit_trc20_approve(
-        &client,
-        keypair.secret_bytes(),
-        &owner,
-        &contract,
-        &spender,
-        value,
-        opts,
-    )
-    .await?;
-    report_broadcast(&submitted.signed.txid_hex(), &submitted.receipt, json)
+    let submitted =
+        submit::submit_trc20_approve(&client, &secret, &owner, &contract, &spender, value, opts)
+            .await?;
+    report_broadcast(&submitted.txid(), submitted.receipt(), json)
 }
 
-/// Whether a decimal amount string is effectively an unlimited allowance.
+/// Whether an allowance is effectively unlimited.
 ///
-/// 2^128 has 39 digits; a real token balance never approaches that, so anything
-/// that long is "forever" in practice.
-pub fn is_unlimited_approval(amount: &str) -> bool {
-    let digits = amount.trim().trim_start_matches('0');
-    digits.len() >= 39
+/// Delegates to the core threshold so the CLI confirmation gate and the ABI it
+/// protects cannot drift. Takes `U256` rather than a decimal string: the
+/// previous digit-count test read a *rendered* value, so any future change to
+/// how amounts are formatted (padding, grouping, a `0x` prefix) would have
+/// silently reclassified an unlimited approval as bounded and skipped the
+/// prompt.
+pub fn is_unlimited_approval(amount: U256) -> bool {
+    tron_wallet_core::trc20::is_unlimited(amount)
 }
 
 #[cfg(test)]
@@ -297,10 +319,24 @@ mod tests {
 
     #[test]
     fn unlimited_approval_detection() {
-        assert!(is_unlimited_approval(&U256::MAX.to_string()));
-        assert!(is_unlimited_approval(&"9".repeat(39)));
-        assert!(!is_unlimited_approval("1000"));
-        assert!(!is_unlimited_approval("0"));
+        assert!(is_unlimited_approval(U256::MAX));
+        // 9 * 10^38 — a 39-digit value, which is what `max` renders as in
+        // practice and above the 2^128-1 threshold.
+        assert!(is_unlimited_approval(
+            U256::from(9u64) * U256::from(10u64).pow(38.into())
+        ));
+        assert!(!is_unlimited_approval(U256::from(1000u64)));
+        assert!(!is_unlimited_approval(U256::zero()));
+    }
+
+    #[test]
+    fn is_unlimited_threshold_boundary() {
+        // The gate is strictly-greater, so the threshold itself still prompts
+        // as a bounded allowance.
+        let threshold = tron_wallet_core::trc20::UNLIMITED_APPROVAL_THRESHOLD;
+        assert!(is_unlimited_approval(threshold + 1));
+        assert!(!is_unlimited_approval(threshold));
+        assert!(!is_unlimited_approval(threshold - 1));
     }
 
     #[test]
