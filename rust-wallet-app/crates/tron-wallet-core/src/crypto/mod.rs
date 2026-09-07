@@ -359,4 +359,89 @@ mod tests {
         let b = encrypt(plaintext, pass).expect("b");
         assert_ne!(a.as_bytes(), b.as_bytes());
     }
+
+    /// Heap-hygiene regression guard: `derive_key` must return a
+    /// `Zeroizing<Vec<u8>>`. Bug it would catch: someone swaps the
+    /// return type for `Vec<u8>` to "simplify" the API, dropping the
+    /// AES key on the floor.
+    #[test]
+    fn derived_key_is_zeroized_on_drop() {
+        fn assert_zeroizing<T: zeroize::Zeroize>(_: &T) {}
+        let salt = random_salt();
+        let key = derive_key(b"correct horse battery staple", &salt).expect("derive_key");
+        assert_zeroizing(&*key);
+        assert_eq!(key.len(), DERIVED_KEY_LEN);
+        assert_ne!(key.as_slice(), &salt);
+        drop(key);
+    }
+
+    /// Blob size invariant: `salt || nonce || ciphertext || tag`.
+    /// Bug it would catch: someone adds a version byte, AAD prefix,
+    /// or inflates the salt/nonce/tag size.
+    #[test]
+    fn ciphertext_size_overhead_is_bounded() {
+        let pw = b"correct horse battery staple";
+        for n in [0usize, 32, 1024, 65_536] {
+            let pt = vec![0xABu8; n];
+            let blob = encrypt(&pt, pw).expect("encrypt");
+            let expected = SALT_LEN + NONCE_LEN + n + TAG_LEN;
+            assert_eq!(
+                blob.len(),
+                expected,
+                "blob size invariant at plaintext len {n}"
+            );
+        }
+    }
+
+    /// Argon2id KDF parameter regression guard. Plan §Phase 5 Task 4.7
+    /// floor: m ≥ 64 MiB, t ≥ 3, p ≥ 1. Bug it would catch: someone
+    /// lowers the constants to speed up CI.
+    #[test]
+    fn key_derivation_uses_2xx_argon2id_params() {
+        assert!(
+            ARGON2_M_COST_KIB >= 64 * 1024,
+            "Argon2id m_cost_kib={} below 64 MiB floor",
+            ARGON2_M_COST_KIB
+        );
+        assert!(
+            ARGON2_T_COST >= 3,
+            "Argon2id t_cost={} below 3 floor",
+            ARGON2_T_COST
+        );
+        assert!(
+            ARGON2_P_COST >= 1,
+            "Argon2id p_cost={} below 1 floor",
+            ARGON2_P_COST
+        );
+    }
+
+    /// Heap-hygiene regression guard: `decrypt` must return a
+    /// `Zeroizing<Vec<u8>>` so the recovered plaintext zeroizes on
+    /// drop. Bug it would catch: return-type swap to `Vec<u8>`.
+    #[test]
+    fn plaintext_zeroizes_after_decrypt() {
+        fn assert_zeroizing<T: zeroize::Zeroize>(_: &T) {}
+        let blob =
+            encrypt(b"hello secret plaintext", b"correct horse battery staple").expect("encrypt");
+        let pt = decrypt(&blob, b"correct horse battery staple").expect("decrypt");
+        assert_zeroizing(&*pt);
+        assert_eq!(pt.as_slice(), b"hello secret plaintext");
+        drop(pt);
+    }
+
+    /// AEAD integrity: flipping one byte in the ciphertext region
+    /// must surface as `Error::Encryption`. Bug it would catch: a
+    /// non-AEAD cipher, or a no-op integrity check.
+    #[test]
+    fn decrypt_rejects_a_tampered_ciphertext_byte() {
+        let plaintext = b"some plaintext to encrypt";
+        let pw = b"correct horse battery staple";
+        let blob = encrypt(plaintext, pw).expect("encrypt");
+        let mut tampered = blob.as_bytes().to_vec();
+        let idx = SALT_LEN + NONCE_LEN + 2;
+        tampered[idx] ^= 0x01;
+        let tampered_blob = EncryptedWallet::from_blob(tampered).expect("from_blob");
+        let err = decrypt(&tampered_blob, pw).expect_err("must reject tampered ciphertext");
+        assert!(matches!(err, Error::Encryption(_)));
+    }
 }

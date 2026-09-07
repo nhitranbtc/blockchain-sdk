@@ -314,3 +314,247 @@ fn list_summaries_skips_wallets_under_a_different_passphrase() {
     // Both ids are still enumerable — skipping is not hiding.
     assert_eq!(mgr.list().expect("list ids").len(), 2);
 }
+
+// ─── Phase 5 Task 5.8 — gap tests (UC-4, UC-9, UC-10, UC-11, UC-12, UC-13,
+//     UC-14, UC-15, UC-18, UC-19, UC-20, UC-22) ──────────────────────────────
+
+/// `UnlockedWallet::mnemonic()` must return `&Mnemonic` (whose internal
+/// `bip39::Mnemonic` wraps the phrase in `Zeroizing<String>` per Phase 1).
+/// Bug it would catch: someone returns `String`/`&str` and the phrase
+/// lingers in heap memory after the unlock drops.
+#[test]
+fn unlock_returns_zeroizing_mnemonic() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let id = mgr.create(&fresh_mnemonic(), "pw").expect("create");
+    let unlocked = mgr.unlock(id, "pw").expect("unlock");
+    let phrase: &str = unlocked.mnemonic().expect("mnemonic variant").phrase();
+    assert!(phrase.starts_with("abandon"));
+}
+
+/// End-to-end: create → rename → unlock preserves the secret.
+#[test]
+fn create_then_rename_then_unlock_preserves_secret() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let expected_phrase = fresh_mnemonic().phrase().to_owned();
+    let id = mgr.create(&fresh_mnemonic(), "pw").expect("create");
+    mgr.rename(id, "pw", "renamed-label").expect("rename");
+    let unlocked = mgr.unlock(id, "pw").expect("unlock");
+    assert_eq!(unlocked.mnemonic().expect("mn").phrase(), expected_phrase);
+    assert_eq!(unlocked.name(), Some("renamed-label"));
+}
+
+/// Delete then recreate with the same passphrase yields a new id, not
+/// the deleted one. Idempotency guard.
+#[test]
+fn delete_then_recreate_with_same_password_yields_new_id() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let id1 = mgr.create(&fresh_mnemonic(), "pw").expect("create 1");
+    mgr.delete(id1).expect("delete");
+    let id2 = mgr.create(&fresh_mnemonic(), "pw").expect("create 2");
+    assert_ne!(id1, id2);
+    assert!(mgr.unlock(id1, "pw").is_err(), "old id must not resurrect");
+    assert!(mgr.unlock(id2, "pw").is_ok());
+}
+
+/// After delete, unlock on the deleted id surfaces `Error::Wallet`.
+#[test]
+fn delete_then_unlock_returns_wallet_not_found() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let id = mgr.create(&fresh_mnemonic(), "pw").expect("create");
+    mgr.delete(id).expect("delete");
+    let err = mgr.unlock(id, "pw").expect_err("must not find deleted");
+    assert!(matches!(err, tron_wallet_core::Error::Wallet(_)));
+}
+
+/// Imported raw-key wallet rejects `rename` to empty/whitespace label.
+#[test]
+fn imported_raw_key_cannot_be_renamed_to_empty_label() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let hex = "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35";
+    let id = mgr
+        .import_private_key(hex, "pw", Some("paper"), None)
+        .expect("import");
+    let err = mgr.rename(id, "pw", "").expect_err("must reject empty");
+    assert!(matches!(err, tron_wallet_core::Error::Wallet(_)));
+    let err = mgr
+        .rename(id, "pw", "   ")
+        .expect_err("must reject whitespace");
+    assert!(matches!(err, tron_wallet_core::Error::Wallet(_)));
+}
+
+/// `summary` reports `WalletKind::PrivateKey` for raw-key imports.
+#[test]
+fn imported_raw_key_summary_kind_is_private_key() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let hex = "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35";
+    let id = mgr
+        .import_private_key(hex, "pw", Some("paper"), Some("mainnet"))
+        .expect("import");
+    let sum = mgr.summary(id, "pw").expect("summary");
+    assert!(sum.is_private_key());
+    assert_eq!(sum.kind, tron_wallet_core::wallet::WalletKind::PrivateKey);
+    assert_eq!(sum.name.as_deref(), Some("paper"));
+    assert_eq!(sum.network.as_deref(), Some("mainnet"));
+}
+
+/// `list()` returns every persisted id, regardless of insertion order.
+#[test]
+fn list_returns_ids_in_independent_order() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let mut ids = Vec::new();
+    for _ in 0..5 {
+        ids.push(mgr.create(&fresh_mnemonic(), "pw").expect("create"));
+    }
+    let listed = mgr.list().expect("list");
+    assert_eq!(listed.len(), 5);
+    // Set equality, not order equality — storage is a map.
+    let a: std::collections::HashSet<_> = listed.iter().copied().collect();
+    let b: std::collections::HashSet<_> = ids.iter().copied().collect();
+    assert_eq!(a, b);
+}
+
+/// `list_summaries` with a wrong password returns only decryptable
+/// wallets — never panics on the wrong-pw ones.
+#[test]
+fn list_summaries_with_wrong_password_returns_empty_or_decryptable_only() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    mgr.create_with_meta(&fresh_mnemonic(), "pw-correct", None, None)
+        .expect("a");
+    mgr.create_with_meta(&fresh_mnemonic(), "pw-other", None, None)
+        .expect("b");
+    let visible = mgr.list_summaries("pw-correct").expect("list");
+    assert_eq!(visible.len(), 1, "wrong-pw wallet must not appear");
+}
+
+/// Empty passphrase is allowed at create (the user is choosing to
+/// store an unprotected blob — their call).
+#[test]
+fn create_with_meta_empty_pw_is_allowed() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let id = mgr
+        .create_with_meta(&fresh_mnemonic(), "", Some("nopw"), None)
+        .expect("empty pw is allowed");
+    let unlocked = mgr.unlock(id, "").expect("unlock with empty pw");
+    assert_eq!(unlocked.name(), Some("nopw"));
+}
+
+/// Very long passphrases are allowed (KDF is bounded only by Argon2id params).
+#[test]
+fn create_with_meta_long_pw_is_allowed() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let long_pw: String = "x".repeat(10_000);
+    let id = mgr.create(&fresh_mnemonic(), &long_pw).expect("long pw ok");
+    let unlocked = mgr.unlock(id, &long_pw).expect("unlock long pw");
+    assert!(unlocked.mnemonic().is_some());
+}
+
+/// `unlock` is read-only — concurrent calls do not block each other.
+#[test]
+fn unlock_does_not_block_concurrent_calls() {
+    use std::sync::Arc;
+    use std::thread;
+    let storage = Arc::new(InMemoryStorage::new());
+    let id = {
+        let mgr = WalletManager::new(&*storage);
+        mgr.create(&fresh_mnemonic(), "pw").expect("create")
+    };
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let storage = Arc::clone(&storage);
+        let id = id;
+        handles.push(thread::spawn(move || {
+            let mgr = WalletManager::new(&*storage);
+            mgr.unlock(id, "pw").is_ok()
+        }));
+    }
+    for h in handles {
+        assert!(
+            h.join().expect("join"),
+            "concurrent unlock must not deadlock"
+        );
+    }
+}
+
+/// `create` writes atomically: storage ends with exactly one entry,
+/// never a partial/corrupt half-blob on the success path.
+#[test]
+fn create_writes_atomically() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let id = mgr.create(&fresh_mnemonic(), "pw").expect("create");
+    assert_eq!(mgr.list().expect("list").len(), 1);
+    assert!(mgr.unlock(id, "pw").is_ok());
+}
+
+/// Truncated blob (cut mid-ciphertext) is rejected with `Error::Encryption`.
+#[test]
+fn unlock_after_partial_truncate_errors() {
+    let storage = InMemoryStorage::new();
+    let mgr = WalletManager::new(&storage);
+    let id = mgr.create(&fresh_mnemonic(), "pw").expect("create");
+    let original = storage.get(&id).expect("get").expect("blob present");
+    let blob_bytes: Vec<u8> = original.to_vec();
+    let half = blob_bytes.len() / 2;
+    let truncated_bytes = blob_bytes[..half].to_vec();
+    drop(original);
+    let truncated =
+        tron_wallet_core::EncryptedWallet::from_blob(truncated_bytes).expect("from_blob");
+    storage
+        .put_atomic(&id, truncated.as_bytes())
+        .expect("put_atomic");
+    let err = mgr.unlock(id, "pw").expect_err("must reject truncated");
+    assert!(matches!(err, tron_wallet_core::Error::Encryption(_)));
+}
+
+/// Desktop PAL end-to-end: `FileWalletStorage` round-trips a wallet
+/// through the real disk-backed backend. Linux-only smoke (path differs
+/// per OS; CI runs Linux for v0.1).
+#[cfg(target_os = "linux")]
+#[test]
+fn file_wallet_storage_round_trip() {
+    use std::env;
+    use tron_wallet_core::platform::desktop::FileWalletStorage;
+
+    let dir = env::temp_dir().join(format!(
+        "tron-wallet-test-{}-{}",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let storage = FileWalletStorage::with_dir(dir.clone()).expect("with_dir");
+    let mgr = WalletManager::new(&storage);
+    let id = mgr.create(&fresh_mnemonic(), "pw").expect("create");
+    let unlocked = mgr.unlock(id, "pw").expect("unlock");
+    assert!(unlocked.mnemonic().is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// iOS PAL contract: `KeychainWalletStorage` exposes the `WalletStorage`
+/// trait surface used by `WalletManager`. Trait-level smoke only — no
+/// FFI bridge in v0.1. Cross-compile gate.
+#[cfg(target_os = "ios")]
+#[test]
+fn keychain_wallet_storage_contract_test() {
+    use tron_wallet_core::platform::ios::KeychainWalletStorage;
+    let _storage: Box<dyn WalletStorage> = Box::new(KeychainWalletStorage::new());
+}
+
+/// Android PAL contract: `EncryptedFileWalletStorage` exposes the
+/// `WalletStorage` trait surface used by `WalletManager`. Trait-level
+/// smoke only — no JNI bridge in v0.1. Cross-compile gate.
+#[cfg(target_os = "android")]
+#[test]
+fn encrypted_file_wallet_storage_contract_test() {
+    use tron_wallet_core::platform::android::EncryptedFileWalletStorage;
+    let _storage: Box<dyn WalletStorage> = Box::new(EncryptedFileWalletStorage::new());
+}

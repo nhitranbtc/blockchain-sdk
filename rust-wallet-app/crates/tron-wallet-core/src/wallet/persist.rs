@@ -266,20 +266,41 @@ struct PrivateKeyRecord {
 }
 
 impl PlaintextRecord {
-    fn from_mnemonic(m: &Mnemonic, name: Option<&str>, network: Option<&str>) -> Self {
-        Self::Mnemonic(MnemonicRecord {
-            phrase: m.phrase().to_owned(),
-            name: name.map(str::to_owned),
-            network: network.map(str::to_owned),
-        })
+    /// Defense-in-depth label validator: mirrors `WalletManager::rename`.
+    /// Whitespace-only labels would round-trip as visible junk in the UI;
+    /// reject them at the constructor before any encryption runs.
+    fn validate_label(label: Option<&str>) -> Result<Option<String>> {
+        match label {
+            None => Ok(None),
+            Some(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Err(Error::Wallet("wallet name must not be empty".into()))
+                } else {
+                    Ok(Some(trimmed.to_owned()))
+                }
+            }
+        }
     }
 
-    fn from_private_key_hex(hex_key: &str, name: Option<&str>, network: Option<&str>) -> Self {
-        Self::PrivateKey(PrivateKeyRecord {
+    fn from_mnemonic(m: &Mnemonic, name: Option<&str>, network: Option<&str>) -> Result<Self> {
+        Ok(Self::Mnemonic(MnemonicRecord {
+            phrase: m.phrase().to_owned(),
+            name: Self::validate_label(name)?,
+            network: Self::validate_label(network)?,
+        }))
+    }
+
+    fn from_private_key_hex(
+        hex_key: &str,
+        name: Option<&str>,
+        network: Option<&str>,
+    ) -> Result<Self> {
+        Ok(Self::PrivateKey(PrivateKeyRecord {
             hex: hex_key.to_owned(),
-            name: name.map(str::to_owned),
-            network: network.map(str::to_owned),
-        })
+            name: Self::validate_label(name)?,
+            network: Self::validate_label(network)?,
+        }))
     }
 
     fn name(&self) -> Option<&str> {
@@ -346,7 +367,7 @@ impl<'a> WalletManager<'a> {
         name: Option<&str>,
         network: Option<&str>,
     ) -> Result<WalletId> {
-        let record = PlaintextRecord::from_mnemonic(mnemonic, name, network);
+        let record = PlaintextRecord::from_mnemonic(mnemonic, name, network)?;
         self.persist_new(&record, passphrase)
     }
 
@@ -372,7 +393,7 @@ impl<'a> WalletManager<'a> {
         );
         keypair_from_secret_bytes(&bytes)?;
 
-        let record = PlaintextRecord::from_private_key_hex(&normalised, name, network);
+        let record = PlaintextRecord::from_private_key_hex(&normalised, name, network)?;
         self.persist_new(&record, passphrase)
     }
 
@@ -562,7 +583,8 @@ mod tests {
             .expect("valid phrase"),
             Some("cold"),
             Some("nile"),
-        );
+        )
+        .expect("ctor");
         let s = serde_json::to_string(&rec).expect("serialize");
         assert!(
             s.contains("\"phrase\""),
@@ -586,7 +608,8 @@ mod tests {
             "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35",
             Some("paper"),
             Some("mainnet"),
-        );
+        )
+        .expect("ctor");
         let s = serde_json::to_string(&rec).expect("serialize");
         assert!(
             s.contains("\"hex\""),
@@ -624,5 +647,81 @@ mod tests {
         };
         assert!(raw_summary.is_private_key());
         assert_eq!(raw_summary.kind, WalletKind::PrivateKey);
+    }
+
+    /// `None` labels must serialize as omitted fields, never as `""` defaults.
+    /// Bug it would catch: someone drops `skip_serializing_if = "Option::is_none"`,
+    /// which would serialize `"name":""` and break pre-Phase-6 blob compat.
+    #[test]
+    fn record_with_empty_name_and_network_round_trips() {
+        let rec = PlaintextRecord::from_mnemonic(
+            &Mnemonic::from_phrase(
+                "abandon abandon abandon abandon abandon abandon \
+                 abandon abandon abandon abandon abandon about",
+                Language::English,
+            )
+            .expect("valid phrase"),
+            None,
+            None,
+        )
+        .expect("ctor");
+        let s = serde_json::to_string(&rec).expect("serialize");
+        assert!(
+            !s.contains("\"name\""),
+            "name:None must not appear in JSON: {s}"
+        );
+        assert!(
+            !s.contains("\"network\""),
+            "network:None must not appear in JSON: {s}"
+        );
+        let back: PlaintextRecord = serde_json::from_str(&s).expect("round-trip");
+        assert_eq!(back.name(), None);
+        assert_eq!(back.network(), None);
+    }
+
+    /// Defense-in-depth: constructor rejects whitespace-only labels
+    /// before any encryption. Mirrors `WalletManager::rename`.
+    /// Bug it would catch: someone removes the constructor guard,
+    /// leaving `create` to persist blank-labeled wallets that would
+    /// later be rejected on rename but already lost the cost of one
+    /// Argon2id@256MiB derivation.
+    #[test]
+    fn record_with_whitespace_only_name_rejected() {
+        let mnemonic = Mnemonic::from_phrase(
+            "abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon abandon abandon about",
+            Language::English,
+        )
+        .expect("valid phrase");
+        let err = PlaintextRecord::from_mnemonic(&mnemonic, Some("   "), None)
+            .expect_err("must reject whitespace-only name");
+        assert!(matches!(err, Error::Wallet(_)));
+
+        let hex = "e8f32e723decf4051aefac8e2c93c9c5b214313817cdb01a1494b917c8436b35";
+        let err = PlaintextRecord::from_private_key_hex(hex, None, Some("\t  \n"))
+            .expect_err("must reject whitespace-only network");
+        assert!(matches!(err, Error::Wallet(_)));
+    }
+
+    /// JSON output is stable across calls — deterministic encoding.
+    /// Bug it would catch: someone swaps to a `HashMap`-backed
+    /// representation (randomized iteration order), making blob
+    /// diffs noisy and breaking tamper-detection parity tests.
+    #[test]
+    fn record_serializes_stably_across_calls() {
+        let rec = PlaintextRecord::from_mnemonic(
+            &Mnemonic::from_phrase(
+                "abandon abandon abandon abandon abandon abandon \
+                 abandon abandon abandon abandon abandon about",
+                Language::English,
+            )
+            .expect("valid phrase"),
+            Some("cold"),
+            Some("nile"),
+        )
+        .expect("ctor");
+        let a = serde_json::to_string(&rec).expect("a");
+        let b = serde_json::to_string(&rec).expect("b");
+        assert_eq!(a, b, "serialization must be deterministic");
     }
 }
