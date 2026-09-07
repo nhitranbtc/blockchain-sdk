@@ -1,0 +1,40 @@
+[package]
+name = "tron"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94"
+license = "MIT"
+description = "`tron` CLI for the tron-wallet-core v0.1 library (Phase 6 of the anychain plan)."
+publish = false
+
+[[bin]]
+name = "tron"
+path = "src/main.rs"
+
+[dependencies]
+# Single import surface: the CLI depends on tron-wallet-core alone for
+# domain types (mirrors the `polygon` CLI's Q1 Option A decision).
+tron-wallet-core = { path = "../tron-wallet-core" }
+# `U256` for TRC-20 amounts. Same workspace pin the core uses, so the CLI and
+# the library speak one type rather than converting at the boundary.
+ethereum-types = { workspace = true }
+
+# clap carries `derive` + `env` from the workspace declaration.
+clap = { workspace = true }
+# `block_on` dispatch kernel for the async handlers (trc20 balance, tx get).
+tokio = { workspace = true }
+
+# Config file + `--json` output formatting.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Default data-dir resolution (XDG on Linux, platform equivalent elsewhere).
+directories = { workspace = true }
+
+# Passphrases are held in `Zeroizing` from the moment they are resolved.
+zeroize = { workspace = true }
+# TTY passphrase prompt when neither --password nor TRON_PASSWORD is given.
+rpassword = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

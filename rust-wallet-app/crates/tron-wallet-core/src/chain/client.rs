@@ -326,4 +326,305 @@ impl TronGridClient {
             .await?;
         Ok(resp.energy_used.unwrap_or(0))
     }
+
+    /// `POST /wallet/getaccount` — native TRX balance and account presence.
+    ///
+    /// An address that has never received funds is not an error: TronGrid
+    /// answers HTTP 200 with `{}`, which this maps to
+    /// `AccountInfo { address: None, balance_sun: 0 }` (so
+    /// `AccountInfo::exists()` returns `false`). Collapsing that into
+    /// an error would make "empty wallet" indistinguishable from "node down",
+    /// and those two need different operator responses.
+    pub async fn get_account(&self, address: &str) -> Result<AccountInfo> {
+        let url = format!("{}/wallet/getaccount", self.rpc_url);
+        #[derive(Serialize)]
+        struct Body<'a> {
+            address: &'a str,
+            visible: bool,
+        }
+        let resp = self
+            .http
+            .post(&url)
+            .json(&Body {
+                address,
+                visible: true,
+            })
+            .send()
+            .await
+            .map_err(|e| Error::Node(format!("getaccount send: {e}")))?;
+
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| Error::Node(format!("getaccount body read: {e}")))?;
+        if !status.is_success() {
+            return Err(Error::Node(format!(
+                "getaccount HTTP {}: {}",
+                status,
+                String::from_utf8_lossy(&bytes)
+            )));
+        }
+        parse_account_response(&bytes)
+    }
+
+    /// `POST /wallet/gettransactionbyid` — the *transaction*, not its receipt.
+    ///
+    /// Distinct from [`Self::get_tx_info`], which returns the execution
+    /// receipt. This one carries `raw_data.contract`, which is what a
+    /// fee-limit bump needs in order to rebuild an equivalent transaction.
+    pub async fn get_transaction_by_id(&self, txid_hex: &str) -> Result<OriginalCall> {
+        let url = format!("{}/wallet/gettransactionbyid", self.rpc_url);
+        #[derive(Serialize)]
+        struct Body<'a> {
+            value: &'a str,
+            visible: bool,
+        }
+        let resp = self
+            .http
+            .post(&url)
+            .json(&Body {
+                value: txid_hex,
+                visible: true,
+            })
+            .send()
+            .await
+            .map_err(|e| Error::Node(format!("gettransactionbyid send: {e}")))?;
+
+        let status = resp.status();
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| Error::Node(format!("gettransactionbyid body read: {e}")))?;
+        if !status.is_success() {
+            return Err(Error::Node(format!(
+                "gettransactionbyid HTTP {}: {}",
+                status,
+                String::from_utf8_lossy(&bytes)
+            )));
+        }
+        parse_transaction_by_id(&bytes)
+    }
+}
+
+/// Native-account view returned by `getaccount`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountInfo {
+    /// T-address the node reported, when present. `None` for an account the
+    /// chain has never seen.
+    pub address: Option<String>,
+    /// Native balance in SUN (1 TRX = 1_000_000 SUN).
+    pub balance_sun: u64,
+}
+
+impl AccountInfo {
+    /// Whether the chain holds a record for this address at all.
+    ///
+    /// An activated account holding exactly 0 TRX still has a record, so
+    /// `address.is_some()` is the right proxy — keeping a separate
+    /// `exists: bool` field would let the two drift out of sync (PR #545
+    /// review finding).
+    pub fn exists(&self) -> bool {
+        self.address.is_some()
+    }
+}
+
+/// The contract call inside an already-broadcast transaction, reduced to the
+/// two shapes v0.1 can rebuild.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OriginalCall {
+    /// Native TRX transfer.
+    Transfer {
+        owner: String,
+        to: String,
+        amount_sun: u64,
+    },
+    /// Smart-contract call (TRC-20 transfer/approve and anything else).
+    TriggerSmartContract {
+        owner: String,
+        contract: String,
+        /// ABI calldata as hex, selector included.
+        data_hex: String,
+    },
+}
+
+/// Pure decoder for `getaccount`, split out so it is testable without a node.
+fn parse_account_response(bytes: &[u8]) -> Result<AccountInfo> {
+    if bytes.is_empty() || bytes == b"{}" {
+        return Ok(AccountInfo {
+            address: None,
+            balance_sun: 0,
+        });
+    }
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| Error::NodeResponse(format!("getaccount decode: {e}")))?;
+    if let Some(err) = value.get("Error").and_then(|e| e.as_str()) {
+        return Err(Error::Node(format!("getaccount: {err}")));
+    }
+    // `balance` is absent on an activated account holding exactly 0 TRX.
+    let balance_sun = match value.get("balance") {
+        Some(b) => b
+            .as_u64()
+            .ok_or_else(|| Error::NodeResponse(format!("getaccount balance not a u64: {b}")))?,
+        None => 0,
+    };
+    Ok(AccountInfo {
+        address: value
+            .get("address")
+            .and_then(|a| a.as_str())
+            .map(str::to_owned),
+        balance_sun,
+    })
+}
+
+/// Pure decoder for `gettransactionbyid`, reduced to [`OriginalCall`].
+fn parse_transaction_by_id(bytes: &[u8]) -> Result<OriginalCall> {
+    if bytes.is_empty() || bytes == b"{}" {
+        return Err(Error::Node(
+            "gettransactionbyid: unknown txid (empty response)".into(),
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|e| Error::NodeResponse(format!("gettransactionbyid decode: {e}")))?;
+
+    let contract = value
+        .pointer("/raw_data/contract/0")
+        .ok_or_else(|| Error::NodeResponse("gettransactionbyid: no raw_data.contract[0]".into()))?;
+    let kind = contract
+        .get("type")
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| Error::NodeResponse("gettransactionbyid: contract has no type".into()))?;
+    let params = contract
+        .pointer("/parameter/value")
+        .ok_or_else(|| Error::NodeResponse("gettransactionbyid: no parameter.value".into()))?;
+
+    let field = |name: &str| -> Result<String> {
+        params
+            .get(name)
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                Error::NodeResponse(format!("gettransactionbyid: {kind} missing {name}"))
+            })
+    };
+
+    match kind {
+        "TransferContract" => Ok(OriginalCall::Transfer {
+            owner: field("owner_address")?,
+            to: field("to_address")?,
+            amount_sun: params
+                .get("amount")
+                .and_then(|a| a.as_u64())
+                .ok_or_else(|| Error::NodeResponse("TransferContract missing amount".into()))?,
+        }),
+        "TriggerSmartContract" => Ok(OriginalCall::TriggerSmartContract {
+            owner: field("owner_address")?,
+            contract: field("contract_address")?,
+            data_hex: field("data")?,
+        }),
+        other => Err(Error::TransactionBuild(format!(
+            "cannot rebuild a {other} transaction: only TransferContract and \
+             TriggerSmartContract are supported"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod response_decoding_tests {
+    use super::*;
+
+    #[test]
+    fn unseen_account_is_zero_balance_not_an_error() {
+        let info = parse_account_response(b"{}").expect("empty body is a valid answer");
+        assert!(!info.exists());
+        assert_eq!(info.balance_sun, 0);
+    }
+
+    #[test]
+    fn activated_account_with_no_balance_field_reads_as_zero() {
+        let info =
+            parse_account_response(br#"{"address":"TAbc","create_time":1}"#).expect("decode");
+        assert!(
+            info.exists(),
+            "the node returned a record, so the account exists"
+        );
+        assert_eq!(info.balance_sun, 0);
+    }
+
+    #[test]
+    fn funded_account_reports_sun() {
+        let info =
+            parse_account_response(br#"{"address":"TAbc","balance":1500000}"#).expect("decode");
+        assert_eq!(info.balance_sun, 1_500_000);
+        assert_eq!(info.address.as_deref(), Some("TAbc"));
+    }
+
+    /// Regression for Finding K: `exists()` is a method, derived from
+    /// `address.is_some()`, never a stored field — PR #545 review.
+    #[test]
+    fn account_info_exists_derives_from_address() {
+        let seen = AccountInfo {
+            address: Some("TAbc".into()),
+            balance_sun: 0,
+        };
+        assert!(seen.exists(), "address.is_some() implies exists()");
+
+        let unseen = AccountInfo {
+            address: None,
+            balance_sun: 0,
+        };
+        assert!(!unseen.exists(), "address.is_none() implies !exists()");
+    }
+
+    #[test]
+    fn node_side_error_field_is_surfaced() {
+        let err = parse_account_response(br#"{"Error":"invalid address"}"#)
+            .expect_err("Error field must not be read as a balance");
+        assert!(matches!(err, Error::Node(_)));
+    }
+
+    #[test]
+    fn transfer_contract_round_trips_into_original_call() {
+        let body = br#"{"raw_data":{"contract":[{"type":"TransferContract",
+            "parameter":{"value":{"owner_address":"TFrom","to_address":"TTo","amount":42}}}]}}"#;
+        assert_eq!(
+            parse_transaction_by_id(body).expect("decode"),
+            OriginalCall::Transfer {
+                owner: "TFrom".into(),
+                to: "TTo".into(),
+                amount_sun: 42,
+            }
+        );
+    }
+
+    #[test]
+    fn trigger_smart_contract_round_trips_into_original_call() {
+        let body = br#"{"raw_data":{"contract":[{"type":"TriggerSmartContract",
+            "parameter":{"value":{"owner_address":"TFrom","contract_address":"TUsdt","data":"a9059cbb"}}}]}}"#;
+        assert_eq!(
+            parse_transaction_by_id(body).expect("decode"),
+            OriginalCall::TriggerSmartContract {
+                owner: "TFrom".into(),
+                contract: "TUsdt".into(),
+                data_hex: "a9059cbb".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn unknown_txid_is_an_error_not_a_default_transaction() {
+        // Rebuilding a "default" transaction here would sign a transfer the
+        // operator never made.
+        assert!(parse_transaction_by_id(b"{}").is_err());
+    }
+
+    #[test]
+    fn unsupported_contract_type_is_refused() {
+        let body = br#"{"raw_data":{"contract":[{"type":"FreezeBalanceV2Contract",
+            "parameter":{"value":{"owner_address":"TFrom"}}}]}}"#;
+        assert!(matches!(
+            parse_transaction_by_id(body),
+            Err(Error::TransactionBuild(_))
+        ));
+    }
 }

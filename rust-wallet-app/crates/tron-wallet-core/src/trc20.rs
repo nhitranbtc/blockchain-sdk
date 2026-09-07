@@ -58,8 +58,33 @@ pub const APPROVE_SIGNATURE: &str = "approve(address,uint256)";
 
 /// `balanceOf(address)` — view call that returns the holder's token balance.
 pub const BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
+
+/// An allowance above this is treated as effectively unlimited.
+///
+/// `U256::MAX >> 128` = `2^128 - 1`. A real TRC-20 supply never reaches that,
+/// so anything larger is "the spender can drain the balance forever" in
+/// practice. Written out as limbs because `Shr` is not a `const fn`; the test
+/// below pins it against the shift it stands for.
+///
+/// Shared by the CLI `trc20 approve` confirmation gate so the rule lives next
+/// to the ABI it protects rather than in `handlers/`. Compared numerically
+/// rather than by decimal-digit count: a digit-length test silently reclassifies
+/// values whose string form is padded or grouped.
+pub const UNLIMITED_APPROVAL_THRESHOLD: U256 = U256([u64::MAX, u64::MAX, 0, 0]);
+
+/// Whether `amount` is an effectively-unlimited allowance.
+pub fn is_unlimited(amount: U256) -> bool {
+    amount > UNLIMITED_APPROVAL_THRESHOLD
+}
+
 /// Solidity signature for `balanceOf(address)`.
 pub const BALANCE_OF_SIGNATURE: &str = "balanceOf(address)";
+
+/// `allowance(address,address)` — remaining spender allowance.
+pub const ALLOWANCE_SELECTOR: [u8; 4] = [0xdd, 0x62, 0xed, 0x3e];
+
+/// Human-readable signature TronGrid resolves against the contract ABI.
+pub const ALLOWANCE_SIGNATURE: &str = "allowance(address,address)";
 
 /// `decimals()` — view call that returns the token's decimal precision.
 pub const DECIMALS_SELECTOR: [u8; 4] = [0x31, 0x3c, 0xe5, 0x67];
@@ -119,6 +144,16 @@ pub fn balance_of_args(owner_bytes: &[u8]) -> [u8; ABI_WORD] {
     encode_address_arg(owner_bytes)
 }
 
+/// `allowance(address,address)` calldata body — two 32-byte address slots,
+/// owner first, spender second. Order matters: swapping them silently reads a
+/// different allowance instead of failing.
+pub fn allowance_args(owner_bytes: &[u8], spender_bytes: &[u8]) -> [u8; ABI_WORD * 2] {
+    let mut out = [0u8; ABI_WORD * 2];
+    out[..ABI_WORD].copy_from_slice(&encode_address_arg(owner_bytes));
+    out[ABI_WORD..].copy_from_slice(&encode_address_arg(spender_bytes));
+    out
+}
+
 /// Calldata body for selectors that take no arguments (`decimals`, `symbol`,
 /// `name`). Returned as a `Vec` so callers can borrow it without a slice
 /// conversion.
@@ -142,6 +177,34 @@ pub async fn balance_of(rpc: &TronGridClient, contract: &str, owner: &str) -> Re
     let raw = response.constant_result_bytes()?;
     decode_uint256(&raw)
         .map_err(|e| Error::NodeResponse(format!("balanceOf({contract}, {owner}) decode: {e}")))
+}
+
+/// Read the remaining allowance `owner` has granted `spender` on `contract`.
+///
+/// Same smallest-unit convention as [`balance_of`]. A fresh pair reads 0; an
+/// "infinite" approval reads a value near `U256::MAX`.
+pub async fn allowance(
+    rpc: &TronGridClient,
+    contract: &str,
+    owner: &str,
+    spender: &str,
+) -> Result<U256> {
+    let owner_addr: crate::address::Address = owner.parse()?;
+    let spender_addr: crate::address::Address = spender.parse()?;
+    let args = allowance_args(owner_addr.as_bytes(), spender_addr.as_bytes());
+
+    // `owner` doubles as the simulated caller — a view call, so it does not
+    // affect the result, but TronGrid rejects an empty `owner_address`.
+    let response = rpc
+        .trigger_constant_contract(contract, owner, ALLOWANCE_SIGNATURE, &args)
+        .await?;
+
+    let raw = response.constant_result_bytes()?;
+    decode_uint256(&raw).map_err(|e| {
+        Error::NodeResponse(format!(
+            "allowance({contract}, {owner}, {spender}) decode: {e}"
+        ))
+    })
 }
 
 /// Read `decimals()` from `contract`. Returns 6 for USDT/USDC, 18 for
@@ -268,6 +331,24 @@ fn decode_abi_string(bytes: &[u8], selector_label: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unlimited_threshold_is_the_shift_it_documents() {
+        // The const is written as limbs because `Shr` is not `const fn`; this
+        // is the equality that makes that rewrite safe.
+        assert_eq!(UNLIMITED_APPROVAL_THRESHOLD, U256::MAX >> 128);
+    }
+
+    #[test]
+    fn is_unlimited_boundary() {
+        // Strictly-greater: the threshold itself is still a bounded allowance.
+        assert!(!is_unlimited(UNLIMITED_APPROVAL_THRESHOLD));
+        assert!(!is_unlimited(UNLIMITED_APPROVAL_THRESHOLD - 1));
+        assert!(is_unlimited(UNLIMITED_APPROVAL_THRESHOLD + 1));
+        assert!(is_unlimited(U256::MAX));
+        assert!(!is_unlimited(U256::zero()));
+        assert!(!is_unlimited(U256::from(1000u64)));
+    }
 
     #[test]
     fn balance_of_selector_is_correct() {

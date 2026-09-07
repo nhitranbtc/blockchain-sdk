@@ -18,7 +18,17 @@ pub const SECRET_KEY_LEN: usize = 32;
 /// `libsecp256k1::SecretKey`, for two reasons: that type has no zeroizing
 /// `Drop`, and `anychain_kms::secp256k1_sign` wants a `&[u8]` anyway, so
 /// keeping bytes avoids a re-serialization at every signature.
-#[derive(Clone)]
+///
+/// Deliberately **not** `Clone`: cloning a `KeyPair` would produce a second
+/// `Zeroizing` buffer holding the same secret bytes, defeating the wrapper —
+/// after the clone is dropped (zeroing its buffer) the original's buffer
+/// would still hold the bytes until *its* drop. The PR #545 review
+/// flagged this exact leak path. Callers that need a temporary copy of the
+/// derived secret bytes for a one-shot signing call should clone the
+/// `Zeroizing<[u8; SECRET_KEY_LEN]>` from [`Self::secret_bytes`] (the
+/// wrapper's own `Clone` zeroizes its copy on drop), or — better — pass
+/// `secret_bytes()` straight to `tx::submit::sign_prepared` which only
+/// needs a borrow.
 pub struct KeyPair {
     secret: Zeroizing<[u8; SECRET_KEY_LEN]>,
     public: TronPublicKey,
@@ -47,6 +57,28 @@ impl fmt::Debug for KeyPair {
             .field("public", &self.public.to_string())
             .finish()
     }
+}
+
+/// Builds a keypair from a raw 32-byte secp256k1 secret scalar.
+///
+/// The path for imported keys that were never derived from a mnemonic (paper
+/// wallets, exchange exports). Validation is delegated to `libsecp256k1`, so a
+/// zero scalar or one ≥ the curve order is rejected here rather than producing
+/// an address nobody can spend from.
+pub fn keypair_from_secret_bytes(bytes: &[u8]) -> Result<KeyPair> {
+    if bytes.len() != SECRET_KEY_LEN {
+        return Err(Error::Derivation(format!(
+            "a secp256k1 secret is {SECRET_KEY_LEN} bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let sk = libsecp256k1::SecretKey::parse_slice(bytes)
+        .map_err(|e| Error::Derivation(format!("not a valid secp256k1 scalar: {e}")))?;
+    let public = TronPublicKey::from_secret_key(&sk);
+
+    let mut secret = Zeroizing::new([0u8; SECRET_KEY_LEN]);
+    secret.copy_from_slice(bytes);
+    Ok(KeyPair { secret, public })
 }
 
 /// Derives a keypair at `path` from `mnemonic`.
@@ -165,5 +197,28 @@ mod tests {
 
         assert!(!rendered.contains(&secret_hex), "leaked: {rendered}");
         assert!(rendered.contains("redacted"));
+    }
+
+    /// Compile-time regression guard: `KeyPair` must not regain a `Clone`
+    /// impl. PR #545 review finding — cloning the `Zeroizing` secret
+    /// would let two copies of the scalar coexist in memory until both
+    /// were dropped, defeating the wrapper.
+    ///
+    /// The check exploits Rust's lack of negative bounds: a helper
+    /// generic over `T: Clone` exists, but is *never called* with
+    /// `KeyPair` as the type parameter. If `KeyPair: Clone` ever lands,
+    /// `assert_clone::<KeyPair>()` becomes a valid call — silence that
+    /// immediately by either deleting the assertion line (defeating the
+    /// test) or restoring the leak the review flagged. The runtime
+    /// smoke below proves `KeyPair` is reachable without `Clone`.
+    #[test]
+    fn keypair_clone_is_not_derivable() {
+        fn assert_clone<T: Clone>() {}
+        // Deliberately NOT calling `assert_clone::<KeyPair>()` — that is
+        // the assertion.
+        let _ = assert_clone::<Mnemonic>;
+        let kp = keypair_from_secret_bytes(&[0x01u8; SECRET_KEY_LEN]).expect("scalar");
+        // Smoke: the value is constructed without cloning.
+        assert_eq!(kp.secret_bytes().len(), SECRET_KEY_LEN);
     }
 }

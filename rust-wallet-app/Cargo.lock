@@ -6537,6 +6537,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "tron"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "directories",
+ "ethereum-types",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tron-wallet-core",
+ "zeroize",
+]
+
+[[package]]
 name = "tron-v1-spike"
 version = "0.0.0"
 dependencies = [
@@ -6569,9 +6585,11 @@ dependencies = [
  "anychain-kms",
  "anychain-tron",
  "argon2",
+ "clap",
  "directories",
  "ethereum-types",
  "hex",
+ "libsecp256k1",
  "proptest",
  "protobuf",
  "rand 0.8.7",

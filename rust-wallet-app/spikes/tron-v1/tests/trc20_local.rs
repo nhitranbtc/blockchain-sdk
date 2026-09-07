@@ -18,6 +18,12 @@
 //!
 //! `cargo test -p tron-v1-spike --test trc20_local -- --include-ignored --nocapture`
 //! expected output: **8 passed + 9 failed** when Docker daemon is up.
+
+// `tron-v1-spike` is throwaway research code — it intentionally carries unused
+// helpers (alt. RPC shapes, alternate compile paths) so future operators can
+// re-enable them without re-deriving the patterns. Strict lint policing is
+// wasted budget here.
+#![allow(dead_code, clippy::let_and_return, clippy::print_literal)]
 //!
 //! - **8 pass:** 5 URL-parsing unit tests + 3 `tronbox_local_node_*` container
 //!   probes (spawn TronBox via testcontainers, exercise

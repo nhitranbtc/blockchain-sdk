@@ -30,7 +30,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
@@ -76,14 +77,19 @@ fn network_table() -> &'static HashMap<Network, NetworkEntry> {
 /// The TRON network this crate talks to. The numeric chain-id is what
 /// `POST /jsonrpc {"method":"eth_chainId"}` returns (the plan's discovery of
 /// the JSON-RPC path; TronGrid's `/wallet/getchainid` returns HTTP 405).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 pub enum Network {
     /// TRON mainnet. Chain-id 0x2c mainnet (decimal 728126428) on TronGrid's
     /// Ethereum-shaped JSON-RPC endpoint.
     Mainnet,
     /// Shasta public testnet (legacy; not in v0.1 release-train smoke).
     Shasta,
-    /// Nile community testnet (the v0.1 test target).
+    /// Nile community testnet (the v0.1 test target). The `Default` — a fresh
+    /// `tron` invocation without an explicit `--network` should never
+    /// accidentally land on mainnet.
+    #[default]
     Nile,
     /// A user-supplied local node, e.g. a TronBox Docker container.
     /// Wraps a custom RPC URL; chain-id is what the endpoint reports.
@@ -174,6 +180,41 @@ mod tests {
                 t.contains_key(&n),
                 "tokens/network.json missing row for {n:?}"
             );
+        }
+    }
+
+    /// `clap::ValueEnum::value_variants()` is the canonical list clap hands
+    /// back to `--help` and to `--possible_value`. Drift between the enum
+    /// and the registered values turns into silent operator surprises
+    /// (e.g. `--network foo` accepted but never wired).
+    #[test]
+    fn network_value_enum_lists_all_variants() {
+        let listed: Vec<Network> = Network::value_variants().to_vec();
+        assert_eq!(listed.len(), 4, "value_variants() must list every variant");
+        for n in [
+            Network::Mainnet,
+            Network::Shasta,
+            Network::Nile,
+            Network::Local,
+        ] {
+            assert!(listed.contains(&n), "value_variants() missing {n:?}");
+        }
+    }
+
+    /// The serde lowercase tags must match what `tag()` returns, so a JSON
+    /// serialised with `tag()` round-trips through `serde_json::from_str`.
+    #[test]
+    fn network_serde_tags_match_tag_method() {
+        for n in [
+            Network::Mainnet,
+            Network::Shasta,
+            Network::Nile,
+            Network::Local,
+        ] {
+            let body = serde_json::to_string(&n).expect("serialise");
+            assert_eq!(body, format!("\"{}\"", n.tag()));
+            let back: Network = serde_json::from_str(&body).expect("deserialise");
+            assert_eq!(back, n);
         }
     }
 }
