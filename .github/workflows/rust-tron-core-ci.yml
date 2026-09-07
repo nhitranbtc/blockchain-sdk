@@ -285,6 +285,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Mirrors the umbrella ci.yml step.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
