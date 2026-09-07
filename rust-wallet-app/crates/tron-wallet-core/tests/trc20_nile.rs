@@ -417,6 +417,15 @@ async fn row_1_trx_native_transfer_nile() {
     );
     eprintln!("[row_1] Nile txid: {txid_hex}");
 
+    // --- Wait for on-chain confirmation BEFORE reading post-balance ---
+    // `broadcast()`'s `is_success()` only proves the node accepted the tx
+    // into its mempool; for TRX-native bandwidth-only transfers the gap
+    // between mempool acceptance and block inclusion is enough to make an
+    // immediate `get_account` read the pre-transfer balance. The canonical
+    // TRC20 row above already polls; mirror that here so the balance delta
+    // reflects a transaction that is actually on-chain.
+    poll_for_confirmation(&rpc, txid_hex, POLL_DEADLINE).await;
+
     // --- Snapshot sender TRX balance AFTER + assert strict delta ---
     let sender_balance_after = rpc
         .get_account(&owner_address)
