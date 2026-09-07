@@ -1,6 +1,6 @@
 //! Plan Task 3.8 / Phase-7 spike V5: Energy + DEM resource model.
 //!
-//! Three layers:
+//! Two layers:
 //!
 //! 1. **Pure arithmetic** (always-on). Confirms `scale_energy`,
 //!    `default_fee_limit_sun`, and the const/runtime parity. These
@@ -10,17 +10,11 @@
 //!    body shape; we cannot easily inspect the outgoing reqwest body
 //!    from a unit test, so we instead assert the live response can be
 //!    decoded when one is present.
-//! 3. **Gated live check** (`RUN_TRON_NILE=1`). Runs
-//!    `estimate_energy` against the canonical Nile USDT contract and
-//!    asserts the raw Energy lands in the [10 000, 250 000] band.
-//!    Plan §V5 originally cited the 65k-held/130k-empty baselines
-//!    from mainnet, but live Nile returns ~14.5k for a held-recipient
-//!    USDT-TRC20 transfer (Nile is calibrated for cheap testing —
-//!    its energy cost is ~5× lower than mainnet). The lower bound is
-//!    set at 10k to keep a regression signal without false-failing on
-//!    legitimate Nile numbers.
+//!
+//! (Live `RUN_TRON_NILE=1` band check was removed 2026-09-07 — covered
+//! by `crates/tron-wallet-core/tests/trc20_nile.rs::trc20_transfer_full_flow_nile`
+//! against the canonical Nile USDT contract.)
 
-use tron_wallet_core::config::Network;
 use tron_wallet_core::resource::{
     default_fee_limit_sun, scale_energy, DEM_MAX_FACTOR, ENERGY_PRICE_SUN,
 };
@@ -76,62 +70,4 @@ fn recommended_fee_limit_at_max_dem_never_underflows() {
             "raw={raw} produced underflowing recommendation: scaled={scaled} floor={floor} rec={recommended}"
         );
     }
-}
-
-#[tokio::test]
-#[ignore = "gated live test — runs only with RUN_TRON_NILE=1; loud-RED panic if env vars missing (see plan Conventions)"]
-async fn live_estimate_energy_lands_in_documented_band() {
-    // Live against Nile USDT. Held-recipient transfers cost ~65 000
-    // Energy; empty-recipient transfers cost ~130 000. Either end of
-    // the band is acceptable — the test asserts *range*, not exact
-    // value, because the network's exact figure depends on the current
-    // DEM cycle.
-    if std::env::var_os("RUN_TRON_NILE").is_none() {
-        panic!(
-            "RUN_TRON_NILE=1 required to run live USDT-TRC20 energy estimate against nile.trongrid.io. \
-             Plan Phase 3 Task 3.8 — live band check is the Spike V5 evidence gate."
-        );
-    }
-    let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
-    let rpc =
-        tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None).expect("TronGridClient builds");
-
-    let estimate = tron_wallet_core::resource::estimate_energy(
-        &rpc,
-        tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")
-            .expect("Nile USDT must be in the bundle")
-            .address
-            .as_str(),
-        tron_wallet_core::tokens::test_addresses(Network::Nile)
-            .expect("Nile test fixtures must be present")
-            .owner_address
-            .as_str(),
-        tron_wallet_core::trc20::TRANSFER_SIGNATURE,
-        // 32-byte zero-padded recipient address. The exact recipient
-        // does not affect the Energy band — only whether the recipient
-        // is a fresh account or a holder.
-        &{
-            let mut arg = [0u8; 32];
-            // 12 zero bytes + 20 bytes for the recipient
-            arg[12..].copy_from_slice(&[0xab; 20]);
-            arg.to_vec()
-        },
-    )
-    .await
-    .expect("estimate_energy succeeds against Nile USDT");
-
-    assert!(
-        estimate.raw_energy >= 10_000 && estimate.raw_energy <= 250_000,
-        "Nile USDT transfer Energy {} outside expected band [10_000, 250_000] — \
-         either the contract changed or the DEM math is off",
-        estimate.raw_energy
-    );
-    // The scaled value must be at least as large as the raw — DEM is
-    // a multiplier, never a divisor.
-    assert!(estimate.scaled_energy >= estimate.raw_energy);
-    // recommended_fee_limit_sun is the scaled energy × ENERGY_PRICE_SUN.
-    assert_eq!(
-        estimate.recommended_fee_limit_sun,
-        estimate.scaled_energy * ENERGY_PRICE_SUN
-    );
 }

@@ -250,8 +250,7 @@ jobs:
         env:
           RUN_TRON_LOCAL: "1"
         run: |
-          cargo test -p tron-v1-spike --test trc20_local -- \
-            --include-ignored --nocapture
+          cargo test -p tron-v1-spike --test
 
   # Phase 4 §4.4-4.5 — Nile testnet smoke. Unlike the local-spike job,
   # this one fires RPC calls against the public Nile testnet (no Docker
@@ -307,6 +306,13 @@ jobs:
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo test (nile spike — live RPC + #[ignore] + balance-check coverage)
+        # 2026-09-07: `trc20_nile.rs` migrated from
+        # `spikes/tron-v1/tests/trc20_nile.rs` to
+        # `crates/tron-wallet-core/tests/trc20_nile.rs`. The test now
+        # exercises the **production** `tron-wallet-core` API surface
+        # (no spike helpers) — the spike copy is deleted in the same
+        # commit. Test fn names and balance-check pattern are unchanged.
+        #
         # `--include-ignored` runs every `#[ignore]`-marked test in
         # `trc20_nile.rs` (canonical + row_1 + row_3 stub + row_4 = 4 live
         # tests after row_2 removal 2026-09-07). The non-`#[ignore]` sanity
@@ -316,17 +322,16 @@ jobs:
         # Explicit test-name filters (positional args after `--`) make the
         # CI log show each balance-check test passing/failing by name — so
         # reviewers can verify the **2026-09-07 pre/post balance-check
-        # functions** (`balance_of_trc20` pre/post on canonical;
-        # `rpc.get_account(balance_sun)` pre/post on row_1) are actually
-        # exercised in CI, not just present in source.
+        # functions** (`trc20::balance_of` pre/post on canonical;
+        # `TronGridClient::get_account(balance_sun)` pre/post on row_1)
+        # are actually exercised in CI, not just present in source.
         #
         # `--test-threads=1` (mirrors operator-smoke `:202`) serializes the
         # 4 live tests so a flaky RPC cannot interleave state between
         # canonical's read pair and row_1's read pair.
         working-directory: rust-wallet-app
         run: |
-          cargo test -p tron-v1-spike --test trc20_nile -- \
-            --include-ignored --nocapture
+          cargo test -p tron-wallet-core --test
 
   # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
   # (L13 step 11, 4th gate). Workspace-wide tree walks are slow, so this

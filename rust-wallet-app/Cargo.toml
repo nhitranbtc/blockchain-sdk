@@ -35,6 +35,9 @@ anychain-core = { path = "crates/anychain-vendored/anychain-core" }
 anychain-tron = { path = "crates/anychain-vendored/anychain-tron" }
 anychain-kms = { path = "crates/anychain-vendored/anychain-kms" }
 tron-wallet-core = { path = "crates/tron-wallet-core" }
+# Phase 7 CLI-driven spike — `spikes/tron-v1` drives the shipped `tron` binary
+# via assert_cmd. Workspace dep so the spike can `tron = { workspace = true }`.
+tron = { path = "crates/tron" }
 
 # Per-chain SDKs
 bitcoin-wallet-core = { path = "crates/bitcoin-wallet-core" }
