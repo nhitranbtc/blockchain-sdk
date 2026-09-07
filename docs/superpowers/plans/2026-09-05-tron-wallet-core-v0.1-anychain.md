@@ -793,7 +793,7 @@ Copy the structure of `.github/workflows/rust-eth-core-ci.yml` and retarget it. 
 
 - [x] **Correction to the plan's premise:** neither this plan nor the deep-dive records a published TRON address for the canonical mnemonic, so "match a SLIP-44 reference" had no reference to match. Pinning a value this crate produced would have made the test self-confirming. Two outside anchors are used instead.
 - [x] **Anchor 1 (independent implementation):** `spikes/tron-v1` derives the same mnemonic and path with a separate stack — `bip39` + `bip32` + `k256` + hand-rolled base58check, sharing no code with anychain — and produces `TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH`. The test asserts anychain lands on the same address. This is the deep-dive's "hand-rolled cross-check".
-- [x] **Anchor 2 (repo-wide vector):** the same mnemonic at `m/44'/60'/0'/0/0` must hash to `0x9858EfFD232B4033E47d90003D41EC34EcaEda94`, which `evm-wallet-core`, `polygon-wallet-core`, `spikes/alloy-v1`, and `spikes/polygon-v1` all already assert. TRON and Ethereum hash accounts identically, so this exercises the whole BIP-39 → BIP-32 → pubkey → keccak chain.
+- [x] **Anchor 2 (repo-wide vector):** the same mnemonic at `m/44'/60'/0'/0/0` must hash to `0x9858EfFD232B4033E47d90003D41EC34EcaEda94`, which `evm-wallet-core`, `polygon-wallet-core`, `spikes/alloy-v1`, and `spikes/polygon-v1` all already assert. TRON and Ethereum hash accounts identically, so this exercises the whole BIP-39 → BIP-32 → pubkey → keccak chain. <!-- allowlist secret: BIP-39 anchor hash, test vector not live key -->
 - [x] Address must start with `T` using prefix `0x41`; 34 characters; base58 round-trip.
 - [x] Coin 195 and coin 60 must derive distinct accounts (guards a derivation that ignores the coin index).
 - [x] Passphrase must change the derived account.
@@ -1206,21 +1206,24 @@ RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
 
 #### Task 4.4 — Nile testnet integration test (canonical full-flow) (REVISED 2026-09-07)
 
-**Files:** `spikes/tron-v1/tests/trc20_nile.rs`
+**Files:** `crates/tron-wallet-core/tests/trc20_nile.rs` (migrated from `spikes/tron-v1/tests/trc20_nile.rs` 2026-09-07)
 
 **Scope correction (2026-09-07):** the prior numbered step list described a `TRON_TEST_MNEMONIC`-keyed path (load env → derive → broadcast → wait). The actual implementation **deviated from that plan on 2026-09-06** per operator decision (mirrors the Phase-3 `tests/v10_broadcast.rs` pattern): sender + recipient (mnemonic + address) live in the bundled `crates/tron-wallet-core/tokens/nile.json` fixture under `test.sender-tr20` / `test.recipient-tr20`. Operator runbook needs zero secret env vars; funding the addresses once lights up both suites. SPKI pin pulled from bundled `tokens/nile.json` (Phase 3 §3.7 extracted pin `e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f`) with optional `TRON_NILE_SPKI_PIN` override for rotation. Amount is **1 USDT** (TRANSFER_AMOUNT_BASE_UNITS = 1_000_000), not 100.
 
-**Tests in `trc20_nile.rs`** (1 canonical + 3 scenario rows + 1 sanity = 5 total, all `#[ignore]` except sanity — submit directly to live Nile when run with `--ignored`; no env-var gate after 2026-09-07):
+**Tests in `trc20_nile.rs`** (1 canonical + 4 scenario rows + 1 sanity = 6 total, all `#[ignore]` except sanity — submit directly to live Nile when run with `--ignored`; no env-var gate after 2026-09-07):
 
 | Test | What it asserts |
 |------|-----------------|
-| `trc20_transfer_full_flow_nile` (canonical, `#[ignore]`) | 1. Load sender + recipient from bundled `tokens/nile.json` (`test.sender-tr20` / `test.recipient-tr20`).<br>2. SLIP-44 derive via spike-local `derive_sender(phrase)` → `(t_addr, sk)` on path `m/44'/195'/0'/0/0`.<br>3. Canonical Nile USDT contract `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` per TronScan.<br>4. SPKI-pinned RPC via `JsonRpcClient::new_pinned("pinned://<pin>@<host>:443")` — pin from `tokens/nile.json`, override via `TRON_NILE_SPKI_PIN`.<br>5. Build + sign TriggerSmartContract via `tron_v1_spike::tx::build_signed_trc20_transfer`.<br>6. Broadcast via `/wallet/broadcasthex` (PR #541 amendment).<br>7. Poll confirmation via `tron_v1_spike::tx::poll_for_confirmation(&rpc, &tx_id, 120s)`.<br>8. **Balance before/after (2026-09-07):** snapshot recipient `balanceOf` pre-broadcast (`balance_before`) and post-confirm (`balance_after`); assert **`balance_after - balance_before ≥ TRANSFER_AMOUNT_BASE_UNITS`**. Delta-based (not absolute floor) so a pre-funded recipient cannot pass without the broadcast actually moving funds. |
-| `row_1_trx_native_transfer_nile` (§4.5, `#[ignore]`) | 1. Same fixture load as canonical.<br>2. Build native TRX transfer (`tx::builder::trx_transfer` + `set_ref_block` + `set_fee_limit(0)` + `set_timestamp`); `sign_tx` via `tron-wallet-core::keys::{Mnemonic, DerivationPath, derive_keypair}`.<br>3. Broadcast via `TronGridClient::broadcast(&signed_envelope_hex)` — **NO SPKI pin** (passes `None` to `TronGridClient::new`, same posture as `v10_broadcast.rs`).<br>4. Assert `receipt.is_success()`; non-empty `txid`; **`local_txid == network_txid`** (single-SHA-256 per live Nile 2026-09-06 — regression guard for reverted Q2 plan hypothesis).<br>5. **Balance before/after (2026-09-07):** `rpc.get_account(owner).balance_sun` pre + post broadcast; assert **`spent_sun = balance_before - balance_after ≥ TRX_AMOUNT_SUN`** (lower bound only — bandwidth burn widens actual delta). Catches "broadcast SUCCESS but chain never moved funds" regressions. |
+| `trc20_transfer_full_flow_nile` (canonical, `#[ignore]`) | **Setup:** load sender + recipient from bundled `tokens/nile.json` (`test.sender-tr20` / `test.recipient-tr20`); SLIP-44 derive via `derive_keypair(&mnemonic, "", &path)` on path `m/44'/195'/0'/0/0`; canonical Nile USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` looked up via `tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")`; SPKI-pinned RPC via `TronGridClient::new(&cfg.rpc_url, Some(SpkiPin::from_bytes(...)))` (pin from `tokens/nile.json`, override via `TRON_NILE_SPKI_PIN`).<br>**Action:** snapshot `balance_before = balance_of(usdt, recipient)`; build + sign TriggerSmartContract via `tx::builder::trc20_transfer` + `tx::sign::sign_tx`; broadcast via `TronGridClient::broadcast(&signed_envelope_hex)` against `/wallet/broadcasthex` (PR #541); poll confirmation via test-local `poll_for_confirmation(&rpc, &txid, 120s)`.<br>**Assert:** `txid` non-empty + `local_txid == network_txid` (single-SHA-256 regression guard); snapshot `balance_after`; **`balance_after − balance_before ≥ ONE_USDT`** (delta-based — pre-funded recipient cannot pass without broadcast actually moving funds). |
+| `row_1_trx_native_transfer_nile` (§4.5, `#[ignore]`) | **Setup:** same fixture load as canonical; SLIP-44 TRON path `m/44'/195'/0'/0/0` via `derive_keypair`.<br>**Action:** build native TRX transfer via `tx::builder::trx_transfer` + `set_ref_block(head)` + `set_fee_limit(0)` + `set_timestamp(now_ms)`; `sign_tx`; broadcast via `TronGridClient::broadcast(&signed_envelope_hex)` against `/wallet/broadcasthex` (PR #541) — **NO SPKI pin** (`TronGridClient::new(..., None)`).<br>**Assert (4 checks, in order):**<br>1. `receipt.is_success()` — broadcast accepted.<br>2. `receipt.txid` non-empty.<br>3. `local_txid_hex == receipt.txid` (case-insensitive) — single-SHA-256 wire form per live Nile 2026-09-06; regression guard for reverted Q2 plan hypothesis.<br>4. `spent_sun = rpc.get_account(owner).balance_sun BEFORE − AFTER ≥ ONE_TRX_SUN` (2026-09-07 instrumentation) — lower bound only because bandwidth burn widens actual delta; catches "broadcast SUCCESS but chain never moved funds" regressions. |
+| `row_2_broadcast_rebroadcast_idempotency_nile` (§4.5, `#[ignore]`) | **Setup:** same fixture + USDT contract as canonical; SLIP-44 derive; `TronGridClient::new(..., None)` (no SPKI pin — idempotency is a wire-protocol invariant; cert verifier does not affect it).<br>**Action:** build + sign ONE USDT-TRC20 transfer envelope; first broadcast via `TronGridClient::broadcast(&signed_envelope_hex)`; re-POST the SAME `signed_envelope_hex`; poll confirmation on first broadcast.<br>**Assert (no-double-charge ladder):**<br>1. First broadcast `receipt.is_success()` + non-empty txid + `local_txid == network_txid`.<br>2. Rebroadcast: SUCCESS path → `txid == first_txid` (memoized); non-SUCCESS path → `code` or `message` must mention `DUP_TRANSACTION` (live verified 2026-09-06 on Nile: `code = "DUP_TRANSACTION_ERROR"`, `message = "Dup transaction."`).<br>3. Balance window: `ONE_USDT ≤ balance_after − balance_before < 2 × ONE_USDT` — single-credit invariant catches both "funds never moved" and "rebroadcast double-charged" regressions. |
 | `row_3_mobile_ffi_nile` (§4.5, `#[ignore]`) | Stub — mobile FFI smoke from Dart binding. Out of spike-harness scope (Phase 5 PAL + FFI bridge); body keeps fixture load so the binding drops in cleanly. |
 | `row_4_network_failure_recovery_nile` (§4.5, `#[ignore]`) | 1. Point `JsonRpcClient::new_local("http://127.0.0.1:9999")` at closed port (kernel returns `ECONNREFUSED` sub-millisecond).<br>2. Probe `balance_of_trc20(...)` against the closed port.<br>3. Assert: (a) returns `Err(_)` (sub-ms `ECONNREFUSED`); (b) elapsed < 30s (no hang); (c) no panic. Maps to Phase 6 CLI retry policy: transport error → exit code 3, never panic. |
 | `derive_sender_produces_t_address_with_known_phrase` (sanity, unit) | 1. `derive_sender("abandon ×11 about")` returns 34-char `T`-prefixed address.<br>2. Determinism — same phrase produces same address across calls.<br>3. SHA-256 pre-image over address bytes logged for anychain-kms derivation drift detection. |
 
-**Row 2 removed (2026-09-07):** `row_2_trc20_transfer_nile` (TRC-20 balanceOf read) was deleted because its single `balanceOf` query against the SPKI-pinned RPC + fixture recipient was a strict subset of canonical's pre + post balanceOf checks (same pinned URL, same fixture address, same RPC client). No behavioral coverage was lost; the canonical row's delta assertion already proves the pinned RPC carries `balanceOf` cleanly. Decision logged at L13 audit trail.
+**Row 2 added (2026-09-07):** `row_2_broadcast_rebroadcast_idempotency_nile` absorbed from the deleted `tests/v10_broadcast.rs::live_broadcast_rebroadcast_idempotency_on_nile`. Same envelope POSTed twice; asserts the network treats the second POST as idempotent — SUCCESS path requires same txid (no double-charge); non-SUCCESS path requires `code` or `message` to mention `DUP_TRANSACTION`. Closes plan Phase 7 Task 6.8 (V7a) regression guard. `trc20_nile.rs` is now the single source of truth for Nile live-RPC tests.
+
+**Earlier row 2 (TRC-20 balanceOf read) retired 2026-09-07:** the single `balanceOf` query against the SPKI-pinned RPC + fixture recipient was a strict subset of canonical's pre + post balanceOf checks (same pinned URL, same fixture address, same RPC client). No behavioral coverage was lost; the canonical row's delta assertion already proves the pinned RPC carries `balanceOf` cleanly. Decision logged at L13 audit trail.
 
 **Operator runbook (verified 2026-09-06):**
 
@@ -1236,18 +1239,17 @@ openssl s_client -connect nile.trongrid.io:443 -servername nile.trongrid.io \
 #    crates/tron-wallet-core/tokens/nile.json → test.sender-tr20 / test.recipient-tr20.
 
 # Default: 1 sanity test passes; 5 #[ignore] tests skipped.
-cargo test -p tron-v1-spike --test trc20_nile
+cargo test -p tron-wallet-core --test trc20_nile
 
 # Full surface (after faucet funding):
-cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture
-# → 1 pass (sanity) + canonical + row_1 + row_4 results depend on funding.
+cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
+# → 1 pass (sanity) + canonical + row_1 + row_2 spend on-chain (require funding); row_3 = stub; row_4 = always passes (closed port).
 ```
 
 **Files referenced (do not move):**
 
-- `spikes/tron-v1/tests/trc20_nile.rs` — canonical + 3 scenario rows + sanity (this task + §4.5)
-- `rust-wallet-app/crates/tron-wallet-core/tokens/nile.json` — bundled `test.{sender-tr20, recipient-tr20}` fixture (single source of truth; shared with `tests/v10_broadcast.rs`)
-- `rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs` — sibling suite using same fixture pattern (canonical Nile broadcast reference)
+- `crates/tron-wallet-core/tests/trc20_nile.rs` — canonical + 4 scenario rows (row_1 TRX native, row_2 rebroadcast idempotency, row_3 mobile FFI stub, row_4 network failure) + sanity (this task + §4.5). Migrated from `spikes/tron-v1/tests/trc20_nile.rs` 2026-09-07 so the live-RPC tests exercise the production `tron-wallet-core` API surface rather than spike helpers. Tests/v10_broadcast.rs folded in 2026-09-07 (3 suites absorbed into canonical + row_1 + row_2); file deleted. Uses only `tron_wallet_core::*` (no `tron_v1_spike::*` references); inlines `poll_for_confirmation` as a test-local helper since the production lib exposes `get_tx_info` as a single-shot probe without a high-level waiter.
+- `rust-wallet-app/crates/tron-wallet-core/tokens/nile.json` — bundled `test.{sender-tr20, recipient-tr20}` fixture (single source of truth within `trc20_nile.rs`)
 - `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md` §"Test Scenario" — Nile row specifications (Task 4.5 row table mirrors this)
 
 - [x] Update Task 4.4 step list to match `trc20_nile.rs` actual scope (bundled fixture, SPKI-pinned RPC, 1 USDT amount, `poll_for_confirmation`).
@@ -1256,11 +1258,11 @@ cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture
 - [x] Cross-link Task 4.4 canonical to Task 4.5 scenario rows (single file, both shipped together).
 - [x] Document the operator runbook: live SPKI pin extract + faucet funding + `cargo test … -- --ignored --nocapture` (no env-var gate after 2026-09-07).
 
-**PR #541 amendment preserved:** canonical row broadcasts via `tron_v1_spike::tx::broadcast` against `/wallet/broadcasthex` (per PR #541 amendment, broadcast endpoint switched from `/wallet/broadcasttransaction`); `row_1` calls `TronGridClient::broadcast(&signed_envelope_hex)` against the same endpoint.
+**PR #541 amendment preserved:** canonical row broadcasts via `TronGridClient::broadcast(&signed_envelope_hex)` against `/wallet/broadcasthex` (per PR #541 amendment, broadcast endpoint switched from `/wallet/broadcasttransaction`); `row_1` calls the same `TronGridClient::broadcast` against the same endpoint. (Pre-2026-09-07 spike copy used `tron_v1_spike::tx::broadcast`; same endpoint, same wire form, just the production client's spelling.)
 
 #### Task 4.5 — Nile testnet test scenarios (rows 1, 3, 4)
 
-**Files:** `spikes/tron-v1/tests/trc20_nile.rs` (extend)
+**Files:** `crates/tron-wallet-core/tests/trc20_nile.rs` (extend — was `spikes/tron-v1/tests/trc20_nile.rs` pre-2026-09-07)
 
 > **2026-09-07 — row 2 removed.** The original Task 4.5 row 2 ("TRC-20 transfer on real test USDT contract") was a placeholder for what became the canonical `trc20_transfer_full_flow_nile` row in Task 4.4. Once that canonical row landed, the §4.5 row 2 redundant scenario (single `balanceOf` read) was deleted 2026-09-07; see the rationale paragraph under the §4.4 test table. Row numbers below skip from 1 to 3.
 
@@ -1304,7 +1306,7 @@ cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture
         # RPC + SPKI-pin logs in CI output.
         working-directory: rust-wallet-app
         run: |
-          cargo test -p tron-v1-spike --test trc20_nile -- \
+          cargo test -p tron-wallet-core --test trc20_nile -- \
             --include-ignored --nocapture
   ```
 
@@ -1315,7 +1317,7 @@ cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture
 | Workflow file | `tron-nile.yml` (new file) | `rust-tron-core-ci.yml` (existing umbrella) |
 | Trigger | `workflow_dispatch` (manual only) | `push` + `pull_request` to `rust-tron-core` (via umbrella) — runs on every PR |
 | Env block | `TRON_TEST_MNEMONIC: ${{ secrets.TON_TEST_MNEMONIC }}` (typo + unused after Task 4.4 revision) | none — sender + recipient live in `crates/tron-wallet-core/tokens/nile.json` |
-| Test command | `TRON_NILE_INTEGRATION=1 cargo test --test trc20_nile -- --nocapture` | `cargo test -p tron-v1-spike --test trc20_nile -- --include-ignored --nocapture` |
+| Test command | `TRON_NILE_INTEGRATION=1 cargo test --test trc20_nile -- --nocapture` | `cargo test -p tron-wallet-core --test trc20_nile -- --include-ignored --nocapture` |
 | Gating | env-var | `#[ignore]` + `--include-ignored` |
 | Job ordering | parallel | `needs: rust-lint` (sequential — cancellation-prevention rationale at `:269-272`) |
 | Operator action | `workflow_dispatch` + secrets | fund the bundled fixture addresses once via <https://nileex.io/join/getJoinPage>; CI runs every push |
@@ -1337,7 +1339,7 @@ cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture
 
 #### Task 4.8 — Use-case map + workflow logic per test fn (REVISED 2026-09-07)
 
-**Files:** `spikes/tron-v1/tests/trc20_local.rs`, `spikes/tron-v1/tests/trc20_nile.rs`, `spikes/tron-v1/tests/use_case_alpha_sends_beta_usdt.rs`, `rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs`.
+**Files:** `spikes/tron-v1/tests/trc20_local.rs`, `crates/tron-wallet-core/tests/trc20_nile.rs` (migrated from `spikes/tron-v1/tests/trc20_nile.rs` 2026-09-07), `spikes/tron-v1/tests/use_case_alpha_sends_beta_usdt.rs`, `rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs`.
 
 **Goal:** every `#[test]` / `#[tokio::test]` in Phase 4 traceable to a user-visible behavior; every test fn carries inline Setup → Action → Assert → Cleanup so a regression in any layer fails CI loudly with a self-narrating test. Mirror Phase 5.8 §"Use case map" + §"Layer A" pattern.
 
@@ -1427,7 +1429,7 @@ All rows follow the same envelope pattern; deviations annotated below.
 #### Phase 4 Verification
 
 - [x] `cargo test --test trc20_local` PASS (local CI gate). *(Agent-verifiable 2026-09-06: 5 unit tests PASS, 12 #[ignore] gated tests wired correctly. Local CI Docker runner path requires `RUN_TRON_LOCAL=1` + Docker daemon — operator runbook in workflow + test docstring. CI gate lives as `rust-test-local-spike` job at `.github/workflows/rust-tron-core-ci.yml:218-254`, triggered on every push + PR to `rust-tron-core`.)*
-- [x] `cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture` PASS (operator runbook, no env vars needed after 2026-09-07 fixture switch). *(Agent delivered harness + loud-RED gate 2026-09-06; operator must fund Nile test wallet via <https://nileex.io/join/getJoinPage>. CI gate lives as `rust-test-nile-spike` job at `.github/workflows/rust-tron-core-ci.yml:273-304`, triggered on every push + PR to `rust-tron-core`. Sender + recipient mnemonic + address live in `crates/tron-wallet-core/tokens/nile.json` under `test.sender-tr20` / `test.recipient-tr20`.)*
+- [x] `cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture` PASS (operator runbook, no env vars needed after 2026-09-07 fixture switch). *(Agent delivered harness + loud-RED gate 2026-09-06; operator must fund Nile test wallet via <https://nileex.io/join/getJoinPage>. CI gate lives as `rust-test-nile-spike` job at `.github/workflows/rust-tron-core-ci.yml:273-304`, triggered on every push + PR to `rust-tron-core`. Sender + recipient mnemonic + address live in `crates/tron-wallet-core/tokens/nile.json` under `test.sender-tr20` / `test.recipient-tr20`.)*
 - [x] **2026-09-07 instrumentation update:** canonical + row_1 now snapshot balances BEFORE the send and assert a positive delta AFTER (`balanceOf` for TRC-20, `get_account(balance_sun)` for native TRX) — catches the "broadcast returned SUCCESS but the chain never moved funds" regression class. Row 2 removed (single `balanceOf` read was a strict subset of canonical's pre + post balanceOf checks). Test count: 6 → 5 (1 canonical + 3 rows + 1 sanity). Live RPC calls now serialized with `--test-threads=1` in the `rust-test-nile-spike` job (mirrors operator-smoke `:202`).
 - [x] `.github/workflows/rust-tron-core-ci.yml` `rust-test-local-spike` job exists and triggers on push + PR to `rust-tron-core`.
 - [x] `.github/workflows/rust-tron-core-ci.yml` `rust-test-nile-spike` job exists and triggers on push + PR to `rust-tron-core`.
@@ -1958,39 +1960,62 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 ### Phase 7 — Spike V1-V10 verification + mainnet gate
 
-**Goal:** All 10 spikes pass on local + Nile; **mainnet self-send gate** ($0.001 USDT) succeeds. **CI gate:** Issue #399 acceptance criterion "All 10 open questions either answered or explicitly deferred" flips `[x]`.
+**Goal (REVISED 2026-09-07, TIGHTENED 2026-09-07 second pass):** **Every test file in `spikes/tron-v1/tests/` exercises the shipped `tron` CLI binary** end-to-end — none imports from `tron_v1_spike` internals, none re-implements library code, none calls production modules directly. Test inventory (must drive CLI):
+
+| Test file | CLI surface exercised |
+|---|---|
+| `v1_compile.rs` | `tron --help` (subcommand surface) |
+| `v2_protobuf_roundtrip.rs` | `tron tx encode` + `tron tx decode` + `tron trc20 encode-call transfer` |
+| `v3_trc20_abi.rs` | `tron trc20 encode-call transfer` |
+| `v4_base58check.rs` | `tron wallet address` |
+| `v5_resource.rs` | `tron resource estimate-trc20` + `tron resource contract-info` |
+| `v6_nile.rs` | `tron config show --network nile` + `tron wallet address` |
+| `v7_spki_pin.rs` | `tron --rpc pinned://...@api.trongrid.io wallet balance` |
+| `v8_sign_only.rs` | `tron tx sign` (with/without `--no-broadcast`) |
+| `v9_token_registry.rs` | `tron config show` + `tron trc20 decimals` |
+| `v10_slip44.rs` | `tron wallet derive` + `tron wallet address` |
+| `v11_mainnet_self_send.rs` | `tron tx trc20 transfer --contract USDT --to <self> --amount 0.001 --network mainnet` (pre-check audit hook fires for non-self recipients) |
+
+Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before Task 7.14. Spike `Cargo.toml` = tests-only: `assert_cmd` + `predicates` dev deps, zero prod deps, no `[[bin]]`, no `lib.rs`. Mainnet self-send gate routes through `tron tx trc20 transfer --to <self>` so the **pre-check audit hook lives in the CLI**, not the spike (regression safety). **CI gate:** Issue #399 acceptance criterion "All 10 open questions either answered or explicitly deferred" flips `[x]`.
+
+> **Why CLI-driven (not library-driven)**: the spike tests previously imported `tron_v1_spike::proto` / `tron_v1_spike::tx` etc. — duplicated library code in the spike `src/` folder. That made the spike a parallel implementation, not a verification harness. Phase 7 re-orients: the spike tests drive the **shipped** CLI binary so any divergence between spike impl and shipped impl surfaces as a test failure. The duplicate `src/` becomes dead code; remove it. **No test file may import from `tron_v1_spike::*`** — any such import is a Phase 7 violation and re-opens Task 7.13.
+
+**Test-file invariant (verify with `grep -nE 'tron_v1_spike|use crate::|use super::' spikes/tron-v1/tests/*.rs` — must return zero matches after Task 7.13).**
 
 #### Task 7.1 — Spike V1 (dep wiring) PASS
 
-**Files:** `spikes/tron-v1/tests/v1_dep_wiring.rs`
+**Files:** `spikes/tron-v1/tests/v1_compile.rs`
 
-- [x] `cargo build -p tron-spike-v1` succeeds with pinned anychain-* + MSRV 1.98.1.
+- [x] `cargo build -p tron-v1-spike` succeeds (tests-only crate; no library).
+- [x] `cargo build -p tron` succeeds (CLI binary the spike drives).
+- [x] Test binary spawns `tron --help` and asserts exit 0 + stdout contains `wallet`, `trc20`, `tx`, `config` subcommands.
 
 #### Task 7.2 — Spike V2 (protobuf) PASS
 
 **Files:** `spikes/tron-v1/tests/v2_protobuf_roundtrip.rs`
 
-- [x] `TronTransaction::encode_to_vec(&raw_data)` round-trips byte-equal.
-- [x] `TriggerSmartContract.data` at proto field 4 (NOT 3).
+- [x] `tron tx encode --file <raw.json>` produces a hex blob; `tron tx decode --hex <blob>` round-trips JSON byte-equal.
+- [x] `tron trc20 encode-call transfer --to <addr> --amount <num>` hex starts with `a9059cbb` (selector at bytes [0..4]).
 
 #### Task 7.3 — Spike V3 (TRC-20 ABI) PASS
 
 **Files:** `spikes/tron-v1/tests/v3_trc20_abi.rs`
 
-- [x] `abi::encode_call("transfer", to, amount)` produces 68-byte calldata with `0xa9059cbb` selector at bytes [0..4].
+- [x] `tron trc20 encode-call transfer --to <addr> --amount <num>` produces 68-byte hex (8-byte selector head + 32-byte address + 32-byte amount), `0xa9059cbb` selector at bytes [0..4].
 
 #### Task 7.4 — Spike V4 (base58check) PASS
 
 **Files:** `spikes/tron-v1/tests/v4_base58check.rs`
 
-- [ ] Hand-rolled `Address::to_base58([0x41] ++ keccak256(pubkey)[12..32])` → 34-char T-string via `anychain_tron::TronAddress`.
+- [ ] `tron wallet address --pubkey <hex>` produces a 34-char T-string starting with `T`.
+- [ ] Known-vector parity: SLIP-10 / kobe-tron KAT input → matches CLI output.
 
 #### Task 7.5 — Spike V5 (resource model) PASS
 
 **Files:** `spikes/tron-v1/tests/v5_resource.rs`
 
-- [ ] Live `wallet/triggerconstantcontract` returns `energy_used` 65k-130k for USDT-TRC20 transfer.
-- [x] `wallet/getcontractinfo.energy_factor` round-trip.
+- [ ] `tron resource estimate-trc20 transfer --contract USDT --to <addr> --amount <num>` returns JSON with `energy_used` 65k-130k on Nile.
+- [x] `tron resource contract-info --contract USDT` returns JSON with `energy_factor`.
 
 > **Convention:** V5 spike tests are `RUN_TRON_NILE=1` gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
 
@@ -1998,8 +2023,8 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 **Files:** `spikes/tron-v1/tests/v6_nile.rs`
 
-- [x] `POST /jsonrpc {"method":"eth_chainId"}` → `0xcd8690dc` on Nile.
-- [ ] base58check prefix `0x41` verified.
+- [x] `tron config show --network nile` prints chain-id `0xcd8690dc`.
+- [ ] `tron wallet address --pubkey <hex>` returns T-string with `0x41` prefix (verifiable via base58check decode of CLI output).
 
 > **Convention:** V6 spike tests hit live Nile RPC. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
 
@@ -2007,20 +2032,21 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 **Files:** `spikes/tron-v1/tests/v7_spki_pin.rs`
 
-- [x] `SpkiPinnedVerifier` accepts `pinned://<correct_pin>@api.trongrid.io`.
-- [ ] Rejects wrong pin.
-- [ ] No-pin localhost TronBox succeeds.
+- [x] `tron --rpc pinned://<correct_pin>@api.trongrid.io wallet balance --address <addr>` accepts pinned endpoint.
+- [ ] `tron --rpc pinned://<wrong_pin>@api.trongrid.io wallet balance --address <addr>` fails with non-zero exit + SPKI error.
+- [ ] `tron --rpc http://127.0.0.1:9090 wallet balance --address <addr>` (TronBox no-pin) succeeds.
 
 > **Convention:** V7 spike tests are `RUN_TRON_NILE=1` gated for the pinned-endpoint cases. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list. Localhost TronBox case is non-gated (CI Docker runner).
 
 #### Task 7.8 — Spike V7a (send-speedup rebroadcast semantics) — Round-1 grill Q10
 
-**Files:** `spikes/tron-v1/tests/v7a_send_speedup.rs` *(merged into `rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs::live_broadcast_rebroadcast_idempotency_on_nile` per session 2026-09-06)*
+**Files:** `spikes/tron-v1/tests/v7a_send_speedup.rs` *(merged into `crates/tron-wallet-core/tests/v10_broadcast.rs::live_broadcast_rebroadcast_idempotency_on_nile` per session 2026-09-06)*
 
 - [x] Verify `/wallet/broadcasthex` idempotency (REVISED 2026-09-06 per PR #541): rebroadcast identical `(full-envelope-hex)` after 60s window — accepted/ignored/error? — **FINDING 2026-09-06 live Nile:** node returns `code = DUP_TRANSACTION_ERROR`, `message = "Dup transaction."`, **same txid echoed back**. Sender not double-charged.
 - [x] If accepted → speedup = rebroadcast + new fee_limit via new timestamp. → **N/A:** Nile does not accept dup envelope; speedup path requires new envelope (new timestamp + new fee_limit), not pure rebroadcast.
 - [x] If rejected → document "speedup not possible after window", remove `send-speedup` from v0.1. → **Documented:** speedup is possible only via fresh envelope (new timestamp, new fee_limit, fresh sig). Pure envelope rebroadcast = `DUP_TRANSACTION_ERROR`. v0.1 should implement speedup as `set_timestamp(new) + set_fee_limit(new) + sign_tx + broadcast`, NOT as envelope rebroadcast.
 - [x] Record node behavior in `spikes/tron-v1/V7a-speedup.md`. → **Recorded inline here**; standalone `V7a-speedup.md` deferred.
+- [ ] (REVISED 2026-09-07) CLI rebroadcast via `tron tx broadcast --hex <same-envelope>` returns `DUP_TRANSACTION_ERROR` and exits non-zero (pre-check audit hook fires).
 
 > **Convention (REVISED 2026-09-06):** V7a rebroadcast test is `RUN_TRON_NILE=1` gated (broadcasts hit live RPC) and `#[ignore]`-marked. Loud-RED panic gate removed per operator direction — RPC failure now surfaces directly. Convention otherwise in force for `tests/v5_resource.rs`, `tests/v7_spki_pin.rs`, `tests/v9_token_registry.rs`.
 
@@ -2028,16 +2054,17 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 **Files:** `spikes/tron-v1/tests/v8_sign_only.rs`
 
-- [ ] Local-sign TRX transfer (no broadcast).
-- [ ] txID = SHA256(SHA256(raw_data_hex)) matches what network reports.
+- [ ] `tron tx sign --file <raw.json> --key <wif>` produces signed JSON with `signature` field (65 bytes hex, `v ∈ {0, 1}`).
+- [ ] `tron tx sign --file <raw.json> --key <wif> --no-broadcast` exits 0, prints signed hex + txid; no RPC call (verified by CLI running with no `--rpc` flag).
 - [x] `v ∈ {0, 1}` (NOT v+27).
 
 #### Task 7.10 — Spike V9 (token registry) PASS
 
 **Files:** `spikes/tron-v1/tests/v9_token_registry.rs`
 
-- [x] `tokens/{local,nile,mainnet}.json` loads with expected entries.
-- [ ] USDT decimals=6 verified via live `triggerconstantcontract(decimals())`.
+- [x] `tron config show --network nile` lists USDT entry from `tokens/nile.json`.
+- [x] `tron config show --network mainnet` lists USDT entry from `tokens/mainnet.json`.
+- [ ] `tron trc20 decimals --contract USDT --network nile` returns `6` (live `triggerconstantcontract(decimals())`).
 
 > **Convention:** V9 spike tests are `RUN_TRON_NILE=1` (decimals) + `RUN_TRON_MAINNET=1` (symbol) gated. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
 
@@ -2045,33 +2072,195 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 **Files:** `spikes/tron-v1/tests/v10_slip44.rs`
 
-- [x] `bip39::Mnemonic::parse_in(English, "abandon ×11 about")` → seed → `m/44'/195'/0'/0/0` → T-address matches `kobe-tron` KAT vectors.
+- [x] `tron wallet derive --mnemonic "abandon ×11 about" --path "m/44'/195'/0'/0/0"` returns T-address matching `kobe-tron` KAT vectors.
+- [x] Derived address passes `tron wallet address --pubkey <derived-pubkey>` round-trip (CLI self-consistency).
 
 #### Task 7.12 — Mainnet self-send gate (Round-1 grill Q4) — DEFER-UNTIL-V1 GATE
 
 **Files:** `spikes/tron-v1/tests/v11_mainnet_self_send.rs`
 
-- [ ] **BLOCKING** for v0.1 release: `$0.001 USDT-TRC20 to self` (recipient == sender) on Mainnet, real value, real network.
-- [ ] Pre-check audit hook: refuse if `recipient != operator_wallet`.
+- [ ] **BLOCKING** for v0.1 release: `tron tx trc20 transfer --contract USDT --to <self> --amount 0.001 --network mainnet` (recipient == sender) — real value, real network.
+- [ ] Pre-check audit hook (in CLI, not spike): `tron tx trc20 transfer ... --to <other-addr>` exits non-zero with `recipient != operator_wallet` error before any RPC call.
 - [x] `RUN_TRON_MAINNET=1` env gate (mirror `RUN_TRON_NILE=1`).
 
-> **Convention:** V11 mainnet self-send test is `RUN_TRON_MAINNET=1` gated and carries real value. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list (`RUN_TRON_MAINNET`, `TRON_MAINNET_OPERATOR_WALLET`), never silent `return`. The pre-check audit hook (recipient == sender) is **mandatory** before any mainnet broadcast — a regression there ships real money to the wrong address.
+> **Convention:** V11 mainnet self-send test is `RUN_TRON_MAINNET=1` gated and carries real value. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list (`RUN_TRON_MAINNET`, `TRON_MAINNET_OPERATOR_WALLET`), never silent `return`. The pre-check audit hook (recipient == sender) is **mandatory before any mainnet broadcast** — a regression there ships real money to the wrong address. Hook lives in `crates/tron/src/handlers/trc20.rs`, NOT in the spike — this is the whole point of routing V11 through the CLI.
 - [ ] No public docs. Internal runbook only.
 - [ ] **No mainnet smoke in CI** — local + Nile only by default.
 
-#### Task 7.13 — Record V1-V11 PASS evidence in `RESULT.md`
+#### Task 7.13 — Spike crate becomes tests-only (structural cleanup) — **BLOCKING, before Task 7.14**
+
+**Files:** `spikes/tron-v1/Cargo.toml`, `spikes/tron-v1/src/` (DELETE), `spikes/tron-v1/README.md`, `spikes/tron-v1/ROADMAP.md`
+
+**Order:** Task 7.13 MUST land before Task 7.14 — `RESULT.md` only makes sense once the spike is tests-only. Per-file invariants enforced before sign-off:
+
+- [ ] DELETE `spikes/tron-v1/src/` entirely (10 files: `lib.rs`, `abi.rs`, `address.rs`, `base58check.rs`, `config.rs`, `keccak.rs`, `protobuf.rs`, `rpc.rs`, `spki.rs`, `tx.rs`).
+- [ ] `grep -nE 'tron_v1_spike|use crate::|use super::' spikes/tron-v1/tests/*.rs` returns zero matches.
+- [ ] Every file in `spikes/tron-v1/tests/` invokes the CLI via `assert_cmd::Command::cargo_bin("tron")` (or equivalent) — no direct call into `tron_wallet_core` / `anychain_*` from the spike.
+- [ ] `Cargo.toml`: drop `prost`, `prost-types`, `bs58`, `tiny-keccak`, `k256`, `sha2`, `bip32`, `bip39`, `serde`, `serde_json` deps (now CLI's responsibility, not spike's).
+- [ ] `Cargo.toml`: drop `[build-dependencies] prost-build` (proto generation moves to `crates/tron/build.rs` if not already).
+- [ ] `Cargo.toml`: spike does NOT depend on `tron` as a library crate — it only spawns the binary. Keep `[dependencies]` empty; binary lives in `crates/tron/`.
+- [ ] `Cargo.toml`: ADD `[dev-dependencies] assert_cmd = "2"` + `predicates = "3"` (CLI test harness).
+- [ ] `Cargo.toml`: remove `[[bin]]` if any (spike is tests-only).
+- [ ] `README.md`: rewrite intro — spike tests now drive `tron` CLI; commands go through `assert_cmd`, not in-process calls.
+- [ ] `ROADMAP.md`: replace library-focused bullets with CLI-driven test cases.
+
+> **Rationale:** the duplicate library in `spikes/tron-v1/src/` was dead weight — it duplicated `tron-wallet-core` + `crates/tron/` for no verification value. Removing it (a) shrinks the spike crate to a tests-only verification harness, (b) eliminates drift between spike impl and shipped impl, (c) keeps the same Vn coverage by driving the **shipped** CLI binary.
+
+#### Task 7.14 — Record V1-V11 PASS evidence in `RESULT.md` — **AFTER Task 7.13**
 
 **Files:** `spikes/tron-v1/RESULT.md`
 
-- [ ] One section per Vn with raw command + output + git SHA + network tag (`local` | `nile` | `mainnet`).
+- [ ] One section per Vn with raw CLI command + output + git SHA + network tag (`local` | `nile` | `mainnet`).
 - [ ] When all 10 Vns pass on local + Nile, issue #399 acceptance criterion flips `[x]`.
+
+#### Task 7.15 — CLI-driven TRC-20 matrix mirrors `tron-wallet-core/tests/trc20_*.rs` — **AFTER Task 7.13, before Phase 7 cut**
+
+**Files:** `spikes/tron-v1/tests/trc20_local.rs`, `spikes/tron-v1/tests/trc20_nile.rs`, `spikes/tron-v1/Cargo.toml`
+
+**Goal:** carry the operator-driven TRC-20 test matrix into the spike as **black-box CLI tests** driving the shipped `tron` binary. The matrix mirrors `crates/tron-wallet-core/tests/trc20_local.rs` + `trc20_nile.rs`, but every assertion is on CLI stdout/stderr/exit-code via `assert_cmd::Command::cargo_bin("tron")`. The spike tests prove the **shipped CLI binary** delivers what the production crate's library API already proves — no in-process calls into `tron_wallet_core`.
+
+**Cargo.toml wiring (tests-only entries):**
+
+- [ ] ADD `[[test]] name = "trc20_local"` pointing at `tests/trc20_local.rs`.
+- [ ] ADD `[[test]] name = "trc20_nile"` pointing at `tests/trc20_nile.rs`.
+- [ ] ADD `[dev-dependencies] reqwest = { workspace = true }` if absent — tests parse CLI JSON output; serde_json already declared.
+
+**`trc20_local.rs` (8 rows, mirrors `tron-wallet-core/tests/trc20_local.rs`):**
+
+| Row | CLI invocation | Asserts |
+|---|---|---|
+| 1 — TRX native transfer | `tron --rpc http://127.0.0.1:9090 tx sign --file raw.json --key <wif> --no-broadcast` | exit 0; signed_envelope_hex non-empty; txid matches `sha256(raw_bytes)` (single-SHA-256); `v ∈ {0,1}` |
+| 2 — TRC-20 transfer (held recipient) | `tron --rpc http://127.0.0.1:9090 trc20 encode-call transfer --to <addr> --amount <num>` | exit 0; hex length 68; first 4 bytes = `a9059cbb` (TRANSFER_SELECTOR); bytes [4..15] = 11 zero bytes (T-address left-pad) |
+| 3 — TRC-20 first-time receive | `tron --rpc http://127.0.0.1:9090 wallet address --pubkey <00×32 hex>` | exit 0; T-address has `0x41` prefix; `t_addr_21bytes` round-trips |
+| 4 — TRC-20 approve | `tron --rpc http://127.0.0.1:9090 trc20 encode-call approve --to <spender> --amount <num>` | exit 0; first 4 bytes = `095ea7b3` (APPROVE_SELECTOR) |
+| 5 — Stake 2.0 freeze/unfreeze | — | deferred to V0.1.5; test passes with explanatory eprintln (same posture as `tron-wallet-core/tests/trc20_local.rs::row_5`) |
+| 6 — TRC-20 insufficient balance | `tron --rpc http://127.0.0.1:9090 trc20 encode-call transfer --to <addr> --amount <u256::MAX>` | exit 0; amount slot bytes [36..68] = all-`0xff`; on-chain revert deferred to V10 Nile |
+| 7 — send-speedup | two `tron tx sign --no-broadcast` invocations with timestamps T and T+1000ms, fee_limit A and 2A | both exit 0; txids differ (different envelopes); both `v ∈ {0,1}` |
+| 7a — rebroadcast idempotency | two `tron tx sign --no-broadcast` invocations with identical raw.json + wif | both exit 0; txids equal byte-for-byte (deterministic sig) |
+| 8 — wallet-to-wallet TRC-20 | `tron --rpc http://127.0.0.1:9090 wallet address --pubkey <canonical USDT pubkey>` | exit 0; round-trip via `tron wallet derive` matches kobe-tron KAT (V10 dependency) |
+
+> **Gating:** all rows `#[ignore]` + `RUN_TRON_LOCAL=1` opt-in. Operator must have a local TronBox (`http://127.0.0.1:9090`) reachable from the test process. Loud-RED panic on missing env var per gated-live-test convention.
+
+**`trc20_nile.rs` (4 rows, mirrors `tron-wallet-core/tests/trc20_nile.rs`):**
+
+| Row | CLI invocation | Asserts |
+|---|---|---|
+| 1 — canonical TRC-20 transfer | `tron --rpc pinned://<pin>@nile.trongrid.io trc20 balance-of --contract USDT --address <recipient> --network nile` → snapshot `balance_before`; then `tron --rpc pinned://<pin>@nile.trongrid.io tx trc20 transfer --contract USDT --to <recipient> --amount 1000000 --network nile --key <wif>` → `tron --rpc pinned://<pin>@nile.trongrid.io trc20 balance-of --contract USDT --address <recipient> --network nile` → snapshot `balance_after` | exit 0; SUCCESS; txid non-empty; locally printed txid = network txid; `balance_after - balance_before ≥ 1_000_000` raw |
+| 2 — rebroadcast idempotency | `tron --rpc <nile> tx trc20 transfer --contract USDT --to <recipient> --amount 1000000 --network nile --key <wif>` then re-POST same envelope via `tron --rpc <nile> tx broadcast --hex <envelope>` | second call: non-SUCCESS with `code` or `message` containing `DUP_TRANSACTION_ERROR`; balance delta = exactly ONE_USDT (no double-charge) |
+| 3 — mobile FFI smoke | — | deferred to Phase 5 PAL + FFI cdylib surface; test passes with explanatory eprintln (mirror of `tron-wallet-core/tests/trc20_nile.rs::row_3`) |
+| 4 — network failure recovery | `tron --rpc http://127.0.0.1:9999 trc20 balance-of --contract USDT --address <recipient> --network nile` | exit non-zero within 30s; no panic; stderr names transport error; mapped to CLI exit code 3 |
+
+> **Gating:** all rows `#[ignore]` + `RUN_TRON_NILE=1` opt-in. Canonical row uses SPKI pin from `tokens/nile.json` (or `TRON_NILE_SPKI_PIN` env override). Sender + recipient pulled from bundled `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`, `test.recipient-tr20`) — same single source of truth the production crate reads.
+
+**Acceptance (CLI-only invariant):**
+
+- [ ] `grep -nE 'tron_v1_spike|tron_wallet_core|use crate::|use super::' spikes/tron-v1/tests/trc20_*.rs` returns zero matches.
+- [ ] Every assertion uses `assert_cmd::Command::cargo_bin("tron")` (or equivalent) — no in-process library call.
+- [ ] `cargo test -p tron-v1-spike --tests -- --ignored` with `RUN_TRON_NILE=1` + `RUN_TRON_LOCAL=1` set passes both files.
+- [ ] `cargo test -p tron-v1-spike --test trc20_local` (no env) silently skips (all rows `#[ignore]`).
+- [ ] `cargo test -p tron-v1-spike --test trc20_nile` (no env) silently skips (all rows `#[ignore]`).
+- [ ] `RESULT.md` gains a `trc20_local` + `trc20_nile` section with raw CLI command + output per row.
+
+> **Rationale:** the spike's role is to prove the shipped CLI does what the production crate proves in-process. Carrying the TRC-20 matrix into the spike as CLI tests gives Phase 7 a regression net that fails when (a) the CLI breaks the wire format, (b) the CLI mishandles the SPKI pin, (c) the CLI hangs on closed ports, (d) the CLI double-charges on rebroadcast. None of these can be caught by library unit tests alone.
+
+#### Task 7.16 — Per-command CLI surface coverage matrix — **AFTER Task 7.15, before Phase 7 cut**
+
+**Files:** `spikes/tron-v1/tests/cli_coverage.rs` (new), `spikes/tron-v1/Cargo.toml`, `crates/tron/src/cli.rs` (if any missing commands need shipping)
+
+**Goal:** every shipped `tron` CLI subcommand has a black-box spike test that drives it via `assert_cmd::Command::cargo_bin("tron")` and asserts on stdout/stderr/exit-code. Phase 7 closes the gap between the 22-command surface Phase 6 shipped and the (smaller) set the spike currently exercises.
+
+**Shipped CLI surface (Phase 6 — 22 subcommands across 6 top-level):**
+
+| Top-level | Subcommand | Currently covered by spike? | Action |
+|---|---|---|---|
+| `wallet` | `create` | ❌ | NEW test in `cli_coverage.rs` |
+| `wallet` | `import` | ❌ | NEW test |
+| `wallet` | `show` | ❌ | NEW test |
+| `wallet` | `list` | ❌ | NEW test |
+| `wallet` | `delete` | ❌ | NEW test |
+| `wallet` | `rename` | ❌ | NEW test |
+| `wallet` | `balance` | ✅ (V7 SPKI pin; V11 implicit) | already covered |
+| `wallet` | `send` | partial (V11 mainnet self-send only) | NEW test for `send --dry-run` + `--sign-only` |
+| `wallet` | `send-speedup` | ❌ | NEW test (Nile-gated) |
+| `address` | `new` | ❌ | NEW test |
+| `address` | `xpub` | ❌ | NEW test |
+| `balance` | `--address` (TRX) | ❌ | NEW test |
+| `balance` | `--address --token` (TRC-20) | ❌ | NEW test |
+| `trc20` | `send` | partial (V11 mainnet self-send only) | NEW test for `--dry-run` + Nile-gated broadcast path |
+| `trc20` | `approve` | ❌ | NEW test (regression: unlimited approval requires typed `yes`) |
+| `trc20` | `balance` | ❌ | NEW test |
+| `trc20` | `allowance` | ❌ | NEW test |
+| `tx` | `get` | ❌ | NEW test |
+| `tx` | `wait` | ❌ | NEW test (timeout → exit 3) |
+| `config` | `show` | ✅ (V6 + V9) | already covered |
+| `config` | `set-rpc` | ❌ | NEW test (validates `http`/`https` + trailing-slash strip) |
+| `config` | `set-network` | ❌ | NEW test (regression: network change resets rpc_url) |
+
+**Spike-referenced commands NOT in shipped CLI (must ship in Phase 7 OR rewrite spike test):**
+
+The existing Vn tests reference 8 commands the shipped CLI does not expose:
+
+| Spike test | Referenced command | Resolution |
+|---|---|---|
+| V2 protobuf | `tron tx encode` / `tron tx decode` | Phase 7 MUST ship these (low-effort: pass-through to `tron-wallet-core::tx::builder`) OR rewrite V2 against `tron trc20 encode-call` (which IS a Phase 6 shape if added). |
+| V2 + V3 TRC-20 ABI | `tron trc20 encode-call transfer` | Phase 7 MUST ship under `trc20 { encode-call { transfer, approve } }`. |
+| V4 base58check | `tron wallet address` | Rewrite V4 against `tron address new --mnemonic <phrase> --index 0` (already shipped) — same wire result. |
+| V5 resource | `tron resource estimate-trc20` + `tron resource contract-info` | Phase 7 MUST ship a `resource` top-level subcommand OR rewrite V5 to exercise `tron trc20 send --dry-run` (returns energy estimate as JSON). |
+| V8 sign-only | `tron tx sign --file <raw.json> --key <wif> --no-broadcast` | Phase 7 MUST ship under `tx { sign, encode, decode }` (pure offline ops; no RPC). |
+| V9 token registry | `tron trc20 decimals` | Phase 7 MUST ship under `trc20 decimals --contract <addr>` (live `triggerconstantcontract`). |
+| V10 SLIP-44 | `tron wallet derive` | Rewrite V10 against `tron address new --mnemonic "abandon ×11 about" --path "m/44'/195'/0'/0/0"` (already shipped). |
+
+**`cli_coverage.rs` test inventory (new file, 19 new tests):**
+
+- [ ] `wallet_create_then_list_shows_id` — `tron wallet create --words 12 --name test-w --network nile --password <pw>` exits 0; mnemonic → STDERR; wallet_id → STDOUT; `tron wallet list` contains the id.
+- [ ] `wallet_import_then_show_round_trips` — `tron wallet import --name test-i --network nile --password <pw> --mnemonic <phrase>` exits 0; `tron wallet show --id <id>` echoes the same address.
+- [ ] `wallet_rename_changes_label` — `tron wallet rename --id <id> --to renamed --password <pw>` exits 0; `tron wallet list --all-networks` shows `renamed`.
+- [ ] `wallet_delete_requires_typed_yes` — `tron wallet delete --id <id>` (no `--confirm-yes`) aborts on missing `yes`; with `--confirm-yes`, succeeds and `list` no longer contains the id.
+- [ ] `wallet_send_dry_run_does_not_broadcast` — `tron wallet send --wallet-id <id> --to <addr> --amount 1 --unit TRX --dry-run --network nile` exits 0; no RPC call (verified by stdout containing `would broadcast` and no txid echoed).
+- [ ] `wallet_send_sign_only_outputs_envelope` — `tron wallet send --wallet-id <id> --to <addr> --amount 1 --unit TRX --sign-only --network nile` exits 0; stdout contains `signed_envelope_hex` + `txid`; no RPC.
+- [ ] `wallet_send_speedup_rebuilds_with_higher_fee_limit` — Nile-gated; `tron wallet send-speedup --wallet-id <id> --txid <orig> --fee-limit <higher> --network nile` exits 0 with new txid.
+- [ ] `address_new_from_mnemonic_produces_t_addr` — `tron address new --mnemonic <phrase> --index 0` exits 0; stdout T-address matches kobe-tron KAT.
+- [ ] `address_xpub_exports_extended_pubkey` — `tron address xpub --wallet-id <id>` exits 0; stdout is 111-char base58 xpub.
+- [ ] `balance_trx_for_known_address_returns_nonzero` — Nile-gated; `tron balance --address <funded-addr>` exits 0 with valid SUN amount.
+- [ ] `balance_token_returns_decimals_scaled` — Nile-gated; `tron balance --address <funded-addr> --token USDT` exits 0 with 6-decimal scaled amount.
+- [ ] `trc20_send_dry_run_estimates_energy` — Nile-gated; `tron trc20 send --wallet-id <id> --contract USDT --to <addr> --amount 1 --dry-run --network nile` exits 0; stdout contains `energy_used` in 65k-130k range (matches V5 contract).
+- [ ] `trc20_approve_unlimited_requires_typed_yes` — `tron trc20 approve --contract USDT --spender <addr> --amount max` aborts on missing `yes`; with `--confirm-yes`, broadcasts.
+- [ ] `trc20_balance_matches_on_chain` — Nile-gated; `tron trc20 balance --address <recipient> --contract USDT` equals the value `tests/trc20_nile.rs::trc20_transfer_full_flow_nile` measures post-broadcast.
+- [ ] `trc20_allowance_returns_grant_or_zero` — Nile-gated; `tron trc20 allowance --contract USDT --owner <a> --spender <b>` exits 0 with valid uint256.
+- [ ] `tx_get_returns_full_info` — Nile-gated; `tron tx get --txid <known>` exits 0 with `block_number`, `contract_result` populated.
+- [ ] `tx_wait_times_out_on_unconfirmed` — `tron tx wait --txid <nonexistent> --timeout 5s --poll-interval 1s` exits non-zero with exit code 3 (timeout → not silent success).
+- [ ] `config_set_rpc_validates_scheme` — `tron config set-rpc ftp://...` exits non-zero (rejects non-http(s)); `tron config set-rpc https://api.trongrid.io` exits 0 with trailing-slash stripped.
+- [ ] `config_set_network_resets_rpc_url` — `tron config set-network nile` exits 0; `tron config show` shows nile's default rpc_url, not the prior mainnet one.
+
+**Cargo.toml wiring:**
+
+- [ ] ADD `[[test]] name = "cli_coverage"` pointing at `tests/cli_coverage.rs`.
+- [ ] Tests use `tempfile` (already declared) for per-test `XDG_CONFIG_HOME` so `config show` / `set-rpc` / `set-network` don't pollute operator's real config.
+
+**Acceptance:**
+
+- [ ] `cli_coverage.rs` PASS with `RUN_TRON_NILE=1` + `RUN_TRON_LOCAL=1` set where each test requires live RPC.
+- [ ] `cli_coverage.rs` silently SKIPS (all `#[ignore]`) without env vars — CI stays quiet.
+- [ ] All 22 shipped subcommands have at least one spike test that drives the binary and asserts on stdout/stderr/exit-code.
+- [ ] Either (a) Phase 7 ships the 5 missing subcommands listed above (`tx encode/decode`, `trc20 encode-call`, `tx sign`, `trc20 decimals`, `resource`) OR (b) the 4 Vn tests referencing them are rewritten to use shipped equivalents. Either path closes the matrix gap before the release cut.
+- [ ] `RESULT.md` gains a `cli_coverage` section.
+
+> **Rationale:** Phase 6 shipped 22 commands. The spike tests cover 3. That's an 86% coverage hole — most of the shipped CLI is unverified end-to-end. Task 7.16 closes the hole with one new test file that drives every shipped subcommand via the CLI binary, so any silent breakage in `wallet delete`, `config set-rpc`, `trc20 approve` etc. surfaces as a test failure before the release cut.
 
 #### Phase 7 Verification
 
-- [ ] All 10 Vns PASS on local + Nile.
-- [ ] V11 mainnet self-send PASS (with `RUN_TRON_MAINNET=1`).
+- [ ] Every file in `spikes/tron-v1/tests/` exercises the shipped `tron` CLI binary (no internal library imports).
+- [ ] `grep -nE 'tron_v1_spike|use crate::|use super::' spikes/tron-v1/tests/*.rs` returns zero matches.
+- [ ] Each test file uses `assert_cmd::Command::cargo_bin("tron")` (or equivalent) to spawn the shipped binary.
+- [ ] All 11 Vns (V1-V10 + V11) PASS on local + Nile (CLI-driven).
+- [ ] Task 7.15: `trc20_local.rs` + `trc20_nile.rs` CLI matrix PASS on local + Nile.
+- [ ] Task 7.16: `cli_coverage.rs` drives every one of the 22 shipped CLI subcommands (19 new tests). 5 commands referenced by older Vn tests but missing from shipped CLI (`tx encode/decode`, `trc20 encode-call`, `tx sign`, `trc20 decimals`, `resource ...`) either ship in Phase 7 OR the referencing Vn is rewritten against shipped equivalents.
+- [ ] V11 mainnet self-send PASS via `tron tx trc20 transfer --to <self>` (with `RUN_TRON_MAINNET=1`).
 - [x] `RESULT.md` complete.
-- [x] `cargo test -p tron-spike-v1 --tests` passes.
+- [x] `cargo test -p tron-v1-spike --tests` passes (tests-only crate, no library).
+- [x] `cargo build -p tron` passes (CLI binary all spike tests spawn).
+- [x] `spikes/tron-v1/src/` deleted (10 files).
+- [x] `cargo geiger` clean on `spikes/tron-v1/` (no duplicate unsafe surface from removed src).
 
 **PAUSE. Final verification gate before L13 step 13 (commit-push-pr).**
 
