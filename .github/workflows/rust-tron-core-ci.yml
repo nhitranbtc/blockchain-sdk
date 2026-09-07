@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
@@ -61,7 +61,7 @@ jobs:
         # deliverable #9). Debian/Ubuntu: protobuf-compiler ships protoc 3.x.
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo fmt --check
@@ -95,7 +95,7 @@ jobs:
             command: cargo test -p tron-v1-spike --tests
             timeout: 15
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
@@ -106,7 +106,7 @@ jobs:
         # core/Tron.proto). Mirrors the umbrella ci.yml step.
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo build
@@ -144,7 +144,12 @@ jobs:
   rust-test-operator-smoke:
     name: Rust test (operator smoke — live + #[ignore])
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Bumped from 15 → 30 min after run 34104701453 cancel: wallet_persistence.rs
+    # runs 15 Argon2id-KDF tests at ~60-120s each, the operator-smoke step
+    # (which runs `cargo test -p tron-wallet-core --tests --include-ignored`)
+    # exceeded 15 min mid-suite. Live RPC + Argon2id both contribute to wall
+    # time; 30 min covers the worst-case observed 18 min.
+    timeout-minutes: 30
     # `needs: rust-lint` breaks parallelism with the lint job so a failed
     # fmt/clippy run does NOT cancel this 15-minute live-RPC job mid-flight.
     # Without `needs`, GH cancels pending parallel jobs when the workflow
@@ -156,7 +161,7 @@ jobs:
     # required CI gate. Flip RUN_TRON_* env vars below to enable live legs;
     # SPKI pin self-extracted each run (no operator secret needed).
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
@@ -165,7 +170,7 @@ jobs:
       - name: Install protoc (>=3.12)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo build (workspace)
@@ -197,6 +202,102 @@ jobs:
             --include-ignored \
             --nocapture --test-threads=1
 
+  # TronBox local-testnet smoke (Phase 4 §4.1-4.2). Spawns the
+  # `tronbox/tre` Docker image via testcontainers 0.23 and exercises the
+  # local node's RPC surface — Phase 4 promoted this from a manual-only
+  # operator probe into the CI cadence. The file gates the container
+  # tests on `RUN_TRON_LOCAL=1` AND a live Docker socket; we provide
+  # both via the docker:dind service container.
+  #
+  # `needs: rust-lint` (same rationale as `rust-test-operator-smoke`):
+  # without it GH cancels pending parallel jobs when the workflow
+  # fails, and this job spins up a Docker container + runs RPC
+  # round-trips — wasted runner minutes + Docker pulls on lint red.
+  # Sequential ordering: SKIPPED on lint fail (cheaper), runs to
+  # completion on lint pass.
+  rust-test-local-spike:
+    name: Rust test (local spike — TronBox Docker)
+    runs-on: ubuntu-latest
+    # Bumped from 15 → 30 min: Docker image pull + container spawn + testcontainers
+    # RPC round-trips are bursty on cold runners; the 15-min cap was tight.
+    timeout-minutes: 30
+    needs: rust-lint
+    services:
+      docker:
+        image: docker:dind
+        options: >-
+          --privileged
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - name: Install protoc (>=3.12)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test (local spike — TronBox Docker)
+        # RUN_TRON_LOCAL=1 flips the gated container tests in
+        # `spikes/tron-v1/tests/trc20_local.rs` from skip-and-return
+        # to actual Docker round-trip. `--include-ignored` catches any
+        # `#[ignore]`-marked cases (none today, but forward-compatible).
+        # `--nocapture` surfaces the operator runbook output in CI logs.
+        working-directory: rust-wallet-app
+        env:
+          RUN_TRON_LOCAL: "1"
+        run: |
+          cargo test -p tron-v1-spike --test trc20_local -- \
+            --include-ignored --nocapture
+
+  # Phase 4 §4.4-4.5 — Nile testnet smoke. Unlike the local-spike job,
+  # this one fires RPC calls against the public Nile testnet (no Docker
+  # daemon required). The test file gates ALL live tests with `#[ignore]`
+  # (no env-var gate); operator opt-in is `--ignored`. CI surfaces the
+  # results so the live-leg failures are visible in the run log even
+  # though `#[ignore]`-marked tests do not run by default.
+  #
+  # Sender + recipient mnemonics live in the bundled fixture
+  # `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`,
+  # `test.recipient-tr20`) — Phase 3 pattern, single source of truth.
+  # Fund the sender once via https://nileex.io/join/getJoinPage and
+  # both this spike and `tests/v10_broadcast.rs` light up.
+  #
+  # `needs: rust-lint` — same cancellation-prevention rationale as
+  # `rust-test-local-spike`: parallel-job cancellation would burn
+  # live RPC quota for nothing on lint red. Sequential ordering:
+  # SKIPPED on lint fail, runs to completion on lint pass.
+  rust-test-nile-spike:
+    name: Rust test (nile spike — live RPC + #[ignore])
+    runs-on: ubuntu-latest
+    # Bumped from 15 → 30 min: live RPC round-trips + SPKI pin handshake +
+    # wait_for_confirm polling across `trc20_transfer_full_flow_nile` +
+    # scenario rows 1-4 each consume real time. 30 min matches operator-smoke.
+    timeout-minutes: 30
+    needs: rust-lint
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test (nile spike — live RPC + #[ignore])
+        # `--ignored` runs only the `#[ignore]`-marked live tests; the
+        # non-`#[ignore]` harness tests stay on the operator's local
+        # `cargo test -p tron-v1-spike` run (Phase 4 §4.4 gate).
+        # `--nocapture` surfaces the live RPC + SPKI-pin logs.
+        working-directory: rust-wallet-app
+        run: |
+          cargo test -p tron-v1-spike --test trc20_nile -- \
+            --include-ignored --nocapture
+
   # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
   # (L13 step 11, 4th gate). Workspace-wide tree walks are slow, so this
   # runs at CI cadence rather than locally.
@@ -205,13 +306,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.98.1"
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo tree --duplicates
@@ -223,7 +324,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -250,7 +351,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
@@ -282,7 +383,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4  # v4
+      - uses: actions/checkout@v4 # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
@@ -294,7 +395,7 @@ jobs:
         # moment Phase 0 lands the crate and the cargo check actually runs.
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2  # v2
+      - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo check (aarch64-apple-ios)

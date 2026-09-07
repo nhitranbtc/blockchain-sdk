@@ -6,9 +6,9 @@
 //!
 //! ## Gating
 //!
-//! - **Live test:** `TRON_NILE_INTEGRATION=1` must be set. Missing →
-//!   loud-RED panic naming every missing variable (per plan gated-live-test
-//!   convention; silent-skip is forbidden).
+//! - **No env-var gate.** All live tests are `#[ignore]`-marked; CI stays
+//!   silent by default. Operator opts in by running with `--ignored`
+//!   (the tests submit directly to the live Nile testnet).
 //! - Sender + recipient mnemonics + addresses are loaded from the bundled
 //!   Nile fixture at
 //!   `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`,
@@ -35,7 +35,6 @@
 //!
 //! - **Run (operator, after faucet funding):**
 //!   ```bash
-//!   TRON_NILE_INTEGRATION=1 \
 //!   cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture
 //!   ```
 //!
@@ -43,7 +42,7 @@
 //!
 //! - Canonical `trc20_transfer_full_flow_nile` — full TRC-20 transfer path on
 //!   real Nile, mirroring `use_case_alpha_sends_beta_usdt_live_nile` but
-//!   mnemonic-keyed (per Phase 4 §4.4 spec) and gated on `TRON_NILE_INTEGRATION`
+//!   mnemonic-keyed (per Phase 4 §4.4 spec) and gated on `--ignored` only
 //!   rather than the `RUN_TRON_NILE=1` / three-env-gate the use-case uses.
 //! - Scenario rows 1-4 stubs (§4.5) — wired as `#[ignore]` with TODO + runbook
 //!   pointers; unblock when the canonical harness stabilises.
@@ -75,30 +74,14 @@ use tron_wallet_core::tx::builder;
 use tron_wallet_core::tx::sign::sign_tx;
 use tron_wallet_core::{TronConfig, TronGridClient};
 
-/// Loud-RED panic gate. Per plan gated-live-test convention: silent `return`
-/// is forbidden — the harness must report FAILED when env vars are absent.
-/// Returns the optional SPKI pin override on success (`None` = use the bundled
-/// pin). Mnemonic + recipient now come from the bundled Nile fixture
-/// (`crates/tron-wallet-core/tokens/nile.json`), not env vars.
-fn require_nile_env() -> Option<String> {
-    let mut missing = Vec::new();
-    let integration = std::env::var("TRON_NILE_INTEGRATION").ok();
-    let spki_override = std::env::var("TRON_NILE_SPKI_PIN").ok();
-
-    if integration.as_deref() != Some("1") {
-        missing.push("TRON_NILE_INTEGRATION=1");
-    }
-
-    if !missing.is_empty() {
-        panic!(
-            "trc20_nile: missing required env vars: [{}]. \
-             Operator runbook: TRON_NILE_INTEGRATION=1 [TRON_NILE_SPKI_PIN=<hex>] \
-             cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture",
-            missing.join(", ")
-        );
-    }
-
-    spki_override
+/// Read the optional SPKI pin override for the Nile RPC. `None` = use the
+/// bundled pin from `tokens/nile.json` (Phase 3 §3.7:
+/// `e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f`).
+/// Mnemonic + recipient come from the bundled Nile fixture, not env vars.
+/// No env-var gate — canonical row + scenario rows submit directly to the
+/// live Nile testnet when run with `--ignored` (CI stays silent by default).
+fn nile_spki_override() -> Option<String> {
+    std::env::var("TRON_NILE_SPKI_PIN").ok()
 }
 
 /// 1 USDT-TRC20 in 6-decimal base units (1 × 10^6 = 1_000_000).
@@ -213,7 +196,7 @@ fn pinned_nile_url(override_pin: Option<&str>) -> String {
 // ---------------------------------------------------------------------------
 
 /// Full TRC-20 transfer path on real Nile testnet. Steps per Phase 4 §4.4:
-///   1. Gate via `TRON_NILE_INTEGRATION=1` (loud-RED panic otherwise).
+///   1. (No env-var gate — submits live to Nile when run with `--ignored`.)
 ///   2. Load sender + recipient (mnemonic + address) from the bundled Nile
 ///      fixture (`crates/tron-wallet-core/tokens/nile.json`).
 ///   3. Derive sender keypair via SLIP-44 path `m/44'/195'/0'/0/0`.
@@ -225,9 +208,9 @@ fn pinned_nile_url(override_pin: Option<&str>) -> String {
 ///      `tx::wait_for_confirm(&receipt.txid, Duration::from_secs(60),
 ///       Duration::from_secs(3), &cfg)`.
 #[tokio::test]
-#[ignore = "operator-driven per Phase 4 §4.4 — TRON_NILE_INTEGRATION=1 cargo test -p tron-v1-spike --test trc20_nile trc20_transfer_full_flow_nile -- --ignored --nocapture"]
+#[ignore = "operator-driven per Phase 4 §4.4 — submits live to Nile. cargo test -p tron-v1-spike --test trc20_nile trc20_transfer_full_flow_nile -- --ignored --nocapture"]
 async fn trc20_transfer_full_flow_nile() {
-    let spki_override = require_nile_env();
+    let spki_override = nile_spki_override();
     let fixture = load_nile_fixture();
     let sender_wallet = fixture.test.sender_tr20;
     let recipient_wallet = fixture.test.recipient_tr20;
@@ -327,10 +310,10 @@ async fn trc20_transfer_full_flow_nile() {
 /// spike's own `JsonRpcClient::new_pinned` (Phase 3 §3.7 pin from
 /// `tokens/nile.json`). Followup: thread SPKI through `TronGridClient`.
 #[tokio::test]
-#[ignore = "Phase 4 §4.5 row 1 — live TRX native transfer on Nile. Operator-driven, same gate as trc20_transfer_full_flow_nile."]
+#[ignore = "Phase 4 §4.5 row 1 — live TRX native transfer on Nile. Same `--ignored` opt-in as trc20_transfer_full_flow_nile."]
 async fn row_1_trx_native_transfer_nile() {
     // Only the integration gate matters here — no SPKI override path.
-    let _spki_override = require_nile_env();
+    let _spki_override = nile_spki_override();
     let fixture = load_nile_fixture();
     let sender_wallet = fixture.test.sender_tr20;
     let recipient_wallet = fixture.test.recipient_tr20;
@@ -424,9 +407,9 @@ async fn row_1_trx_native_transfer_nile() {
 /// client. Canonical contract
 /// `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` per TronScan.
 #[tokio::test]
-#[ignore = "Phase 4 §4.5 row 2 — TRC-20 balance visibility on Nile. Same gate as trc20_transfer_full_flow_nile."]
+#[ignore = "Phase 4 §4.5 row 2 — TRC-20 balance visibility on Nile. Same `--ignored` opt-in as trc20_transfer_full_flow_nile."]
 async fn row_2_trc20_transfer_nile() {
-    let spki_override = require_nile_env();
+    let spki_override = nile_spki_override();
     let usdt = nile_usdt_address();
     eprintln!("[row_2] USDT contract = {usdt}");
 
@@ -469,7 +452,7 @@ async fn row_2_trc20_transfer_nile() {
 #[tokio::test]
 #[ignore = "Phase 4 §4.5 row 3 — Mobile FFI smoke from Dart binding. Out of spike-harness scope; ships with Phase 5 PAL + crypto."]
 async fn row_3_mobile_ffi_nile() {
-    let _spki_override = require_nile_env();
+    let _spki_override = nile_spki_override();
     let fixture = load_nile_fixture();
     eprintln!(
         "[row_3] deferred to Phase 5 — would consume fixture \
@@ -489,9 +472,9 @@ async fn row_3_mobile_ffi_nile() {
 /// `ECONNREFUSED`). Maps to the production `TronGridClient` retry policy
 /// in Phase 6 — CLI returns exit code 3 for transport errors, never panics.
 #[tokio::test]
-#[ignore = "Phase 4 §4.5 row 4 — Network failure recovery. Same gate as trc20_transfer_full_flow_nile; asserts no panic / no hang + transport error surface."]
+#[ignore = "Phase 4 §4.5 row 4 — Network failure recovery. Same `--ignored` opt-in as trc20_transfer_full_flow_nile; asserts no panic / no hang + transport error surface."]
 async fn row_4_network_failure_recovery_nile() {
-    let _spki_override = require_nile_env();
+    let _spki_override = nile_spki_override();
     // Construct an http:// (unpinned) client pointed at a closed port on
     // loopback. `127.0.0.1:9999` has no listener — kernel returns
     // `ECONNREFUSED` immediately. Same harness used by the canonical row's
