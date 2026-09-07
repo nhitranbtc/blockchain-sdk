@@ -260,6 +260,15 @@ jobs:
   # results so the live-leg failures are visible in the run log even
   # though `#[ignore]`-marked tests do not run by default.
   #
+  # 2026-09-07 update: each live test now reads balance BEFORE and AFTER
+  # the send (canonical = `balanceOf` pre/post on TRC-20 recipient;
+  # row_1 = `get_account(balance_sun)` pre/post on TRX sender; row_3
+  # stub no live RPC; row_4 = transport-error probe). The 4 live tests
+  # each issue 2+ balance reads — `--test-threads=1` (added to the cargo
+  # test command below) keeps the live RPC calls serialized so a flaky
+  # node can't interleave state between canonical's read pair and row_1's
+  # read pair.
+  #
   # Sender + recipient mnemonics live in the bundled fixture
   # `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`,
   # `test.recipient-tr20`) — Phase 3 pattern, single source of truth.
@@ -275,7 +284,11 @@ jobs:
     runs-on: ubuntu-latest
     # Bumped from 15 → 30 min: live RPC round-trips + SPKI pin handshake +
     # wait_for_confirm polling across `trc20_transfer_full_flow_nile` +
-    # scenario rows 1-4 each consume real time. 30 min matches operator-smoke.
+    # scenario rows 1 and 4 each consume real time. (Row 2 — TRC-20
+    # balanceOf read — was removed 2026-09-07 because its single balanceOf
+    # read was a strict subset of canonical's pre + post balanceOf checks;
+    # row 3 is a deferred mobile FFI stub and does no live RPC.) 30 min
+    # matches operator-smoke.
     timeout-minutes: 30
     needs: rust-lint
     steps:
@@ -293,11 +306,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: cargo test (nile spike — live RPC + #[ignore])
-        # `--ignored` runs only the `#[ignore]`-marked live tests; the
-        # non-`#[ignore]` harness tests stay on the operator's local
-        # `cargo test -p tron-v1-spike` run (Phase 4 §4.4 gate).
-        # `--nocapture` surfaces the live RPC + SPKI-pin logs.
+      - name: cargo test (nile spike — live RPC + #[ignore] + balance-check coverage)
+        # `--include-ignored` runs every `#[ignore]`-marked test in
+        # `trc20_nile.rs` (canonical + row_1 + row_3 stub + row_4 = 4 live
+        # tests after row_2 removal 2026-09-07). The non-`#[ignore]` sanity
+        # test runs in the upstream `rust-test` matrix entry — not here, to
+        # avoid double-coverage.
+        #
+        # Explicit test-name filters (positional args after `--`) make the
+        # CI log show each balance-check test passing/failing by name — so
+        # reviewers can verify the **2026-09-07 pre/post balance-check
+        # functions** (`balance_of_trc20` pre/post on canonical;
+        # `rpc.get_account(balance_sun)` pre/post on row_1) are actually
+        # exercised in CI, not just present in source.
+        #
+        # `--test-threads=1` (mirrors operator-smoke `:202`) serializes the
+        # 4 live tests so a flaky RPC cannot interleave state between
+        # canonical's read pair and row_1's read pair.
         working-directory: rust-wallet-app
         run: |
           cargo test -p tron-v1-spike --test trc20_nile -- \

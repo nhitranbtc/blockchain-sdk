@@ -44,7 +44,7 @@
 //!   real Nile, mirroring `use_case_alpha_sends_beta_usdt_live_nile` but
 //!   mnemonic-keyed (per Phase 4 §4.4 spec) and gated on `--ignored` only
 //!   rather than the `RUN_TRON_NILE=1` / three-env-gate the use-case uses.
-//! - Scenario rows 1-4 stubs (§4.5) — wired as `#[ignore]` with TODO + runbook
+//! - Scenario row stubs (§4.5) — wired as `#[ignore]` with TODO + runbook
 //!   pointers; unblock when the canonical harness stabilises.
 //!
 //! ## What is deferred
@@ -234,6 +234,15 @@ async fn trc20_transfer_full_flow_nile() {
     // failures before any HTTP call.
     let _recipient_20 = base58_to_20bytes(&recipient);
 
+    // Snapshot recipient USDT balance BEFORE the transfer so we can assert
+    // a strictly positive delta post-confirm (not just "≥amount" which can
+    // pass even if the broadcast silently no-op'd and the recipient was
+    // already pre-funded).
+    let balance_before = tron_v1_spike::tx::balance_of_trc20(&rpc, &usdt_contract, &recipient)
+        .await
+        .expect("balanceOf query (before)");
+    eprintln!("[trc20_nile] recipient balanceOf (before) = {balance_before} raw (6-dec)");
+
     // Build + sign a TriggerSmartContract transaction for USDT-TRC20 transfer.
     // (mirrors the proven path in
     // `tests/use_case_alpha_sends_beta_usdt.rs::use_case_alpha_sends_beta_usdt_live_nile`).
@@ -269,15 +278,22 @@ async fn trc20_transfer_full_flow_nile() {
         .expect("tx confirmation poll");
     eprintln!("[trc20_nile] confirmed after ≤{poll_deadline:?}");
 
-    // Verify recipient `balanceOf` increased by at least the transfer amount.
+    // Verify recipient `balanceOf` strictly increased by the transfer
+    // amount — delta-based (not absolute floor) so a pre-funded recipient
+    // can't pass without the broadcast actually moving funds.
     let balance_after = tron_v1_spike::tx::balance_of_trc20(&rpc, &usdt_contract, &recipient)
         .await
         .expect("balanceOf query");
-    eprintln!("[trc20_nile] recipient balanceOf = {balance_after} raw (6-dec)");
-    let min_balance: u128 = TRANSFER_AMOUNT_BASE_UNITS.into();
+    eprintln!("[trc20_nile] recipient balanceOf (after)  = {balance_after} raw (6-dec)");
+    let delta = balance_after.saturating_sub(balance_before);
+    eprintln!(
+        "[trc20_nile] recipient balanceOf delta    = {delta} raw (6-dec) \
+         (expected ≥ {TRANSFER_AMOUNT_BASE_UNITS})"
+    );
     assert!(
-        balance_after >= min_balance,
-        "recipient should hold ≥{TRANSFER_AMOUNT_BASE_UNITS} raw, got {balance_after}"
+        delta >= u128::from(TRANSFER_AMOUNT_BASE_UNITS),
+        "recipient balanceOf should have grown by ≥{TRANSFER_AMOUNT_BASE_UNITS} raw; \
+         before={balance_before} after={balance_after} delta={delta}"
     );
 
     eprintln!(
@@ -287,13 +303,16 @@ async fn trc20_transfer_full_flow_nile() {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4 §4.5 — Nile testnet scenario rows 1-4 (mostly `#[ignore]` stubs).
+// Phase 4 §4.5 — Nile testnet scenario rows (mostly `#[ignore]` stubs).
 // ---------------------------------------------------------------------------
 //
 // Row 3 (Mobile-specific) requires Dart binding + emulator/device, out of
-// scope for the spike harness. Rows 1, 2, 4 are wired as `#[ignore]` stubs
+// scope for the spike harness. Rows 1 and 4 are wired as `#[ignore]` stubs
 // that delegate to the proven `trc20_transfer_full_flow_nile` shape but
-// carry scenario-specific assertions.
+// carry scenario-specific assertions. Row 2 (TRC-20 balance visibility)
+// was removed — its single balanceOf read was a strict subset of the
+// canonical transfer's pre + post balanceOf checks (same pinned RPC, same
+// recipient address), so it duplicated coverage without earning its slot.
 
 /// Phase 4 §4.5 row 1 — live native TRX transfer on real Nile. Mirrors the
 /// proven shape in
@@ -344,6 +363,21 @@ async fn row_1_trx_native_transfer_nile() {
         .get_now_block()
         .await
         .expect("get_now_block must succeed");
+
+    // --- Snapshot sender TRX balance BEFORE the transfer ---
+    // Delta-based assertion below catches the case where broadcast returned
+    // SUCCESS but the chain never moved funds (reorg, dropped, mis-priced
+    // fee — anything that would let `receipt.is_success()` lie).
+    let sender_balance_before = rpc
+        .get_account(&owner_address)
+        .await
+        .expect("get_account (before) must succeed against Nile")
+        .balance_sun;
+    eprintln!(
+        "[row_1] sender TRX balance (before) = {sender_balance_before} SUN \
+         ({} TRX)",
+        sender_balance_before / 1_000_000
+    );
 
     // --- Build + populate native TRX transfer parameters (bandwidth-only) ---
     let mut params = builder::trx_transfer(&owner_address, &recipient, TRX_AMOUNT_SUN)
@@ -397,48 +431,35 @@ async fn row_1_trx_native_transfer_nile() {
          — local txid computation regressed? See tx::sign::txid = sha256(raw_bytes) per live Nile verification 2026-09-06."
     );
     eprintln!("[row_1] Nile txid: {txid_hex}");
-}
 
-/// Phase 4 §4.5 row 2 — live TRC-20 transfer on Nile, balance verification
-/// via the spike's own `balance_of_trc20` against the canonical pinned RPC
-/// (no Tronscan API key required). The TRC-20 transfer itself is exercised
-/// by `trc20_transfer_full_flow_nile` — this row re-asserts that the
-/// post-transfer `balanceOf` reads cleanly through the SPKI-pinned RPC
-/// client. Canonical contract
-/// `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` per TronScan.
-#[tokio::test]
-#[ignore = "Phase 4 §4.5 row 2 — TRC-20 balance visibility on Nile. Same `--ignored` opt-in as trc20_transfer_full_flow_nile."]
-async fn row_2_trc20_transfer_nile() {
-    let spki_override = nile_spki_override();
-    let usdt = nile_usdt_address();
-    eprintln!("[row_2] USDT contract = {usdt}");
-
-    // Reuse the canonical pinned RPC path so this row runs under the same
-    // SPKI pin (Phase 3 §3.7) as `trc20_transfer_full_flow_nile`.
-    let pinned_url = pinned_nile_url(spki_override.as_deref());
-    let rpc = tron_v1_spike::rpc::JsonRpcClient::new_pinned(&pinned_url)
-        .expect("[row_2] pinned JsonRpcClient must build");
-
-    // Pre-empt NPE-shaped downstream failures (mirrors canonical).
-    let fixture = load_nile_fixture();
-    let recipient_wallet = fixture.test.recipient_tr20;
-    let recipient = recipient_wallet.address.as_str();
-    let _ = base58_to_20bytes(recipient);
-
-    // Prove the spike's balanceOf RPC returns a parseable u128 against the
-    // live Nile node for the fixture recipient — independent of the
-    // canonical transfer path.
-    let balance = tron_v1_spike::tx::balance_of_trc20(&rpc, &usdt, recipient)
+    // --- Snapshot sender TRX balance AFTER the transfer + assert strict delta ---
+    // Expected delta ≥ TRX_AMOUNT_SUN (the transferred amount). Actual delta
+    // will be larger because the sender also burns bandwidth for the tx —
+    // we assert the lower bound only so the test stays robust against
+    // bandwidth-price changes without losing the "funds actually moved"
+    // guarantee.
+    let sender_balance_after = rpc
+        .get_account(&owner_address)
         .await
-        .expect("[row_2] balanceOf RPC must succeed against live Nile");
+        .expect("get_account (after) must succeed against Nile")
+        .balance_sun;
+    let spent_sun = sender_balance_before.saturating_sub(sender_balance_after);
     eprintln!(
-        "[row_2] recipient balanceOf = {balance} raw (6-dec) = {} USDT",
-        balance / 1_000_000
+        "[row_1] sender TRX balance (after)  = {sender_balance_after} SUN \
+         ({} TRX)",
+        sender_balance_after / 1_000_000
     );
-    // Tronscan-only visibility check was deferred (no API key), so we
-    // assert the canonical RPC balance is reachable. Tronscan HTTP GET
-    // follow-up remains a known TODO (operator-supplied API key, or skip
-    // the explorer check if no key set).
+    eprintln!(
+        "[row_1] sender TRX spent            = {spent_sun} SUN \
+         (expected ≥ {TRX_AMOUNT_SUN} SUN for the transfer, \
+         remainder = burned bandwidth)"
+    );
+    assert!(
+        spent_sun >= TRX_AMOUNT_SUN,
+        "[row_1] sender should have spent ≥{TRX_AMOUNT_SUN} SUN; \
+         before={sender_balance_before} after={sender_balance_after} spent={spent_sun} \
+         — broadcast returned SUCCESS but funds did not move on-chain."
+    );
 }
 
 /// Phase 4 §4.5 row 3 — Mobile FFI smoke. Requires the FFI cdylib surface
