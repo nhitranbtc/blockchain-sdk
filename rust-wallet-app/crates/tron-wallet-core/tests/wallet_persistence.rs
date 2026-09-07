@@ -471,7 +471,6 @@ fn unlock_does_not_block_concurrent_calls() {
     let mut handles = Vec::new();
     for _ in 0..4 {
         let storage = Arc::clone(&storage);
-        let id = id;
         handles.push(thread::spawn(move || {
             let mgr = WalletManager::new(&*storage);
             mgr.unlock(id, "pw").is_ok()

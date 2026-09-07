@@ -396,6 +396,9 @@ mod tests {
     /// Argon2id KDF parameter regression guard. Plan §Phase 5 Task 4.7
     /// floor: m ≥ 64 MiB, t ≥ 3, p ≥ 1. Bug it would catch: someone
     /// lowers the constants to speed up CI.
+    // Const-eval already proves the comparison (clippy::assertions_on_constants),
+    // but the runtime assert is the regression guard — keep it; silence the lint.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn key_derivation_uses_2xx_argon2id_params() {
         assert!(
