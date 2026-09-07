@@ -12,12 +12,15 @@
 //! `keys::{Mnemonic, DerivationPath, derive_keypair}`, `tokens::by_symbol`),
 //! the test belongs with the code it tests.
 //!
-//! Mirrors the pattern in `tests/v10_broadcast.rs` — same fixture,
-//! same SLIP-44 path, same broadcast endpoint. Adds the **balance
-//! before/after delta assertion** (2026-09-07) that v10_broadcast.rs
-//! does not yet carry, plus the §4.5 row 1 (native TRX) + row 3 (mobile
-//! stub) + row 4 (transport-error probe) + sanity (derivation) tests
-//! the spike file used to own.
+//! 2026-09-07 fold-in: `tests/v10_broadcast.rs` removed and its three
+//! suites absorbed here. The canonical TRC-20 path (v10#1) maps to
+//! `trc20_transfer_full_flow_nile` (superset: SPKI pin, balance delta,
+//! confirmation poll). The native-TRX path (v10#2) maps to
+//! `row_1_trx_native_transfer_nile` (superset: balance delta). The
+//! rebroadcast idempotency path (v10#3) maps to
+//! `row_2_broadcast_rebroadcast_idempotency_nile` (added below).
+//! This file is now the **single source of truth** for operator-driven
+//! Nile live-RPC tests in `tron-wallet-core`.
 //!
 //! ## Gating
 //!
@@ -26,13 +29,14 @@
 //! - Sender + recipient (mnemonic + address) loaded from the bundled
 //!   Nile fixture at `crates/tron-wallet-core/tokens/nile.json`
 //!   (`test.sender-tr20`, `test.recipient-tr20`) — single source of
-//!   truth across `v10_broadcast.rs` and this file.
+//!   truth within this file.
 //! - Canonical flow uses **SPKI pinning** (pin from `tokens/nile.json`,
 //!   Phase 3 §3.7: `e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f`)
 //!   via `TronGridClient::new(..., Some(SpkiPin::from_bytes(...)))`.
 //!   Optional override: `TRON_NILE_SPKI_PIN` env var (64 lowercase hex chars).
-//! - Row 1 native TRX uses `TronGridClient::new(..., None)` — same
-//!   posture as `tests/v10_broadcast.rs::live_broadcast_trx_native_transfer_succeeds_on_nile`.
+//! - Row 1 (native TRX) + Row 2 (rebroadcast idempotency) deliberately
+//!   drop the SPKI pin (`TronGridClient::new(..., None)`) to preserve
+//!   the "no-pin still works" posture for operators who opt out.
 //!
 //! ## Operator setup (one-time)
 //!
@@ -66,11 +70,10 @@ use tron_wallet_core::tx::{builder, sign::sign_tx};
 use tron_wallet_core::{SpkiPin, TronGridClient};
 
 // ---------------------------------------------------------------------------
-// Constants — must stay in sync with `tests/v10_broadcast.rs`.
+// Constants — single source of truth within this file.
 // ---------------------------------------------------------------------------
 
-/// SLIP-44 TRON (coin 195) derivation path. Matches
-/// `tests/v10_broadcast.rs::SENDER_PATH` and `examples/gen_nile_wallet.rs`.
+/// SLIP-44 TRON (coin 195) derivation path. Matches `examples/gen_nile_wallet.rs`.
 const SENDER_PATH: &str = "m/44'/195'/0'/0/0";
 
 /// 1 USDT-TRC20 in 6-decimal base units (1 × 10^6 = 1_000_000).
@@ -92,7 +95,7 @@ const NILE_SPKI_PIN_HEX: &str = "e9cc763b176063ea6eed1525dac2542512d9e0bf601e210
 const TRANSPORT_ERROR_BUDGET: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
-// Bundled Nile fixture — same on-disk shape as `tests/v10_broadcast.rs`.
+// Bundled Nile fixture — single on-disk shape used by every test below.
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
@@ -116,8 +119,7 @@ struct NileFixtureTest {
 }
 
 /// Load the `test.{sender-tr20, recipient-tr20}` blocks from the bundled
-/// `tokens/nile.json`. Single source of truth shared with
-/// `tests/v10_broadcast.rs`.
+/// `tokens/nile.json`. Single source of truth within this file.
 fn load_nile_fixture() -> NileFixture {
     let json = include_str!("../tokens/nile.json");
     serde_json::from_str(json)
@@ -321,15 +323,14 @@ async fn trc20_transfer_full_flow_nile() {
 // Phase 4 §4.5 row 1 — native TRX transfer on real Nile.
 // ===========================================================================
 
-/// Phase 4 §4.5 row 1 — live native TRX transfer on real Nile. Mirrors
-/// `tests/v10_broadcast.rs::live_broadcast_trx_native_transfer_succeeds_on_nile`
-/// but adds the 2026-09-07 pre/post `get_account(balance_sun)` balance
-/// assertion.
+/// Phase 4 §4.5 row 1 — live native TRX transfer on real Nile. Adds the
+/// 2026-09-07 pre/post `get_account(balance_sun)` balance assertion on
+/// top of the v10-era broadcast-only contract.
 ///
 /// **SPKI pin:** this row does NOT enforce SPKI pinning —
-/// `TronGridClient::new` passes `None` for the cert verifier (same
-/// posture as `v10_broadcast.rs`). The canonical row above keeps SPKI
-/// pinning via `TronGridClient::new(..., Some(SpkiPin::from_bytes(...)))`.
+/// `TronGridClient::new` passes `None` for the cert verifier. The
+/// canonical row above keeps SPKI pinning via
+/// `TronGridClient::new(..., Some(SpkiPin::from_bytes(...)))`.
 #[tokio::test]
 #[ignore = "Phase 4 §4.5 row 1 — live TRX native transfer on Nile. cargo test -p tron-wallet-core --test trc20_nile row_1_trx_native_transfer_nile -- --ignored --nocapture"]
 async fn row_1_trx_native_transfer_nile() {
@@ -349,7 +350,7 @@ async fn row_1_trx_native_transfer_nile() {
     let sender_path: DerivationPath = SENDER_PATH.parse().expect("SLIP-44 TRON path must parse");
     let keypair = derive_keypair(&mnemonic, "", &sender_path).expect("derive_keypair must succeed");
 
-    // --- Build RPC client (NO SPKI pin per v10_broadcast.rs posture) ---
+    // --- Build RPC client (NO SPKI pin — deliberate, mirrors row_1 + row_2 posture) ---
     let cfg = TronConfig::for_network(Network::Nile);
     let rpc = TronGridClient::new(&cfg.rpc_url, None)
         .expect("TronGridClient must build against Nile config");
@@ -439,6 +440,213 @@ async fn row_1_trx_native_transfer_nile() {
          before={sender_balance_before} after={sender_balance_after} spent={spent_sun} \
          — broadcast returned SUCCESS but funds did not move on-chain."
     );
+}
+
+// ===========================================================================
+// Phase 4 §4.5 row 2 — Rebroadcast idempotency on live Nile.
+// ===========================================================================
+
+/// Phase 4 §4.5 row 2 — re-POST the same signed envelope and assert the
+/// network treats it as idempotent. Plan Phase 7 Task 6.8 (V7a).
+///
+/// Contract (live verified 2026-09-06 on Nile): pure envelope rebroadcast
+/// returns `code = "DUP_TRANSACTION_ERROR"`, `message = "Dup transaction."`
+/// with the SAME txid echoed back. Sender is NOT double-charged. Pin both
+/// branches:
+///   - SUCCESS path: txid MUST equal the first broadcast's txid (no
+///     double-charge). Any other txid = bug.
+///   - non-SUCCESS path: code OR message MUST mention `DUP_TRANSACTION`.
+///     A generic `FAILED` or empty rejection is a regression.
+///
+/// **SPKI pin:** this row does NOT enforce SPKI pinning —
+/// `TronGridClient::new` passes `None` for the cert verifier (mirrors
+/// `row_1_trx_native_transfer_nile`). Idempotency is a wire-protocol
+/// invariant; the cert verifier does not affect it.
+///
+/// Spending: 1 USDT-TRC20 (single on-chain transfer; second POST is
+/// short-circuited by the node).
+#[tokio::test]
+#[ignore = "Phase 4 §4.5 row 2 — rebroadcast idempotency. cargo test -p tron-wallet-core --test trc20_nile row_2_broadcast_rebroadcast_idempotency_nile -- --ignored --nocapture"]
+async fn row_2_broadcast_rebroadcast_idempotency_nile() {
+    // --- Load sender + recipient + Nile USDT contract from bundled fixture ---
+    let fixture = load_nile_fixture();
+    let sender_wallet = fixture.test.sender_tr20;
+    let recipient_wallet = fixture.test.recipient_tr20;
+    let owner_address = sender_wallet.address.clone();
+    let recipient = recipient_wallet.address.clone();
+    let mnemonic_phrase = sender_wallet.mnemonic.as_str();
+    eprintln!("[row_2] sender    = {owner_address}");
+    eprintln!("[row_2] recipient = {recipient}");
+
+    let usdt = tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")
+        .expect("Nile USDT must be in bundled token registry");
+    let usdt_address = usdt.address.clone();
+    eprintln!("[row_2] USDT      = {usdt_address}");
+
+    // --- Derive sender keypair (SLIP-44 TRON path) ---
+    let mnemonic = Mnemonic::from_phrase(mnemonic_phrase, Language::English)
+        .expect("bundled sender mnemonic must be a valid BIP-39 phrase");
+    let sender_path: DerivationPath = SENDER_PATH.parse().expect("SLIP-44 TRON path must parse");
+    let keypair = derive_keypair(&mnemonic, "", &sender_path).expect("derive_keypair must succeed");
+
+    // --- Build RPC client (NO SPKI pin — matches row_1 posture) ---
+    let cfg = TronConfig::for_network(Network::Nile);
+    let rpc = TronGridClient::new(&cfg.rpc_url, None)
+        .expect("TronGridClient must build against Nile config");
+    let head = rpc
+        .get_now_block()
+        .await
+        .expect("get_now_block must succeed");
+    eprintln!(
+        "[row_2] head block = #{} id={}",
+        head.block_number, head.block_id
+    );
+
+    // --- Build + sign one USDT transfer envelope ---
+    let amount = U256::from(ONE_USDT);
+    let mut params = builder::trc20_transfer(&owner_address, &usdt_address, &recipient, amount)
+        .expect("trc20_transfer builder must succeed");
+    builder::set_ref_block(&mut params, head.block_number as i64, &head.block_id)
+        .expect("set_ref_block must accept head");
+    let ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time must be after epoch")
+        .as_millis() as i64;
+    builder::set_timestamp(&mut params, ts_ms);
+    let signed = sign_tx(keypair.secret_bytes(), &params).expect("sign_tx must succeed");
+    let local_txid_hex = hex::encode(signed.txid);
+    eprintln!("[row_2] local txid = {local_txid_hex}");
+
+    // --- Snapshot recipient USDT balance BEFORE any broadcast ---
+    //
+    // This MUST be captured pre-broadcast, not after. The single-broadcast
+    // already credits the recipient on-chain; capturing after the broadcast
+    // would measure the rebroadcast's delta (which is 0 by the idempotency
+    // contract), masking any EVM-revert on the first broadcast.
+    let balance_before: U256 = trc20::balance_of(&rpc, &usdt_address, &recipient)
+        .await
+        .expect("balanceOf (before) must succeed");
+    eprintln!("[row_2] recipient balanceOf (before) = {balance_before} raw");
+
+    // --- First broadcast (must succeed) ---
+    let receipt1 = rpc
+        .broadcast(&signed.signed_envelope_hex)
+        .await
+        .expect("first broadcast must reach the Nile node without transport failure");
+    assert!(
+        receipt1.is_success(),
+        "[row_2] first broadcast rejected: code={:?} message={:?} error={:?}",
+        receipt1.code,
+        receipt1.message,
+        receipt1.error
+    );
+    let txid1 = receipt1
+        .txid
+        .as_deref()
+        .expect("first successful broadcast must include txid")
+        .to_owned();
+    eprintln!("[row_2] first  Nile txid = {txid1}");
+
+    // Pin the wire-form txid contract: locally-computed
+    // (sha256(raw_bytes) per tx::sign::txid — live Nile verification
+    // 2026-09-06) must match the first broadcast's network-reported txid.
+    assert_eq!(
+        local_txid_hex.to_ascii_lowercase(),
+        txid1.to_ascii_lowercase(),
+        "[row_2] locally-computed txid {local_txid_hex} != first-broadcast network txid {txid1} \
+         — local txid computation regressed? See tx::sign::txid = sha256(raw_bytes) per live Nile verification 2026-09-06."
+    );
+
+    // --- Re-POST the SAME signed envelope ---
+    let receipt2 = rpc
+        .broadcast(&signed.signed_envelope_hex)
+        .await
+        .expect("rebroadcast must reach the Nile node without transport failure");
+    eprintln!(
+        "[row_2] second code={:?} message={:?} txid={:?}",
+        receipt2.code, receipt2.message, receipt2.txid
+    );
+
+    // Idempotency contract. Pin both branches — see doc-comment above.
+    let same_txid = receipt2.txid.as_deref() == Some(txid1.as_str());
+    if receipt2.is_success() {
+        assert!(
+            same_txid,
+            "[row_2] rebroadcast returned SUCCESS with a different txid (potential double-charge): \
+             first={txid1} second={:?}",
+            receipt2.txid
+        );
+    } else {
+        let code = receipt2.code.as_deref().unwrap_or_default();
+        let msg = receipt2.message.as_deref().unwrap_or_default();
+        assert!(
+            code.contains("DUP_TRANSACTION_ERROR")
+                || msg.to_ascii_uppercase().contains("DUP TRANSACTION"),
+            "[row_2] rebroadcast failure does not look like DUP_TRANSACTION_ERROR \
+             (operator should re-investigate canonical node contract): code={code:?} message={msg:?}",
+        );
+    }
+
+    // --- Poll for confirmation so we can assert NO double-charge on-chain ---
+    poll_for_confirmation(&rpc, &txid1, POLL_DEADLINE).await;
+    eprintln!("[row_2] confirmed ≤{POLL_DEADLINE:?}");
+
+    // --- Verify the first broadcast actually EXECUTED, not just appeared in a block ---
+    //
+    // EVM reverts (out-of-energy, contract condition, etc.) leave the tx
+    // on-chain with a populated `id` but an empty/failed `contract_result`.
+    // `poll_for_confirmation` only checks `info.id.is_some()` — true for any
+    // on-chain tx, reverted or not. Re-fetch and verify both:
+    //   1. `block_number.is_some()` — mined into a block.
+    //   2. `contract_result` does not contain "FAILED" / "REVERT".
+    // The balance-delta assertion below is the ground truth; this block is
+    // diagnostics so a future failure names the cause directly.
+    let tx_info = rpc
+        .get_tx_info(&txid1)
+        .await
+        .expect("get_tx_info after poll must succeed");
+    eprintln!(
+        "[row_2] tx_info: block_number={:?} contract_result={:?} fee={:?}",
+        tx_info.block_number, tx_info.contract_result, tx_info.fee
+    );
+    assert!(
+        tx_info.block_number.is_some(),
+        "[row_2] tx {txid1} appeared in mempool but never mined into a block; \
+         https://nile.tronscan.org/#/transaction/{txid1}"
+    );
+    for entry in &tx_info.contract_result {
+        let upper = entry.to_ascii_uppercase();
+        assert!(
+            !upper.contains("FAILED") && !upper.contains("REVERT"),
+            "[row_2] tx {txid1} mined but contract_result entry {entry:?} indicates EVM revert \
+             (likely out-of-energy — default fee_limit may be insufficient); \
+             https://nile.tronscan.org/#/transaction/{txid1}"
+        );
+    }
+
+    // --- Snapshot recipient USDT balance AFTER — strict single-credit invariant ---
+    let balance_after: U256 = trc20::balance_of(&rpc, &usdt_address, &recipient)
+        .await
+        .expect("balanceOf (after) must succeed");
+    let delta = balance_after.saturating_sub(balance_before);
+    eprintln!("[row_2] recipient balanceOf (after)  = {balance_after} raw");
+    eprintln!(
+        "[row_2] recipient balanceOf delta     = {delta} raw \
+         (expected exactly {ONE_USDT} — no double-charge)"
+    );
+    assert!(
+        delta >= U256::from(ONE_USDT),
+        "[row_2] recipient balanceOf should have grown by ≥{ONE_USDT} raw; \
+         before={balance_before} after={balance_after} delta={delta} \
+         — first broadcast reported SUCCESS but funds did not move on-chain."
+    );
+    assert!(
+        delta < U256::from(ONE_USDT * 2),
+        "[row_2] recipient balanceOf grew by {delta} raw — expected exactly {ONE_USDT}, \
+         got ≥ 2×{ONE_USDT} = {} raw — rebroadcast double-charged the sender.",
+        ONE_USDT * 2
+    );
+    eprintln!("[row_2] PASS — no double-charge; txid={txid1}");
 }
 
 // ===========================================================================
