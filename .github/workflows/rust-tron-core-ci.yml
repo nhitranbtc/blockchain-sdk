@@ -273,6 +273,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: cargo build (workspace)
+        # Workspace build before `cargo test` so the `tron` binary lands in
+        # `target/debug/` and cargo sets `CARGO_BIN_EXE_tron` in the spike
+        # test process. Without this pre-build, `cargo test -p tron-v1-spike
+        # --tests` can skip building the `tron` bin (it's a workspace
+        # member, but not pulled into the spike test's transitive closure
+        # unless explicitly built first), and every test calling
+        # `assert_cmd::cargo_bin!("tron")` panics with
+        # `CARGO_BIN_EXE_tron is unset`. Reproduced locally with
+        # `cargo clean -p tron && cargo test -p tron-v1-spike --test
+        # cli_coverage` — same failure as run 34214814671. The other
+        # jobs (`rust-test`, `rust-test-operator-smoke`) already have this
+        # pre-build; this one inherited the layout pre-Phase-7 spike and
+        # never gained it. Fixed.
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
       - name: cargo test (local spike — TronBox Docker + #[ignore])
         # RUN_TRON_LOCAL=1 flips the gated container tests in
         # `spikes/tron-v1/tests/trc20_local.rs` from skip-and-return
