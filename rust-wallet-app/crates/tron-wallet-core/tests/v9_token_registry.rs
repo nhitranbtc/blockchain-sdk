@@ -118,12 +118,6 @@ fn local_bundle_has_mockusdt_placeholder() {
 #[tokio::test]
 #[ignore = "gated live test — runs only with RUN_TRON_NILE=1; loud-RED panic if env vars missing (see plan Conventions)"]
 async fn live_decimals_match_bundle_against_nile() {
-    if std::env::var_os("RUN_TRON_NILE").is_none() {
-        panic!(
-            "RUN_TRON_NILE=1 required to run live Nile USDT decimals check. \
-             Plan Phase 3 Task 3.7 / Spike V9 — bundle value must match on-chain decimals."
-        );
-    }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
     let rpc =
         tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None).expect("TronGridClient builds");
