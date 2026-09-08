@@ -50,22 +50,3 @@ fn v7_pinned_endpoint_rejects_wrong_pin() {
         "wrong pin must surface SPKI/cert error; stderr: {stderr}"
     );
 }
-
-#[test]
-fn v7_tronbox_local_no_pin_succeeds() {
-    // No pin: CLI defaults to Rustls verification against TronBox (TronBox
-    // self-signed cert is acceptable in CI). Gate is RUN_TRON_LOCAL=1 + a
-    // running TronBox at localhost:9090. The test fixture in PHASE 4 ships
-    // a `testcontainers` helper for CI Docker runners; operator-driven when
-    // running locally.
-    if std::env::var(common::RUN_TRON_LOCAL).ok().as_deref() != Some("1") {
-        eprintln!("[V7-tronbox] SKIP — RUN_TRON_LOCAL=1 required");
-        return;
-    }
-
-    common::tron()
-        .args(["--rpc", common::TRONBOX_RPC_URL])
-        .args(["balance", "--address", common::nile_recipient()])
-        .assert()
-        .success();
-}

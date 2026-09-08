@@ -599,9 +599,6 @@ pub const TEST_PASSWORD: &str = "test-pw";
 /// Stronger password for V10 wallet persistence tests.
 pub const V10_PASSWORD: &str = "v10-kat-pass";
 
-/// TronBox default RPC URL (local testnet).
-pub const TRONBOX_RPC_URL: &str = "http://127.0.0.1:9090";
-
 /// Closed-port RPC URL (used by network-failure recovery tests).
 pub const CLOSED_PORT_RPC_URL: &str = "http://127.0.0.1:9999";
 
