@@ -14,18 +14,16 @@
 //!   offset. `tx::sign::sign_hash` rejects anything else rather than passing it
 //!   on to a broadcast that would be refused by the node.
 
+mod common;
+
 use tron_wallet_core::keys::{derive_keypair, Language, Mnemonic};
 use tron_wallet_core::tx::sign::{sign_hash, txid, RecoveryId, SIGNATURE_LEN};
 use zeroize::Zeroizing;
 
-const CANONICAL_PHRASE: &str = "abandon abandon abandon abandon abandon abandon \
-     abandon abandon abandon abandon abandon about";
-
-const TRON_PATH: &str = "m/44'/195'/0'/0/0";
-
 fn canonical_secret() -> Zeroizing<[u8; 32]> {
-    let mnemonic = Mnemonic::from_phrase(CANONICAL_PHRASE, Language::English).expect("phrase");
-    let keypair = derive_keypair(&mnemonic, "", &TRON_PATH.parse().expect("path"))
+    let mnemonic =
+        Mnemonic::from_phrase(common::CANONICAL_PHRASE, Language::English).expect("phrase");
+    let keypair = derive_keypair(&mnemonic, "", &common::TRON_PATH.parse().expect("path"))
         .expect("derivation must succeed");
     keypair.secret_bytes().clone()
 }

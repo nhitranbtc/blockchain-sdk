@@ -1095,14 +1095,28 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 **Goal:** Provide integration test infrastructure covering local (TronBox Docker via testcontainers, desktop-only) + Nile testnet (real network, fallback for mobile + manual QA). Both surface in CI + spike V11 mainnet gate uses same harness. **CI gate:** `cargo test --test trc20_local` PASS in CI (Docker runner); `TRON_NILE_INTEGRATION=1 cargo test --test trc20_nile` PASS on manual trigger.
 
+**`crates/tron-wallet-core/tests/` layout (Phase 4 surface, 2026-09-08 sync):**
+
+| Path                                                            | Role                                                                                            |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `tests/trc20_local.rs` (17 tests: 5 unit + 3 harness + 9 rows)  | Local testnet — testcontainers TronBox harness + encode/sign/txid scenario rows (this phase)    |
+| `tests/trc20_nile.rs` (6 tests: 1 canonical + 4 rows + 1 sanity)| Live Nile RPC — SPKI-pinned broadcast + balance-delta receipts (this phase, post-2026-09-07 fold-in) |
+| `tests/common/mod.rs`                                           | Shared helpers (`deterministic_sk`, `spawn_tronbox`, `load_nile_fixture`, `poll_for_confirmation`, …) — `#[path]`-loaded by `spikes/tron-v1/tests/common/mod.rs` per spike Cargo.toml |
+| `tests/fixtures/MockTRC20.sol`                                  | Solidity source for the local mock USDT (referenced by Loud-RED panic fixture path in §4.2)    |
+| `tests/fixtures/spki_pin_test_cert.der`                         | Pre-extracted SPKI pin DER for offline cert-pin tests                                          |
+
+**Phase 4 spike mirror (NOT the Phase 4 surface):** `spikes/tron-v1/tests/trc20_local.rs` + `spikes/tron-v1/tests/trc20_nile.rs` are **CLI-driven matrices** (Task 7.15) — same filenames, `assert_cmd::cargo_bin("tron")` black-box invocations on the shipped binary, not in-process library calls. The spike Cargo.toml adds `tron = { workspace = true }` (bin access) + `tron-wallet-core = { workspace = true }` (dev-dep for the shared `common/mod.rs`) per commit `e7812630`. **Test files NOT owned by Phase 4** (belong to earlier phases / Phase 7): `address.rs` (Ph 1), `wallet_persistence.rs` (Ph 1), `v2_protobuf_roundtrip.rs` (Ph 2), `varint_and_txid.rs` (Ph 2), `v7_spki_pin.rs` (Ph 2), `v8_sign_only.rs` (Ph 2), `v9_sign_tx.rs` (Ph 2), `v3_trc20_abi.rs` (Ph 3), `v5_resource.rs` (Ph 3), `v9_token_registry.rs` (Ph 3), `v10_slip44.rs` (Ph 1), `placeholder.rs` (scaffold). Out of scope for Phase 4 edits.
+
+**`tests/v10_broadcast.rs` + `tests/use_case_alpha_sends_beta_usdt.rs`:** the former was folded into `tests/trc20_nile.rs` 2026-09-07 (file deleted; canonical + row_1 + row_2 absorb the 3 suites); the latter **never existed as a source file** in this repo — only stale `target/debug/deps/use_case_alpha_sends_beta_usdt-*.rmeta` build artifacts remain. UC-AB-* rows in §4.8 drop with this sync.
+
 **Two testnet targets covered.** **Local testnet (TronBox Docker, desktop-only)** is the default (CI + desktop dev). **Nile testnet (remote)** is fallback for mobile users + manual pre-release QA.
 
 #### Task 4.1 — Local testnet: testcontainers TronBox spawn
 
-**Files:** `spikes/tron-v1/tests/trc20_local.rs`
+**Files:** `crates/tron-wallet-core/tests/trc20_local.rs` (primary Phase 4 surface) + `crates/tron-wallet-core/tests/common/mod.rs` (helpers: `spawn_tronbox`, `probe_getnowblock`, `require_local_opt_in`). Spike mirror at `spikes/tron-v1/tests/trc20_local.rs` is the **CLI matrix** (Task 7.15), NOT the Phase 4 harness — it black-boxes the shipped `tron` binary via `assert_cmd::cargo_bin("tron")`.
 
-- [x] Add `testcontainers = { version = "0.23" }` to `[dev-dependencies]` of `tron-wallet-core/Cargo.toml`. *(Deviation 2026-09-06: `testcontainers = "0.23"` was already in `spikes/tron-v1/Cargo.toml` (added in prior session for `use_case_alpha_sends_beta_usdt`). No new add needed. `tron-wallet-core` does not gain a testcontainers dep — the harness lives in the spike crate per plan §File Structure.)*
-- [ ] Add `testcontainers-modules = { version = "0.x", features = ["tronbox"] }` for TronBox preset. *(Deviation 2026-09-06: skipped — followed the proven `GenericImage::new("tronbox/tre", "latest")` pattern in `use_case_alpha_sends_beta_usdt.rs` instead of the `Cli::default().run(TronBox::default())` preset. Plan §4.1 listed this as the alternative; existing testcontainers 0.23 already supports the `GenericImage` API. Saves a transitive dep.)*
+- [x] Add `testcontainers = { version = "0.23" }` to `[dev-dependencies]` of `tron-wallet-core/Cargo.toml`. *(Deviation 2026-09-06: `testcontainers = "0.23"` was already in `spikes/tron-v1/Cargo.toml`. No new add needed at the time. **2026-09-08 sync:** the test harness now lives in `crates/tron-wallet-core/tests/trc20_local.rs`; the spike crate pulls `tron-wallet-core` as a dev-dep (commit `e7812630`) and `#[path]`-loads `tests/common/mod.rs` from the core crate. testcontainers 0.23 itself remains a spike-side dep since the harness helpers are shared but the binary invocation surface is CLI-driven.)*
+- [ ] Add `testcontainers-modules = { version = "0.x", features = ["tronbox"] }` for TronBox preset. *(Deviation 2026-09-06: skipped — followed the proven `GenericImage::new("tronbox/tre", "latest")` pattern instead of the `Cli::default().run(TronBox::default())` preset. Plan §4.1 listed this as the alternative; existing testcontainers 0.23 already supports the `GenericImage` API. Saves a transitive dep.)*
 - [x] Write integration test `trc20_transfer_full_flow_local`:
   1. Spawn TronBox Docker via `Cli::default().run(TronBox::default())`.
   2. Get host port via `container.get_host_port_ipv4(8090)`.
@@ -1112,27 +1126,42 @@ Five Phase 2 checkboxes were left unchecked because their evidence requires a li
 
 > **Convention:** local testcontainers tests are CI-gated (Docker availability check is an env-class gate). MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` when not in CI Docker runner, panic with actionable message naming missing prerequisites (Docker daemon, TronBox image, `DOCKER_HOST`).
 
-#### Task 4.2 — Local testnet test scenarios (rows 1-8 + harness) (REVISED 2026-09-07)
+#### Task 4.2 — Local testnet test scenarios (rows 1-8 + harness) (REVISED 2026-09-07; path-corrected 2026-09-08)
 
-**Files:** `spikes/tron-v1/tests/trc20_local.rs`
+**Files:** `crates/tron-wallet-core/tests/trc20_local.rs` (Phase 4 surface) + `crates/tron-wallet-core/tests/common/mod.rs` (shared helpers used by rows). Spike mirror `spikes/tron-v1/tests/trc20_local.rs` is the **Task 7.15 CLI matrix** — distinct content, black-box CLI invocations, NOT a duplicate of this harness.
 
-**Scope correction (2026-09-07):** the prior row table described CLI-driven broadcast scenarios (`tron send …` → on-chain acceptance + receipt energy). That use case is **NOT covered** by `trc20_local.rs` — the file's module docstring (lines 35-44) explicitly states the broadcast half is deferred: "the broadcast half is verified by V10 on Nile (`tests/v10_broadcast.rs`) and by the live e2e in `tests/use_case_alpha_sends_beta_usdt.rs`." `trc20_local.rs` covers **harness + local-encode/local-sign/dual-SHA-256-txid per scenario row** — no `tron` CLI exec, no on-chain broadcast, no receipt parsing. Coverage is rows **1-8** (prior table claimed 1-7a; row 8 was always wired). MockTRC20 deploy + funded-sender paths are loud-RED-panic gated because the `tronbox/tre:latest` image verified 2026-09-06 lacks `npx`/`solc` inside the container and `wallet/easytransfer` returns HTTP 404 (devnet-only endpoint).
+**Scope correction (2026-09-07):** the prior row table described CLI-driven broadcast scenarios (`tron send …` → on-chain acceptance + receipt energy). That use case is **NOT covered** by `crates/tron-wallet-core/tests/trc20_local.rs` — the file covers **harness + local-encode/local-sign/dual-SHA-256-txid per scenario row** — no `tron` CLI exec, no on-chain broadcast, no receipt parsing. Coverage is rows **1-8** (prior table claimed 1-7a; row 8 was always wired). MockTRC20 deploy + funded-sender paths are loud-RED-panic gated because the `tronbox/tre:latest` image verified 2026-09-06 lacks `npx`/`solc` inside the container and `wallet/easytransfer` returns HTTP 404 (devnet-only endpoint).
 
-**Operator runbook (verified 2026-09-06):**
+**Operator runbook (verified 2026-09-08):**
 
 ```bash
 # Default (no Docker): 5 unit tests pass; 12 #[ignore] gated tests skipped
-cargo test -p tron-v1-spike --test trc20_local
+cargo test -p tron-wallet-core --test trc20_local
 #   → 5 passed; 0 failed; 12 ignored; 0 measured
+# (NOTE: 2026-09-08 — primary path is now tron-wallet-core crate, NOT
+#  tron-v1-spike; the spike `tests/trc20_local.rs` is the Task 7.15 CLI
+#  matrix mirror — distinct test bodies, separate cargo invocation.)
 
 # Harness only (suppress scenario-row loud-RED), Docker daemon required:
-RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
+RUN_TRON_LOCAL=1 cargo test -p tron-wallet-core --test trc20_local \
   -- --include-ignored tronbox_local_node  # 3 pass, 0 fail
 
 # Full surface (Docker daemon + `docker pull tronbox/tre:latest`):
-RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
+RUN_TRON_LOCAL=1 cargo test -p tron-wallet-core --test trc20_local \
   -- --include-ignored --nocapture
 #   → 8 passed + 9 failed (the 9 row_* panic loud-RED; harness covered)
+
+# Spike CLI matrix mirror (Task 7.15 — different test bodies, black-box
+# CLI invocations against the shipped `tron` binary; runs un-ignored by
+# default):
+cargo test -p tron-v1-spike --test trc20_local
+#   → 8 passed; 0 failed; 0 ignored (rows 1, 7, 7a hit live Nile RPC for
+#      ref_block; rows 2, 3, 4, 6, 8 are pure offline transforms)
+
+# Env vars NOT used by Phase 4 (kept here to disambiguate from later phases):
+#   RUN_TRON_LOCAL  — flips Phase 4 §4.2 #[ignore] gate (this runbook)
+#   RUN_TRON_NILE   — Phase 3 v5_resource / v7_spki_pin / v9_token_registry
+#   RUN_TRON_MAINNET — Phase 7 v11_mainnet_self_send BLOCKING gate (v9_token_registry.rs:144)
 ```
 
 **Tests in `trc20_local.rs`** (5 unit + 3 harness + 9 scenario rows = 17 total):
@@ -1143,44 +1172,57 @@ RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
 | Harness (3)                | `tronbox_local_node_serves_getnowblock`, `tronbox_local_node_serves_walletsolidity_getnowblock`, `tronbox_local_node_serves_eth_chainid`                                                                                                                                                                                                       | `RUN_TRON_LOCAL=1`, `#[ignore]` | Container spawn + readiness probe (`/wallet/getnowblock` 2xx), TAPOS path (`/walletsolidity/getnowblock` 2xx per Task 2.4), `/jsonrpc eth_chainId` shape (0x-prefixed hex per Round-1 grill Q6). All 3 verify node is reachable, no fund required                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Scenario rows 1-8 + 7a (9) | `row_1_trx_native_transfer_local`, `row_2_trc20_transfer_held_recipient_local`, `row_3_trc20_first_time_receive_local`, `row_4_trc20_approval_local`, `row_5_stake2_freeze_unfreeze_local`, `row_6_trc20_insufficient_balance_local`, `row_7_send_speedup_local`, `row_7a_rebroadcast_idempotency_local`, `row_8_wallet_to_wallet_trc20_local` | `RUN_TRON_LOCAL=1`, `#[ignore]` | **Local half only:** TRC-20 calldata encode (`abi::encode_transfer` 68 bytes, `0xa9059cbb` selector at [0..4]; `encode_approve` 68 bytes, `0x095ea7b3` selector), dual-SHA-256 txid (`Sha256::digest(Sha256::digest(raw))`), local secp256k1 sign with `v ∈ {0, 1}` (TRON, NOT Ethereum `v+27` per Q8). Row 1: 256-byte representative TransferContract envelope. Row 4: `approve(1000 mock USDT)` selector assertion `== [0x09, 0x5e, 0xa7, 0xb3]`. Row 6: `u256::MAX` amount slot encoding. Row 7: speedup = different envelope (timestamp + fee_limit) → different txid. Row 7a: identical envelope → identical txid (determinism; node-side `DUP_TRANSACTION_ERROR` verified live by Task 7.8 V7a on Nile). Row 8: `wallet_lookup("cold")` → T-address → ABI encode. **No broadcast, no receipt parse, no on-chain assertion.** |
 
-**What is NOT covered by `trc20_local.rs`** (deferred to live paths per module docstring):
+**What is NOT covered by `crates/tron-wallet-core/tests/trc20_local.rs`** (deferred to live paths per module docstring + 2026-09-08 sync):
 
-- On-chain broadcast acceptance (Nile + mainnet only) — `tests/v10_broadcast.rs`, `tests/use_case_alpha_sends_beta_usdt.rs`
-- `energy_usage ≈ 65_000` / `≈ 130_000` per-recipient baselines — `tests/v5_resource.rs` on Nile
+- On-chain broadcast acceptance (Nile + mainnet only) — `crates/tron-wallet-core/tests/trc20_nile.rs` (canonical + row_1 TRX native + row_2 rebroadcast idempotency; the deleted `tests/v10_broadcast.rs` 3-suite content was folded here 2026-09-07)
+- `energy_usage ≈ 65_000` / `≈ 130_000` per-recipient baselines — `crates/tron-wallet-core/tests/v5_resource.rs` on Nile
 - `balance = 100 mock USDT` post-conditions — broadcast path required, blocked by MockTRC20 deploy (no `npx` in `tronbox/tre:latest` per 2026-09-06 verification)
-- `tx REVERTED` / `DUP_TRANSACTION_ERROR` from a real node — Nile Task 7.8 + `use_case_alpha_sends_beta_usdt.rs`
-- CLI invocation through `tron` binary — Phase 6 CLI tests live in `rust-wallet-app/crates/tron/tests/cli.rs`, not `trc20_local.rs`
+- `tx REVERTED` / `DUP_TRANSACTION_ERROR` from a real node — `crates/tron-wallet-core/tests/trc20_nile.rs` canonical + row_2 (single-SHA-256 txid + DUP_TRANSACTION code/message ladder)
+- CLI invocation through `tron` binary — `rust-wallet-app/crates/tron/tests/cli.rs` (Phase 6 CLI) + `spikes/tron-v1/tests/cli_coverage.rs` (Phase 7 §Task 7.16 CLI surface matrix) — separate from the `trc20_local.rs` in-process library surface
 
 **Status of operator runbook:** ✅ Container spawn verified 2026-09-06 (Docker daemon up + `docker pull tronbox/tre:latest` resolved). ✅ All 3 harness tests PASS live with `RUN_TRON_LOCAL=1`. ❌ 9 `row_*` tests panic loud-RED by design — MockTRC20 deploy needs a `tronbox/tre:solidity` (or equivalent) image that ships `npx`/`solc` inside the container; or a fixture pre-deploy path. Track as follow-up: ship the deploy-bearing image + fixture + replace each `panic!` body with the row's real implementation.
 
-**Files referenced (do not move):**
+**Files referenced (do not move, 2026-09-08 path-corrected):**
 
-- `spikes/tron-v1/tests/trc20_local.rs` — harness + scenarios (this task)
-- `rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs` — live Nile broadcast (Task 7.8 / unblocks Phase 7 acceptance)
-- `spikes/tron-v1/tests/use_case_alpha_sends_beta_usdt.rs` — pre-existing live local-node probe (referenced by `trc20_local.rs` module docstring)
+- `crates/tron-wallet-core/tests/trc20_local.rs` — Phase 4 harness + 9 scenario rows (5 unit + 3 harness + 9 row, this task)
+- `crates/tron-wallet-core/tests/common/mod.rs` — shared helpers (`spawn_tronbox`, `require_local_opt_in`, `deterministic_sk`, `trc20_txid`, `sign_local`, `wallet_lookup`, `wrap_in_envelope`, etc.)
+- `crates/tron-wallet-core/tests/fixtures/MockTRC20.sol` — Solidity source for the local mock USDT (referenced by Loud-RED panic fixture path in §4.2)
+- `crates/tron-wallet-core/tests/fixtures/spki_pin_test_cert.der` — pre-extracted SPKI pin DER for offline cert-pin tests
+- `spikes/tron-v1/tests/trc20_local.rs` — **Task 7.15 CLI matrix mirror** (CLI-driven, NOT a Phase 4 duplicate). Invoked via `assert_cmd::cargo_bin("tron")`; wired through spike `Cargo.toml` dev-deps `tron = { workspace = true }` + `tron-wallet-core = { workspace = true }` per commit `e7812630`.
+- `crates/tron-wallet-core/tests/trc20_nile.rs` — live Nile broadcast + balance-delta receipts (canonical + 4 rows + sanity; absorbs deleted `tests/v10_broadcast.rs` per 2026-09-07 fold-in)
 - `rust-wallet-app/crates/tron/tests/cli.rs` — Phase 6 CLI integration tests (separate surface)
+- `spikes/tron-v1/tests/cli_coverage.rs` — Phase 7 §Task 7.16 CLI surface matrix (19 tests × 22 subcommands)
 
 - [x] Update Task 4.2 row table to match `trc20_local.rs` actual scope (harness + local encode/sign/txid), not the prior CLI-driven broadcast scenario.
 - [x] Document operator runbook: 5 unit pass + 12 `#[ignore]` (RUN_TRON_LOCAL=1) when Docker up → 8 pass + 9 loud-RED fail with `--include-ignored`.
 - [x] Note the 8-row coverage (prior table claimed 1-7a; row 8 was always wired).
-- [x] Document what is NOT covered (broadcast, energy baselines, on-chain assertions) and where it actually lives (Nile v10_broadcast + use_case_alpha_sends_beta_usdt).
+- [x] Document what is NOT covered (broadcast, energy baselines, on-chain assertions) and where it actually lives (`trc20_nile.rs` canonical + row_1 + row_2 per 2026-09-07 fold-in; previously split across `tests/v10_broadcast.rs` + `tests/use_case_alpha_sends_beta_usdt.rs` — both now consolidated/removed per 2026-09-08 sync).
 - [x] Flag MockTRC20 deploy follow-up (`tronbox/tre:solidity` image + pre-deploy fixture) as a separate PR.
 
 **PR #541 amendment preserved:** `row_7` and `row_7a` both assert the V7a finding (speedup = fresh envelope with new timestamp + new fee_limit, NOT envelope rebroadcast; identical envelope → identical txid). Per PR #541, broadcast endpoint is `/wallet/broadcasthex` (not exercised in `trc20_local.rs`, but cited in the docstring as the broadcast path the production crate uses).
 
-#### Task 4.3 — CI integration: `rust-test-local-spike` job in `rust-tron-core-ci.yml`
+#### Task 4.3 — CI integration: `rust-test-spike` job in `rust-tron-core-ci.yml`
 
 **Files:** `.github/workflows/rust-tron-core-ci.yml` (existing; no new file).
 
 **2026-09-07 plan correction:** the standalone `tron-integration.yml` sketched in the original Task 4.3 was **never created**. Phase 4 local-testnet coverage lives as a job inside the umbrella `rust-tron-core-ci.yml` workflow, alongside the lint / test / operator-smoke / nile-spike / dedup / audit / deny / mobile-check jobs. The umbrella workflow already triggers on push + PR to `rust-tron-core` (plan §Phase Set Up Task S.2 branch rule); adding a second file would double the runner minutes without adding signal.
 
-- [x] `rust-test-local-spike` job at `.github/workflows/rust-tron-core-ci.yml:218-254` (TronBox Docker via testcontainers 0.23):
+**2026-09-08 plan correction (post Phase 7 commit `7e0fe55e`):** the job was renamed `rust-test-spike` (dropped `-local-` since the same job also drives `RUN_TRON_NILE=1` rows in the spike CLI matrix mirror). Test command switched from `--test trc20_local` to `--tests` (plural) because Phase 7 added many spike integration binaries (`v1_compile`, `v2_protobuf_roundtrip`, `v3_trc20_abi`, …, `v11_mainnet_self_send`, `cli_coverage`, `trc20_nile`, `trc20_local`) — running only `trc20_local` would silently skip CLI surface coverage for every other spike test. Added `cargo build --workspace` pre-step so `CARGO_BIN_EXE_tron` lands in `target/debug/` and `assert_cmd::cargo_bin!("tron")` doesn't panic with `unset` (run 34214814671 reproduction).
+
+- [x] `rust-test-spike` job at `.github/workflows/rust-tron-core-ci.yml:246-308` (TronBox Docker via testcontainers 0.23 + spike CLI matrix mirror):
   ```yaml
-  rust-test-local-spike:
+  rust-test-spike:
     name: Rust test (local spike — TronBox Docker)
     runs-on: ubuntu-latest
-    timeout-minutes: 30   # bumped 15 → 30: cold-runner Docker pull + container spawn
-    needs: rust-lint      # sequential ordering: SKIPPED on lint red, runs to completion on lint pass
+    # Bumped from 15 → 30 min: Docker image pull + container spawn + testcontainers
+    # RPC round-trips are bursty on cold runners; the 15-min cap was tight.
+    timeout-minutes: 30
+    needs: rust-lint
+    # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
+    # warnings → errors. Step-level `env:` (RUN_TRON_LOCAL=1) below
+    # merges with this block per GH docs, no conflict.
+    env:
+      RUSTFLAGS: "-D warnings"
     services:
       docker:
         image: docker:dind
@@ -1200,31 +1242,42 @@ RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: cargo test (local spike — TronBox Docker)
+      - name: cargo build (workspace)
+        # Workspace build so rust-cache warms all crates; spike test process
+        # then sees `CARGO_BIN_EXE_tron` for `assert_cmd::cargo_bin!("tron")`.
+        # Without this pre-build, every test calling cargo_bin!("tron") panics
+        # with `CARGO_BIN_EXE_tron is unset` (reproduced in run 34214814671).
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test (local spike — TronBox Docker + #[ignore])
         working-directory: rust-wallet-app
         env:
           RUN_TRON_LOCAL: "1"                 # flips gated container tests from skip-and-return to actual round-trip
+          RUN_TRON_NILE: "1"                  # also flips spike trc20_nile CLI matrix mirror rows (Task 7.15)
         run: |
-          cargo test -p tron-v1-spike --test trc20_local -- \
+          cargo test -p tron-v1-spike --tests -- \
             --include-ignored --nocapture
   ```
 
 **Key reality** (vs the original Task 4.3 sketch):
 
-| Aspect            | Original sketch                                | Actual                                                                               |
-| ----------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Aspect            | Original sketch                                | Actual (post-Phase 7, commit `7e0fe55e`)                                            |
+| ----------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------- |
 | Workflow file     | `tron-integration.yml` (new file)              | `rust-tron-core-ci.yml` (existing umbrella)                                          |
 | Trigger           | `[push]`                                       | `push` + `pull_request` to `rust-tron-core` (via umbrella)                           |
+| Job name          | `rust-test-local-spike`                        | `rust-test-spike` (also drives `RUN_TRON_NILE=1` rows in spike CLI mirror)          |
 | Toolchain action  | `dtolnay/rust-toolchain@1.98.1`                | `dtolnay/rust-toolchain@master` + `with.toolchain: "1.98.1"`                         |
 | Rust-cache        | not configured                                 | `Swatinem/rust-cache@v2` with `workspaces: rust-wallet-app -> target`                |
 | Protoc install    | not mentioned                                  | `apt-get install protobuf-compiler` per job (required by `spikes/tron-v1/build.rs`)  |
 | Working directory | implicit (root)                                | explicit `working-directory: rust-wallet-app`                                        |
 | Timeout           | not specified                                  | `timeout-minutes: 30` (cold-runner Docker pull)                                      |
-| Job ordering      | parallel                                       | `needs: rust-lint` (sequential — see `rust-test-nile-spike` rationale at `:269-272`) |
-| Test command      | `cargo test --test trc20_local -- --nocapture` | `cargo test -p tron-v1-spike --test trc20_local -- --include-ignored --nocapture`    |
-| Test gating       | implicit `#[ignore]` only                      | `RUN_TRON_LOCAL=1` env + `--include-ignored` (handles both gates)                    |
+| Job ordering      | parallel                                       | `needs: rust-lint` (sequential — lint fail cancels this job before container pull)  |
+| Pre-build         | none                                           | `cargo build --workspace` before test (resolves `CARGO_BIN_EXE_tron`)                |
+| Test command      | `cargo test --test trc20_local -- --nocapture` | `cargo test -p tron-v1-spike --tests -- --include-ignored --nocapture`               |
+| Test gating       | implicit `#[ignore]` only                      | `RUN_TRON_LOCAL=1` + `RUN_TRON_NILE=1` env + `--include-ignored` (handles both gates) |
+| RUSTFLAGS         | not set                                        | `-D warnings` job-level (warnings → errors, same as `rust-test` rationale)          |
 
-**Verification:** CI runs on every push + PR to `rust-tron-core`; the `docker:dind` service container provides the Docker daemon; testcontainers 0.23 spawns TronBox from `tronbox/tre:latest`.
+**Verification:** CI runs on every push + PR to `rust-tron-core`; the `docker:dind` service container provides the Docker daemon; testcontainers 0.23 spawns TronBox from `tronbox/tre:latest`. The `--tests` plural picks up every spike integration binary (`v1_compile` through `v11_mainnet_self_send` + `cli_coverage` + `trc20_nile` + `trc20_local`), so a single CLI regression across any spike surface fails CI.
 
 #### Task 4.4 — Nile testnet integration test (canonical full-flow) (REVISED 2026-09-07)
 
@@ -1247,7 +1300,7 @@ RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
 
 **Earlier row 2 (TRC-20 balanceOf read) retired 2026-09-07:** the single `balanceOf` query against the SPKI-pinned RPC + fixture recipient was a strict subset of canonical's pre + post balanceOf checks (same pinned URL, same fixture address, same RPC client). No behavioral coverage was lost; the canonical row's delta assertion already proves the pinned RPC carries `balanceOf` cleanly. Decision logged at L13 audit trail.
 
-**Operator runbook (verified 2026-09-06):**
+**Operator runbook (verified 2026-09-08):**
 
 ```bash
 # Setup (one-time):
@@ -1345,7 +1398,7 @@ cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 | Operator action | `workflow_dispatch` + secrets                                                                  | fund the bundled fixture addresses once via <https://nileex.io/join/getJoinPage>; CI runs every push |
 
 - [x] **No `workflow_dispatch` gate** — nile tests run on every push + PR to `rust-tron-core` once the operator-funded fixture addresses are live.
-- [x] **No secrets** — sender + recipient mnemonics + addresses live in `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`, `test.recipient-tr20`). Operator funds those addresses once via the Nile faucet and both this job and `tests/v10_broadcast.rs` light up.
+- [x] **No secrets** — sender + recipient mnemonics + addresses live in `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`, `test.recipient-tr20`). Operator funds those addresses once via the Nile faucet and this job lights up. (Note: `tests/v10_broadcast.rs` was folded into `tests/trc20_nile.rs` 2026-09-07 — same fixture, no second CI surface to coordinate.)
 
 #### Task 4.7 — Decision matrix (test stage → network)
 
@@ -1359,15 +1412,15 @@ cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 | Mobile CI             | Local (TronBox)                     | no Docker fallback for mobile — **Round-1 grill Q6: mobile CI matrix = `cargo build --target aarch64-apple-ios` + `cargo build --target aarch64-linux-android` (FFI compile only). NO mobile runtime smoke in v0.1. Add runtime mobile smoke via Nile testnet (real network, no Docker) for v0.2.** |
 | Production            | Mainnet                             | post-Phase 4 only                                                                                                                                                                                                                                                                                   |
 
-#### Task 4.8 — Use-case map + workflow logic per test fn (REVISED 2026-09-07)
+#### Task 4.8 — Use-case map + workflow logic per test fn (REVISED 2026-09-07; path-corrected 2026-09-08)
 
-**Files:** `spikes/tron-v1/tests/trc20_local.rs`, `crates/tron-wallet-core/tests/trc20_nile.rs` (migrated from `spikes/tron-v1/tests/trc20_nile.rs` 2026-09-07), `spikes/tron-v1/tests/use_case_alpha_sends_beta_usdt.rs`, `rust-wallet-app/crates/tron-wallet-core/tests/v10_broadcast.rs`.
+**Files:** `crates/tron-wallet-core/tests/trc20_local.rs` (Phase 4 surface — testcontainers harness + 9 scenario rows), `crates/tron-wallet-core/tests/trc20_nile.rs` (canonical + 4 rows + sanity; migrated from `spikes/tron-v1/tests/trc20_nile.rs` 2026-09-07), `crates/tron-wallet-core/tests/common/mod.rs` (shared helpers), `crates/tron-wallet-core/tests/fixtures/MockTRC20.sol` + `spki_pin_test_cert.der` (test fixtures). **Spike mirrors** (NOT Phase 4 surface): `spikes/tron-v1/tests/trc20_local.rs` + `spikes/tron-v1/tests/trc20_nile.rs` are Task 7.15 CLI matrices — same filenames, black-box `assert_cmd::cargo_bin("tron")` content. **Dropped 2026-09-08:** `tests/use_case_alpha_sends_beta_usdt.rs` (never existed as source — only stale `target/debug/deps/*.rmeta` artifacts) and `tests/v10_broadcast.rs` (folded into `trc20_nile.rs` 2026-09-07).
 
 **Goal:** every `#[test]` / `#[tokio::test]` in Phase 4 traceable to a user-visible behavior; every test fn carries inline Setup → Action → Assert → Cleanup so a regression in any layer fails CI loudly with a self-narrating test. Mirror Phase 5.8 §"Use case map" + §"Layer A" pattern.
 
 **Scope discipline:** helpers (`require_local_opt_in`, `spawn_tronbox`, `probe_getnowblock`, `deterministic_sk`, `trc20_txid`, `sign_local`, `u128_to_32bytes`, `encode_approve`, `base58_to_20bytes`, `wallet_lookup`, `chrono_like_timestamp_ms`, `build_representative_trx_raw_data`, `wrap_in_envelope`, `compile_mock_trc20_in_container`, `deploy_mock_trc20`, `easytransfer_fund`, `wait_for_confirm`, `triggerconstant_call`, `parse_uint256_hex`, `address_to_32bytes_hex`, `u64_to_32bytes_hex`, `deploy_mock_trc20_fixture`, `rpc_smoke`, `param_zero_address`, `nile_spki_override`, `tron_path`, `derive_sender`, `nile_usdt_address`, `load_nile_fixture`, `pinned_nile_url`, `nile_creds`, `env_opt_in`, `fresh_wallet`, `build_trc20_transfer_calldata`, `sign_prehash_65byte`) are NOT use cases — they exist to make the test fns below readable and are audited by the test-fn bodies themselves, not by a separate UC entry.
 
-**Use case map** — 25 tests across 4 files, 21 UCs (row_2 + UC-NR-2 removed 2026-09-07):
+**Use case map** — 22 tests across 2 files (Phase 4 surface), 19 UCs (row_2 + UC-NR-2 + UC-AB-O/L/N removed; UC-AB-* dropped 2026-09-08 because `tests/use_case_alpha_sends_beta_usdt.rs` never existed as source — only stale build artifacts):
 
 | UC       | Behavior (one-line user story)                                                                                                                                                                                                                                                                                                                                 | Test fn                                                | File                                | Gating                      |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------- | --------------------------- |
@@ -1393,9 +1446,6 @@ cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 | UC-NR-3  | Mobile FFI smoke stub (Phase 5 PAL + FFI bridge scope; body keeps fixture load)                                                                                                                                                                                                                                                                                | `row_3_mobile_ffi_nile`                                | `trc20_nile.rs`                     | `#[ignore]`                 |
 | UC-NR-4  | Network-failure recovery: closed port → `Err` within 30s, no panic (maps to CLI exit 3)                                                                                                                                                                                                                                                                        | `row_4_network_failure_recovery_nile`                  | `trc20_nile.rs`                     | `#[ignore]`                 |
 | UC-NS    | SLIP-44 derivation determinism: same phrase → same T-address; SHA-256 pre-image logged for anychain-kms drift detection                                                                                                                                                                                                                                        | `derive_sender_produces_t_address_with_known_phrase`   | `trc20_nile.rs`                     | unit                        |
-| UC-AB-O  | Alpha → Beta USDT offline: calldata + 65-byte prehash sign without network (regression fixture for the local-sign half)                                                                                                                                                                                                                                        | `use_case_alpha_sends_beta_usdt_offline`               | `use_case_alpha_sends_beta_usdt.rs` | unit                        |
-| UC-AB-L  | Alpha → Beta USDT live local-node: spawn TronBox, fund via `easytransfer`, submit, poll, balance ≥ transfer                                                                                                                                                                                                                                                    | `use_case_alpha_sends_beta_usdt_live_local_node`       | `use_case_alpha_sends_beta_usdt.rs` | gated                       |
-| UC-AB-N  | Alpha → Beta USDT live Nile: env-gated `TRON_NILE_TEST_MNEMONIC` path; full broadcast + receipt + balance                                                                                                                                                                                                                                                      | `use_case_alpha_sends_beta_usdt_live_nile`             | `use_case_alpha_sends_beta_usdt.rs` | env-gated                   |
 
 **Workflow logic per test fn** — Setup → Action → Assert → Cleanup. Format mirrors Phase 5.8 §"Layer A" so reviewers can grep `^### UC-` blocks.
 
@@ -1435,17 +1485,19 @@ All rows follow the same envelope pattern; deviations annotated below.
 - **UC-NR-4** `row_4_network_failure_recovery_nile` (line 476). Setup: `JsonRpcClient::new_local("http://127.0.0.1:9999")` (closed port). Action: `balance_of_trc20(...)` with 30s timeout. Assert: `Err(_)` within 30s (no hang); no panic. Cleanup: drop.
 - **UC-NS** `derive_sender_produces_t_address_with_known_phrase` (line 524, unit). Setup: `phrase = "abandon ×11 about"` (12-word). Action: `derive_sender(phrase)` called twice. Assert: both calls return same 34-char `T`-prefixed address; log `Sha256(address_bytes)` for anychain-kms drift detection. Cleanup: drop.
 
-### UC-AB-* — Alpha → Beta USDT (mixed gating, `use_case_alpha_sends_beta_usdt.rs`)
+### UC-AB-* — Alpha → Beta USDT (REMOVED 2026-09-08)
 
-- **UC-AB-O** `use_case_alpha_sends_beta_usdt_offline` (line 154). Setup: `fresh_wallet(ALPHA_PHRASE)` → `(t_addr, _, sk)`; `nile_usdt_address()`; `beta_t`. Action: `build_trc20_transfer_calldata(usdt, beta_t, AMOUNT)` → 4+32+32 bytes; `sign_prehash_65byte(&keccak256(&calldata), &sk)` → 65-byte sig. Assert: calldata.len() == 68; sig[64] ∈ {0, 1}. Cleanup: drop.
-- **UC-AB-L** `use_case_alpha_sends_beta_usdt_live_local_node` (line 202). Setup: spawn TronBox; `fresh_wallet`; `easytransfer_fund(alpha_t, 100_000_000 sun)`; `wait_for_confirm`. Action: build + sign TriggerSmartContract; broadcast via `/wallet/broadcasthex`; poll. Assert: `balanceOf(beta_t)` ≥ AMOUNT. Cleanup: container drops.
-- **UC-AB-N** `use_case_alpha_sends_beta_usdt_live_nile` (line 291). Setup: `nile_creds()` from env; same fixture pattern. Action: same as AB-L but against `nile.trongrid.io`. Assert: same. Cleanup: drop.
+The `tests/use_case_alpha_sends_beta_usdt.rs` source file **never existed** in this repo — only stale `target/debug/deps/use_case_alpha_sends_beta_usdt-*.rmeta` artifacts from an early prototype. UC-AB-O / UC-AB-L / UC-AB-N are dropped. Coverage maps as:
+
+- **Offline sign + 65-byte prehash** → absorbed by `UC-LR-1..LR-8` rows in `crates/tron-wallet-core/tests/trc20_local.rs` (`deterministic_sk()` + `sign_local` cover the same fixture path).
+- **Live local-node (TronBox + easytransfer)** → was never wired (mock-fund path is loud-RED per §4.2 status). Lives in scope of the follow-up `tronbox/tre:solidity` image work.
+- **Live Nile broadcast** → `UC-NC` (`trc20_transfer_full_flow_nile`) in `crates/tron-wallet-core/tests/trc20_nile.rs` exercises the same surface with the bundled `tokens/nile.json` fixture.
 
 **Checklist** (mirror Phase 5.8 §"Checklist"):
 
-- [x] Use case map table covers all 25 test fns across 4 files (helpers excluded by Scope discipline).
+- [x] Use case map table covers all 22 test fns across 2 Phase 4 files (`trc20_local.rs` + `trc20_nile.rs`); helpers excluded by Scope discipline. UC-AB-O / UC-AB-L / UC-AB-N rows dropped 2026-09-08 — `use_case_alpha_sends_beta_usdt.rs` source never existed; coverage absorbed into UC-LR-1..8 + UC-NC.
 - [x] Every UC entry has Setup → Action → Assert → Cleanup inline.
-- [x] Gating column accurate: unit tests have no env var; `RUN_TRON_LOCAL=1` for Docker-gated; `#[ignore]` + fixture-funded for Nile; env-gated for `use_case_alpha_sends_beta_usdt_live_nile`.
+- [x] Gating column accurate: unit tests have no env var; `RUN_TRON_LOCAL=1` for Docker-gated; `#[ignore]` + fixture-funded for Nile. No env-gated rows (the deleted `use_case_alpha_sends_beta_usdt_live_nile` `TRON_NILE_TEST_MNEMONIC` path was never wired).
 - [x] Cross-link to Phase 5.8 (same format → grep `^### UC-` works across both phases).
 
 #### Phase 4 Verification

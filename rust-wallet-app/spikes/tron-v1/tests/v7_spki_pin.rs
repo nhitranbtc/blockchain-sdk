@@ -8,6 +8,7 @@
 //! Gated on `RUN_TRON_NILE=1` for the pinned-endpoint cases; localhost
 //! TronBox case is non-gated (CI Docker runner).
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 /// All-zeros 64-char hex placeholder SPKI pin (deliberately wrong; only

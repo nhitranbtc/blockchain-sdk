@@ -12,6 +12,7 @@
 //! Operator wallet comes from the bundled `crates/tron-wallet-core/tokens/nile.json`
 //! fixture (`test.owner_address`) via `common::nile_owner()`.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 #[test]

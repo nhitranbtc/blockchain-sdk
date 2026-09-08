@@ -12,6 +12,8 @@
 //! All assertions use deterministic byte constants so the regression is
 //! exact, not "looks similar".
 
+mod common;
+
 use anychain_core::Transaction;
 use anychain_tron::protocol::Tron::transaction::Raw;
 use anychain_tron::trx;
@@ -57,9 +59,7 @@ fn fee_limit_canonical_varint() {
 /// exercise the real path.
 #[test]
 fn signed_tx_raw_data_hex_ends_with_canonical_varint() {
-    let fixture =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures");
+    let fixture = common::mainnet_test_addresses();
 
     let contract = trx::build_transfer_contract(
         fixture.owner_address.as_str(),
@@ -97,9 +97,7 @@ fn signed_tx_raw_data_hex_ends_with_canonical_varint() {
 /// dead-code method; the live computation lives in `tx::sign::txid`).
 #[test]
 fn txid_is_single_sha256() {
-    let fixture =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures");
+    let fixture = common::mainnet_test_addresses();
 
     let contract = trx::build_transfer_contract(
         fixture.owner_address.as_str(),

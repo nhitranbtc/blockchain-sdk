@@ -21,6 +21,8 @@
 //! `nile.trongrid.io`. The earlier Phase-4-deferred
 //! `no_pin_localhost_tronbox_succeeds` slot was removed 2026-09-06.
 
+mod common;
+
 use std::error::Error;
 
 use tron_wallet_core::chain::spki::{SpkiPin, SpkiPinnedVerifier};

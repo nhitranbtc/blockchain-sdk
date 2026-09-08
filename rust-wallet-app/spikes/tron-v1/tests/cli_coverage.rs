@@ -25,6 +25,7 @@
 //! routes passphrase via env). Remaining gaps (`config_set_rpc_validates_scheme`)
 //! need CLI changes — tracked as Path B follow-up.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -573,7 +574,7 @@ fn tx_wait_times_out_on_unconfirmed() {
             "--timeout",
             common::TX_WAIT_SHORT_TIMEOUT_SECS,
             "--poll-interval",
-            common::POLL_INTERVAL_SECS,
+            common::POLL_INTERVAL_SECS_STR,
             "--network",
             common::NILE_NETWORK,
         ])

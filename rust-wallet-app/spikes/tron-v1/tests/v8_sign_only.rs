@@ -11,6 +11,7 @@
 //! on `RUN_TRON_NILE=1` per L29 + Phase 7 §Conventions; the offline
 //! `--no-broadcast` path is non-gated.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 /// Round-trip a sign via the CLI and assert the 65-byte `signature`

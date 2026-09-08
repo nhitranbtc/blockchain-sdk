@@ -23,6 +23,7 @@
 //! the `new` + `xpub` subcommands. If a future refactor drops one, this
 //! test fails and forces the spike to track the new surface.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 use sha2::Digest as _;

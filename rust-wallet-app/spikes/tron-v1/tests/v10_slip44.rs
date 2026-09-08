@@ -19,6 +19,7 @@
 //! - xpub export is deterministic per mnemonic + path.
 //! - Drift detector: `tron address new --help` documents the `--path` flag.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 /// Pinned KAT: `common::CANONICAL_MNEMONIC` at `m/44'/195'/0'/0/0` MUST emit this

@@ -13,6 +13,8 @@
 //! Each backend gets its own `#[test]` so a failure pinpoints which
 //! PAL impl regressed.
 
+mod common;
+
 use tron_wallet_core::keys::{Language, Mnemonic, SECRET_KEY_LEN};
 use tron_wallet_core::wallet::{WalletId, WalletManager};
 use tron_wallet_core::WalletStorage;
@@ -20,11 +22,13 @@ use tron_wallet_core::WalletStorage;
 use tron_wallet_core::platform::test::InMemoryStorage;
 use zeroize::Zeroizing;
 
-const PHRASE: &str = "abandon abandon abandon abandon abandon abandon \
-                      abandon abandon abandon abandon abandon about";
+/// All-zero BIP-39 entropy mnemonic, shared with the rest of the suite via
+/// `tests/common/mod.rs`. Aliased as `PHRASE` so the rest of this file's
+/// assertions stay self-documenting.
+const PHRASE: &str = common::CANONICAL_PHRASE;
 
 fn fresh_mnemonic() -> Mnemonic {
-    Mnemonic::from_phrase(PHRASE, Language::English).expect("mnemonic")
+    Mnemonic::from_phrase(common::CANONICAL_PHRASE, Language::English).expect("mnemonic")
 }
 
 #[test]

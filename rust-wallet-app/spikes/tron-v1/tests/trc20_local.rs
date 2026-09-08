@@ -31,6 +31,7 @@
 //! Plan ref: docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md
 //! §Task 7.15 "trc20_local.rs (8 rows, mirrors ...)".
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 /// Canonical test mnemonic (BIP-39 — `abandon × 11 + about`).

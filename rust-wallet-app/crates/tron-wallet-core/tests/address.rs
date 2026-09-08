@@ -3,22 +3,15 @@
 //! Plan: `docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md`
 //! Phase 1 Tasks 1.3 and 1.6.
 
+mod common;
+
 use tron_wallet_core::address::Address;
-use tron_wallet_core::keys::{derive_keypair, xpub, Language, Mnemonic};
-
-const CANONICAL_PHRASE: &str = "abandon abandon abandon abandon abandon abandon \
-     abandon abandon abandon abandon abandon about";
-
-const TRON_PATH: &str = "m/44'/195'/0'/0/0";
+use tron_wallet_core::keys::{derive_keypair, xpub};
 
 /// Published `anychain-tron` fixture (`src/address.rs` unit tests): the raw 21
 /// bytes `4196a3bace5adacf637eb7cc79d5787f4247da4bbe` render as this address.
 const KNOWN_ADDRESS: &str = "TPhiVyQZ5xyvVK2KS2LTke8YvXJU5wxnbN";
 const KNOWN_ADDRESS_HEX: &str = "4196a3bace5adacf637eb7cc79d5787f4247da4bbe";
-
-fn canonical_mnemonic() -> Mnemonic {
-    Mnemonic::from_phrase(CANONICAL_PHRASE, Language::English).expect("phrase must parse")
-}
 
 #[test]
 fn parses_a_known_base58_address() {
@@ -38,8 +31,12 @@ fn parses_the_hex_form_of_a_known_address() {
 
 #[test]
 fn derived_address_round_trips() {
-    let keypair = derive_keypair(&canonical_mnemonic(), "", &TRON_PATH.parse().expect("path"))
-        .expect("derivation must succeed");
+    let keypair = derive_keypair(
+        &common::canonical_mnemonic(),
+        "",
+        &common::TRON_PATH.parse().expect("path"),
+    )
+    .expect("derivation must succeed");
     let address = Address::from_public_key(keypair.public_key()).expect("address must derive");
 
     let parsed: Address = address.to_base58().parse().expect("round-trip must parse");
@@ -73,9 +70,9 @@ fn is_valid_rejects_malformed_input() {
 #[test]
 fn xpub_export_is_slip0132_encoded() {
     let exported = xpub(
-        &canonical_mnemonic(),
+        &common::canonical_mnemonic(),
         "",
-        &"m/44'/195'/0'".parse().expect("path"),
+        &common::TRON_XPUB_PATH.parse().expect("path"),
     )
     .expect("xpub export must succeed");
 
@@ -88,13 +85,13 @@ fn xpub_export_is_slip0132_encoded() {
 #[test]
 fn xpub_differs_per_account() {
     let account_0 = xpub(
-        &canonical_mnemonic(),
+        &common::canonical_mnemonic(),
         "",
-        &"m/44'/195'/0'".parse().expect("path"),
+        &common::TRON_XPUB_PATH.parse().expect("path"),
     )
     .expect("xpub export must succeed");
     let account_1 = xpub(
-        &canonical_mnemonic(),
+        &common::canonical_mnemonic(),
         "",
         &"m/44'/195'/1'".parse().expect("path"),
     )

@@ -6,6 +6,7 @@
 //! - `tron trc20 decimals --contract USDT --network nile` returns `6`
 //!   (live `triggerconstantcontract(decimals())`).
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 #[test]

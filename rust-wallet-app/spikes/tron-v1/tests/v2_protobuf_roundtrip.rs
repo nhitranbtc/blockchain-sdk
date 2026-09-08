@@ -23,6 +23,7 @@
 //!    and forces the test author to wire in a positive protobuf-roundtrip
 //!    assertion. Until then it PASSES as a documented BLOCKING.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 /// First 4 bytes of keccak256("transfer(address,uint256)") = 0xa9059cbb.

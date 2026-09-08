@@ -6577,7 +6577,9 @@ dependencies = [
  "testcontainers",
  "tokio",
  "tron",
+ "tron-wallet-core",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
@@ -6589,6 +6591,7 @@ dependencies = [
  "anychain-kms",
  "anychain-tron",
  "argon2",
+ "assert_cmd",
  "clap",
  "directories",
  "ethereum-types",
@@ -6609,6 +6612,7 @@ dependencies = [
  "testcontainers",
  "thiserror 1.0.69",
  "tokio",
+ "tron",
  "uuid",
  "webpki",
  "x509-parser",

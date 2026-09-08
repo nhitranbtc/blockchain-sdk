@@ -101,12 +101,25 @@ directories = { workspace = true }
 proptest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Live-RPC tests in tests/trc20_nile.rs share a single funded recipient on
+# Nile testnet; parallel execution causes credit double-count assertions to
+# fail (recipient balance grows from concurrent broadcasts). `#[serial]`
+# forces sequential execution within this test binary.
+serial_test = { workspace = true }
 # Phase 3 carry-over test (tests/v2_protobuf_roundtrip.rs) inspects the
 # inner TriggerSmartContract wire format directly to verify `data` lives
 # at proto field 4. Pinned at the same exact version anychain-tron uses
 # (`=3.7.2` per anychain workspace) so the test parses the same bytes
 # anychain writes.
 protobuf = "=3.7.2"
+# Phase 7 — spike tests (`spikes/tron-v1/tests/*.rs`) `#[path]` this crate's
+# `tests/common/mod.rs` and exercise the shipped `tron` CLI via
+# `assert_cmd::cargo_bin("tron")`. Both deps live here so the common module
+# compiles in either crate's test binary; core tests ignore the CLI helpers.
+assert_cmd = "2"
+# CLI binary the spike spawns via assert_cmd. Workspace path so spike tests
+# resolve the same binary that `cargo build -p tron` produces.
+tron = { workspace = true }
 
 [features]
 # Gates tests that need a Docker daemon (local TRON node via testcontainers).

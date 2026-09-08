@@ -8,6 +8,7 @@
 //! spawned `tron --help` stdout contains the four top-level subcommand
 //! groups (wallet, trc20, tx, config).
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 #[test]

@@ -77,6 +77,21 @@ sha2 = { workspace = true }
 # the computed pin to fail loud on cert rotation, instead of hardcoding).
 x509-parser = { workspace = true }
 
+# `tests/common/mod.rs::nile_sender_keypair()` returns a `Zeroizing<[u8; 32]>`.
+# The spike test bodies never call this helper (they only invoke the
+# shipped `tron` CLI), but the `#[path]` mod still resolves its return type
+# at compile time.
+zeroize = { workspace = true }
+
+# Phase 7 — `tests/common/mod.rs` is `#[path]`-loaded from
+# `crates/tron-wallet-core/tests/common/mod.rs`. That module references
+# `tron_wallet_core::config::Network`, `tokens::TestAddresses`, etc. for
+# typed registry accessors + network RPC URLs + SPKI pin helpers.
+# The invariant "tests may not import from tron_wallet_core" still holds
+# at the test-body level (spike test bodies still only assert on CLI
+# stdout/stderr/exit-code); only the shared helpers reach into the lib.
+tron-wallet-core = { workspace = true }
+
 [[test]]
 name = "v1_compile"
 path = "tests/v1_compile.rs"

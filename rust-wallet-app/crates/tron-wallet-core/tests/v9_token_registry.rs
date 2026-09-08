@@ -10,6 +10,8 @@
 //! that the registry's static view of the contract still matches what
 //! the network actually returns.
 
+mod common;
+
 use tron_wallet_core::config::Network;
 use tron_wallet_core::tokens;
 
@@ -125,14 +127,10 @@ async fn live_decimals_match_bundle_against_nile() {
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Nile);
     let rpc =
         tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None).expect("TronGridClient builds");
-    let nile_test = tron_wallet_core::tokens::test_addresses(Network::Nile)
-        .expect("Nile test fixtures must be present");
+    let nile_test = common::nile_test_addresses();
     let live = tron_wallet_core::trc20::decimals(
         &rpc,
-        tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")
-            .expect("Nile USDT must be in the bundle")
-            .address
-            .as_str(),
+        common::nile_usdt_address(),
         nile_test.owner_address.as_str(),
     )
     .await
@@ -143,23 +141,13 @@ async fn live_decimals_match_bundle_against_nile() {
 #[tokio::test]
 #[ignore = "gated live test — runs only with RUN_TRON_MAINNET=1; loud-RED panic if env vars missing (see plan Conventions)"]
 async fn live_symbol_matches_bundle_against_mainnet() {
-    if std::env::var_os("RUN_TRON_MAINNET").is_none() {
-        panic!(
-            "RUN_TRON_MAINNET=1 required to run live mainnet USDT symbol check. \
-             Plan Phase 3 Task 3.7 / Spike V9 — bundle symbol must match on-chain name."
-        );
-    }
     let cfg = tron_wallet_core::TronConfig::for_network(Network::Mainnet);
     let rpc =
         tron_wallet_core::TronGridClient::new(&cfg.rpc_url, None).expect("TronGridClient builds");
-    let mainnet_test = tron_wallet_core::tokens::test_addresses(Network::Mainnet)
-        .expect("mainnet test fixtures must be present");
+    let mainnet_test = common::mainnet_test_addresses();
     let live = tron_wallet_core::trc20::symbol(
         &rpc,
-        tokens::by_symbol(Network::Mainnet, "USDT")
-            .expect("mainnet USDT must be in the bundle")
-            .address
-            .as_str(),
+        common::mainnet_usdt_address(),
         mainnet_test.owner_address.as_str(),
     )
     .await

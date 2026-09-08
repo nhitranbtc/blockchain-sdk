@@ -10,6 +10,7 @@
 //! Gated on `RUN_TRON_NILE=1` per L29 + Phase 7 §Conventions (loud-RED panic
 //! on missing var).
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 #[test]

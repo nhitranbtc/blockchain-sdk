@@ -29,6 +29,7 @@
 //! Plan ref: docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md
 //! §Task 7.15.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 /// CLI emits `raw` (base units, uint-as-string) for `trc20 balance`. Parse it.
@@ -115,7 +116,7 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--txid",
             txid,
             "--timeout",
-            common::TX_WAIT_TIMEOUT_SECS,
+            common::TX_WAIT_TIMEOUT_SECS_STR,
             "--network",
             common::NILE_NETWORK,
             "--json",

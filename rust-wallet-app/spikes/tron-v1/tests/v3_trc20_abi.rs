@@ -14,6 +14,7 @@
 //! 32-byte big-endian uint256 slot) catch anychain-side encoding drift
 //! that a selector-only assertion would silently pass.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 /// First 4 bytes of keccak256("balanceOf(address)").

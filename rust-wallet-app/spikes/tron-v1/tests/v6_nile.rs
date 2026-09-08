@@ -3,6 +3,7 @@
 //! Both rows run offline against a per-test isolated data dir (no env-var gate,
 //! no live RPC). The shipped `tron` CLI surface drives the assertions.
 
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
 mod common;
 
 use std::path::PathBuf;
