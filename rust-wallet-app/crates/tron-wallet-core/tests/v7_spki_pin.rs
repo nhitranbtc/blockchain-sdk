@@ -146,13 +146,6 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
     // the public constructor directly because it would refuse the wrong
     // pin; this test builds the client in-line so the failure surface
     // is observable.
-    if std::env::var_os("RUN_TRON_NILE").is_none() {
-        panic!(
-            "RUN_TRON_NILE=1 required to run live wrong-pin handshake against nile.trongrid.io. \
-             Plan Phase 3 carry-over Task 2.8: 'Live wrong-pin handshake behaviour is what closes \
-             Scenario A pin enforcement is real, not dead; unit-only tests cannot prove it.'"
-        );
-    }
 
     // `[0xff; 32]` is a guaranteed wrong pin — no production endpoint
     // will ever resolve to this SPKI digest.
