@@ -18,7 +18,7 @@
 //! `OnceCell` is the right scope. `set_test_data_dir` records the
 //! isolation dir for this thread; `tron()` injects it as `TRON_DATA_DIR`
 //! + `XDG_DATA_HOME` on every spawned subprocess, so parallel tests
-//! never stomp each other's wallet/config state.
+//!   never stomp each other's wallet/config state.
 
 use std::cell::OnceCell;
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ use std::path::PathBuf;
 use assert_cmd::Command;
 
 thread_local! {
-    static TEST_DATA_DIR: OnceCell<PathBuf> = OnceCell::new();
+    static TEST_DATA_DIR: OnceCell<PathBuf> = const { OnceCell::new() };
 }
 
 /// Record the test-thread's isolated data dir. Subsequent `tron()` calls
@@ -225,7 +225,7 @@ pub fn live_spki_pin(host: &str, port: u16) -> String {
     //    closes stdin so openssl exits after the handshake instead of
     //    waiting for input. `2>/dev/null` discards the s_client status
     //    chatter — only stdout (the cert blob) matters.
-    let s_client = StdCommand::new("openssl")
+    let mut s_client = StdCommand::new("openssl")
         .args([
             "s_client",
             "-connect",
@@ -251,6 +251,8 @@ pub fn live_spki_pin(host: &str, port: u16) -> String {
         .spawn()
         .expect("openssl x509 must be on PATH for live SPKI derivation");
     let output = x509.wait_with_output().expect("openssl x509 must complete");
+    // Reap the s_client child now that x509 has consumed its stdout pipe to EOF.
+    let _ = s_client.wait();
 
     if !output.status.success() {
         let _ = writeln!(
