@@ -35,6 +35,13 @@ use crate::tx::broadcast::{
 pub struct TronGridClient {
     rpc_url: String,
     http: reqwest::Client,
+    /// True when the client was built with an SPKI pin. Used to label
+    /// transport errors with `"SPKI pin verification active"` so operators
+    /// (and the V7 integration test) can distinguish a TLS rejection
+    /// caused by a wrong pin from a generic network failure. The flag
+    /// does not affect the wire shape — reqwest's error chain has already
+    /// been collapsed by the time we see it.
+    pinned: bool,
 }
 
 /// Body TronGrid expects at `wallet/broadcasthex`.
@@ -80,7 +87,24 @@ impl TronGridClient {
         Ok(Self {
             rpc_url: rpc_url.trim_end_matches('/').to_owned(),
             http,
+            pinned: spki_pin.is_some(),
         })
+    }
+
+    /// Wrap a `reqwest::send` error with the SPKI-pin context.
+    ///
+    /// When the client was built with an SPKI pin, a TLS handshake failure
+    /// is the most likely cause of any connect-time error. `reqwest`'s
+    /// `Error::Display` collapses the rustls source chain, so a wrong pin
+    /// looks identical to "node down" from the caller's view. We append a
+    /// label so the wrong-pin failure mode is recognisable in STDERR
+    /// (V7 `tests/v7_spki_pin.rs` asserts on this).
+    fn label_send_err(&self, op: &str, e: reqwest::Error) -> Error {
+        let mut msg = format!("{op}: {e}");
+        if self.pinned {
+            msg.push_str(" (SPKI pin verification active — possible pin mismatch)");
+        }
+        Error::Node(msg)
     }
 
     /// `POST /wallet/broadcasthex`.
@@ -108,7 +132,7 @@ impl TronGridClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::Node(format!("broadcast send: {e}")))?;
+            .map_err(|e| self.label_send_err("broadcast send", e))?;
 
         let status = resp.status();
         let bytes = resp
@@ -141,7 +165,7 @@ impl TronGridClient {
             .get(&url)
             .send()
             .await
-            .map_err(|e| Error::Node(format!("getnowblock send: {e}")))?;
+            .map_err(|e| self.label_send_err("getnowblock send", e))?;
 
         let status = resp.status();
         let bytes = resp
@@ -180,7 +204,7 @@ impl TronGridClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::Node(format!("gettransactioninfobyid send: {e}")))?;
+            .map_err(|e| self.label_send_err("gettransactioninfobyid send", e))?;
 
         let status = resp.status();
         let bytes = resp
@@ -271,7 +295,7 @@ impl TronGridClient {
             .json(&body)
             .send()
             .await
-            .map_err(|e| Error::Node(format!("triggerconstantcontract send: {e}")))?;
+            .map_err(|e| self.label_send_err("triggerconstantcontract send", e))?;
 
         let status = resp.status();
         let bytes = resp
@@ -351,7 +375,7 @@ impl TronGridClient {
             })
             .send()
             .await
-            .map_err(|e| Error::Node(format!("getaccount send: {e}")))?;
+            .map_err(|e| self.label_send_err("getaccount send", e))?;
 
         let status = resp.status();
         let bytes = resp
@@ -389,7 +413,7 @@ impl TronGridClient {
             })
             .send()
             .await
-            .map_err(|e| Error::Node(format!("gettransactionbyid send: {e}")))?;
+            .map_err(|e| self.label_send_err("gettransactionbyid send", e))?;
 
         let status = resp.status();
         let bytes = resp

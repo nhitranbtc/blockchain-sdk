@@ -16,30 +16,23 @@
 //! TRC-20 transfer contains `0x22` immediately followed by the
 //! `0xa9059cbb` selector of `transfer(address,uint256)`.
 
+mod common;
+
 use anychain_core::Transaction;
 use anychain_tron::trx;
 use anychain_tron::TronTransaction;
 
 #[test]
 fn tron_transaction_parameters_round_trip_through_bytes() {
-    let addr_from =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures must be present")
-            .owner_address
-            .as_str();
-    let addr_to =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures must be present")
-            .recipient_address
-            .as_str();
+    let test = common::mainnet_test_addresses();
+    let addr_from = test.owner_address.as_str();
+    let addr_to = test.recipient_address.as_str();
     let amount = "10000000";
 
     let contract = trx::build_transfer_contract(addr_from, addr_to, amount)
         .expect("anychain build_transfer_contract");
     let mut params = anychain_tron::TronTransactionParameters::default();
     params.set_timestamp(trx::timestamp_millis());
-    let test = tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-        .expect("mainnet test fixtures must be present");
     params.set_ref_block(test.ref_block_number, &test.ref_block_hex);
     params.set_contract(contract);
 
@@ -56,24 +49,15 @@ fn tron_transaction_parameters_round_trip_through_bytes() {
 
 #[test]
 fn raw_data_bytes_are_stable_against_upstream_test_vector() {
-    let addr_from =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures must be present")
-            .owner_address
-            .as_str();
-    let addr_to =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures must be present")
-            .recipient_address
-            .as_str();
+    let test = common::mainnet_test_addresses();
+    let addr_from = test.owner_address.as_str();
+    let addr_to = test.recipient_address.as_str();
     let amount = "10000000";
 
     let contract = trx::build_transfer_contract(addr_from, addr_to, amount)
         .expect("anychain build_transfer_contract");
     let mut params = anychain_tron::TronTransactionParameters::default();
     params.set_timestamp(0);
-    let test = tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-        .expect("mainnet test fixtures must be present");
     params.set_ref_block(test.ref_block_number, &test.ref_block_hex);
     params.set_contract(contract);
 
@@ -114,21 +98,10 @@ fn trigger_smart_contract_data_lives_at_proto_field_4() {
     use anychain_tron::protocol::smart_contract::TriggerSmartContract;
     use protobuf::Message;
 
-    let owner =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures must be present")
-            .owner_address
-            .as_str();
-    let contract =
-        tron_wallet_core::tokens::by_symbol(tron_wallet_core::config::Network::Mainnet, "USDT")
-            .expect("mainnet USDT must be in the bundle")
-            .address
-            .as_str();
-    let recipient =
-        tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-            .expect("mainnet test fixtures must be present")
-            .recipient_address
-            .as_str();
+    let test = common::mainnet_test_addresses();
+    let owner = test.owner_address.as_str();
+    let contract = common::mainnet_usdt_address();
+    let recipient = test.recipient_address.as_str();
     let amount = "1000000"; // 1 USDT (6 decimals)
 
     let contract_pb = trx::build_trc20_transfer_contract(owner, contract, recipient, amount)

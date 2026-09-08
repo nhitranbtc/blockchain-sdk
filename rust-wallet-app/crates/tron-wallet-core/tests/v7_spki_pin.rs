@@ -21,9 +21,12 @@
 //! `nile.trongrid.io`. The earlier Phase-4-deferred
 //! `no_pin_localhost_tronbox_succeeds` slot was removed 2026-09-06.
 
+mod common;
+
 use std::error::Error;
 
 use tron_wallet_core::chain::spki::{SpkiPin, SpkiPinnedVerifier};
+use tron_wallet_core::config::{Network, TronConfig};
 
 #[test]
 fn pin_round_trips_through_hex_display() {
@@ -143,13 +146,6 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
     // the public constructor directly because it would refuse the wrong
     // pin; this test builds the client in-line so the failure surface
     // is observable.
-    if std::env::var_os("RUN_TRON_NILE").is_none() {
-        panic!(
-            "RUN_TRON_NILE=1 required to run live wrong-pin handshake against nile.trongrid.io. \
-             Plan Phase 3 carry-over Task 2.8: 'Live wrong-pin handshake behaviour is what closes \
-             Scenario A pin enforcement is real, not dead; unit-only tests cannot prove it.'"
-        );
-    }
 
     // `[0xff; 32]` is a guaranteed wrong pin — no production endpoint
     // will ever resolve to this SPKI digest.
@@ -163,8 +159,17 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
         .build()
         .expect("reqwest client builds");
 
+    // Source the RPC base URL from `tokens/network.json` via the
+    // production `TronConfig::for_network` helper so a future operator
+    // who points `nile.rpc_url` at a mirror (e.g. behind a TLS
+    // terminator) does not have to chase this test file too. The path
+    // (`/walletsolidity/getnowblock`) is hard-coded — we only need the
+    // bare TCP/TLS handshake, not a known-good RPC body.
+    let nile_cfg = TronConfig::for_network(Network::Nile);
+    let url = format!("{}/walletsolidity/getnowblock", nile_cfg.rpc_url);
+
     let err = client
-        .get("https://nile.trongrid.io/walletsolidity/getnowblock")
+        .get(&url)
         .send()
         .await
         .expect_err("wrong pin must cause a transport error");

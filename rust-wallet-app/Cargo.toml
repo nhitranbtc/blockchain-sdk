@@ -89,6 +89,7 @@ rpassword = "7"
 # Test
 proptest = "1"
 tempfile = "3"
+serial_test = "3"
 
 # FFI codegen (Task 1 spike + Phase 1 of 2026-08-19 FFI integration plan)
 cbindgen = "0.27"

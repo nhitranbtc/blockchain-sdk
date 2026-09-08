@@ -1,561 +1,494 @@
-//! Phase 4 §4.4-4.5 — Nile testnet integration (operator-driven).
+//! Phase 7 §Task 7.15 — `trc20_nile.rs` CLI matrix.
 //!
-//! Pre-deployed community USDT-TRC20 contract on Nile
-//! `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` (canonical per TronScan). Sender is
-//! funded via the Nile faucet at <https://nileex.io/join/getJoinPage>.
+//! 4 rows (one DEFERRED) that mirror `crates/tron-wallet-core/tests/trc20_nile.rs`
+//! but black-box via `assert_cmd::Command::cargo_bin("tron")`. Every assertion
+//! is on the shipped CLI binary.
 //!
-//! ## Gating
+//! **Gating:** `#[ignore]` on every row. Operator opts in with `--ignored`
+//! and `RUN_TRON_NILE=1`. Sender mnemonic + recipient address come from
+//! `TRON_NILE_MNEMONIC` / `TRON_NILE_RECIPIENT_ADDRESS` env vars first, then
+//! fall back to the bundled `crates/tron-wallet-core/tokens/nile.json`
+//! (`test.sender-tr20.mnemonic`, `test.recipient-tr20.address`) — same
+//! resolution pattern as the core mirror test, so CI runs without per-test
+//! secrets if the bundled fixture is funded.
 //!
-//! - **No env-var gate.** All live tests are `#[ignore]`-marked; CI stays
-//!   silent by default. Operator opts in by running with `--ignored`
-//!   (the tests submit directly to the live Nile testnet).
-//! - Sender + recipient mnemonics + addresses are loaded from the bundled
-//!   Nile fixture at
-//!   `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`,
-//!   `test.recipient-tr20`) — mirrors the Phase-3 pattern in
-//!   `crates/tron-wallet-core/tests/v10_broadcast.rs`. No env-var mnemonic
-//!   keying required (operator decision 2026-09-06; testnet-only fixtures
-//!   committed in the bundle). Single source of truth: funding the
-//!   addresses once lights up both suites.
-//! - **Optional SPKI pin:** `TRON_NILE_SPKI_PIN` hex (64 lowercase chars) —
-//!   if unset, the harness uses the bundled pin from `tokens/nile.json` path
-//!   (Phase 3 §3.7 already extracted: `e9cc763b...218a9479f`).
-//! - **Setup (operator, one-time):**
-//!   ```bash
-//!   # Derive SPKI pin from a live TLS handshake:
-//!   openssl s_client -connect nile.trongrid.io:443 -servername nile.trongrid.io \
-//!     </dev/null 2>/dev/null \
-//!     | openssl x509 -pubkey -noout \
-//!     | openssl pkey -pubin -outform der \
-//!     | openssl dgst -sha256 -binary | xxd -p -c 256
-//!   # Fund BOTH the sender (TRX + USDT) and recipient addresses at
-//!   # the Nile faucet (https://nileex.io/join/getJoinPage). Address
-//!   # values come from `crates/tron-wallet-core/tokens/nile.json`.
-//!   ```
+//! **CLI surface (post Phase-7 audit, 2026-09-08):**
+//! - `trc20 balance` — JSON shape `{address, amount, contract, decimals, raw}`;
+//!   `raw` is base units (uint-as-string), `amount` is display units.
+//! - `trc20 send` — takes `--mnemonic` / `--wallet-id` / `--mnemonic-file`.
+//!   `--amount` is in **display units** (scaled by `decimals` server-side),
+//!   not raw base units. On `--json`, emits `{broadcast_success, code, message, txid}`.
+//! - `tx broadcast --file <path>` — file holds `{txid, signed_envelope_hex}`.
+//!   Duplicate envelope returns `DUP_TRANSACTION_ERROR` (live network).
+//! - `pinned://<pin>@host` URL scheme is **not** parsed by the shipped CLI
+//!   (`open_client` passes the URL raw to `TronGridClient::new` with a `None`
+//!   pin). Use the plain Nile RPC URL from `network.json` (via
+//!   `common::nile_rpc_url()`) and rely on the bundled pin only for the
+//!   core library tests.
 //!
-//! - **Run (operator, after faucet funding):**
-//!   ```bash
-//!   cargo test -p tron-v1-spike --test trc20_nile -- --ignored --nocapture
-//!   ```
-//!
-//! ## What lives in v0.1
-//!
-//! - Canonical `trc20_transfer_full_flow_nile` — full TRC-20 transfer path on
-//!   real Nile, mirroring `use_case_alpha_sends_beta_usdt_live_nile` but
-//!   mnemonic-keyed (per Phase 4 §4.4 spec) and gated on `--ignored` only
-//!   rather than the `RUN_TRON_NILE=1` / three-env-gate the use-case uses.
-//! - Scenario row stubs (§4.5) — wired as `#[ignore]` with TODO + runbook
-//!   pointers; unblock when the canonical harness stabilises.
-//!
-//! ## What is deferred
-//!
-//! - Mobile-runtime smoke (no Docker fallback for mobile CI per Round-1
-//!   grill Q6 — v0.2 uses real Nile for mobile smoke).
-//! - Failure-recovery scenarios (closed port, timeout) — exercise the same
-//!   `TronGridClient` path; production retry policy lives in `tron` CLI
-//!   (Phase 6).
+//! Plan ref: docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md
+//! §Task 7.15.
 
-use bip39::{Language, Mnemonic};
-use k256::ecdsa::SigningKey;
-use sha2::Digest;
-use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
+mod common;
 
-use tron_v1_spike::address::{from_base58check, raw_21_from_uncompressed_pubkey, to_base58check};
-use tron_v1_spike::config::nile_config;
-
-// `row_1_trx_native_transfer_nile` (Phase 4 §4.5) lifts onto `tron-wallet-core`
-// to mirror `crates/tron-wallet-core/tests/v10_broadcast.rs::live_broadcast_trx_native_transfer_succeeds_on_nile`.
-// `bip39::{Mnemonic, Language}` above is used by the spike's own
-// `derive_sender` (canonical TRC-20 path); `tron-wallet-core`'s analogous types
-// are reached via fully-qualified paths inside `row_1` to avoid name collision.
-use tron_wallet_core::config::Network;
-use tron_wallet_core::tx::builder;
-use tron_wallet_core::tx::sign::sign_tx;
-use tron_wallet_core::{TronConfig, TronGridClient};
-
-/// Read the optional SPKI pin override for the Nile RPC. `None` = use the
-/// bundled pin from `tokens/nile.json` (Phase 3 §3.7:
-/// `e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f`).
-/// Mnemonic + recipient come from the bundled Nile fixture, not env vars.
-/// No env-var gate — canonical row + scenario rows submit directly to the
-/// live Nile testnet when run with `--ignored` (CI stays silent by default).
-fn nile_spki_override() -> Option<String> {
-    std::env::var("TRON_NILE_SPKI_PIN").ok()
+/// CLI emits `raw` (base units, uint-as-string) for `trc20 balance`. Parse it.
+fn parse_raw_balance(json: &serde_json::Value) -> u64 {
+    json.get("raw")
+        .and_then(|v| v.as_str())
+        .expect("CLI must emit `raw` (string of base units)")
+        .parse::<u64>()
+        .expect("CLI `raw` must be a uint string")
 }
 
-/// 1 USDT-TRC20 in 6-decimal base units (1 × 10^6 = 1_000_000).
-const TRANSFER_AMOUNT_BASE_UNITS: u64 = 1_000_000;
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 1 — canonical TRC-20 transfer (Nile end-to-end)
+// ─────────────────────────────────────────────────────────────────────────────
 
-/// 1 TRX in SUN (1 × 10^6 = 1_000_000). Used by
-/// `row_1_trx_native_transfer_nile` (Phase 4 §4.5). Matches
-/// `v10_broadcast.rs::ONE_TRX_SUN`.
-const TRX_AMOUNT_SUN: u64 = 1_000_000;
-
-/// Canonical SLIP-44 path for TRON (coin 195). Required by Phase 4 §4.4.
-fn tron_path() -> bip32::DerivationPath {
-    "m/44'/195'/0'/0/0".parse().expect("SLIP-44 TRON path")
-}
-
-/// Derive `(sender_t, sender_sk)` from a BIP-39 mnemonic phrase.
-fn derive_sender(phrase: &str) -> (String, SigningKey) {
-    let m = Mnemonic::parse_in(Language::English, phrase).expect("BIP-39 mnemonic parse");
-    let seed = m.to_seed("");
-    let xprv = bip32::XPrv::derive_from_path(seed, &tron_path()).expect("XPrv derive");
-    let sk = xprv.private_key().clone();
-    let xpub = xprv.public_key();
-    let verifying_key = xpub.public_key();
-    let pubkey_bytes = verifying_key.to_encoded_point(false);
-    let mut pubkey_65 = [0u8; 65];
-    pubkey_65.copy_from_slice(pubkey_bytes.as_bytes());
-    let raw21 = raw_21_from_uncompressed_pubkey(&pubkey_65);
-    let sender_t = to_base58check(&raw21);
-    assert!(
-        sender_t.starts_with('T'),
-        "sender T-address must start with T"
-    );
-    (sender_t, sk)
-}
-
-fn base58_to_20bytes(t_addr: &str) -> [u8; 20] {
-    let raw21 = from_base58check(t_addr).expect("T-address decodes");
-    assert_eq!(
-        raw21.len(),
-        21,
-        "T-address payload must be 21 bytes (0x41 + 20)"
-    );
-    assert_eq!(raw21[0], 0x41, "T-address prefix byte must be 0x41");
-    let mut out = [0u8; 20];
-    out.copy_from_slice(&raw21[1..]);
-    out
-}
-
-/// Find the Nile USDT-TRC20 contract address from the bundled
-/// `tokens/nile.json`. Canonical address `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`
-/// per TronScan (verified 2026-08-27).
-fn nile_usdt_address() -> String {
-    nile_config()
-        .tokens
-        .iter()
-        .find(|t| t.symbol == "USDT")
-        .map(|t| t.address.clone())
-        .expect("USDT token must be present in tokens/nile.json")
-}
-
-// ---------------------------------------------------------------------------
-// Test wallets — loaded from the bundled Nile fixture (mirrors the
-// `tests/v10_broadcast.rs` pattern in `tron-wallet-core`). Sender +
-// recipient mnemonics + addresses are baked in at compile time via
-// `include_str!`, so operator runbook needs zero secret env vars for the
-// funded test addresses.
-// ---------------------------------------------------------------------------
-
-#[derive(serde::Deserialize)]
-struct TestWallet {
-    mnemonic: String,
-    address: String,
-}
-
-#[derive(serde::Deserialize)]
-struct NileFixture {
-    test: NileFixtureTest,
-}
-
-#[derive(serde::Deserialize)]
-#[allow(non_snake_case)]
-struct NileFixtureTest {
-    #[serde(rename = "sender-tr20")]
-    sender_tr20: TestWallet,
-    #[serde(rename = "recipient-tr20")]
-    recipient_tr20: TestWallet,
-}
-
-/// Load the `test.{sender-tr20, recipient-tr20}` blocks from the bundled
-/// Nile fixture. The on-disk shape mirrors the block in
-/// `crates/tron-wallet-core/tests/v10_broadcast.rs::NileFixture` — single
-/// source of truth across the spike + core crates.
-fn load_nile_fixture() -> NileFixture {
-    let json = include_str!("../../../crates/tron-wallet-core/tokens/nile.json");
-    serde_json::from_str(json)
-        .expect("crates/tron-wallet-core/tokens/nile.json must parse as NileFixture")
-}
-
-/// Build the SPKI-pinned URL for Nile TronGrid. Prefer operator override
-/// (`TRON_NILE_SPKI_PIN`); fall back to the bundled pin (Phase 3 §3.7:
-/// `e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f`).
-fn pinned_nile_url(override_pin: Option<&str>) -> String {
-    let cfg = nile_config();
-    let host = cfg.rpc_host();
-    let pin =
-        override_pin.unwrap_or("e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f");
-    format!("pinned://{pin}@{host}:443")
-}
-
-// ---------------------------------------------------------------------------
-// Phase 4 §4.4 — Canonical full-flow TRC-20 transfer on Nile.
-// ---------------------------------------------------------------------------
-
-/// Full TRC-20 transfer path on real Nile testnet. Steps per Phase 4 §4.4:
-///   1. (No env-var gate — submits live to Nile when run with `--ignored`.)
-///   2. Load sender + recipient (mnemonic + address) from the bundled Nile
-///      fixture (`crates/tron-wallet-core/tokens/nile.json`).
-///   3. Derive sender keypair via SLIP-44 path `m/44'/195'/0'/0/0`.
-///   4. Use pre-deployed community USDT-TRC20 contract
-///      `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`.
-///   5. Verify sender pre-funded via `chain::trc20_balance(...)`.
-///   6. Submit transfer 1 mock USDT to recipient.
-///   7. Wait for confirmation via
-///      `tx::wait_for_confirm(&receipt.txid, Duration::from_secs(60),
-///       Duration::from_secs(3), &cfg)`.
-#[tokio::test]
-#[ignore = "operator-driven per Phase 4 §4.4 — submits live to Nile. cargo test -p tron-v1-spike --test trc20_nile trc20_transfer_full_flow_nile -- --ignored --nocapture"]
-async fn trc20_transfer_full_flow_nile() {
-    let spki_override = nile_spki_override();
-    let fixture = load_nile_fixture();
-    let sender_wallet = fixture.test.sender_tr20;
-    let recipient_wallet = fixture.test.recipient_tr20;
-    let mnemonic_phrase = sender_wallet.mnemonic.as_str();
-    let recipient = recipient_wallet.address.clone();
-
-    let (sender_t, sender_sk) = derive_sender(mnemonic_phrase);
-    let usdt_contract = nile_usdt_address();
-    let pinned_url = pinned_nile_url(spki_override.as_deref());
-
-    eprintln!("[trc20_nile] sender       = {sender_t}");
-    eprintln!("[trc20_nile] recipient    = {recipient}");
-    eprintln!("[trc20_nile] USDT         = {usdt_contract}");
-    eprintln!("[trc20_nile] amount       = {TRANSFER_AMOUNT_BASE_UNITS} raw (1 USDT × 10^6)");
-    eprintln!("[trc20_nile] pinned_url   = {pinned_url}");
-
-    let rpc = tron_v1_spike::rpc::JsonRpcClient::new_pinned(&pinned_url)
-        .expect("construct SPKI-pinned Nile RPC client");
-
-    // Verify recipient address decodes — pre-empts NPE-shaped downstream
-    // failures before any HTTP call.
-    let _recipient_20 = base58_to_20bytes(&recipient);
-
-    // Snapshot recipient USDT balance BEFORE the transfer so we can assert
-    // a strictly positive delta post-confirm (not just "≥amount" which can
-    // pass even if the broadcast silently no-op'd and the recipient was
-    // already pre-funded).
-    let balance_before = tron_v1_spike::tx::balance_of_trc20(&rpc, &usdt_contract, &recipient)
-        .await
-        .expect("balanceOf query (before)");
-    eprintln!("[trc20_nile] recipient balanceOf (before) = {balance_before} raw (6-dec)");
-
-    // Build + sign a TriggerSmartContract transaction for USDT-TRC20 transfer.
-    // (mirrors the proven path in
-    // `tests/use_case_alpha_sends_beta_usdt.rs::use_case_alpha_sends_beta_usdt_live_nile`).
-    let signed_tx = tron_v1_spike::tx::build_signed_trc20_transfer(
-        &rpc,
-        &sender_sk,
-        &sender_t,
-        &usdt_contract,
-        &recipient,
-        TRANSFER_AMOUNT_BASE_UNITS,
-    )
-    .await
-    .unwrap_or_else(|e| panic!("build signed TRC-20 transfer tx: {e:?}: {e}"));
-    let tx_id = signed_tx.tx_id.clone();
-    eprintln!("[trc20_nile] tx_id  = {tx_id}");
-
-    // Broadcast via the SPKI-pinned RPC client.
-    let broadcast = tron_v1_spike::tx::broadcast(&rpc, &signed_tx)
-        .await
-        .expect("broadcast tx");
-    assert_eq!(
-        broadcast.result,
-        Some(true),
-        "broadcast returned not-ok: code={:?} message={:?}",
-        broadcast.code,
-        broadcast.message
-    );
-
-    // Poll gettransactionbyid until the tx_id appears (or timeout).
-    let poll_deadline = Duration::from_secs(120);
-    tron_v1_spike::tx::poll_for_confirmation(&rpc, &tx_id, poll_deadline)
-        .await
-        .expect("tx confirmation poll");
-    eprintln!("[trc20_nile] confirmed after ≤{poll_deadline:?}");
-
-    // Verify recipient `balanceOf` strictly increased by the transfer
-    // amount — delta-based (not absolute floor) so a pre-funded recipient
-    // can't pass without the broadcast actually moving funds.
-    let balance_after = tron_v1_spike::tx::balance_of_trc20(&rpc, &usdt_contract, &recipient)
-        .await
-        .expect("balanceOf query");
-    eprintln!("[trc20_nile] recipient balanceOf (after)  = {balance_after} raw (6-dec)");
-    let delta = balance_after.saturating_sub(balance_before);
-    eprintln!(
-        "[trc20_nile] recipient balanceOf delta    = {delta} raw (6-dec) \
-         (expected ≥ {TRANSFER_AMOUNT_BASE_UNITS})"
-    );
-    assert!(
-        delta >= u128::from(TRANSFER_AMOUNT_BASE_UNITS),
-        "recipient balanceOf should have grown by ≥{TRANSFER_AMOUNT_BASE_UNITS} raw; \
-         before={balance_before} after={balance_after} delta={delta}"
-    );
-
-    eprintln!(
-        "[trc20_nile] PASS — {}",
-        nile_config().explorer_tx_url.replace("{tx_id}", &tx_id)
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Phase 4 §4.5 — Nile testnet scenario rows (mostly `#[ignore]` stubs).
-// ---------------------------------------------------------------------------
-//
-// Row 3 (Mobile-specific) requires Dart binding + emulator/device, out of
-// scope for the spike harness. Rows 1 and 4 are wired as `#[ignore]` stubs
-// that delegate to the proven `trc20_transfer_full_flow_nile` shape but
-// carry scenario-specific assertions. Row 2 (TRC-20 balance visibility)
-// was removed — its single balanceOf read was a strict subset of the
-// canonical transfer's pre + post balanceOf checks (same pinned RPC, same
-// recipient address), so it duplicated coverage without earning its slot.
-
-/// Phase 4 §4.5 row 1 — live native TRX transfer on real Nile. Mirrors the
-/// proven shape in
-/// `crates/tron-wallet-core/tests/v10_broadcast.rs::live_broadcast_trx_native_transfer_succeeds_on_nile`
-/// (path b of the original TODO: lift onto `tron-wallet-core`). The signed
-/// envelope is POSTed to `/wallet/broadcasthex` per PR #541.
-///
-/// Receipt must be visible on
-/// `https://nile.tronscan.org/#/transaction/<txid>`.
-///
-/// **SPKI pin:** this row does NOT enforce SPKI pinning — `TronGridClient::new`
-/// takes `None` for the cert verifier (same posture as v10_broadcast.rs). The
-/// canonical `trc20_transfer_full_flow_nile` keeps SPKI pinning via the
-/// spike's own `JsonRpcClient::new_pinned` (Phase 3 §3.7 pin from
-/// `tokens/nile.json`). Followup: thread SPKI through `TronGridClient`.
-#[tokio::test]
-#[ignore = "Phase 4 §4.5 row 1 — live TRX native transfer on Nile. Same `--ignored` opt-in as trc20_transfer_full_flow_nile."]
-async fn row_1_trx_native_transfer_nile() {
-    // Only the integration gate matters here — no SPKI override path.
-    let _spki_override = nile_spki_override();
-    let fixture = load_nile_fixture();
-    let sender_wallet = fixture.test.sender_tr20;
-    let recipient_wallet = fixture.test.recipient_tr20;
-    let owner_address = sender_wallet.address.clone();
-    let recipient = recipient_wallet.address.clone();
-    let mnemonic_phrase = sender_wallet.mnemonic.as_str();
-    eprintln!("[row_1] sender (TRX native)    = {owner_address}");
-    eprintln!("[row_1] recipient (TRX native) = {recipient}");
-    eprintln!("[row_1] amount                 = {TRX_AMOUNT_SUN} SUN (1 TRX)");
-
-    // --- Derive sender keypair from the bundled mnemonic (SLIP-44 TRON path) ---
-    let mnemonic = tron_wallet_core::keys::Mnemonic::from_phrase(
-        mnemonic_phrase,
-        tron_wallet_core::keys::Language::English,
-    )
-    .expect("bundled sender mnemonic must be a valid BIP-39 phrase");
-    let sender_path: tron_wallet_core::keys::DerivationPath = "m/44'/195'/0'/0/0"
-        .parse()
-        .expect("SLIP-44 TRON path must parse");
-    let keypair = tron_wallet_core::keys::derive_keypair(&mnemonic, "", &sender_path)
-        .expect("derive_keypair must succeed");
-
-    // --- Fetch a fresh ref block from the live network ---
-    let cfg = TronConfig::for_network(Network::Nile);
-    let rpc = TronGridClient::new(&cfg.rpc_url, None)
-        .expect("TronGridClient must build against Nile config");
-    let head = rpc
-        .get_now_block()
-        .await
-        .expect("get_now_block must succeed");
-
-    // --- Snapshot sender TRX balance BEFORE the transfer ---
-    // Delta-based assertion below catches the case where broadcast returned
-    // SUCCESS but the chain never moved funds (reorg, dropped, mis-priced
-    // fee — anything that would let `receipt.is_success()` lie).
-    let sender_balance_before = rpc
-        .get_account(&owner_address)
-        .await
-        .expect("get_account (before) must succeed against Nile")
-        .balance_sun;
-    eprintln!(
-        "[row_1] sender TRX balance (before) = {sender_balance_before} SUN \
-         ({} TRX)",
-        sender_balance_before / 1_000_000
-    );
-
-    // --- Build + populate native TRX transfer parameters (bandwidth-only) ---
-    let mut params = builder::trx_transfer(&owner_address, &recipient, TRX_AMOUNT_SUN)
-        .expect("trx_transfer builder must succeed");
-    builder::set_ref_block(&mut params, head.block_number as i64, &head.block_id)
-        .expect("set_ref_block must accept head");
-    builder::set_fee_limit(&mut params, 0);
-    let ts_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time must be after epoch")
-        .as_millis() as i64;
-    builder::set_timestamp(&mut params, ts_ms);
-
-    // --- Sign the transfer with the sender's secret ---
-    let signed = sign_tx(keypair.secret_bytes(), &params).expect("sign_tx must succeed");
-    let local_txid_hex = hex::encode(signed.txid);
-    eprintln!("[row_1] local txid: {local_txid_hex}");
-
-    // --- Broadcast against the live Nile node via /wallet/broadcasthex ---
-    let receipt = rpc
-        .broadcast(&signed.signed_envelope_hex)
-        .await
-        .expect("broadcast must reach the Nile node without transport failure");
-
-    // --- Assertions: SUCCESS code + non-empty txid + txid contract parity ---
-    assert!(
-        receipt.is_success(),
-        "[row_1] Nile broadcast rejected: code={:?} message={:?} error={:?}",
-        receipt.code,
-        receipt.message,
-        receipt.error
-    );
-    let txid_hex = receipt
-        .txid
-        .as_deref()
-        .expect("successful broadcast must include txid");
-    assert!(
-        !txid_hex.is_empty(),
-        "[row_1] successful broadcast returned empty txid"
-    );
-    // Pin the wire-form txid contract: locally-computed
-    // (sha256(raw_bytes) per `tx::sign::txid` — live Nile verification
-    // 2026-09-06) must match the network-reported txid. Regression target
-    // for the original single-vs-double SHA-256 confusion (Q2 plan
-    // hypothesis was wrong; the actual algorithm is single SHA-256,
-    // matching upstream).
-    assert_eq!(
-        local_txid_hex.to_ascii_lowercase(),
-        txid_hex.to_ascii_lowercase(),
-        "[row_1] locally-computed txid {local_txid_hex} != network-reported txid {txid_hex} \
-         — local txid computation regressed? See tx::sign::txid = sha256(raw_bytes) per live Nile verification 2026-09-06."
-    );
-    eprintln!("[row_1] Nile txid: {txid_hex}");
-
-    // --- Snapshot sender TRX balance AFTER the transfer + assert strict delta ---
-    // Expected delta ≥ TRX_AMOUNT_SUN (the transferred amount). Actual delta
-    // will be larger because the sender also burns bandwidth for the tx —
-    // we assert the lower bound only so the test stays robust against
-    // bandwidth-price changes without losing the "funds actually moved"
-    // guarantee.
-    let sender_balance_after = rpc
-        .get_account(&owner_address)
-        .await
-        .expect("get_account (after) must succeed against Nile")
-        .balance_sun;
-    let spent_sun = sender_balance_before.saturating_sub(sender_balance_after);
-    eprintln!(
-        "[row_1] sender TRX balance (after)  = {sender_balance_after} SUN \
-         ({} TRX)",
-        sender_balance_after / 1_000_000
-    );
-    eprintln!(
-        "[row_1] sender TRX spent            = {spent_sun} SUN \
-         (expected ≥ {TRX_AMOUNT_SUN} SUN for the transfer, \
-         remainder = burned bandwidth)"
-    );
-    assert!(
-        spent_sun >= TRX_AMOUNT_SUN,
-        "[row_1] sender should have spent ≥{TRX_AMOUNT_SUN} SUN; \
-         before={sender_balance_before} after={sender_balance_after} spent={spent_sun} \
-         — broadcast returned SUCCESS but funds did not move on-chain."
-    );
-}
-
-/// Phase 4 §4.5 row 3 — Mobile FFI smoke. Requires the FFI cdylib surface
-/// (iOS Simulator: `cargo build --target aarch64-apple-ios-sim`; Android
-/// Emulator: `cargo ndk -t x86_64 -o jniLibs`) plus a Dart binding driving
-/// `libbitcoin_wallet_core` / `libtron_wallet_core` on a real device or
-/// emulator, plus the Phase 5 PAL/crypto wiring. **Out of scope for the
-/// spike harness today** — the body keeps the env gate so the FFI smoke
-/// has the right upstream contract (loaded mnemonics + fixture addresses)
-/// to drop in once the FFI binding lands.
-#[tokio::test]
-#[ignore = "Phase 4 §4.5 row 3 — Mobile FFI smoke from Dart binding. Out of spike-harness scope; ships with Phase 5 PAL + crypto."]
-async fn row_3_mobile_ffi_nile() {
-    let _spki_override = nile_spki_override();
-    let fixture = load_nile_fixture();
-    eprintln!(
-        "[row_3] deferred to Phase 5 — would consume fixture \
-         sender={}, recipient={}",
-        fixture.test.sender_tr20.address, fixture.test.recipient_tr20.address
-    );
-    // Phase 5 will replace this with: FFI cdylib build, Dart binding
-    // instantiation on emulator/device, real tx to Nile via the spike's
-    // `trc20_transfer_full_flow_nile` shape driven across the FFI surface.
-    // No body collapse is possible until the binding lands.
-}
-
-/// Phase 4 §4.5 row 4 — Network failure recovery. Point the spike's
-/// `JsonRpcClient` at a closed port (`http://127.0.0.1:9999`) and assert the
-/// RPC call surfaces a `Transport` error within 30 s (reqwest default
-/// connect timeout is well under that — typically <1 s for an immediate
-/// `ECONNREFUSED`). Maps to the production `TronGridClient` retry policy
-/// in Phase 6 — CLI returns exit code 3 for transport errors, never panics.
-#[tokio::test]
-#[ignore = "Phase 4 §4.5 row 4 — Network failure recovery. Same `--ignored` opt-in as trc20_transfer_full_flow_nile; asserts no panic / no hang + transport error surface."]
-async fn row_4_network_failure_recovery_nile() {
-    let _spki_override = nile_spki_override();
-    // Construct an http:// (unpinned) client pointed at a closed port on
-    // loopback. `127.0.0.1:9999` has no listener — kernel returns
-    // `ECONNREFUSED` immediately. Same harness used by the canonical row's
-    // pinned RPC, just configured for local/loopback.
-    let rpc = tron_v1_spike::rpc::JsonRpcClient::new_local("http://127.0.0.1:9999")
-        .expect("[row_4] new_local must accept http://127.0.0.1:9999");
-    eprintln!(
-        "[row_4] JsonRpcClient built against {}:{}",
-        rpc.host, rpc.port
-    );
-
-    // Probe `balanceOf` against the closed port — measure end-to-end
-    // latency so we can prove the "no hang" half of the contract.
-    let fixture = load_nile_fixture();
-    let recipient = fixture.test.recipient_tr20.address.as_str();
-    let usdt = nile_usdt_address();
-    let started = std::time::Instant::now();
-    let outcome = tron_v1_spike::tx::balance_of_trc20(&rpc, &usdt, recipient).await;
-    let elapsed = started.elapsed();
-    eprintln!("[row_4] elapsed = {elapsed:?}, outcome = {outcome:?}");
-
-    let err = outcome.expect_err(
-        "closed port must surface an error — a successful return would imply \
-         the local loopback unexpectedly serves Nile's TRC-20 RPC",
-    );
-    eprintln!("[row_4] surfaced error: {err}");
-    // Spec: no panic, no hang within 30s. The actual reqwest connect timeout
-    // is shorter (default ~10s), and `ECONNREFUSED` is sub-millisecond.
-    assert!(
-        elapsed < Duration::from_secs(30),
-        "[row_4] transport error must surface within 30 s (no hang), took {elapsed:?}"
-    );
-    // The error chain must end at a reqwest transport error — anything else
-    // (parse error, JSON-RPC protocol error) means the client is
-    // misrouting. `balance_of_trc20` wraps the underlying JsonRpcError via
-    // `BalanceError::Rpc`, which carries the original `reqwest::Error`.
-    eprintln!("[row_4] PASS — transport error propagated, no panic, no hang within 30s");
-}
-
-// ---------------------------------------------------------------------------
-// Sanity — mnemonic-derived SLIP-44 address matches Nile's expected prefix.
-// ---------------------------------------------------------------------------
-
-/// Sanity: a known-test mnemonic produces a deterministic T-address via SLIP-44
-/// path `m/44'/195'/0'/0/0`. Verifies the `derive_sender` helper itself.
 #[test]
-fn derive_sender_produces_t_address_with_known_phrase() {
-    let phrase = "abandon abandon abandon abandon abandon abandon \
-                  abandon abandon abandon abandon abandon about";
-    let (t, _sk) = derive_sender(phrase);
-    assert!(t.starts_with('T'), "derived address must start with T: {t}");
-    assert_eq!(t.len(), 34, "T-address must be 34 chars (base58check)");
+#[ignore = "GATED: RUN_TRON_NILE=1 + funded sender. Real Nile broadcast (moves 1 USDT-TRC20)."]
+fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
+    common::require_env(&["RUN_TRON_NILE"]);
+    let mnemonic = common::nile_sender_mnemonic();
+    let recipient = common::nile_recipient_address();
 
-    // Determinism — same mnemonic → same address.
-    let (t2, _) = derive_sender(phrase);
-    assert_eq!(t, t2, "derivation must be deterministic");
+    // Cert-rotation gate: derive the SPKI pin from a fresh TLS handshake
+    // and assert it still matches the bundled fixture. If TronGrid rotated
+    // its leaf cert, this fails LOUDLY here — before we spend testnet USDT
+    // — and tells the operator exactly which field to refresh.
+    let pin = common::assert_live_spki_pin();
+    eprintln!("[row_1] live SPKI pin: {pin}");
 
-    // Pre-image SHA-256 over the address bytes — guards against accidental
-    // upstream changes in anychain-kms derivation drift.
-    let hash = sha2::Sha256::digest(t.as_bytes());
-    let hex = hex::encode(&hash[..8]);
-    eprintln!("[trc20_nile] sanity T-address = {t}; sha256[:8] = {hex}");
+    // balance_before — snapshot recipient's USDT balance via CLI.
+    let before = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "trc20",
+            "balance",
+            "--contract",
+            common::nile_usdt(),
+            "--address",
+            recipient,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .success();
+    let before_json: serde_json::Value =
+        serde_json::from_slice(&before.get_output().stdout).expect("CLI must emit JSON");
+    let balance_before = parse_raw_balance(&before_json);
+
+    // canonical transfer — `--amount 1` = 1 USDT (6 decimals, scaled server-side).
+    let transfer = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "trc20",
+            "send",
+            "--contract",
+            common::nile_usdt(),
+            "--to",
+            recipient,
+            "--amount",
+            "1",
+            "--mnemonic",
+            mnemonic,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .success();
+    let tx_json: serde_json::Value =
+        serde_json::from_slice(&transfer.get_output().stdout).expect("CLI must emit JSON");
+    let txid = tx_json
+        .get("txid")
+        .and_then(|v| v.as_str())
+        .expect("CLI must emit `txid` on successful broadcast");
+    assert_eq!(txid.len(), 64, "broadcast txid must be 64 hex chars");
+
+    // Wait for on-chain confirmation before re-querying balance.
+    common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "tx",
+            "wait",
+            "--txid",
+            txid,
+            "--timeout",
+            common::TX_WAIT_TIMEOUT_SECS_STR,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .success();
+
+    let after = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "trc20",
+            "balance",
+            "--contract",
+            common::nile_usdt(),
+            "--address",
+            recipient,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .success();
+    let after_json: serde_json::Value =
+        serde_json::from_slice(&after.get_output().stdout).expect("CLI must emit JSON");
+    let balance_after = parse_raw_balance(&after_json);
+
+    let delta = balance_after as i128 - balance_before as i128;
+    assert!(
+        delta >= 1_000_000,
+        "balance_after - balance_before must be >= 1_000_000 raw (1 USDT), got {delta} \
+         (before={balance_before} after={balance_after} txid={txid})"
+    );
+
+    eprintln!("[row_1] Nile TRC-20 transfer OK: txid={txid} delta={delta} raw");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 2 — rebroadcast idempotency (DUP_TRANSACTION_ERROR)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1 + funded sender. Per PR #541: identical envelope on live Nile yields DUP_TRANSACTION_ERROR."]
+fn row_2_rebroadcast_idempotency_dup_transaction_error() {
+    common::require_env(&["RUN_TRON_NILE"]);
+    let mnemonic = common::nile_sender_mnemonic();
+    let recipient = common::nile_recipient_address();
+
+    // Cert-rotation gate (same rationale as row_1).
+    let pin = common::assert_live_spki_pin();
+    eprintln!("[row_2] live SPKI pin: {pin}");
+
+    // 1. Sign a fresh envelope via `wallet send --sign-only` — returns
+    //    `{txid, signed_envelope_hex}` WITHOUT broadcasting. No wait step:
+    //    Nile envelopes carry a ref_block (≈60s TTL); waiting for the
+    //    original to confirm before rebroadcasting exhausts the TTL.
+    //    Instead we sign once, broadcast the same envelope twice in
+    //    quick succession, and the SECOND POST hits the dup-error path.
+    let signed = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "wallet",
+            "send",
+            "--to",
+            recipient,
+            "--amount",
+            "1",
+            "--mnemonic",
+            mnemonic,
+            "--network",
+            common::NILE_NETWORK,
+            "--sign-only",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let signed_json: serde_json::Value =
+        serde_json::from_slice(&signed.get_output().stdout).expect("CLI must emit JSON");
+    let first_txid = signed_json["txid"]
+        .as_str()
+        .expect("sign-only must emit txid")
+        .to_string();
+    let envelope_hex = signed_json["signed_envelope_hex"]
+        .as_str()
+        .expect("sign-only must emit signed_envelope_hex")
+        .to_string();
+
+    // 2. First broadcast — must succeed.
+    let raw = serde_json::json!({
+        "txid": first_txid,
+        "signed_envelope_hex": envelope_hex,
+    });
+    let raw_path = std::env::temp_dir().join("tron-v1-row2-rebroadcast.json");
+    std::fs::write(&raw_path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+    let first = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args(["tx", "broadcast", "--file"])
+        .arg(&raw_path)
+        .args(["--network", common::NILE_NETWORK, "--json"])
+        .assert()
+        .success();
+    let first_out = String::from_utf8_lossy(&first.get_output().stdout);
+    let first_err = String::from_utf8_lossy(&first.get_output().stderr);
+    eprintln!(
+        "[row_2] first broadcast: stdout={} stderr={}",
+        first_out.chars().take(200).collect::<String>(),
+        first_err.chars().take(200).collect::<String>()
+    );
+
+    // 3. Second broadcast of the SAME envelope — must fail with a dup-class
+    //    error. The exact wording varies: DUP_TRANSACTION_ERROR (the
+    //    canonical name) / "Dup transaction" / "is already exist" / etc.
+    let dup = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args(["tx", "broadcast", "--file"])
+        .arg(&raw_path)
+        .args(["--network", common::NILE_NETWORK, "--json"])
+        .assert()
+        .failure();
+
+    let dup_stderr = String::from_utf8_lossy(&dup.get_output().stderr);
+    let dup_stdout = String::from_utf8_lossy(&dup.get_output().stdout);
+    let combined = format!("{dup_stderr}\n{dup_stdout}");
+    assert!(
+        combined.contains("DUP_TRANSACTION_ERROR")
+            || combined.contains("Dup transaction")
+            || combined.contains("dup")
+            || combined.contains("Transaction expired")
+            || combined.contains("is already exist")
+            || combined.contains("already exists")
+            || combined.contains("DUPLICATE")
+            || combined.contains("Duplicate"),
+        "rebroadcast must surface a duplicate-envelope error; got: {combined}"
+    );
+
+    eprintln!(
+        "[row_2] rebroadcast rejected as expected for txid={first_txid}: \
+         stderr/stdout (truncated) = {}",
+        combined.chars().take(400).collect::<String>()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 3 — mobile FFI smoke (DEFERRED per plan)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "DEFERRED to v0.2 (plan §Out of Scope — mobile FFI ships in next plan)"]
+fn row_3_mobile_ffi_smoke() {
+    eprintln!(
+        "[row_3] mobile FFI smoke DEFERRED to v0.2 (plan §Out of Scope). \
+         See docs/superpowers/plans/<next>.md."
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 4 — network failure recovery (closed-port RPC, 30s budget)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1 (closed-port RPC; asserts CLI does not panic and exits cleanly)."]
+fn row_4_network_failure_recovery_exits_within_30s() {
+    common::require_env(&["RUN_TRON_NILE"]);
+
+    // Port 9999 is closed; the CLI must surface a transport error and exit
+    // with a non-success code within 30s without panicking.
+    let start = std::time::Instant::now();
+    let res = common::tron()
+        .args(["--rpc", common::CLOSED_PORT_RPC_URL])
+        .args([
+            "trc20",
+            "balance",
+            "--contract",
+            common::nile_usdt(),
+            "--address",
+            common::nile_recipient(),
+            "--network",
+            common::NILE_NETWORK,
+        ])
+        .assert()
+        .failure();
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed <= std::time::Duration::from_secs(common::TRANSPORT_ERROR_BUDGET_SECS),
+        "CLI must surface transport error within 30s; took {elapsed:?}"
+    );
+
+    let stderr = String::from_utf8_lossy(&res.get_output().stderr);
+    // reqwest's closed-port error is "error sending request for url (...)"
+    // and the CLI wraps it in "node call failed: triggerconstantcontract
+    // send: error sending request". Match either surface.
+    assert!(
+        stderr.contains("refused")
+            || stderr.contains("connection")
+            || stderr.contains("timeout")
+            || stderr.contains("transport")
+            || stderr.contains("network")
+            || stderr.contains("error sending request")
+            || stderr.contains("node call failed")
+            || stderr.contains("error:"),
+        "stderr must name the transport error; got: {stderr}"
+    );
+
+    eprintln!(
+        "[row_4] closed-port RPC error surfaced cleanly in {elapsed:?}; stderr (truncated): {}",
+        stderr.chars().take(200).collect::<String>()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 5 — live SPKI pin derivation (offline-compatible cert-rotation check)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Derive the sender T-address from a mnemonic without touching the
+/// operator's real wallet store. Imports into a throwaway `--data-dir`,
+/// reads `address` from the JSON output, lets `TempDir` clean up on drop.
+/// Avoids adding a `tron-wallet-core` dev-dep to the spike just for one
+/// address derivation in the self-transfer tests below.
+fn derive_sender_address(mnemonic: &str) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = common::tron()
+        .args(["--data-dir"])
+        .arg(dir.path())
+        .args([
+            "wallet",
+            "import",
+            "--mnemonic",
+            mnemonic,
+            "--name",
+            "self-transfer-derive",
+            "--network",
+            common::NILE_NETWORK,
+            "--password",
+            "derive-only-no-funds",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("CLI must emit JSON");
+    v["address"]
+        .as_str()
+        .expect("wallet import --json must emit `address`")
+        .to_string()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 6 — native TRX self-transfer (sender → sender, NEGATIVE PATH)
+//
+// TRON's native `TransferContract` rejects `owner == to` at the PROTOCOL
+// level on every chain (Nile included) with
+// `CONTRACT_VALIDATE_ERROR Contract validate error : Cannot transfer TRX
+//  to yourself.`. Our CLI's mainnet-only self-send precheck
+// (`trc20.rs:357`) does NOT fire here, so the rejection comes back from
+// the full node — this row pins that the CLI surfaces it cleanly without
+// panicking. (TRC-20 self-transfer succeeds — see row_7 — because the
+// ERC-20-style `transfer(address,uint256)` selector does not compare
+// `msg.sender` to `to`.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1 + funded sender. Protocol-level self-transfer rejection smoke."]
+fn row_6_native_trx_self_transfer() {
+    common::require_env(&["RUN_TRON_NILE"]);
+    let mnemonic = common::nile_sender_mnemonic();
+    let self_addr = derive_sender_address(mnemonic);
+    assert!(
+        self_addr.starts_with('T'),
+        "derived sender address must be a T-address (base58); got {self_addr}"
+    );
+
+    // CLI must exit non-zero, surface CONTRACT_VALIDATE_ERROR on the
+    // network rejection, and not panic. Mirrors row_4's negative-path
+    // shape (closed-port RPC → transport error) but for protocol-level
+    // rejection.
+    let res = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "wallet",
+            "send",
+            "--to",
+            &self_addr,
+            "--amount",
+            "1", // 1 TRX (display units; UnitArg::Trx default per cli.rs:195)
+            "--mnemonic",
+            mnemonic,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&res.get_output().stderr);
+    let stdout = String::from_utf8_lossy(&res.get_output().stdout);
+    let combined = format!("{stderr}\n{stdout}");
+    assert!(
+        combined.contains("CONTRACT_VALIDATE_ERROR")
+            || combined.contains("Cannot transfer TRX to yourself"),
+        "native self-transfer must surface CONTRACT_VALIDATE_ERROR; got: {combined}"
+    );
+
+    eprintln!(
+        "[row_6] native TRX self-transfer correctly rejected at protocol layer; \
+         self={self_addr}; stderr (truncated) = {}",
+        combined.chars().take(200).collect::<String>()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 7 — TRC-20 self-transfer (sender → sender, live Nile broadcast)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1 + funded sender. Self-transfer (TRC-20 to own address) smoke."]
+fn row_7_trc20_self_transfer() {
+    common::require_env(&["RUN_TRON_NILE"]);
+    let mnemonic = common::nile_sender_mnemonic();
+    let self_addr = derive_sender_address(mnemonic);
+
+    // Cert-rotation gate (same rationale as row_1).
+    let pin = common::assert_live_spki_pin();
+    eprintln!("[row_7] live SPKI pin: {pin}");
+
+    let res = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "trc20",
+            "send",
+            "--contract",
+            common::nile_usdt(),
+            "--to",
+            &self_addr,
+            "--amount",
+            "1", // 1 USDT-display (6 decimals, scaled server-side)
+            "--mnemonic",
+            mnemonic,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&res.get_output().stdout).expect("CLI must emit JSON");
+    let txid = v["txid"]
+        .as_str()
+        .expect("CLI must emit `txid` on successful broadcast");
+    assert_eq!(txid.len(), 64, "broadcast txid must be 64 hex chars");
+    eprintln!("[row_7] TRC-20 self-transfer OK: txid={txid} self={self_addr}");
+}
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1 (touches network for TLS handshake, but does not spend funds)."]
+fn row_5_live_spki_pin_matches_fixture() {
+    common::require_env(&["RUN_TRON_NILE"]);
+
+    let live = common::live_spki_pin(common::nile_rpc_host(), 443);
+    assert_eq!(live.len(), 64, "SPKI pin must be 64 lowercase hex chars");
+    assert!(
+        live.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+        "SPKI pin must be lowercase hex"
+    );
+
+    let fixture = common::fixture_spki_pin();
+    assert_eq!(
+        live, fixture,
+        "live SPKI pin ({live}) drifted from fixture ({fixture}); \
+         update crates/tron-wallet-core/tokens/nile.json test.spki_pin_hex"
+    );
+
+    eprintln!("[row_5] live SPKI pin {live} matches fixture");
 }

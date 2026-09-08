@@ -58,9 +58,12 @@
 //! cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 //! ```
 
+mod common;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ethereum_types::U256;
+use serial_test::serial;
 
 use tron_wallet_core::address::Address;
 use tron_wallet_core::config::{Network, TronConfig};
@@ -74,79 +77,33 @@ use tron_wallet_core::{SpkiPin, TronGridClient};
 // ---------------------------------------------------------------------------
 
 /// SLIP-44 TRON (coin 195) derivation path. Matches `examples/gen_nile_wallet.rs`.
-const SENDER_PATH: &str = "m/44'/195'/0'/0/0";
+const SENDER_PATH: &str = common::TRON_PATH;
 
 /// 1 USDT-TRC20 in 6-decimal base units (1 × 10^6 = 1_000_000).
-const ONE_USDT: u64 = 1_000_000;
+const ONE_USDT: u64 = common::ONE_USDT_RAW;
 
 /// 1 TRX in SUN (1 × 10^6 = 1_000_000). Used by row_1.
-const ONE_TRX_SUN: u64 = 1_000_000;
+const ONE_TRX_SUN: u64 = common::ONE_TRX_SUN;
 
 /// Confirmation-poll deadline. Matches the spike's prior 120s window.
-const POLL_DEADLINE: Duration = Duration::from_secs(120);
+const POLL_DEADLINE: Duration = Duration::from_secs(common::TX_WAIT_TIMEOUT_SECS);
 
 /// Confirmation-poll interval. Matches the spike's prior 3s cadence.
-const POLL_INTERVAL: Duration = Duration::from_secs(3);
-
-/// Bundled SPKI pin (Phase 3 §3.7, extracted 2026-09-06).
-const NILE_SPKI_PIN_HEX: &str = "e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f";
+const POLL_INTERVAL: Duration = Duration::from_secs(common::POLL_INTERVAL_SECS);
 
 /// Hard ceiling for transport-error round-trip; row_4 asserts against this.
 const TRANSPORT_ERROR_BUDGET: Duration = Duration::from_secs(30);
 
 // ---------------------------------------------------------------------------
-// Bundled Nile fixture — single on-disk shape used by every test below.
+// SPKI pin — env-var override beats bundled pin (provided by `common`).
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Deserialize)]
-struct TestWallet {
-    mnemonic: String,
-    address: String,
-}
-
-#[derive(serde::Deserialize)]
-struct NileFixture {
-    test: NileFixtureTest,
-}
-
-#[derive(serde::Deserialize)]
-#[allow(non_snake_case)]
-struct NileFixtureTest {
-    #[serde(rename = "sender-tr20")]
-    sender_tr20: TestWallet,
-    #[serde(rename = "recipient-tr20")]
-    recipient_tr20: TestWallet,
-}
-
-/// Load the `test.{sender-tr20, recipient-tr20}` blocks from the bundled
-/// `tokens/nile.json`. Single source of truth within this file.
-fn load_nile_fixture() -> NileFixture {
-    let json = include_str!("../tokens/nile.json");
-    serde_json::from_str(json)
-        .expect("crates/tron-wallet-core/tokens/nile.json must parse as NileFixture")
-}
-
-// ---------------------------------------------------------------------------
-// SPKI pin — env-var override beats bundled pin.
-// ---------------------------------------------------------------------------
-
-/// Resolve the SPKI pin for the Nile RPC: operator override
-/// (`TRON_NILE_SPKI_PIN`, 64 lowercase hex chars) wins, else fall back to
-/// the bundled pin extracted 2026-09-06 (Phase 3 §3.7).
+/// Resolve the SPKI pin for the Nile RPC via `common::get_spki()`. The
+/// helper tries `TRON_NILE_SPKI_PIN` env var first, else live-derives
+/// from a TLS handshake against `nile.trongrid.io`. Single source of
+/// truth lives in `tests/common/mod.rs`.
 fn nile_spki_pin() -> SpkiPin {
-    let hex_str = std::env::var("TRON_NILE_SPKI_PIN")
-        .ok()
-        .unwrap_or_else(|| NILE_SPKI_PIN_HEX.to_string());
-    let bytes = hex::decode(&hex_str).expect("SPKI pin must be valid hex");
-    assert_eq!(
-        bytes.len(),
-        32,
-        "SPKI pin must be 32 bytes (64 hex chars); got {}",
-        bytes.len()
-    );
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    SpkiPin::from_bytes(arr)
+    SpkiPin::from_bytes(common::get_spki())
 }
 
 // ---------------------------------------------------------------------------
@@ -197,14 +154,12 @@ async fn poll_for_confirmation(rpc: &TronGridClient, txid_hex: &str, deadline: D
 ///      pass without the broadcast actually moving funds.
 #[tokio::test]
 #[ignore = "operator-driven per Phase 4 §4.4 — submits live to Nile. cargo test -p tron-wallet-core --test trc20_nile trc20_transfer_full_flow_nile -- --ignored --nocapture"]
+#[serial]
 async fn trc20_transfer_full_flow_nile() {
     // --- Load sender + recipient from the bundled Nile fixture ---
-    let fixture = load_nile_fixture();
-    let sender_wallet = fixture.test.sender_tr20;
-    let recipient_wallet = fixture.test.recipient_tr20;
-    let owner_address = sender_wallet.address.clone();
-    let recipient = recipient_wallet.address.clone();
-    let mnemonic_phrase = sender_wallet.mnemonic.as_str();
+    let mnemonic_phrase = common::nile_sender_mnemonic();
+    let owner_address = common::nile_sender_address().to_string();
+    let recipient = common::nile_recipient_address().to_string();
 
     // --- Look up canonical Nile USDT contract via bundled token registry ---
     let usdt = tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")
@@ -333,13 +288,11 @@ async fn trc20_transfer_full_flow_nile() {
 /// `TronGridClient::new(..., Some(SpkiPin::from_bytes(...)))`.
 #[tokio::test]
 #[ignore = "Phase 4 §4.5 row 1 — live TRX native transfer on Nile. cargo test -p tron-wallet-core --test trc20_nile row_1_trx_native_transfer_nile -- --ignored --nocapture"]
+#[serial]
 async fn row_1_trx_native_transfer_nile() {
-    let fixture = load_nile_fixture();
-    let sender_wallet = fixture.test.sender_tr20;
-    let recipient_wallet = fixture.test.recipient_tr20;
-    let owner_address = sender_wallet.address.clone();
-    let recipient = recipient_wallet.address.clone();
-    let mnemonic_phrase = sender_wallet.mnemonic.as_str();
+    let mnemonic_phrase = common::nile_sender_mnemonic();
+    let owner_address = common::nile_sender_address().to_string();
+    let recipient = common::nile_recipient_address().to_string();
     eprintln!("[row_1] sender (TRX native)    = {owner_address}");
     eprintln!("[row_1] recipient (TRX native) = {recipient}");
     eprintln!("[row_1] amount                 = {ONE_TRX_SUN} SUN (1 TRX)");
@@ -476,14 +429,12 @@ async fn row_1_trx_native_transfer_nile() {
 /// short-circuited by the node).
 #[tokio::test]
 #[ignore = "Phase 4 §4.5 row 2 — rebroadcast idempotency. cargo test -p tron-wallet-core --test trc20_nile row_2_broadcast_rebroadcast_idempotency_nile -- --ignored --nocapture"]
+#[serial]
 async fn row_2_broadcast_rebroadcast_idempotency_nile() {
     // --- Load sender + recipient + Nile USDT contract from bundled fixture ---
-    let fixture = load_nile_fixture();
-    let sender_wallet = fixture.test.sender_tr20;
-    let recipient_wallet = fixture.test.recipient_tr20;
-    let owner_address = sender_wallet.address.clone();
-    let recipient = recipient_wallet.address.clone();
-    let mnemonic_phrase = sender_wallet.mnemonic.as_str();
+    let mnemonic_phrase = common::nile_sender_mnemonic();
+    let owner_address = common::nile_sender_address().to_string();
+    let recipient = common::nile_recipient_address().to_string();
     eprintln!("[row_2] sender    = {owner_address}");
     eprintln!("[row_2] recipient = {recipient}");
 
@@ -671,12 +622,13 @@ async fn row_2_broadcast_rebroadcast_idempotency_nile() {
 /// cdylib surface lands.
 #[tokio::test]
 #[ignore = "Phase 4 §4.5 row 3 — Mobile FFI smoke. Out of core-harness scope; ships with Phase 5 PAL + FFI cdylib surface."]
+#[serial]
 async fn row_3_mobile_ffi_nile() {
-    let fixture = load_nile_fixture();
     eprintln!(
         "[row_3] deferred to Phase 5 — would consume fixture \
          sender={}, recipient={}",
-        fixture.test.sender_tr20.address, fixture.test.recipient_tr20.address
+        common::nile_sender_address(),
+        common::nile_recipient_address(),
     );
 }
 
@@ -692,6 +644,7 @@ async fn row_3_mobile_ffi_nile() {
 /// retry policy: transport error → exit code 3, never panic.
 #[tokio::test]
 #[ignore = "Phase 4 §4.5 row 4 — Network failure recovery. Same `--ignored` opt-in as canonical; asserts no panic / no hang + transport error surface."]
+#[serial]
 async fn row_4_network_failure_recovery_nile() {
     // Construct an http:// (unpinned) client pointed at a closed port on
     // loopback. `127.0.0.1:9999` has no listener — kernel returns
@@ -701,8 +654,7 @@ async fn row_4_network_failure_recovery_nile() {
 
     // Probe `balanceOf` against the closed port — measure end-to-end
     // latency so we can prove the "no hang" half of the contract.
-    let fixture = load_nile_fixture();
-    let recipient = fixture.test.recipient_tr20.address.clone();
+    let recipient = common::nile_recipient_address().to_string();
     let usdt = tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")
         .expect("Nile USDT must be in bundled token registry");
     let usdt_address = usdt.address.clone();
@@ -737,6 +689,7 @@ async fn row_4_network_failure_recovery_nile() {
 /// `Address::from_public_key` end-to-end (the path the canonical flow
 /// relies on for `owner_address` derivation when not pinned by fixture).
 #[test]
+#[serial]
 fn derive_sender_produces_t_address_with_known_phrase() {
     use sha2::Digest;
 

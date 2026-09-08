@@ -26,14 +26,12 @@
 //! Together they mean a silent `anychain-kms` or `anychain-tron` derivation
 //! change fails this file before it can reach a wallet.
 
+mod common;
+
 use tron_wallet_core::address::Address;
-use tron_wallet_core::keys::{derive_keypair, Language, Mnemonic};
+use tron_wallet_core::keys::derive_keypair;
 
-/// BIP-39 vector mnemonic for all-zero entropy.
-const CANONICAL_PHRASE: &str = "abandon abandon abandon abandon abandon abandon \
-     abandon abandon abandon abandon abandon about";
-
-/// TRON account 0 for [`CANONICAL_PHRASE`], derived independently by
+/// TRON account 0 for [`common::CANONICAL_PHRASE`], derived independently by
 /// `spikes/tron-v1/tests/v10_slip44.rs` (bip39 + bip32 + k256 + hand-rolled
 /// base58check). Regenerate with:
 ///
@@ -42,22 +40,14 @@ const CANONICAL_PHRASE: &str = "abandon abandon abandon abandon abandon abandon 
 /// ```
 const CROSS_CHECKED_TRON_ADDRESS: &str = "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH";
 
-/// Ethereum account 0 for [`CANONICAL_PHRASE`], lowercase and without `0x`.
+/// Ethereum account 0 for [`common::CANONICAL_PHRASE`], lowercase and without `0x`.
 /// The rest of the repository asserts the mixed-case form
 /// `0x9858EfFD232B4033E47d90003D41EC34EcaEda94`.
 const CANONICAL_ETH_ACCOUNT: &str = "9858effd232b4033e47d90003d41ec34ecaeda94";
 
-const TRON_PATH: &str = "m/44'/195'/0'/0/0";
-const ETHEREUM_PATH: &str = "m/44'/60'/0'/0/0";
-
-fn canonical_mnemonic() -> Mnemonic {
-    Mnemonic::from_phrase(CANONICAL_PHRASE, Language::English)
-        .expect("canonical BIP-39 phrase must parse")
-}
-
 fn address_at(path: &str) -> Address {
     let keypair = derive_keypair(
-        &canonical_mnemonic(),
+        &common::canonical_mnemonic(),
         "",
         &path.parse().expect("valid path"),
     )
@@ -70,7 +60,7 @@ fn address_at(path: &str) -> Address {
 #[test]
 fn slip44_195_matches_independent_implementation() {
     assert_eq!(
-        address_at(TRON_PATH).to_base58(),
+        address_at(common::TRON_PATH).to_base58(),
         CROSS_CHECKED_TRON_ADDRESS,
         "anychain derivation disagrees with the tron-v1 spike (bip39/bip32/k256)"
     );
@@ -80,7 +70,7 @@ fn slip44_195_matches_independent_implementation() {
 /// vector five other crates in this repository already depend on.
 #[test]
 fn eth_anchor_reproduces_repo_canonical_vector() {
-    let hex = address_at(ETHEREUM_PATH).to_hex().to_lowercase();
+    let hex = address_at(common::ETHEREUM_PATH).to_hex().to_lowercase();
 
     // TronAddress renders 21 bytes: the 0x41 prefix plus the 20-byte account.
     assert_eq!(hex.len(), 42, "expected 21 bytes of hex, got {hex}");
@@ -93,7 +83,7 @@ fn eth_anchor_reproduces_repo_canonical_vector() {
 
 #[test]
 fn slip44_195_address_uses_tron_prefix() {
-    let address = address_at(TRON_PATH);
+    let address = address_at(common::TRON_PATH);
 
     let hex = address.to_hex().to_lowercase();
     assert!(
@@ -111,7 +101,7 @@ fn slip44_195_address_uses_tron_prefix() {
 
 #[test]
 fn slip44_195_address_round_trips_through_base58() {
-    let address = address_at(TRON_PATH);
+    let address = address_at(common::TRON_PATH);
     let parsed: Address = address.to_base58().parse().expect("round-trip must parse");
 
     assert_eq!(parsed, address);
@@ -123,8 +113,8 @@ fn slip44_195_address_round_trips_through_base58() {
 #[test]
 fn coin_195_and_coin_60_derive_distinct_accounts() {
     assert_ne!(
-        address_at(TRON_PATH).to_hex(),
-        address_at(ETHEREUM_PATH).to_hex(),
+        address_at(common::TRON_PATH).to_hex(),
+        address_at(common::ETHEREUM_PATH).to_hex(),
         "coin index must reach the derivation"
     );
 }
@@ -133,8 +123,8 @@ fn coin_195_and_coin_60_derive_distinct_accounts() {
 /// wallets would silently collapse onto the no-passphrase account.
 #[test]
 fn passphrase_changes_the_derived_account() {
-    let path = TRON_PATH.parse().expect("valid path");
-    let mnemonic = canonical_mnemonic();
+    let path = common::TRON_PATH.parse().expect("valid path");
+    let mnemonic = common::canonical_mnemonic();
 
     let plain = derive_keypair(&mnemonic, "", &path).expect("derivation must succeed");
     let salted = derive_keypair(&mnemonic, "TREZOR", &path).expect("derivation must succeed");

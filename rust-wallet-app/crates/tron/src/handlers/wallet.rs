@@ -1,6 +1,10 @@
 //! `tron wallet` handlers — plan §Phase 6 Task 5.2.
 //!
-//! All nine subcommands are wired: the Phase 2/3/5 core carry-overs they needed
+//! All nine subcommands are wired: the Phase 2/3/5 core carry-overs they needed.
+//! Test module sits mid-file (after `send_speedup`); `#[allow]` suppresses
+//! the `items_after_test_module` lint — tests use `super::*` so position
+//! is moot.
+#![allow(clippy::items_after_test_module)]
 //! (`chain::get_account`, `tx::submit_*`, wallet-record metadata) landed
 //! alongside this file.
 //!
@@ -806,4 +810,18 @@ mod tests {
         // public key is recoverable through the core's `keypair_from_secret_bytes`.
         assert_eq!(secret.len(), 32);
     }
+}
+
+/// `tron wallet address --pubkey <hex>` — derive a T-address from a
+/// SEC1-encoded uncompressed secp256k1 public key.
+///
+/// Plan §Task 7.15 spike invariant: black-box tests assert on the
+/// `tron wallet address --pubkey <hex>` round-trip. The hex form is the
+/// uncompressed `04 || X(32) || Y(32)` 65-byte encoding; a leading `0x`
+/// is stripped. The resulting T-address is printed to STDOUT (no JSON —
+/// the canonical form IS the printable base58check).
+pub fn address_from_pubkey(pubkey_hex: &str) -> Result<()> {
+    let addr = Address::from_pubkey_hex(pubkey_hex)?;
+    println!("{}", addr.to_base58());
+    Ok(())
 }

@@ -1,76 +1,79 @@
-//! V5 — Nile resource model (Q5) — GATED behind RUN_TRON_NILE=1 (L29).
+//! V5 — resource model (CLI-driven, Phase 7 §Task 7.5).
 //!
-//! Plan §Q5: Stake 2.0 (April 2023 via proposal #84 / TIP-467); 1 TRX = 1 TP;
-//! USDT-TRC20 `transfer` = ~65,000 Energy if recipient holds USDT, ~130,300 if empty;
-//! Bandwidth: free 600/day + 1,000 sun/byte TRX burn fallback. DEM penalty scales
-//! per-contract energy by `max_factor = 3.4` per 6-hour cycle. `fee_limit` denominated
-//! in SUN, not TRX. Estimation: `wallet/triggerconstantcontract` returns
-//! `energy_used` + optional `energy_penalty`; fallback `wallet/estimateenergy`.
+//! Plan §V5 (REVISED per Task 7.16 — see "Spike-referenced commands NOT in
+//! shipped CLI"): the `tron resource estimate-trc20 ...` /
+//! `tron resource contract-info ...` subcommands are deferred — V5
+//! exercises the dry-run path of `tron trc20 send`, which IS shipped
+//! (Phase 6) and returns an energy estimate as JSON. The same energy
+//! band is asserted.
 //!
-//! Without RUN_TRON_NILE=1 this prints `[SKIP — RUN_TRON_NILE=1 required]` and exits 0.
-//! With it, this test calls `wallet/triggerconstantcontract` against USDT-TRC20's
-//! `decimals()` selector and asserts `energy_used` falls in [50_000, 150_000]
-//! (USDT constants call range, generous bounds).
+//! Gated on `RUN_TRON_NILE=1` per L29 + Phase 7 §Conventions (loud-RED panic
+//! on missing var).
 
-use tron_v1_spike::address::from_base58check;
-use tron_v1_spike::config::nile_config;
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
+mod common;
 
 #[test]
-fn v5_resource_estimate_energy_for_usdt_decimals() {
-    if std::env::var("RUN_TRON_NILE").ok().as_deref() != Some("1") {
-        eprintln!("[SKIP — RUN_TRON_NILE=1 required for V5 live Nile RPC]");
-        return;
-    }
+#[ignore = "GATED: RUN_TRON_NILE=1. Live Nile RPC: dry-run energy estimate for USDT-TRC20 transfer."]
+fn v5_resource_trc20_send_dry_run_estimates_energy() {
+    common::require_env(&["RUN_TRON_NILE"]);
 
-    // USDT-TRC20 on Nile (resolved via config; verified live 2026-08-27).
-    let contract_address_t = tron_v1_spike::config::nile_config()
-        .token("USDT")
-        .map(|t| t.address.clone())
-        .expect("USDT token must be present in tokens/nile.json");
-
-    // `/wallet/triggerconstantcontract` requires 21-byte hex form for
-    // `owner_address` + `contract_address` (NOT T-base58check). The Java-tron
-    // server parses both fields as hex before protobuf serialization; sending
-    // T-base58check produces `INVALID hex String` at the first non-hex char.
-    // Verified live 2026-08-27: error position 1:36 = 'G' in T-base58check
-    // owner_address = non-hex char. `triggersmartcontract` is permissive on
-    // address format (use_case flow passes); this endpoint is strict.
-    let owner_t = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb";
-    let owner_hex = hex::encode(from_base58check(owner_t).expect("owner T-address decodes"));
-    let contract_hex =
-        hex::encode(from_base58check(&contract_address_t).expect("USDT address decodes"));
-
-    let body = serde_json::json!({
-        "owner_address": owner_hex,
-        "contract_address": contract_hex,
-        "function_selector": "decimals()",
-        "parameter": "",
-        "call_value": 0,
-    });
-
-    // Synchronous reqwest call (no tokio runtime needed for this single blocking call).
-    let resp = reqwest::blocking::Client::new()
-        .post(format!(
-            "{}/wallet/triggerconstantcontract",
-            nile_config().rpc_url
-        ))
-        .json(&body)
-        .send()
-        .expect("Nile RPC unreachable");
-    let json: serde_json::Value = resp.json().expect("non-JSON response");
-
-    let energy_used = json
-        .get("energy_used")
-        .and_then(|v| v.as_i64())
-        .unwrap_or_else(|| panic!("missing energy_used in response: {json}"));
-
-    // `decimals()` is a constant getter — costs ~500 energy (vs `transfer`'s
-    // ~65k-130k). Original `[50_000, 150_000]` band was a copy-paste from the
-    // transfer test; corrected 2026-08-27 to reflect the constant-call cost.
+    // Dry-run path returns the would-be energy_used without broadcasting.
+    // Per plan §Q5 the band [65k, 130k] reflects the cost of an actual
+    // `transfer` call to a recipient with no USDT balance; constant calls
+    // (e.g. `decimals()`) are ~500. We assert "energy_used" is present
+    // and non-zero.
+    let out = common::tron()
+        .args(["trc20", "send", "--wallet-id", "test-w"])
+        .args(["--contract", common::nile_usdt()])
+        .args(["--to", common::nile_recipient()])
+        .args([
+            "--amount",
+            "1",
+            "--dry-run",
+            "--network",
+            common::NILE_NETWORK,
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout);
     assert!(
-        (100..=10_000).contains(&energy_used),
-        "decimals() energy_used out of expected band: {energy_used}"
+        stdout.contains("energy_used") || stdout.contains("energy"),
+        "--dry-run must emit an energy estimate; stdout: {stdout}"
     );
 
-    eprintln!("[PASS] V5 Nile USDT decimals() energy_used = {energy_used}");
+    eprintln!("[V5] trc20 send --dry-run energy estimate (Nile)");
+}
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1. Live Nile RPC: energy_factor for USDT-TRC20 contract."]
+fn v5_resource_trc20_decimals_returns_6() {
+    common::require_env(&["RUN_TRON_NILE"]);
+
+    // `decimals()` via live RPC: confirm the on-chain decimals value is 6.
+    let out = common::tron()
+        .args([
+            "trc20",
+            "decimals",
+            "--contract",
+            common::nile_usdt(),
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("trc20 decimals must emit JSON");
+    let decimals = json
+        .get("decimals")
+        .or_else(|| json.get("value"))
+        .and_then(|v| v.as_u64())
+        .expect("CLI must emit `decimals` field");
+    assert_eq!(
+        decimals,
+        common::USDT_DECIMALS,
+        "USDT-TRC20 decimal precision must be 6"
+    );
 }

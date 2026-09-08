@@ -6,29 +6,23 @@
 //! future anychain bump that changes the wire format (prefix bytes, arg
 //! layout, padding) will be caught here.
 
+mod common;
+
 use tron_wallet_core::trc20::{
     APPROVE_SELECTOR, BALANCE_OF_SELECTOR, DECIMALS_SELECTOR, NAME_SELECTOR, SYMBOL_SELECTOR,
     TRANSFER_SELECTOR,
 };
 
-/// The mainnet USDT contract address, read from the bundled token
-/// registry (`tokens/mainnet.json`). Resolved lazily per-test
-/// instead of at module load so a missing bundle produces a
-/// per-test failure with a clear message.
 fn usdt_contract() -> &'static str {
-    tron_wallet_core::tokens::by_symbol(tron_wallet_core::config::Network::Mainnet, "USDT")
-        .expect("mainnet USDT must be in the bundle")
-        .address
-        .as_str()
+    common::mainnet_usdt_address()
 }
 
 fn mainnet_test() -> &'static tron_wallet_core::tokens::TestAddresses {
-    tron_wallet_core::tokens::test_addresses(tron_wallet_core::config::Network::Mainnet)
-        .expect("mainnet test fixtures must be present")
+    common::mainnet_test_addresses()
 }
 
 fn recipient() -> &'static str {
-    mainnet_test().recipient_address.as_str()
+    common::mainnet_test_addresses().recipient_address.as_str()
 }
 
 #[test]
