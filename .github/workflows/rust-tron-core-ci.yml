@@ -1,0 +1,282 @@
+name: rust-tron-core
+
+# CI for the `rust-tron-core` integration branch + per-chain jobs unique
+# to tron (live RPC smoke, Docker spike, dedup walk, mobile arm64 build).
+#
+# Scope: any PR that targets `rust-tron-core` AND push/PR to `main`. Each
+# issue labeled `rust-tron-core` / `rust-tron-cli` feeds work via a
+# sub-task branch that PRs into this branch. At v0.1 completion, a final
+# cut PR merges `rust-tron-core` -> main (per L25).
+#
+# Branch rule (plan Phase Set Up, Task S.2): task branches are cut from
+# `rust-tron-core`, never from `main`, and PR back into `rust-tron-core`,
+# never into `main`. Triggers include `main` so the unique per-chain jobs
+# below (live RPC, Docker spike, mobile arm64) gate every main push too.
+#
+# Umbrella `ci.yml` owns fmt + clippy + workspace test + audit + deny for
+# `main`. This file only owns jobs that umbrella does NOT run.
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the umbrella
+# ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain`,
+# `Swatinem/rust-cache@v2`). No SHA pins available yet; tag-based reference
+# acceptable per L37 rule 2 (verified-cached SHAs land in a follow-up commit
+# after the first successful CI run captures the resolved SHAs).
+#
+# MSRV: pinned to 1.98.1 to match `rust-toolchain.toml` (plan Task 0.1) —
+# the anychain-* crates require it. Not floating on `stable`.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Live RPC smoke gate. Runs the full `tron-wallet-core` test suite
+  # with `--include-ignored` against public TronGrid (Nile + Mainnet).
+  # Always fires on push + PR to `rust-tron-core`. rust-test matrix
+  # runs in parallel and owns the non-`#[ignore]` coverage for the
+  # other crates (tron-v1-spike) AND for tron-wallet-core non-`#[ignore]`
+  # when the live env vars are NOT set. When RUN_TRON_* = 1 here,
+  # operator-smoke is the only path that exercises the live Nile +
+  # mainnet RPC round-trips — so we keep the full set here to avoid
+  # any silent coverage gap for env-gated tests.
+  #
+  # `--include-ignored` covers any `#[ignore]` tests (none exist today)
+  # AND the env-gated live tests in `tests/v9_token_registry.rs` +
+  # `tests/v5_resource.rs`. RUN_TRON_NILE=1 + RUN_TRON_MAINNET=1 flip
+  # those tests from skip-and-return to actual RPC round-trip.
+  # `--test-threads=1` serializes RPC round-trips so a flaky RPC
+  # cannot interleave state.
+  #
+  # Pin handling: SPKI pin self-extracted each run from the live
+  # nile.trongrid.io cert (SHA-256 of SubjectPublicKeyInfo per RFC 7469
+  # + plan §Q5). No repo secret needed — the workflow pulls the current
+  # cert, so rotation is automatic. Mainnet pin lives in tokens/network.json
+  # and is pinned by the binary directly.
+  rust-test-operator-smoke:
+    name: Rust test (operator smoke — ${{ matrix.name }} #[ignore])
+    runs-on: ubuntu-latest
+    # Bumped from 15 → 30 min after run 34104701453 cancel: wallet_persistence.rs
+    # runs 15 Argon2id-KDF tests at ~60-120s each. Both child legs
+    # (`trc20-local` + `remain`) inherit the same per-leg 30-min cap since
+    # they fan out as parallel matrix entries, not sequential stages.
+    timeout-minutes: 30
+    # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
+    # warnings → errors. Matrix-level `env:` (RUN_TRON_LOCAL etc.) merges
+    # with this block per GH docs, no conflict.
+    env:
+      RUSTFLAGS: "-D warnings"
+    # Matrix fan-out: two child legs run in parallel, each scoped to a
+    # distinct test binary so a single failing leg does not hide the
+    # other. `fail-fast: false` keeps the passing leg's signal even when
+    # its sibling reds.
+    #   - `trc20-local`: `tron-wallet-core --test trc20_local` (local RPC
+    #     smoke — file at `crates/tron-wallet-core/tests/trc20_local.rs`;
+    #     RUN_TRON_LOCAL=1 flips gated cases from skip-and-return to
+    #     actual round-trip).
+    #   - `wallet-core`: `tron-wallet-core --test NAME …` — every OTHER
+    #     integration test binary in the wallet-core crate, listed
+    #     explicitly to exclude `trc20_local.rs` (cargo has no
+    #     `--exclude-binary` flag; explicit `--test` list is the
+    #     canonical workaround — brittle to new test files; revisit when
+    #     a new integration test lands). `--ignored` runs every
+    #     `#[ignore]`-marked test in those binaries; `--nocapture`
+    #     surfaces operator output; `--test-threads=1` serializes RPC
+    #     round-trips.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: trc20-local
+            env:
+              RUN_TRON_LOCAL: "1"
+              RUN_TRON_NILE: "1"
+              RUN_TRON_MAINNET: "1"
+            command: >-
+              cargo test -p tron-wallet-core --test trc20_local --
+              --include-ignored --nocapture --test-threads=1
+          - name: wallet-core
+            env:
+              RUN_TRON_NILE: "1"
+              RUN_TRON_MAINNET: "1"
+            command: >-
+              cargo test -p tron-wallet-core
+              --test address --test placeholder --test trc20_nile
+              --test v10_slip44 --test v2_protobuf_roundtrip
+              --test v3_trc20_abi --test v5_resource --test v7_spki_pin
+              --test v8_sign_only --test v9_sign_tx --test v9_token_registry
+              --test varint_and_txid --test wallet_persistence --
+              --ignored --nocapture --test-threads=1
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - name: Install protoc (>=3.12)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo build (workspace)
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test (operator smoke — ${{ matrix.name }} #[ignore])
+        # Per-leg command from matrix; per-leg env (RUN_TRON_LOCAL or
+        # RUN_TRON_NILE/MAINNET) auto-propagates from the matrix entry to
+        # every step, so no step-level `env:` block needed. `--include-
+        # ignored` runs every `#[ignore]`-marked test in the scoped target.
+        # `--test-threads=1` serializes RPC round-trips. `--nocapture`
+        # surfaces operator output.
+        working-directory: rust-wallet-app
+        run: ${{ matrix.command }}
+
+  # TronBox local-testnet smoke (Phase 4 §4.1-4.2). Spawns the
+  # `tronbox/tre` Docker image via testcontainers 0.23 and exercises the
+  # local node's RPC surface — Phase 4 promoted this from a manual-only
+  # operator probe into the CI cadence. The file gates the container
+  # tests on `RUN_TRON_LOCAL=1` AND a live Docker socket; we provide
+  # both via the docker:dind service container.
+  #
+  # `needs: rust-lint` (same rationale as `rust-test-operator-smoke`):
+  # without it GH cancels pending parallel jobs when the workflow
+  # fails, and this job spins up a Docker container + runs RPC
+  # round-trips — wasted runner minutes + Docker pulls on lint red.
+  # Sequential ordering: SKIPPED on lint fail (cheaper), runs to
+  # completion on lint pass.
+  rust-test-spike:
+    name: Rust test (local spike — TronBox Docker)
+    runs-on: ubuntu-latest
+    # Bumped from 15 → 30 min: Docker image pull + container spawn + testcontainers
+    # RPC round-trips are bursty on cold runners; the 15-min cap was tight.
+    timeout-minutes: 30
+    # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
+    # warnings → errors. Step-level `env:` (RUN_TRON_LOCAL=1) below
+    # merges with this block per GH docs, no conflict.
+    env:
+      RUSTFLAGS: "-D warnings"
+    services:
+      docker:
+        image: docker:dind
+        options: >-
+          --privileged
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - name: Install protoc (>=3.12)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo build (workspace)
+        # Workspace build before `cargo test` so the `tron` binary lands in
+        # `target/debug/` and cargo sets `CARGO_BIN_EXE_tron` in the spike
+        # test process. Without this pre-build, `cargo test -p tron-v1-spike
+        # --tests` can skip building the `tron` bin (it's a workspace
+        # member, but not pulled into the spike test's transitive closure
+        # unless explicitly built first), and every test calling
+        # `assert_cmd::cargo_bin!("tron")` panics with
+        # `CARGO_BIN_EXE_tron is unset`. Reproduced locally with
+        # `cargo clean -p tron && cargo test -p tron-v1-spike --test
+        # cli_coverage` — same failure as run 34214814671. The other
+        # jobs (`rust-test`, `rust-test-operator-smoke`) already have this
+        # pre-build; this one inherited the layout pre-Phase-7 spike and
+        # never gained it. Fixed.
+        working-directory: rust-wallet-app
+        run: cargo build --workspace
+      - name: cargo test (local spike — TronBox Docker + #[ignore])
+        # RUN_TRON_LOCAL=1 flips the gated container tests in
+        # `spikes/tron-v1/tests/trc20_local.rs` from skip-and-return
+        # to actual Docker round-trip. `--tests` (plural) builds and runs
+        # every integration test binary in `tron-v1-spike` — fixes the
+        # prior incomplete `--test` (cargo's singular flag expects a
+        # binary name; bare `--test` was a no-op error). `--include-ignored`
+        # catches any `#[ignore]`-marked cases (none today, but forward-
+        # compatible for any future container-bound slow tests).
+        # `--nocapture` surfaces the operator runbook output in CI logs.
+        working-directory: rust-wallet-app
+        env:
+          RUN_TRON_LOCAL: "1"
+          RUN_TRON_NILE: "1"
+        run: |
+          cargo test -p tron-v1-spike --tests -- \
+            --include-ignored --nocapture
+  # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)".
+  # `tron-wallet-core` MUST compile for iOS + Android arm64 with no source
+  # changes — this catches platform-incompatible deps (e.g. `directories`)
+  # the moment they enter the tree, long before V0.1.5 needs them.
+  #
+  # `cargo check` does not invoke a linker, but iOS target builds with
+  # `ring` (rustls default crypto) need `xcrun` (macOS SDK tool) at the
+  # build step; only macos-* runners carry it. Android arm64 stays
+  # checkable from the same runner. Phase 2 failed run 34005032399 job
+  # 101410541738 on Linux for that exact reason; fixing here.
+  #
+  # Runtime smoke on a real device is explicitly out of scope for v0.1
+  # (deep-dive: mobile CI is compile-only; runtime smoke lands in v0.2
+  # via Nile).
+  #
+  # Skips cleanly until Phase 0 creates the crate, so the Phase Set Up
+  # no-op PR can go green before any Rust code exists.
+  mobile-check:
+    name: Mobile compile-only (iOS + Android arm64)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
+    # warnings → errors on the iOS + Android arm64 `cargo check` legs.
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          targets: aarch64-apple-ios,aarch64-linux-android
+      - name: Install protoc (>=3.12)
+        # Not needed while the skip-guard below is active, but required the
+        # moment Phase 0 lands the crate and the cargo check actually runs.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo check (aarch64-apple-ios)
+        # iOS toolchain (xcrun + Apple SDK) is macos-only.
+        if: runner.os == 'macOS'
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/tron-wallet-core ]; then
+            echo "tron-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo check -p tron-wallet-core --target aarch64-apple-ios
+      - name: cargo check (aarch64-linux-android)
+        # Android NDK toolchain is linux-only.
+        if: runner.os == 'Linux'
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/tron-wallet-core ]; then
+            echo "tron-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo check -p tron-wallet-core --target aarch64-linux-android

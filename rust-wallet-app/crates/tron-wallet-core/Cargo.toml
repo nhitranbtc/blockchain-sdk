@@ -1,0 +1,127 @@
+[package]
+name = "tron-wallet-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98.1"
+license = "MIT"
+description = "TRON (TRX + TRC-20 stablecoin) wallet library built on the anychain stack. Phase 0 skeleton of plan `docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md` (tracks issue #399). Phase 1 wires address/keys/signing."
+publish = false
+
+[lib]
+# rlib for in-workspace consumers (the `tron` CLI, integration tests);
+# cdylib so the Phase 6 FFI layer can expose a C ABI to mobile hosts.
+# Mirrors bitcoin-wallet-core.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# anychain stack — exact pins inherited from [workspace.dependencies].
+# See the workspace manifest for why `=X.Y.Z` (not `^`) is mandatory.
+anychain-core = { workspace = true }
+anychain-tron = { workspace = true }
+anychain-kms = { workspace = true }
+# Raw-key wallet import (`WalletManager::import_private_key`) must turn 32
+# secret bytes into a `libsecp256k1::SecretKey` — the associated type
+# `TronPublicKey::from_secret_key` takes. Same `0.7` line the vendored
+# anychain-{tron,kms} crates already use, so the graph keeps one version.
+libsecp256k1 = "0.7"
+# `tx::submit::wait_for_confirm` sleeps between polls. Only the `time` feature:
+# a wallet library has no business pulling in the whole runtime, and the binary
+# that drives it already chooses its own.
+tokio = { version = "1", features = ["time"] }
+
+# TRC-20 ABI types (Phase 3). `U256` is the amount type the trc20
+# transfer/approve builders take and the type `balanceOf` returns.
+# Pinned at the workspace level — see workspace `Cargo.toml`.
+ethereum-types = { workspace = true }
+
+# Error surface. Our public `Error` carries owned strings rather than anychain
+# error types so an upstream `=X.Y.Z` bump cannot break our public API.
+thiserror = { workspace = true }
+
+# Secret hygiene. `anychain_kms::secp256k1_sign` takes `&[u8]` and does NOT
+# zeroize its `sk` argument (plan Risk Register #3), so every raw secret we
+# hold lives inside `Zeroizing` and is dropped right after use.
+zeroize = { workspace = true }
+
+# Dual-SHA256 txid workaround: `anychain_tron` computes a single SHA-256
+# (plan Risk Register #2), so `tx::sign::txid` recomputes it caller-side.
+sha2 = { workspace = true }
+
+# Hex rendering for address round-trips and canonical-vector assertions.
+hex = { workspace = true }
+
+# CLI integration: `Network` derives `clap::ValueEnum` so the `tron` binary
+# can `#[arg(value_enum)]` against the core type rather than a parallel
+# `NetworkArg` newtype. Pulled in here so a future FFI host that wants to
+# expose network selection can reuse the same derive.
+clap = { workspace = true }
+
+# Phase 2 — tx builder wrappers + tx/sign::sign_tx + chain::TronGridClient.
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+
+# Phase 2 — SPKI pin crypto (chain/spki.rs). rustls 0.23 + webpki 0.22 +
+# rustls-native-certs 0.7 + subtle 2 + x509-parser 0.16 — explicitly
+# pulled so an upstream bump cannot silently strip SPKI pinning from
+# our build. `x509-parser` is what extracts the SubjectPublicKeyInfo
+# BIT STRING per RFC 7469 from the leaf cert.
+rustls = { workspace = true }
+rustls-native-certs = { workspace = true }
+webpki = { workspace = true }
+subtle = { workspace = true }
+x509-parser = { workspace = true }
+
+# Docker-backed local-node tests (plan Task 0.5). Declared here rather than in
+# [dev-dependencies] because Cargo rejects optional dev-dependencies:
+#   "dev-dependencies are not allowed to be optional: `testcontainers`"
+# Keeping it optional + feature-gated means it stays uncompiled by default, so
+# the mobile compile-only and lean CI jobs never pull the Docker client stack.
+testcontainers = { version = "0.23", optional = true }
+
+# Phase 5 — at-rest encryption for wallet blobs (Task 4.7).
+# `argon2` derives the AES key (m=256MiB / t=10 / p=4 per F5), `aes-gcm`
+# is the AEAD primitive for the per-blob blob, `rand` powers
+# `OsRng`-backed salt + nonce generation.
+argon2 = { workspace = true }
+aes-gcm = { workspace = true }
+rand = { workspace = true }
+
+# Phase 5 — UUID v4 for `WalletId`. Re-exported through `serde`'s
+# `v4, serde` features already declared in workspace deps.
+uuid = { workspace = true }
+
+# Phase 5 — desktop-only filesystem dir resolution (SystemDirsInfo
+# platform impl). Gated out for v0.1.5 mobile via cfg-attr on the
+# `desktop` module, but the workspace dep is here so the desktop
+# impl compiles without a features gate today.
+directories = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Live-RPC tests in tests/trc20_nile.rs share a single funded recipient on
+# Nile testnet; parallel execution causes credit double-count assertions to
+# fail (recipient balance grows from concurrent broadcasts). `#[serial]`
+# forces sequential execution within this test binary.
+serial_test = { workspace = true }
+# Phase 3 carry-over test (tests/v2_protobuf_roundtrip.rs) inspects the
+# inner TriggerSmartContract wire format directly to verify `data` lives
+# at proto field 4. Pinned at the same exact version anychain-tron uses
+# (`=3.7.2` per anychain workspace) so the test parses the same bytes
+# anychain writes.
+protobuf = "=3.7.2"
+# Phase 7 — spike tests (`spikes/tron-v1/tests/*.rs`) `#[path]` this crate's
+# `tests/common/mod.rs` and exercise the shipped `tron` CLI via
+# `assert_cmd::cargo_bin("tron")`. Both deps live here so the common module
+# compiles in either crate's test binary; core tests ignore the CLI helpers.
+assert_cmd = "2"
+# CLI binary the spike spawns via assert_cmd. Workspace path so spike tests
+# resolve the same binary that `cargo build -p tron` produces.
+tron = { workspace = true }
+
+[features]
+# Gates tests that need a Docker daemon (local TRON node via testcontainers).
+# Off by default so mobile/CI compile-only jobs stay lean.
+desktop-tests = ["dep:testcontainers"]

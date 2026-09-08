@@ -1,0 +1,18 @@
+{
+  "tokens": [
+    {
+      "symbol": "MOCKUSDT",
+      "name": "Mock USDT (TronBox deploy, replaces at Phase 4 spike boot)",
+      "address": "TLocal00000000000000000000000000000000",
+      "decimals": 6,
+      "_note": "Placeholder address. Phase 4 testcontainers + TronBox deploy inserts the live contract address; v0.1 ships this stub so the bundled-registry shape is uniform across local/nile/mainnet."
+    }
+  ],
+  "test": {
+    "owner_address": "TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr",
+    "recipient_address": "TFk5LfscQv8hYM11mZYmi3ZcnRfFc4LLap",
+    "approval_spender_address": "TFk5LfscQv8hYM11mZYmi3ZcnRfFc4LLap",
+    "ref_block_hex": "000000000196d21784deb05dee04c69ed112b8e078e74019f9a0b1df6adc414e",
+    "ref_block_number": 26661399
+  }
+}

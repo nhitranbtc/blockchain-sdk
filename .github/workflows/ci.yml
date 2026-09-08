@@ -21,39 +21,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-fmt:
-    name: Rust fmt
+  rust-lint:
+    # fmt + clippy share a runner so a single protoc install + rust-cache
+    # warm covers both. fmt runs first (cheap, no compile needed) — a
+    # formatting regression fails the whole job before clippy compiles.
+    # clippy then catches semantic lints with `-D warnings`. Mirrors the
+    # old `rust-tron-core-ci.yml` rust-lint shape (per-issue #403
+    # deliverable #9).
+    name: Rust lint (fmt + clippy)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4  # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable  # stable
+      - uses: dtolnay/rust-toolchain@stable  # stable (1.98.1 via rust-toolchain.toml)
         with:
-          components: rustfmt
-      - name: cargo fmt --check
-        working-directory: rust-wallet-app
-        run: cargo fmt --all -- --check
-
-  rust-clippy:
-    name: Rust clippy
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4  # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable  # stable
-        with:
-          components: clippy
+          components: rustfmt, clippy
       - name: Install protoc (>=3.12)
-        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored core/Tron.proto).
-        # Issue #403 deliverable #9. Debian/Ubuntu: protobuf-compiler package ships protoc 3.x.
+        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
+        # core/Tron.proto). Issue #403 deliverable #9. Debian/Ubuntu:
+        # protobuf-compiler package ships protoc 3.x.
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: cargo fmt --check
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
       - name: cargo clippy
         working-directory: rust-wallet-app
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -109,37 +104,41 @@ jobs:
             && echo "cdylib ok: $(file target/debug/libbitcoin_wallet_core.so)" \
             || (echo "ERROR: cdylib not produced" && exit 1)
 
-  # Split from the old combined lint-audit job so deny and audit run in
-  # parallel — sample's per-concern shape. Both gates independently enforced.
-  rust-deny:
-    name: Rust deny
+  # L13 step 11 gates 2-4 (dedup / audit / deny) merged into one job to
+  # share the checkout + toolchain install across all three. Previously
+  # three parallel ubuntu runners each paid the full setup cost; merging
+  # cuts 3 runners -> 1, total wall clock roughly halved on a clean
+  # cache. Each gate fails the job independently — fail-fast is
+  # irrelevant since they're sequential.
+  rust-deps:
+    name: Rust dep checks (dedup + audit + deny)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4  # v4
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable  # stable
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-      - name: cargo deny
+      - uses: Swatinem/rust-cache@v2  # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo tree --duplicates
+        # L13 step 11 gate 2 — workspace-wide dup-deps walk. Slow on cold
+        # cache, runs at CI cadence rather than locally.
         working-directory: rust-wallet-app
-        run: cargo deny check
-
-  # Transitive dev-deps (rustls-webpki via bitcoind, tokio-tar via
-  # testcontainers) without upstream fixes yet. See deny.toml for rationale.
-  rust-audit:
-    name: Rust audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4  # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable  # stable
+        run: cargo tree --workspace --duplicates
+      # Transitive dev-deps (rustls-webpki via bitcoind, tokio-tar via
+      # testcontainers) without upstream fixes yet. See deny.toml for rationale.
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: cargo audit
+        # `--ignore` list mirrors the previous `rust-eth-core-ci.yml`
+        # rationale — transitive dev-deps without upstream fixes yet.
+        # Canonical list: `rust-wallet-app/deny.toml`.
+        #   RUSTSEC-2026-0098: transitive via regtest deps; no fix upstream
+        #   RUSTSEC-2026-0099: same transitive chain (testcontainers-tokio-tar)
+        #   RUSTSEC-2026-0104: same transitive chain
+        #   RUSTSEC-2025-0111: pre-existing umbrella allowance
         working-directory: rust-wallet-app
         run: |
           cargo audit \
@@ -147,6 +146,11 @@ jobs:
             --ignore RUSTSEC-2026-0099 \
             --ignore RUSTSEC-2026-0104 \
             --ignore RUSTSEC-2025-0111
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny
+        working-directory: rust-wallet-app
+        run: cargo deny check
 
   # Unsafe-code audit per CLAUDE.md conventions (`cargo geiger` listed).
   # Mirrors the deny/audit shape used across `rust-evm-core-ci.yml`.
@@ -194,3 +198,4 @@ jobs:
             (cd "$crate_dir" && CARGO_TARGET_DIR=/tmp/geiger-target cargo geiger) || true
             echo "::endgroup::"
           done
+

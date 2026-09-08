@@ -1,0 +1,14 @@
+{
+  "mainnet": {
+    "rpc_url": "https://api.trongrid.io"
+  },
+  "shasta": {
+    "rpc_url": "https://api.shasta.trongrid.io"
+  },
+  "nile": {
+    "rpc_url": "https://nile.trongrid.io"
+  },
+  "local": {
+    "rpc_url": "http://127.0.0.1:8090"
+  }
+}

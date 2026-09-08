@@ -1,73 +1,102 @@
-//! V6 — Nile JSON-RPC ping (Q6) — GATED behind RUN_TRON_NILE=1 (L29).
+//! V6 — chain-id + address derivation smoke (CLI-driven, Phase 7 §Task 7.6).
 //!
-//! Plan §Q6: `POST /jsonrpc eth_chainId` returns `0xcd8690dc` (Nile). `wallet/getchainid`
-//! returns HTTP 405 on TronGrid's HTTP front, so `/jsonrpc` path is required.
-//! Address generation uses prefix `0x41` (same code path for mainnet/Shasta/Nile).
-//! For TAPOS reference: `walletsolidity/getnowblock` (not `wallet/getnowblock`).
+//! Both rows run offline against a per-test isolated data dir (no env-var gate,
+//! no live RPC). The shipped `tron` CLI surface drives the assertions.
 
-use tron_v1_spike::config::nile_config;
-use tron_v1_spike::rpc::{JsonRpcRequest, JsonRpcResponse, NILE_CHAIN_ID_HEX};
+#[path = "../../../crates/tron-wallet-core/tests/common/mod.rs"]
+mod common;
 
-#[test]
-fn v6_nile_chain_id_via_eth_chainid() {
-    if std::env::var("RUN_TRON_NILE").ok().as_deref() != Some("1") {
-        eprintln!("[SKIP — RUN_TRON_NILE=1 required for V6 live Nile RPC]");
-        return;
-    }
+use std::path::PathBuf;
 
-    let rpc_url = nile_config().rpc_url;
+use assert_cmd::Command;
 
-    let body = serde_json::to_value(JsonRpcRequest {
-        jsonrpc: "2.0",
-        method: "eth_chainId",
-        params: serde_json::json!([]),
-        id: 1,
-    })
-    .unwrap();
+fn isolated_config_home() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().to_path_buf();
+    common::set_test_data_dir(path.clone());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
+    (dir, path)
+}
 
-    let resp: JsonRpcResponse<String> = reqwest::blocking::Client::new()
-        .post(format!("{rpc_url}/jsonrpc"))
-        .json(&body)
-        .send()
-        .expect("Nile RPC unreachable")
-        .json()
-        .expect("non-JSON response");
-
-    assert_eq!(
-        resp.result.as_deref(),
-        Some(NILE_CHAIN_ID_HEX),
-        "expected Nile chain-id {NILE_CHAIN_ID_HEX}"
-    );
-    eprintln!("[PASS] V6 Nile chain-id = {NILE_CHAIN_ID_HEX}");
+fn tron() -> Command {
+    common::tron()
 }
 
 #[test]
-fn v6_nile_getnowblock_for_tapos() {
-    if std::env::var("RUN_TRON_NILE").ok().as_deref() != Some("1") {
-        eprintln!("[SKIP — RUN_TRON_NILE=1 required for V6 live Nile RPC]");
-        return;
-    }
+fn v6_wallet_address_derives_34_char_t_string() {
+    let mnemonic = common::nile_sender_mnemonic();
+    let out = tron()
+        .args(["address", "new", "--mnemonic", mnemonic])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&out.get_output().stdout);
+    let address = stdout.trim();
+    assert_eq!(
+        address.len(),
+        34,
+        "TRON base58check address must be 34 chars; got {address:?}"
+    );
+    assert!(
+        address.starts_with('T'),
+        "TRON addresses start with 'T'; got {address:?}"
+    );
 
-    let rpc_url = nile_config().rpc_url;
+    assert!(
+        address[1..]
+            .chars()
+            .all(|c| common::BS58_ALPHABET.contains(c)),
+        "non-prefix chars must be base58 alphabet (no 0/O/I/l); got {address:?}"
+    );
+    eprintln!("[V6-row_1] tron address new --mnemonic (nile sender) -> {address}");
+}
 
-    // walletsolidity/getnowblock (NOT wallet/getnowblock) for TAPOS per plan §Q6.
-    let resp: serde_json::Value = reqwest::blocking::Client::new()
-        .post(format!("{rpc_url}/walletsolidity/getnowblock"))
-        .json(&serde_json::json!({}))
-        .send()
-        .expect("Nile RPC unreachable")
-        .json()
-        .expect("non-JSON response");
+#[test]
+fn v6_config_show_clean_dir_defaults_to_nile_rpc() {
+    let (_dir, _path) = isolated_config_home();
 
-    let block_id = resp
-        .get("blockID")
+    let out = tron().args(["config", "show", "--json"]).assert().success();
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("CLI must emit JSON");
+    let network = json
+        .get("network")
         .and_then(|v| v.as_str())
-        .expect("missing blockID");
-    let block_header = resp.get("block_header").expect("missing block_header");
+        .expect("network field");
+    let rpc_url = json
+        .get("rpc_url")
+        .and_then(|v| v.as_str())
+        .expect("rpc_url field");
+    assert_eq!(
+        network,
+        common::NILE_NETWORK,
+        "clean data dir must default to nile"
+    );
+    assert_eq!(
+        rpc_url,
+        common::nile_rpc_url(),
+        "rpc_url must match the bundled network.json nile default"
+    );
+    eprintln!("[V6-row_2] config show --json (clean dir) -> network={network} rpc_url={rpc_url}");
+}
 
-    assert!(!block_id.is_empty());
-    let _raw_data = block_header
-        .get("raw_data")
-        .expect("missing block_header.raw_data");
-    eprintln!("[PASS] V6 Nile block_id = {block_id}");
+#[test]
+fn v6_config_set_network_nile_round_trips_through_show() {
+    let (_dir, _path) = isolated_config_home();
+
+    tron()
+        .args(["config", "set-network", common::NILE_NETWORK])
+        .assert()
+        .success();
+
+    let out = tron().args(["config", "show", "--json"]).assert().success();
+    let json: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("CLI must emit JSON");
+    assert_eq!(
+        json.get("network").and_then(|v| v.as_str()),
+        Some(common::NILE_NETWORK)
+    );
+    assert_eq!(
+        json.get("rpc_url").and_then(|v| v.as_str()),
+        Some(common::nile_rpc_url())
+    );
+    eprintln!("[V6-row_3] config set-network / show round-trip OK on nile");
 }

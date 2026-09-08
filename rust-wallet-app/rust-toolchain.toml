@@ -1,5 +1,10 @@
 [toolchain]
-# MSRV is 1.85 (per plan §Task 1 + F31) but transitive deps (icu_* via reqwest/rustls)
-# require rustc ≥1.86. Using 1.94 stable locally. Down-pin per crate if needed.
-channel = "1.94"
+# Bumped 1.94 -> 1.98.1 for anychain-tron 0.2.14 / anychain-kms 0.1.23
+# (plan Phase 0, Task 0.1). Note: the published anychain-* crates declare no
+# `rust-version` on crates.io — 1.98.1 is the toolchain the upstream
+# `0xcregis/anychain` workspace itself pins (its rust-toolchain.toml), so we
+# match it to build against the same compiler the authors test on.
+# This file overrides `dtolnay/rust-toolchain@stable` for every CI job that
+# runs cargo inside `rust-wallet-app/`, so all chain crates build on 1.98.1.
+channel = "1.98.1"
 components = ["rustfmt", "clippy", "rust-src"]
