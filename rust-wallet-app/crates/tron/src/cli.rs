@@ -21,6 +21,12 @@ pub struct Cli {
     #[arg(long, global = true, env = "TRON_DATA_DIR")]
     pub data_dir: Option<PathBuf>,
 
+    /// Default RPC URL for every subcommand. Overrides per-command
+    /// `--rpc-url`. Plan §Task 7.15 spike invariant: the black-box CLI
+    /// tests assert on the top-level `--rpc` shape.
+    #[arg(long, global = true, value_name = "URL")]
+    pub rpc: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -237,6 +243,17 @@ pub enum WalletAction {
         #[arg(long)]
         json: bool,
     },
+    /// Derive a T-address from an SEC1-encoded secp256k1 public key.
+    ///
+    /// Plan §Task 7.15 spike invariant: black-box tests assert on the
+    /// `wallet address --pubkey <hex>` round-trip. The hex form is the
+    /// uncompressed `04 || X(32) || Y(32)` 65-byte encoding; the leading
+    /// `0x` is optional.
+    Address {
+        /// SEC1-encoded uncompressed secp256k1 public key (65 bytes hex).
+        #[arg(long, value_name = "HEX")]
+        pubkey: String,
+    },
 }
 
 // --------------------------------------------------------------- address
@@ -330,6 +347,9 @@ pub enum Trc20Action {
         amount: String,
         #[arg(long)]
         fee_limit: Option<i64>,
+        /// Build and print an energy estimate, do not broadcast.
+        #[arg(long)]
+        dry_run: bool,
         #[arg(long, env = "TRON_PASSWORD")]
         password: Option<String>,
         #[arg(long, value_enum)]
@@ -399,6 +419,49 @@ pub enum Trc20Action {
         #[arg(long)]
         json: bool,
     },
+    /// Read `decimals()` from a TRC-20 contract.
+    ///
+    /// Bundled-registry first, live `decimals()` fallback for unknown tokens.
+    /// V5 §Task 7.5 asserts the on-chain value matches the registry (USDT = 6).
+    Decimals {
+        #[arg(long)]
+        contract: String,
+        #[arg(long, value_enum)]
+        network: Option<Network>,
+        #[arg(long)]
+        rpc_url: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Encode a TRC-20 `transfer` / `approve` call and emit the hex calldata.
+    ///
+    /// Pure offline transform: no signing, no network, no `--mnemonic`.
+    /// The 4-byte selector is concatenated onto the encoded argument block
+    /// so callers receive the full 68-byte calldata (selector + 32-byte
+    /// address slot + 32-byte uint256 slot).
+    ///
+    /// Plan §Task 7.15 spike invariant: black-box tests assert on the
+    /// `trc20 encode-call {transfer,approve}` wire output.
+    EncodeCall {
+        /// `transfer` or `approve`.
+        #[arg(value_enum)]
+        kind: EncodeCallKind,
+        /// Recipient (transfer) or spender (approve) — TRON T-address.
+        #[arg(long)]
+        to: String,
+        /// Amount in the token's smallest unit (u256 decimal string).
+        #[arg(long)]
+        amount: String,
+    },
+}
+
+/// `transfer` calldata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum EncodeCallKind {
+    /// `transfer(address,uint256)` — selector `0xa9059cbb`.
+    Transfer,
+    /// `approve(address,uint256)` — selector `0x095ea7b3`.
+    Approve,
 }
 
 // -------------------------------------------------------------------- tx
@@ -433,6 +496,27 @@ pub enum TxAction {
         /// Seconds between polls.
         #[arg(long, default_value_t = 3)]
         poll_interval: u64,
+        #[arg(long, value_enum)]
+        network: Option<Network>,
+        #[arg(long)]
+        rpc_url: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Re-POST a previously signed envelope. Returns the broadcast receipt;
+    /// a duplicate envelope surfaces as `DUP_TRANSACTION_ERROR` on the live
+    /// network.
+    ///
+    /// Plan §Task 7.15 spike invariant: black-box tests assert on the
+    /// `tx broadcast --hex <envelope>` path for rebroadcast-idempotency rows.
+    Broadcast {
+        /// Signed envelope hex (raw proto with signature appended).
+        #[arg(long, conflicts_with = "file")]
+        hex: Option<String>,
+        /// JSON file holding `{txid, signed_envelope_hex}` (mutually
+        /// exclusive with `--hex`).
+        #[arg(long, conflicts_with = "hex")]
+        file: Option<PathBuf>,
         #[arg(long, value_enum)]
         network: Option<Network>,
         #[arg(long)]

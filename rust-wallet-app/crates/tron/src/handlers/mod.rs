@@ -163,8 +163,12 @@ fn host_of(url: &str) -> Option<String> {
 /// Opens the RPC client for a command.
 ///
 /// Priority: `--rpc-url` → `--network`'s default URL → the persisted config.
-/// No SPKI pin is passed; the pin machinery was stripped from config in
-/// `631a90f`, so pinning is not a v0.1 CLI surface.
+/// No SPKI pin is passed from the persisted config; the pin machinery was
+/// stripped from config in `631a90f`. The CLI still honours an inline
+/// `pinned://<hex-pin>@<host>` form on `--rpc-url` because V7
+/// (`tests/v7_spki_pin.rs`) asserts on that wire shape. The pin is
+/// extracted here and routed to `TronGridClient::new`; the URL handed to
+/// reqwest is the bare `https://<host>` body.
 ///
 /// When the RPC URL targets anything other than the four bundled TronGrid
 /// hosts (mainnet, shasta, nile) or a loopback, a STDERR warning is emitted:
@@ -195,7 +199,63 @@ pub fn open_client(
             );
         }
     }
-    Ok(TronGridClient::new(&url, None)?)
+    let (stripped_url, pin) = parse_pinned_url(&url);
+    Ok(TronGridClient::new(&stripped_url, pin)?)
+}
+
+/// Parse a `pinned://<hex-pin>@<host>` URL into `(https_url, Some(pin))`.
+///
+/// Returns `(url, None)` unchanged when the URL does not start with
+/// `pinned://`. The hex pin must be 64 lowercase or uppercase hex chars
+/// (32 bytes, the SHA-256 SPKI digest length). A malformed pin falls
+/// through to the downstream reqwest builder error rather than being
+/// silently swallowed — the same exit class as every other URL-shape
+/// error.
+fn parse_pinned_url(url: &str) -> (String, Option<tron_wallet_core::chain::SpkiPin>) {
+    let Some(rest) = url.strip_prefix("pinned://") else {
+        return (url.to_string(), None);
+    };
+    let Some((pin_hex, host_part)) = rest.split_once('@') else {
+        return (url.to_string(), None);
+    };
+    let Some(pin_bytes) = decode_hex(pin_hex) else {
+        return (url.to_string(), None);
+    };
+    if pin_bytes.len() != 32 {
+        return (url.to_string(), None);
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&pin_bytes);
+    let pin = tron_wallet_core::chain::SpkiPin::from_bytes(arr);
+    (format!("https://{host_part}"), Some(pin))
+}
+
+/// Local hex decoder — `hex` is not a direct dep of this crate.
+///
+/// Accepts both lowercase and uppercase, returns `None` on any non-hex
+/// char or odd length. Only used to read the SPKI pin prefix inside a
+/// `pinned://<pin>@host` URL.
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    for i in (0..bytes.len()).step_by(2) {
+        let hi = decode_nibble(bytes[i])?;
+        let lo = decode_nibble(bytes[i + 1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn decode_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// The network a command operates on: explicit flag, else persisted config.

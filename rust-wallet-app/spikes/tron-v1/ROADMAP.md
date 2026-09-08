@@ -1,10 +1,21 @@
-# TRON spike roadmap — use case: alpha → beta USDT-TRC20 on local testnet + Nile
+# TRON spike roadmap — CLI-driven Phase 7 verification
 
-> **Goal**: Document the end-to-end "send stablecoin on TRON" use case, mirror the
-> Ethereum pattern (Anvil in-process), and track the gap between current spike
-> coverage and a full production-grade TRC-20 transfer pipeline. Covers both the
-> local-testnet (TronBox via testcontainers) and live-Nile paths now that the
-> `use_case_alpha_sends_beta_usdt_live_nile` e2e is green (#409 closed).
+> **Goal (REVISED 2026-09-07 per Task 7.13):** The spike is a **tests-only**
+> crate driving the shipped `tron` CLI binary via `assert_cmd`. Every Vn +
+> trc20 matrix + cli_coverage test asserts on CLI stdout/stderr/exit-code — no
+> in-process library call. The previously-library-driven test surface (which
+> imported `tron_v1_spike::proto` / `tron_v1_spike::tx` etc.) is retired; the
+> spike `src/` directory was deleted in Task 7.13. Drift between spike impl
+> and shipped impl now surfaces as a test failure, which is the whole point.
+
+## Scope (Phase 7 release-cut gate)
+
+| Layer | Test file | Drives |
+|---|---|---|
+| Vn unit matrix | `tests/v1_compile.rs` … `tests/v11_mainnet_self_send.rs` | Each Vn asserts on the shipped `tron` subcommand that proves the open question (Q1–Q11) |
+| TRC-20 matrix | `tests/trc20_local.rs` + `tests/trc20_nile.rs` | Mirrors `crates/tron-wallet-core/tests/trc20_*.rs` but black-box via CLI |
+| CLI coverage | `tests/cli_coverage.rs` (Task 7.16) | Drives all 22 shipped `tron` subcommands (19 new tests) |
+| End-to-end | `tests/use_case_alpha_sends_beta_usdt.rs` | alpha → beta 1 USDT-TRC20, the Phase 4 §4.5 acceptance shape, now CLI-driven |
 
 ---
 

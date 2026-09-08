@@ -24,6 +24,7 @@
 use std::error::Error;
 
 use tron_wallet_core::chain::spki::{SpkiPin, SpkiPinnedVerifier};
+use tron_wallet_core::config::{Network, TronConfig};
 
 #[test]
 fn pin_round_trips_through_hex_display() {
@@ -163,8 +164,17 @@ async fn spki_pin_rejects_wrong_pin_against_nile() {
         .build()
         .expect("reqwest client builds");
 
+    // Source the RPC base URL from `tokens/network.json` via the
+    // production `TronConfig::for_network` helper so a future operator
+    // who points `nile.rpc_url` at a mirror (e.g. behind a TLS
+    // terminator) does not have to chase this test file too. The path
+    // (`/walletsolidity/getnowblock`) is hard-coded — we only need the
+    // bare TCP/TLS handshake, not a known-good RPC body.
+    let nile_cfg = TronConfig::for_network(Network::Nile);
+    let url = format!("{}/walletsolidity/getnowblock", nile_cfg.rpc_url);
+
     let err = client
-        .get("https://nile.trongrid.io/walletsolidity/getnowblock")
+        .get(&url)
         .send()
         .await
         .expect_err("wrong pin must cause a transport error");

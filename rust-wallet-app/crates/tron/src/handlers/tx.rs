@@ -5,7 +5,7 @@
 //! scheduling, not chain semantics — no signing, no encoding, nothing an FFI
 //! caller would want to inherit from us.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use tron_wallet_core::tx::broadcast::TransactionInfo;
@@ -141,4 +141,61 @@ mod tests {
         ));
         assert_eq!(super::super::exit_code(&err), 2);
     }
+}
+
+/// `tron tx broadcast --hex <envelope> [--network]`] [--rpc-url]`.
+///
+/// Re-POST a previously signed envelope. Plan §Task 7.15 spike invariant:
+/// the black-box `trc20_nile::row_2` rebroadcast-idempotency test asserts
+/// this surface, then expects a `DUP_TRANSACTION_ERROR` (or local-network
+/// `DUP` sentinel) when the same envelope hits the network a second time.
+///
+/// `hex` and `file` are mutually exclusive: `hex` carries the raw envelope
+/// directly, `file` reads `{txid, signed_envelope_hex}` JSON. Either way,
+/// the result is the broadcast receipt rendered through `report_broadcast`.
+#[allow(clippy::too_many_arguments)]
+pub async fn broadcast(
+    data_dir: &Path,
+    hex: Option<String>,
+    file: Option<PathBuf>,
+    network: Option<Network>,
+    rpc_url: Option<String>,
+    json: bool,
+) -> Result<()> {
+    use crate::handlers::wallet::report_broadcast;
+
+    let envelope = match (hex, file) {
+        (Some(h), _) => h,
+        (None, Some(path)) => {
+            let raw = std::fs::read_to_string(&path).map_err(|e| {
+                CliError::Core(tron_wallet_core::Error::Config(format!(
+                    "read {}: {e}",
+                    path.display()
+                )))
+            })?;
+            let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+                CliError::BadInput(format!(
+                    "broadcast file must be JSON with signed_envelope_hex: {e}"
+                ))
+            })?;
+            v.get("signed_envelope_hex")
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| {
+                    CliError::BadInput(
+                        "broadcast file JSON missing `signed_envelope_hex` string".into(),
+                    )
+                })?
+                .to_string()
+        }
+        (None, None) => {
+            return Err(CliError::BadInput(
+                "one of --hex or --file is required".into(),
+            ))
+        }
+    };
+    let client = open_client(data_dir, network, rpc_url)?;
+    let receipt = client.broadcast(&envelope).await?;
+    // txid is unknown when the caller hands us a raw envelope; fall back to
+    // "unknown" in the JSON output rather than panicking.
+    report_broadcast("unknown", &receipt, json)
 }

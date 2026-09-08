@@ -58,6 +58,19 @@ impl Address {
     pub fn as_tron_address(&self) -> &TronAddress {
         &self.0
     }
+
+    /// Derive an address from a SEC1-encoded uncompressed secp256k1 public
+    /// key (the `04 || X(32) || Y(32)` 65-byte form, optionally `0x`-prefixed).
+    ///
+    /// Plan §Task 7.15 spike invariant: the `tron wallet address --pubkey
+    /// <hex>` round-trip goes through this entry point, so the CLI never
+    /// reaches into `anychain_tron` directly.
+    pub fn from_pubkey_hex(hex_str: &str) -> Result<Self> {
+        let trimmed = hex_str.trim().trim_start_matches("0x");
+        let pk = TronPublicKey::from_str(trimmed)
+            .map_err(|e| Error::Address(format!("invalid SEC1 uncompressed pubkey: {e}")))?;
+        Self::from_public_key(&pk)
+    }
 }
 
 /// Longest input any accepted form can have: `0x` plus 42 hex characters.

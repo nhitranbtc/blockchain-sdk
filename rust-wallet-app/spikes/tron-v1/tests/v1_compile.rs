@@ -1,57 +1,42 @@
-//! V1 — compile gate.
+//! V1 — compile gate (CLI-driven, Phase 7 §Task 7.1).
 //!
-//! Plan §Q1: `cargo add prost@0.14 prost-types@0.14 bs58@0.5 tiny-keccak@2.0.2` compiles against
-//! workspace. PASS = this file compiles + cargo build -p tron-v1-spike exits 0. The
-//! `v1_compile_smoke` assertion below is a trivially-true runtime check that ensures the
-//! test binary itself is linked + the build script ran (prost-build generated types).
-//!
-//! `protoc ≥ 3.12` must be in PATH at build time (CI install dep — see README).
+//! The CLI binary the spike drives (`tron` from `crates/tron/`) must build
+//! + the test binary itself must build. PASS criteria: `cargo build -p
+//! tron-v1-spike` succeeds (tests-only crate; no library) AND
+//! `cargo build -p tron` succeeds (CLI binary the spike drives) AND the
+//! spawned `tron --help` stdout contains the four top-level subcommand
+//! groups (wallet, trc20, tx, config).
+
+mod common;
 
 #[test]
-fn v1_compile_smoke() {
-    // If this binary runs, the build pipeline succeeded: prost-build compiled the
-    // vendored proto/core/Tron.proto → Rust types are linked into the spike binary.
-    // Trivial assertion kept so the test framework reports a result.
+fn v1_cargo_build_tests_only_crate() {
+    // If this binary runs, the build pipeline succeeded. The ship gates
+    // are: (a) `cargo build -p tron-v1-spike` exits 0, (b) `cargo build
+    // -p tron` exits 0, (c) `tron --help` lists the four subcommand groups.
+    // All three are exercised by the CI workflow (`.github/workflows/
+    // tron-nile-spike.yml`); the runtime assertion below is just a
+    // sanity check that the binary loaded into memory at test start.
     let _linker_ok = true;
     assert!(_linker_ok);
 }
 
 #[test]
-fn v1_prost_generated_types_visible() {
-    // Generated `proto` module from `proto/core/Tron.proto` (SHA 851575d) is reachable
-    // through the spike crate's re-export. `Block` is one of the top-level messages
-    // in core/Tron.proto — if codegen ran, `proto::Block` resolves.
-    use tron_v1_spike::proto;
-    let _type_check: Option<proto::Block> = None;
-}
+fn v1_tron_help_lists_subcommand_groups() {
+    // The CLI binary is the spike's only library. Per Plan §V1 table:
+    // "Test binary spawns `tron --help` and asserts exit 0 + stdout
+    // contains `wallet`, `trc20`, `tx`, `config` subcommands."
+    let assert = common::tron().arg("--help").assert().success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout);
 
-#[test]
-fn v1_workspace_deps_resolve() {
-    // All four NEW workspace deps must resolve at compile time per plan §B.
-    use bs58;
-    use prost;
-    use prost_types;
-    use sha2::{Digest, Sha256};
-    use tiny_keccak::{Hasher, Keccak};
-
-    // bs58 round-trip sanity.
-    let encoded = bs58::encode([0x42u8]).into_string();
-    assert_eq!(bs58::decode(&encoded).into_vec().unwrap(), vec![0x42]);
-
-    // prost::Message trait must be in scope for Q2 round-trip tests.
-    fn _assert_message<T: prost::Message>() {}
-    _assert_message::<tron_v1_spike::proto::Block>();
-
-    // prost-types well-known types must be reachable.
-    let _ts = prost_types::Timestamp {
-        seconds: 0,
-        nanos: 0,
-    };
-
-    // sha2 + tiny-keccak (Keccak-256, NOT SHA3-256) must both be reachable.
-    let _ = Sha256::digest(b"x");
-    let mut h = Keccak::v256();
-    h.update(b"x");
-    let mut out = [0u8; 32];
-    h.finalize(&mut out);
+    // Each top-level subcommand group must appear in --help output.
+    let missing: Vec<&str> = ["wallet", "trc20", "tx", "config"]
+        .iter()
+        .copied()
+        .filter(|g| !stdout.contains(g))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "tron --help must list every shipped top-level subcommand group; missing: {missing:?}"
+    );
 }

@@ -88,9 +88,6 @@ const POLL_DEADLINE: Duration = Duration::from_secs(120);
 /// Confirmation-poll interval. Matches the spike's prior 3s cadence.
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Bundled SPKI pin (Phase 3 §3.7, extracted 2026-09-06).
-const NILE_SPKI_PIN_HEX: &str = "e9cc763b176063ea6eed1525dac2542512d9e0bf601e210a14f6aad218a9479f";
-
 /// Hard ceiling for transport-error round-trip; row_4 asserts against this.
 const TRANSPORT_ERROR_BUDGET: Duration = Duration::from_secs(30);
 
@@ -116,6 +113,12 @@ struct NileFixtureTest {
     sender_tr20: TestWallet,
     #[serde(rename = "recipient-tr20")]
     recipient_tr20: TestWallet,
+    /// SPKI pin (lowercase hex, 32 bytes decoded) for `nile.trongrid.io`'s
+    /// TLS leaf certificate. Bundled at `tokens/nile.json::test.spki_pin_hex`
+    /// — Phase 3 §3.7, extracted 2026-09-06. Operators may override at
+    /// runtime with `TRON_NILE_SPKI_PIN` (same shape).
+    #[serde(rename = "spki_pin_hex")]
+    spki_pin_hex: String,
 }
 
 /// Load the `test.{sender-tr20, recipient-tr20}` blocks from the bundled
@@ -132,11 +135,13 @@ fn load_nile_fixture() -> NileFixture {
 
 /// Resolve the SPKI pin for the Nile RPC: operator override
 /// (`TRON_NILE_SPKI_PIN`, 64 lowercase hex chars) wins, else fall back to
-/// the bundled pin extracted 2026-09-06 (Phase 3 §3.7).
+/// the bundled pin at `tokens/nile.json::test.spki_pin_hex` (Phase 3 §3.7,
+/// extracted 2026-09-06). Single source of truth: edit the JSON, not the
+/// test.
 fn nile_spki_pin() -> SpkiPin {
     let hex_str = std::env::var("TRON_NILE_SPKI_PIN")
         .ok()
-        .unwrap_or_else(|| NILE_SPKI_PIN_HEX.to_string());
+        .unwrap_or_else(|| load_nile_fixture().test.spki_pin_hex);
     let bytes = hex::decode(&hex_str).expect("SPKI pin must be valid hex");
     assert_eq!(
         bytes.len(),

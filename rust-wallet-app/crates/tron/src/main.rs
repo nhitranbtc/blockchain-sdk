@@ -37,6 +37,13 @@ fn main() {
 
 async fn run(cli: Cli) -> Result<()> {
     let data_dir = handlers::resolve_data_dir(cli.data_dir)?;
+    let top_rpc = cli.rpc;
+
+    /// Merge the top-level `--rpc` flag with a per-command `--rpc-url`.
+    /// Top-level wins when set; per-command is the fallback.
+    fn merge_rpc(top: &Option<String>, sub: Option<String>) -> Option<String> {
+        top.clone().or(sub)
+    }
 
     match cli.command {
         Commands::Wallet(cmd) => match cmd.action {
@@ -93,7 +100,14 @@ async fn run(cli: Cli) -> Result<()> {
                 json,
             } => {
                 handlers::wallet::balance(
-                    &data_dir, wallet_id, address, token, password, network, rpc_url, json,
+                    &data_dir,
+                    wallet_id,
+                    address,
+                    token,
+                    password,
+                    network,
+                    merge_rpc(&top_rpc, rpc_url),
+                    json,
                 )
                 .await
             }
@@ -136,7 +150,7 @@ async fn run(cli: Cli) -> Result<()> {
                         confirm_yes,
                         password,
                         network,
-                        rpc_url,
+                        rpc_url: merge_rpc(&top_rpc, rpc_url),
                     },
                     json,
                 )
@@ -160,11 +174,12 @@ async fn run(cli: Cli) -> Result<()> {
                     password,
                     confirm_yes,
                     network,
-                    rpc_url,
+                    merge_rpc(&top_rpc, rpc_url),
                     json,
                 )
                 .await
             }
+            WalletAction::Address { pubkey } => handlers::wallet::address_from_pubkey(&pubkey),
         },
 
         Commands::Address(cmd) => match cmd.action {
@@ -186,7 +201,7 @@ async fn run(cli: Cli) -> Result<()> {
             } => handlers::address::xpub_cmd(&data_dir, wallet_id, password, path, json),
         },
 
-        Commands::Balance(args) => balance(&data_dir, args).await,
+        Commands::Balance(args) => balance(&data_dir, args, top_rpc.clone()).await,
 
         Commands::Trc20(cmd) => match cmd.action {
             Trc20Action::Send {
@@ -197,6 +212,7 @@ async fn run(cli: Cli) -> Result<()> {
                 to,
                 amount,
                 fee_limit,
+                dry_run,
                 password,
                 network,
                 rpc_url,
@@ -212,9 +228,10 @@ async fn run(cli: Cli) -> Result<()> {
                     to,
                     amount,
                     fee_limit,
+                    dry_run,
                     password,
                     network,
-                    rpc_url,
+                    merge_rpc(&top_rpc, rpc_url),
                     confirm_yes,
                     json,
                 )
@@ -245,7 +262,7 @@ async fn run(cli: Cli) -> Result<()> {
                     fee_limit,
                     password,
                     network,
-                    rpc_url,
+                    merge_rpc(&top_rpc, rpc_url),
                     confirm_yes,
                     json,
                 )
@@ -258,7 +275,15 @@ async fn run(cli: Cli) -> Result<()> {
                 rpc_url,
                 json,
             } => {
-                handlers::trc20::balance(&data_dir, address, contract, network, rpc_url, json).await
+                handlers::trc20::balance(
+                    &data_dir,
+                    address,
+                    contract,
+                    network,
+                    merge_rpc(&top_rpc, rpc_url),
+                    json,
+                )
+                .await
             }
             Trc20Action::Allowance {
                 contract,
@@ -269,7 +294,31 @@ async fn run(cli: Cli) -> Result<()> {
                 json,
             } => {
                 handlers::trc20::allowance(
-                    &data_dir, contract, owner, spender, network, rpc_url, json,
+                    &data_dir,
+                    contract,
+                    owner,
+                    spender,
+                    network,
+                    merge_rpc(&top_rpc, rpc_url),
+                    json,
+                )
+                .await
+            }
+            Trc20Action::EncodeCall { kind, to, amount } => {
+                handlers::trc20::encode_call(kind, to, amount)
+            }
+            Trc20Action::Decimals {
+                contract,
+                network,
+                rpc_url,
+                json,
+            } => {
+                handlers::trc20::decimals(
+                    &data_dir,
+                    contract,
+                    network,
+                    merge_rpc(&top_rpc, rpc_url),
+                    json,
                 )
                 .await
             }
@@ -281,7 +330,10 @@ async fn run(cli: Cli) -> Result<()> {
                 network,
                 rpc_url,
                 json,
-            } => handlers::tx::get(&data_dir, txid, network, rpc_url, json).await,
+            } => {
+                handlers::tx::get(&data_dir, txid, network, merge_rpc(&top_rpc, rpc_url), json)
+                    .await
+            }
             TxAction::Wait {
                 txid,
                 timeout,
@@ -296,7 +348,24 @@ async fn run(cli: Cli) -> Result<()> {
                     timeout,
                     poll_interval,
                     network,
-                    rpc_url,
+                    merge_rpc(&top_rpc, rpc_url),
+                    json,
+                )
+                .await
+            }
+            TxAction::Broadcast {
+                hex,
+                file,
+                network,
+                rpc_url,
+                json,
+            } => {
+                handlers::tx::broadcast(
+                    &data_dir,
+                    hex,
+                    file,
+                    network,
+                    merge_rpc(&top_rpc, rpc_url),
                     json,
                 )
                 .await
@@ -314,6 +383,14 @@ async fn run(cli: Cli) -> Result<()> {
 }
 
 /// Thin wrapper so the `Commands::Balance` arm stays one line.
-async fn balance(data_dir: &std::path::Path, args: BalanceArgs) -> Result<()> {
+async fn balance(
+    data_dir: &std::path::Path,
+    args: BalanceArgs,
+    top_rpc: Option<String>,
+) -> Result<()> {
+    let mut args = args;
+    if args.rpc_url.is_none() {
+        args.rpc_url = top_rpc;
+    }
     handlers::balance::run(data_dir, args).await
 }

@@ -61,10 +61,9 @@ for higher rate limits (not needed for these tests).
 
 ### CI build deps
 
-`protoc ≥ 3.12` must be in PATH at build time (CI install dep). On Debian/Ubuntu:
-`apt-get install -y protobuf-compiler`. On macOS: `brew install protobuf`.
-
-Verified locally: `protoc 3.21.12` (libprotoc 3.21.12).
+**None.** Task 7.13 dropped `prost-build`, `protoc`, and all production deps
+from this crate. The proto generation lives in `crates/tron/build.rs` (if
+needed). The spike only spawns the shipped CLI binary.
 
 ## Faucet & test tokens (Nile)
 

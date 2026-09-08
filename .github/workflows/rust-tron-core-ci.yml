@@ -84,6 +84,13 @@ jobs:
     name: Rust test (${{ matrix.crate }})
     runs-on: ubuntu-latest
     timeout-minutes: ${{ matrix.timeout }}
+    # Job-level `RUSTFLAGS` flips rustc warnings → hard errors so a silent
+    # `unused variable` / `dead_code` / `missing-docs` regression cannot
+    # sneak past the build step. Clippy already fails on `-D warnings`
+    # (rust-lint job); this covers the class clippy does not see. Matrix
+    # `env:` entries (none today) merge with this block per GH docs.
+    env:
+      RUSTFLAGS: "-D warnings"
     strategy:
       fail-fast: false
       matrix:
@@ -91,9 +98,6 @@ jobs:
           - crate: tron-wallet-core
             command: cargo test -p tron-wallet-core --tests
             timeout: 30
-          - crate: tron-v1-spike
-            command: cargo test -p tron-v1-spike --tests
-            timeout: 15
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -142,24 +146,64 @@ jobs:
   # cert, so rotation is automatic. Mainnet pin lives in tokens/network.json
   # and is pinned by the binary directly.
   rust-test-operator-smoke:
-    name: Rust test (operator smoke — live + #[ignore])
+    name: Rust test (operator smoke — ${{ matrix.name }} #[ignore])
     runs-on: ubuntu-latest
     # Bumped from 15 → 30 min after run 34104701453 cancel: wallet_persistence.rs
-    # runs 15 Argon2id-KDF tests at ~60-120s each, the operator-smoke step
-    # (which runs `cargo test -p tron-wallet-core --tests --include-ignored`)
-    # exceeded 15 min mid-suite. Live RPC + Argon2id both contribute to wall
-    # time; 30 min covers the worst-case observed 18 min.
+    # runs 15 Argon2id-KDF tests at ~60-120s each. Both child legs
+    # (`trc20-local` + `remain`) inherit the same per-leg 30-min cap since
+    # they fan out as parallel matrix entries, not sequential stages.
     timeout-minutes: 30
     # `needs: rust-lint` breaks parallelism with the lint job so a failed
-    # fmt/clippy run does NOT cancel this 15-minute live-RPC job mid-flight.
-    # Without `needs`, GH cancels pending parallel jobs when the workflow
-    # fails — the smoke test burns 15 minutes of operator RPC quota for
-    # nothing if lint has already red. Sequential ordering means smoke is
-    # SKIPPED on lint fail (cheaper) and runs to completion on lint pass.
+    # fmt/clippy run does NOT cancel this live-RPC job mid-flight. Without
+    # `needs`, GH cancels pending parallel jobs when the workflow fails —
+    # the smoke test burns RPC quota for nothing if lint has already red.
+    # Sequential ordering means smoke is SKIPPED on lint fail (cheaper)
+    # and runs to completion on lint pass.
     needs: rust-lint
-    # Always run on push + PR + dispatch: live Nile + mainnet RPC smoke is a
-    # required CI gate. Flip RUN_TRON_* env vars below to enable live legs;
-    # SPKI pin self-extracted each run (no operator secret needed).
+    # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
+    # warnings → errors. Matrix-level `env:` (RUN_TRON_LOCAL etc.) merges
+    # with this block per GH docs, no conflict.
+    env:
+      RUSTFLAGS: "-D warnings"
+    # Matrix fan-out: two child legs run in parallel, each scoped to a
+    # distinct test binary so a single failing leg does not hide the
+    # other. `fail-fast: false` keeps the passing leg's signal even when
+    # its sibling reds.
+    #   - `trc20-local`: `tron-wallet-core --test trc20_local` (local RPC
+    #     smoke — file at `crates/tron-wallet-core/tests/trc20_local.rs`;
+    #     RUN_TRON_LOCAL=1 flips gated cases from skip-and-return to
+    #     actual round-trip).
+    #   - `wallet-core`: `tron-wallet-core --test NAME …` — every OTHER
+    #     integration test binary in the wallet-core crate, listed
+    #     explicitly to exclude `trc20_local.rs` (cargo has no
+    #     `--exclude-binary` flag; explicit `--test` list is the
+    #     canonical workaround — brittle to new test files; revisit when
+    #     a new integration test lands). `--ignored` runs every
+    #     `#[ignore]`-marked test in those binaries; `--nocapture`
+    #     surfaces operator output; `--test-threads=1` serializes RPC
+    #     round-trips.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: trc20-local
+            env:
+              RUN_TRON_LOCAL: "1"
+            command: >-
+              cargo test -p tron-wallet-core --test trc20_local --
+              --include-ignored --nocapture --test-threads=1
+          - name: wallet-core
+            env:
+              RUN_TRON_NILE: "1"
+              RUN_TRON_MAINNET: "1"
+            command: >-
+              cargo test -p tron-wallet-core
+              --test address --test placeholder --test trc20_nile
+              --test v10_slip44 --test v2_protobuf_roundtrip
+              --test v3_trc20_abi --test v5_resource --test v7_spki_pin
+              --test v8_sign_only --test v9_sign_tx --test v9_token_registry
+              --test varint_and_txid --test wallet_persistence --
+              --ignored --nocapture --test-threads=1
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -176,31 +220,15 @@ jobs:
       - name: cargo build (workspace)
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: cargo test (operator smoke — live + #[ignore])
-        # `--include-ignored` runs every test in tests/*.rs. The env-gated
-        # live tests in `tests/v9_token_registry.rs` + `tests/v5_resource.rs`
-        # + `tests/v7_spki_pin.rs` are NOT `#[ignore]`-marked — they
-        # early-return / panic loud-RED unless RUN_TRON_* is set.
-        # `--test-threads=1` serializes RPC round-trips.
-        # RUN_TRON_NILE flips the Nile legs (`spki_pin_rejects_wrong_pin_against_nile`,
-        # `live_estimate_energy_lands_in_documented_band`,
-        # `live_decimals_match_bundle_against_nile`,
-        # `live_broadcast_*_on_nile`) from skip/panic to real round-trip.
-        # RUN_TRON_MAINNET flips the mainnet legs
-        # (`live_symbol_matches_bundle_against_mainnet`) — safe to gate
-        # on every push because the SPKI pinning machinery was removed
-        # 2026-09-06 (`TronConfig::spki_pin` field + `SpkiPinnedVerifier`
-        # enforcement against the bundled mainnet pin both gone); the
-        # mainnet handshake now uses the default webpki chain, so CDN
-        # cert rotation is no longer a hard fail.
+      - name: cargo test (operator smoke — ${{ matrix.name }} #[ignore])
+        # Per-leg command from matrix; per-leg env (RUN_TRON_LOCAL or
+        # RUN_TRON_NILE/MAINNET) auto-propagates from the matrix entry to
+        # every step, so no step-level `env:` block needed. `--include-
+        # ignored` runs every `#[ignore]`-marked test in the scoped target.
+        # `--test-threads=1` serializes RPC round-trips. `--nocapture`
+        # surfaces operator output.
         working-directory: rust-wallet-app
-        env:
-          RUN_TRON_NILE: "1"
-          RUN_TRON_MAINNET: "1"
-        run: |
-          cargo test -p tron-wallet-core --tests -- \
-            --include-ignored \
-            --nocapture --test-threads=1
+        run: ${{ matrix.command }}
 
   # TronBox local-testnet smoke (Phase 4 §4.1-4.2). Spawns the
   # `tronbox/tre` Docker image via testcontainers 0.23 and exercises the
@@ -215,13 +243,18 @@ jobs:
   # round-trips — wasted runner minutes + Docker pulls on lint red.
   # Sequential ordering: SKIPPED on lint fail (cheaper), runs to
   # completion on lint pass.
-  rust-test-local-spike:
+  rust-test-spike:
     name: Rust test (local spike — TronBox Docker)
     runs-on: ubuntu-latest
     # Bumped from 15 → 30 min: Docker image pull + container spawn + testcontainers
     # RPC round-trips are bursty on cold runners; the 15-min cap was tight.
     timeout-minutes: 30
     needs: rust-lint
+    # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
+    # warnings → errors. Step-level `env:` (RUN_TRON_LOCAL=1) below
+    # merges with this block per GH docs, no conflict.
+    env:
+      RUSTFLAGS: "-D warnings"
     services:
       docker:
         image: docker:dind
@@ -240,99 +273,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: cargo test (local spike — TronBox Docker)
+      - name: cargo test (local spike — TronBox Docker + #[ignore])
         # RUN_TRON_LOCAL=1 flips the gated container tests in
         # `spikes/tron-v1/tests/trc20_local.rs` from skip-and-return
-        # to actual Docker round-trip. `--include-ignored` catches any
-        # `#[ignore]`-marked cases (none today, but forward-compatible).
+        # to actual Docker round-trip. `--tests` (plural) builds and runs
+        # every integration test binary in `tron-v1-spike` — fixes the
+        # prior incomplete `--test` (cargo's singular flag expects a
+        # binary name; bare `--test` was a no-op error). `--include-ignored`
+        # catches any `#[ignore]`-marked cases (none today, but forward-
+        # compatible for any future container-bound slow tests).
         # `--nocapture` surfaces the operator runbook output in CI logs.
         working-directory: rust-wallet-app
         env:
           RUN_TRON_LOCAL: "1"
+          RUN_TRON_NILE: "1"
         run: |
-          cargo test -p tron-v1-spike --test
-
-  # Phase 4 §4.4-4.5 — Nile testnet smoke. Unlike the local-spike job,
-  # this one fires RPC calls against the public Nile testnet (no Docker
-  # daemon required). The test file gates ALL live tests with `#[ignore]`
-  # (no env-var gate); operator opt-in is `--ignored`. CI surfaces the
-  # results so the live-leg failures are visible in the run log even
-  # though `#[ignore]`-marked tests do not run by default.
-  #
-  # 2026-09-07 update: each live test now reads balance BEFORE and AFTER
-  # the send (canonical = `balanceOf` pre/post on TRC-20 recipient;
-  # row_1 = `get_account(balance_sun)` pre/post on TRX sender; row_3
-  # stub no live RPC; row_4 = transport-error probe). The 4 live tests
-  # each issue 2+ balance reads — `--test-threads=1` (added to the cargo
-  # test command below) keeps the live RPC calls serialized so a flaky
-  # node can't interleave state between canonical's read pair and row_1's
-  # read pair.
-  #
-  # Sender + recipient mnemonics live in the bundled fixture
-  # `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`,
-  # `test.recipient-tr20`) — Phase 3 pattern, single source of truth.
-  # Fund the sender once via https://nileex.io/join/getJoinPage and
-  # both this spike and `tests/v10_broadcast.rs` light up.
-  #
-  # `needs: rust-lint` — same cancellation-prevention rationale as
-  # `rust-test-local-spike`: parallel-job cancellation would burn
-  # live RPC quota for nothing on lint red. Sequential ordering:
-  # SKIPPED on lint fail, runs to completion on lint pass.
-  rust-test-nile-spike:
-    name: Rust test (nile spike — live RPC + #[ignore])
-    runs-on: ubuntu-latest
-    # Bumped from 15 → 30 min: live RPC round-trips + SPKI pin handshake +
-    # wait_for_confirm polling across `trc20_transfer_full_flow_nile` +
-    # scenario rows 1 and 4 each consume real time. (Row 2 — TRC-20
-    # balanceOf read — was removed 2026-09-07 because its single balanceOf
-    # read was a strict subset of canonical's pre + post balanceOf checks;
-    # row 3 is a deferred mobile FFI stub and does no live RPC.) 30 min
-    # matches operator-smoke.
-    timeout-minutes: 30
-    needs: rust-lint
-    steps:
-      - uses: actions/checkout@v4 # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.98.1"
-      - name: Install protoc (>=3.12)
-        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
-        # core/Tron.proto). Mirrors the umbrella ci.yml step.
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2 # v2
-        with:
-          workspaces: rust-wallet-app -> target
-      - name: cargo test (nile spike — live RPC + #[ignore] + balance-check coverage)
-        # 2026-09-07: `trc20_nile.rs` migrated from
-        # `spikes/tron-v1/tests/trc20_nile.rs` to
-        # `crates/tron-wallet-core/tests/trc20_nile.rs`. The test now
-        # exercises the **production** `tron-wallet-core` API surface
-        # (no spike helpers) — the spike copy is deleted in the same
-        # commit. Test fn names and balance-check pattern are unchanged.
-        #
-        # `--include-ignored` runs every `#[ignore]`-marked test in
-        # `trc20_nile.rs` (canonical + row_1 + row_3 stub + row_4 = 4 live
-        # tests after row_2 removal 2026-09-07). The non-`#[ignore]` sanity
-        # test runs in the upstream `rust-test` matrix entry — not here, to
-        # avoid double-coverage.
-        #
-        # Explicit test-name filters (positional args after `--`) make the
-        # CI log show each balance-check test passing/failing by name — so
-        # reviewers can verify the **2026-09-07 pre/post balance-check
-        # functions** (`trc20::balance_of` pre/post on canonical;
-        # `TronGridClient::get_account(balance_sun)` pre/post on row_1)
-        # are actually exercised in CI, not just present in source.
-        #
-        # `--test-threads=1` (mirrors operator-smoke `:202`) serializes the
-        # 4 live tests so a flaky RPC cannot interleave state between
-        # canonical's read pair and row_1's read pair.
-        working-directory: rust-wallet-app
-        run: |
-          cargo test -p tron-wallet-core --test
-
+          cargo test -p tron-v1-spike --tests -- \
+            --include-ignored --nocapture
   # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
   # (L13 step 11, 4th gate). Workspace-wide tree walks are slow, so this
   # runs at CI cadence rather than locally.
@@ -417,6 +374,10 @@ jobs:
     name: Mobile compile-only (iOS + Android arm64)
     runs-on: macos-latest
     timeout-minutes: 25
+    # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
+    # warnings → errors on the iOS + Android arm64 `cargo check` legs.
+    env:
+      RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4 # v4
         with:
