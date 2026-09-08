@@ -189,6 +189,8 @@ jobs:
           - name: trc20-local
             env:
               RUN_TRON_LOCAL: "1"
+              RUN_TRON_NILE: "1"
+              RUN_TRON_MAINNET: "1"
             command: >-
               cargo test -p tron-wallet-core --test trc20_local --
               --include-ignored --nocapture --test-threads=1
@@ -306,13 +308,18 @@ jobs:
         run: |
           cargo test -p tron-v1-spike --tests -- \
             --include-ignored --nocapture
-  # Dedup gate, mirroring the umbrella ci.yml and rust-eth-core-ci.yml
-  # (L13 step 11, 4th gate). Workspace-wide tree walks are slow, so this
-  # runs at CI cadence rather than locally.
-  rust-dedup:
-    name: Rust dep dedup
+  # L13 step 11 gates 2-4 (dedup / audit / deny) merged into one job to
+  # share the checkout + rust-cache warm across all three. Previously
+  # three parallel ubuntu runners each paid the full setup cost; merging
+  # cuts 3 runners -> 1, total wall clock roughly halved on a clean
+  # cache. `needs: rust-lint` keeps the same fail-fast ordering as the
+  # smoke jobs — a lint red skips the dep-policy gates instead of
+  # wasting their runner minutes.
+  rust-checks:
+    name: Rust dep checks (dedup + audit + deny)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    needs: rust-lint
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -324,24 +331,22 @@ jobs:
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo tree --duplicates
+        # L13 step 11 gate 2 — workspace-wide dup-deps walk. Slow on cold
+        # cache, runs at CI cadence rather than locally.
         working-directory: rust-wallet-app
         run: cargo tree --workspace --duplicates
-
-  rust-audit:
-    name: Rust audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4 # v4
-        with:
-          persist-credentials: false
+      # `cargo audit` and `cargo deny` resolve the crates.io index + vuln
+      # DB against the current `stable` release; switching toolchain for
+      # just those two steps keeps the manifest-stable guarantees while
+      # letting dedup see the 1.98.1-pinned dep graph the workspace
+      # actually compiles against.
       - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: cargo audit
-        # The `--ignore` list mirrors the umbrella `ci.yml` and
-        # `rust-eth-core-ci.yml` rationale — transitive dev-deps without
-        # upstream fixes yet. Canonical list: `rust-wallet-app/deny.toml`.
+        # `--ignore` list mirrors the umbrella `ci.yml` + `rust-eth-core-ci.yml`
+        # rationale — transitive dev-deps without upstream fixes yet.
+        # Canonical list: `rust-wallet-app/deny.toml`.
         #   RUSTSEC-2026-0098: transitive via regtest deps; no fix upstream
         #   RUSTSEC-2026-0099: same transitive chain (testcontainers-tokio-tar)
         #   RUSTSEC-2026-0104: same transitive chain
@@ -353,16 +358,6 @@ jobs:
             --ignore RUSTSEC-2026-0099 \
             --ignore RUSTSEC-2026-0104 \
             --ignore RUSTSEC-2025-0111
-
-  rust-deny:
-    name: Rust deny
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4 # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: cargo deny
