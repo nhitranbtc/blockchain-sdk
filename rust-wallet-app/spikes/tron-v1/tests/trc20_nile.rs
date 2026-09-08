@@ -68,7 +68,7 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--contract",
             common::nile_usdt(),
             "--address",
-            &recipient,
+            recipient,
             "--network",
             common::NILE_NETWORK,
             "--json",
@@ -88,11 +88,11 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--contract",
             common::nile_usdt(),
             "--to",
-            &recipient,
+            recipient,
             "--amount",
             "1",
             "--mnemonic",
-            &mnemonic,
+            mnemonic,
             "--network",
             common::NILE_NETWORK,
             "--json",
@@ -132,7 +132,7 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--contract",
             common::nile_usdt(),
             "--address",
-            &recipient,
+            recipient,
             "--network",
             common::NILE_NETWORK,
             "--json",
@@ -180,11 +180,11 @@ fn row_2_rebroadcast_idempotency_dup_transaction_error() {
             "wallet",
             "send",
             "--to",
-            &recipient,
+            recipient,
             "--amount",
             "1",
             "--mnemonic",
-            &mnemonic,
+            mnemonic,
             "--network",
             common::NILE_NETWORK,
             "--sign-only",
@@ -383,7 +383,7 @@ fn derive_sender_address(mnemonic: &str) -> String {
 fn row_6_native_trx_self_transfer() {
     common::require_env(&["RUN_TRON_NILE"]);
     let mnemonic = common::nile_sender_mnemonic();
-    let self_addr = derive_sender_address(&mnemonic);
+    let self_addr = derive_sender_address(mnemonic);
     assert!(
         self_addr.starts_with('T'),
         "derived sender address must be a T-address (base58); got {self_addr}"
@@ -403,7 +403,7 @@ fn row_6_native_trx_self_transfer() {
             "--amount",
             "1", // 1 TRX (display units; UnitArg::Trx default per cli.rs:195)
             "--mnemonic",
-            &mnemonic,
+            mnemonic,
             "--network",
             common::NILE_NETWORK,
             "--json",
@@ -436,7 +436,7 @@ fn row_6_native_trx_self_transfer() {
 fn row_7_trc20_self_transfer() {
     common::require_env(&["RUN_TRON_NILE"]);
     let mnemonic = common::nile_sender_mnemonic();
-    let self_addr = derive_sender_address(&mnemonic);
+    let self_addr = derive_sender_address(mnemonic);
 
     // Cert-rotation gate (same rationale as row_1).
     let pin = common::assert_live_spki_pin();
@@ -454,7 +454,7 @@ fn row_7_trc20_self_transfer() {
             "--amount",
             "1", // 1 USDT-display (6 decimals, scaled server-side)
             "--mnemonic",
-            &mnemonic,
+            mnemonic,
             "--network",
             common::NILE_NETWORK,
             "--json",

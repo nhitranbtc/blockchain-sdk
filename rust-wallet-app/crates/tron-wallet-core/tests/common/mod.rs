@@ -610,6 +610,7 @@ pub const CLOSED_PORT_RPC_URL: &str = "http://127.0.0.1:9999";
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Build the canonical sender keypair from the bundled Nile mnemonic.
+#[allow(clippy::type_complexity)]
 pub fn nile_sender_keypair() -> Result<
     (
         Mnemonic,

@@ -86,7 +86,7 @@ fn decode_base58check(candidate: &str) -> Result<Vec<u8>, String> {
 #[test]
 fn v4_tron_address_new_emits_34_char_t_string() {
     let mnemonic = common::nile_sender_mnemonic();
-    let addr = derive_address_via_cli(&mnemonic);
+    let addr = derive_address_via_cli(mnemonic);
     assert!(
         addr.starts_with('T'),
         "TRON address must start with `T` (0x41 mainnet prefix → base58 leading `T`); got {addr:?}"
@@ -114,7 +114,7 @@ fn v4_tron_address_new_emits_34_char_t_string() {
 #[test]
 fn v4_tron_address_decodes_to_21_byte_prefix_0x41() {
     let mnemonic = common::nile_sender_mnemonic();
-    let addr = derive_address_via_cli(&mnemonic);
+    let addr = derive_address_via_cli(mnemonic);
     let payload = decode_base58check(&addr)
         .unwrap_or_else(|e| panic!("CLI-emitted address {addr:?} must base58check-decode: {e}"));
     assert_eq!(
@@ -144,7 +144,7 @@ fn v4_tron_address_decodes_to_21_byte_prefix_0x41() {
 #[test]
 fn v4_tron_address_bad_checksum_rejected_offline() {
     let mnemonic = common::nile_sender_mnemonic();
-    let addr = derive_address_via_cli(&mnemonic);
+    let addr = derive_address_via_cli(mnemonic);
     let mut tampered = addr.clone();
     let last = tampered.pop().expect("address is non-empty");
     let replacement = if last == 'A' { 'B' } else { 'A' };
@@ -179,7 +179,7 @@ fn v4_tron_address_bad_checksum_rejected_offline() {
 #[test]
 fn v4_kat_parity_nile_sender_address_matches_cli() {
     let mnemonic = common::nile_sender_mnemonic();
-    let cli_addr = derive_address_via_cli(&mnemonic);
+    let cli_addr = derive_address_via_cli(mnemonic);
     let fixture_addr = common::nile_owner();
 
     // Sanity: the fixture must already be a valid T-address shape, or
@@ -213,8 +213,8 @@ fn v4_kat_parity_nile_sender_address_matches_cli() {
 #[test]
 fn v4_tron_address_new_is_deterministic_for_same_mnemonic() {
     let mnemonic = common::nile_sender_mnemonic();
-    let first = derive_address_via_cli(&mnemonic);
-    let second = derive_address_via_cli(&mnemonic);
+    let first = derive_address_via_cli(mnemonic);
+    let second = derive_address_via_cli(mnemonic);
     assert_eq!(
         first, second,
         "same mnemonic must derive the same address on repeated CLI invocations; \

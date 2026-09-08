@@ -26,7 +26,7 @@ fn tron() -> Command {
 fn v6_wallet_address_derives_34_char_t_string() {
     let mnemonic = common::nile_sender_mnemonic();
     let out = tron()
-        .args(["address", "new", "--mnemonic", &mnemonic])
+        .args(["address", "new", "--mnemonic", mnemonic])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout);
