@@ -1,16 +1,20 @@
 name: rust-tron-core
 
-# CI for the `rust-tron-core` integration branch.
+# CI for the `rust-tron-core` integration branch + per-chain jobs unique
+# to tron (live RPC smoke, Docker spike, dedup walk, mobile arm64 build).
 #
-# Scope: any PR that targets `rust-tron-core` (NOT main). Each issue labeled
-# `rust-tron-core` / `rust-tron-cli` feeds work via a sub-task branch that
-# PRs into this branch. At v0.1 completion, a final cut PR merges
-# `rust-tron-core` -> main (per L25).
+# Scope: any PR that targets `rust-tron-core` AND push/PR to `main`. Each
+# issue labeled `rust-tron-core` / `rust-tron-cli` feeds work via a
+# sub-task branch that PRs into this branch. At v0.1 completion, a final
+# cut PR merges `rust-tron-core` -> main (per L25).
 #
 # Branch rule (plan Phase Set Up, Task S.2): task branches are cut from
 # `rust-tron-core`, never from `main`, and PR back into `rust-tron-core`,
-# never into `main`. `main` is deliberately absent from the triggers below —
-# the umbrella `ci.yml` covers main.
+# never into `main`. Triggers include `main` so the unique per-chain jobs
+# below (live RPC, Docker spike, mobile arm64) gate every main push too.
+#
+# Umbrella `ci.yml` owns fmt + clippy + workspace test + audit + deny for
+# `main`. This file only owns jobs that umbrella does NOT run.
 #
 # Per L37 (action-SHA hygiene): actions pinned by tag here mirror the umbrella
 # ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain`,
@@ -23,9 +27,9 @@ name: rust-tron-core
 
 on:
   push:
-    branches: [rust-tron-core]
+    branches: [main]
   pull_request:
-    branches: [rust-tron-core]
+    branches: [main]
   workflow_dispatch: {}
 
 # Least-privilege token. CI doesn't push or comment.
@@ -38,91 +42,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust-lint:
-    # fmt + clippy share a runner so a single protoc install + rust-cache
-    # warm covers both. fmt runs first (cheap, no compile needed) — a
-    # formatting regression fails the whole job before clippy compiles.
-    # clippy then catches semantic lints with `-D warnings`. Mirrors the
-    # umbrella ci.yml job split (per-issue: #403 deliverable #9).
-    name: Rust lint (fmt + clippy)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4 # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.98.1"
-          components: rustfmt, clippy
-      - name: Install protoc (>=3.12)
-        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
-        # core/Tron.proto). Mirrors the umbrella ci.yml step (Issue #403
-        # deliverable #9). Debian/Ubuntu: protobuf-compiler ships protoc 3.x.
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2 # v2
-        with:
-          workspaces: rust-wallet-app -> target
-      - name: cargo fmt --check
-        working-directory: rust-wallet-app
-        run: cargo fmt --all -- --check
-      - name: cargo clippy
-        working-directory: rust-wallet-app
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-  # Per-crate parallel matrix. Tron integration branch owns only tron
-  # crates; bitcoin/evm/polygon/eth test suites stay on the umbrella
-  # `ci.yml` and per-chain workflows (`rust-eth-core-ci.yml`,
-  # `evm-polygon-ci.yml`). This split (a) keeps tron PR turnaround
-  # ~5min faster than main-branch PRs, (b) sidesteps the 40-min GH
-  # default cap that the bitcoin crypto suite (Argon2id KDF x 18 tests
-  # at ~80s each) was tripping, and (c) gives fail-fast:false behaviour
-  # so a single crate regression doesn't hide the other crate's signal.
-  # Mirrors the `cd03724` workflow-split precedent.
-  rust-test:
-    name: Rust test (${{ matrix.crate }})
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout }}
-    # Job-level `RUSTFLAGS` flips rustc warnings → hard errors so a silent
-    # `unused variable` / `dead_code` / `missing-docs` regression cannot
-    # sneak past the build step. Clippy already fails on `-D warnings`
-    # (rust-lint job); this covers the class clippy does not see. Matrix
-    # `env:` entries (none today) merge with this block per GH docs.
-    env:
-      RUSTFLAGS: "-D warnings"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - crate: tron-wallet-core
-            command: cargo test -p tron-wallet-core --tests
-            timeout: 30
-    steps:
-      - uses: actions/checkout@v4 # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.98.1"
-      - name: Install protoc (>=3.12)
-        # Required by spikes/tron-v1/build.rs (prost-build compiles vendored
-        # core/Tron.proto). Mirrors the umbrella ci.yml step.
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - uses: Swatinem/rust-cache@v2 # v2
-        with:
-          workspaces: rust-wallet-app -> target
-      - name: cargo build
-        # Workspace build so rust-cache warms all crates; the matrix entry
-        # then narrows to its own crate's tests. Build redundancy across
-        # matrix runners is the cost of parallelism (~5min x 2 runners).
-        working-directory: rust-wallet-app
-        run: cargo build --workspace
-      - name: cargo test (${{ matrix.crate }})
-        working-directory: rust-wallet-app
-        run: ${{ matrix.command }}
-
   # Live RPC smoke gate. Runs the full `tron-wallet-core` test suite
   # with `--include-ignored` against public TronGrid (Nile + Mainnet).
   # Always fires on push + PR to `rust-tron-core`. rust-test matrix
@@ -153,13 +72,6 @@ jobs:
     # (`trc20-local` + `remain`) inherit the same per-leg 30-min cap since
     # they fan out as parallel matrix entries, not sequential stages.
     timeout-minutes: 30
-    # `needs: rust-lint` breaks parallelism with the lint job so a failed
-    # fmt/clippy run does NOT cancel this live-RPC job mid-flight. Without
-    # `needs`, GH cancels pending parallel jobs when the workflow fails —
-    # the smoke test burns RPC quota for nothing if lint has already red.
-    # Sequential ordering means smoke is SKIPPED on lint fail (cheaper)
-    # and runs to completion on lint pass.
-    needs: rust-lint
     # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
     # warnings → errors. Matrix-level `env:` (RUN_TRON_LOCAL etc.) merges
     # with this block per GH docs, no conflict.
@@ -251,7 +163,6 @@ jobs:
     # Bumped from 15 → 30 min: Docker image pull + container spawn + testcontainers
     # RPC round-trips are bursty on cold runners; the 15-min cap was tight.
     timeout-minutes: 30
-    needs: rust-lint
     # Job-level `RUSTFLAGS` (same rationale as rust-test job): rustc
     # warnings → errors. Step-level `env:` (RUN_TRON_LOCAL=1) below
     # merges with this block per GH docs, no conflict.
@@ -308,62 +219,6 @@ jobs:
         run: |
           cargo test -p tron-v1-spike --tests -- \
             --include-ignored --nocapture
-  # L13 step 11 gates 2-4 (dedup / audit / deny) merged into one job to
-  # share the checkout + rust-cache warm across all three. Previously
-  # three parallel ubuntu runners each paid the full setup cost; merging
-  # cuts 3 runners -> 1, total wall clock roughly halved on a clean
-  # cache. `needs: rust-lint` keeps the same fail-fast ordering as the
-  # smoke jobs — a lint red skips the dep-policy gates instead of
-  # wasting their runner minutes.
-  rust-checks:
-    name: Rust dep checks (dedup + audit + deny)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: rust-lint
-    steps:
-      - uses: actions/checkout@v4 # v4
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: "1.98.1"
-      - uses: Swatinem/rust-cache@v2 # v2
-        with:
-          workspaces: rust-wallet-app -> target
-      - name: cargo tree --duplicates
-        # L13 step 11 gate 2 — workspace-wide dup-deps walk. Slow on cold
-        # cache, runs at CI cadence rather than locally.
-        working-directory: rust-wallet-app
-        run: cargo tree --workspace --duplicates
-      # `cargo audit` and `cargo deny` resolve the crates.io index + vuln
-      # DB against the current `stable` release; switching toolchain for
-      # just those two steps keeps the manifest-stable guarantees while
-      # letting dedup see the 1.98.1-pinned dep graph the workspace
-      # actually compiles against.
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: cargo audit
-        # `--ignore` list mirrors the umbrella `ci.yml` + `rust-eth-core-ci.yml`
-        # rationale — transitive dev-deps without upstream fixes yet.
-        # Canonical list: `rust-wallet-app/deny.toml`.
-        #   RUSTSEC-2026-0098: transitive via regtest deps; no fix upstream
-        #   RUSTSEC-2026-0099: same transitive chain (testcontainers-tokio-tar)
-        #   RUSTSEC-2026-0104: same transitive chain
-        #   RUSTSEC-2025-0111: pre-existing umbrella allowance
-        working-directory: rust-wallet-app
-        run: |
-          cargo audit \
-            --ignore RUSTSEC-2026-0098 \
-            --ignore RUSTSEC-2026-0099 \
-            --ignore RUSTSEC-2026-0104 \
-            --ignore RUSTSEC-2025-0111
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-      - name: cargo deny
-        working-directory: rust-wallet-app
-        run: cargo deny check
-
   # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)".
   # `tron-wallet-core` MUST compile for iOS + Android arm64 with no source
   # changes — this catches platform-incompatible deps (e.g. `directories`)
