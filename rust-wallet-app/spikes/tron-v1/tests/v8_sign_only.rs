@@ -38,12 +38,12 @@ fn v8_sign_with_broadcast_returns_valid_txid() {
 
     // Same raw_data but no `--no-broadcast` → CLI broadcasts to live Nile.
     let raw_path = std::env::temp_dir().join("tron-v1-v8-bcast-raw.json");
-    std::fs::write(&raw_path, common::offline_raw_transaction()).expect("write raw.json");
+    std::fs::write(&raw_path, common::OFFLINE_RAW_TRANSACTION).expect("write raw.json");
 
     let out = common::tron()
         .args(["tx", "sign", "--file"])
         .arg(&raw_path)
-        .args(["--key", &key, "--network", common::nile_network()])
+        .args(["--key", &key, "--network", common::NILE_NETWORK])
         .assert()
         .success();
     let json: serde_json::Value =

@@ -69,7 +69,7 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--address",
             &recipient,
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -93,7 +93,7 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--mnemonic",
             &mnemonic,
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -115,9 +115,9 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--txid",
             txid,
             "--timeout",
-            common::tx_wait_timeout_secs(),
+            common::TX_WAIT_TIMEOUT_SECS,
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -133,7 +133,7 @@ fn row_1_canonical_trc20_transfer_balance_delta_one_usdt() {
             "--address",
             &recipient,
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -185,7 +185,7 @@ fn row_2_rebroadcast_idempotency_dup_transaction_error() {
             "--mnemonic",
             &mnemonic,
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--sign-only",
             "--json",
         ])
@@ -214,7 +214,7 @@ fn row_2_rebroadcast_idempotency_dup_transaction_error() {
         .args(["--rpc", common::nile_rpc_url()])
         .args(["tx", "broadcast", "--file"])
         .arg(&raw_path)
-        .args(["--network", common::nile_network(), "--json"])
+        .args(["--network", common::NILE_NETWORK, "--json"])
         .assert()
         .success();
     let first_out = String::from_utf8_lossy(&first.get_output().stdout);
@@ -232,7 +232,7 @@ fn row_2_rebroadcast_idempotency_dup_transaction_error() {
         .args(["--rpc", common::nile_rpc_url()])
         .args(["tx", "broadcast", "--file"])
         .arg(&raw_path)
-        .args(["--network", common::nile_network(), "--json"])
+        .args(["--network", common::NILE_NETWORK, "--json"])
         .assert()
         .failure();
 
@@ -284,7 +284,7 @@ fn row_4_network_failure_recovery_exits_within_30s() {
     // with a non-success code within 30s without panicking.
     let start = std::time::Instant::now();
     let res = common::tron()
-        .args(["--rpc", common::closed_port_rpc_url()])
+        .args(["--rpc", common::CLOSED_PORT_RPC_URL])
         .args([
             "trc20",
             "balance",
@@ -293,14 +293,14 @@ fn row_4_network_failure_recovery_exits_within_30s() {
             "--address",
             common::nile_recipient(),
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
         ])
         .assert()
         .failure();
     let elapsed = start.elapsed();
 
     assert!(
-        elapsed <= std::time::Duration::from_secs(common::transport_error_budget_secs()),
+        elapsed <= std::time::Duration::from_secs(common::TRANSPORT_ERROR_BUDGET_SECS),
         "CLI must surface transport error within 30s; took {elapsed:?}"
     );
 
@@ -343,8 +343,7 @@ fn row_5_live_spki_pin_matches_fixture() {
         "SPKI pin must be lowercase hex"
     );
 
-    let fixture = common::fixture_spki_pin()
-        .expect("tokens/nile.json must pin `test.spki_pin_hex` for this row to assert");
+    let fixture = common::fixture_spki_pin();
     assert_eq!(
         live, fixture,
         "live SPKI pin ({live}) drifted from fixture ({fixture}); \

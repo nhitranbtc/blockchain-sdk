@@ -461,6 +461,7 @@ pub fn is_unlimited_approval(amount: U256) -> bool {
 ///
 /// Returns the full 68-byte calldata (4-byte selector + 32-byte address slot
 /// + 32-byte uint256 slot) as a `0x`-prefixed hex string on STDOUT. No
+///
 /// network, no signing, no `--mnemonic`.
 ///
 /// Plan §Task 7.15 spike invariant: black-box tests assert on the
@@ -507,7 +508,7 @@ pub fn encode_call(kind: EncodeCallKind, to: String, amount: String) -> Result<(
         return Err(CliError::BadInput(format!(
             "encoder returned a non-canonical selector: got {:02x?}, want {:02x?}",
             &bytes[..bytes.len().min(4)],
-            &selector
+            selector
         )));
     }
     println!("0x{}", hex_encode(&bytes));

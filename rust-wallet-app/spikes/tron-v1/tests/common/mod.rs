@@ -152,8 +152,6 @@ struct NileTest {
     #[allow(dead_code)]
     recipient_address: String,
     approval_spender_address: String,
-    #[allow(dead_code)]
-    spki_pin_hex: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -245,7 +243,7 @@ pub fn live_spki_pin(host: &str, port: u16) -> String {
     //    (the leaf) by default.
     let x509 = StdCommand::new("openssl")
         .args(["x509", "-outform", "DER"])
-        .stdin(s_client.stdout.expect("piped stdout"))
+        .stdin(s_client.stdout.take().expect("piped stdout"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -282,22 +280,18 @@ pub fn live_spki_pin(host: &str, port: u16) -> String {
 }
 
 /// Resolve the expected SPKI pin from the bundled `tokens/nile.json` fixture.
-/// Returns `None` if the field is absent (older fixture) — callers should
-/// then either skip the cross-check or fail-closed.
+/// SPKI pin source — derived from a live TLS handshake (no JSON fixture).
+/// Equivalent to `assert_live_spki_pin()` but without the fixture cross-check
+/// (the fixture no longer carries `spki_pin_hex`).
 #[allow(dead_code)]
-pub fn fixture_spki_pin() -> Option<String> {
-    let raw = &nile_config().test.spki_pin_hex;
-    if raw.is_empty() {
-        None
-    } else {
-        Some(raw.to_ascii_lowercase())
-    }
+pub fn fixture_spki_pin() -> String {
+    assert_live_spki_pin()
 }
 
-/// Derive the live SPKI pin for the default Nile RPC, then assert it matches
-/// the bundled fixture. Returns the pin on success, panics loudly on cert
-/// rotation. This is what gated live tests use to surface cert rotation as
-/// a fail-loud instead of a silent skip.
+/// Derive the SPKI pin for the active Nile RPC endpoint from a live TLS
+/// handshake. Returns lowercase hex (64 chars). Panics if the handshake
+/// fails — callers that need a fail-soft path should `live_spki_pin`
+/// directly inside their own guard.
 #[allow(dead_code)]
 pub fn assert_live_spki_pin() -> String {
     let host = nile_rpc_host();
@@ -309,22 +303,7 @@ pub fn assert_live_spki_pin() -> String {
     } else {
         80
     };
-    let live = live_spki_pin(host, port);
-    if let Some(expected) = fixture_spki_pin() {
-        assert_eq!(
-            live, expected,
-            "SPKI pin drift: live handshake for {host}:{port} yields {live}, \
-             but fixture pins {expected}. TronGrid rotated its leaf cert — \
-             refresh crates/tron-wallet-core/tokens/nile.json \
-             `test.spki_pin_hex` (or unset `TRON_NILE_SPKI_PIN_OVERRIDE`)."
-        );
-    } else {
-        eprintln!(
-            "[spki] WARNING: fixture missing `test.spki_pin_hex`; \
-             using live pin {live} without cross-check"
-        );
-    }
-    live
+    live_spki_pin(host, port)
 }
 
 // ─── network.json: per-network RPC URLs ──────────────────────────────────────
@@ -409,24 +388,16 @@ pub const TRON_NILE_PRIVATE_KEY: &str = "TRON_NILE_PRIVATE_KEY";
 pub const TRON_MAINNET_OPERATOR_WALLET: &str = "TRON_MAINNET_OPERATOR_WALLET";
 
 #[allow(dead_code)]
-pub fn nile_network() -> &'static str {
-    "nile"
-}
+pub const NILE_NETWORK: &str = "nile";
 
 #[allow(dead_code)]
-pub fn mainnet_network() -> &'static str {
-    "mainnet"
-}
+pub const MAINNET_NETWORK: &str = "mainnet";
 
 #[allow(dead_code)]
-pub fn shasta_network() -> &'static str {
-    "shasta"
-}
+pub const SHASTA_NETWORK: &str = "shasta";
 
 #[allow(dead_code)]
-pub fn local_network() -> &'static str {
-    "local"
-}
+pub const LOCAL_NETWORK: &str = "local";
 
 #[allow(dead_code)]
 pub fn mainnet_rpc_url() -> &'static str {
@@ -444,14 +415,10 @@ pub fn local_rpc_url() -> &'static str {
 }
 
 #[allow(dead_code)]
-pub fn tronbox_rpc_url() -> &'static str {
-    "http://127.0.0.1:9090"
-}
+pub const TRONBOX_RPC_URL: &str = "http://127.0.0.1:9090";
 
 #[allow(dead_code)]
-pub fn closed_port_rpc_url() -> &'static str {
-    "http://127.0.0.1:9999"
-}
+pub const CLOSED_PORT_RPC_URL: &str = "http://127.0.0.1:9999";
 
 #[allow(dead_code)]
 pub fn mainnet_owner() -> &'static str {
@@ -481,139 +448,82 @@ fn mainnet_config() -> &'static MainnetConfig {
 }
 
 #[allow(dead_code)]
-pub fn canonical_mnemonic() -> &'static str {
-    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
-}
+pub const CANONICAL_MNEMONIC: &str =
+    "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
 
 #[allow(dead_code)]
-pub fn test_password() -> &'static str {
-    "test-pw"
-}
+pub const TEST_PASSWORD: &str = "test-pw";
 
 #[allow(dead_code)]
-pub fn v10_password() -> &'static str {
-    "v10-kat-pass"
-}
+pub const V10_PASSWORD: &str = "v10-kat-pass";
 
 #[allow(dead_code)]
-pub fn default_fee_limit_sun() -> &'static str {
-    "130000000"
-}
+pub const DEFAULT_FEE_LIMIT_SUN: &str = "130000000";
 
 #[allow(dead_code)]
-pub fn speedup_fee_limit_sun() -> &'static str {
-    "260000000"
-}
+pub const SPEEDUP_FEE_LIMIT_SUN: &str = "260000000";
 
 #[allow(dead_code)]
-pub fn tx_wait_timeout_secs() -> &'static str {
-    "120"
-}
+pub const TX_WAIT_TIMEOUT_SECS: &str = "120";
 
 #[allow(dead_code)]
-pub fn tx_wait_short_timeout_secs() -> &'static str {
-    "5s"
-}
+pub const TX_WAIT_SHORT_TIMEOUT_SECS: &str = "5s";
 
 #[allow(dead_code)]
-pub fn poll_interval_secs() -> &'static str {
-    "1s"
-}
+pub const POLL_INTERVAL_SECS: &str = "1s";
 
 #[allow(dead_code)]
-pub fn transport_error_budget_secs() -> u64 {
-    30
-}
+pub const TRANSPORT_ERROR_BUDGET_SECS: u64 = 30;
 
 #[allow(dead_code)]
-pub fn one_usdt_display_amount() -> &'static str {
-    "1"
-}
+pub const ONE_USDT_DISPLAY_AMOUNT: &str = "1";
 
 #[allow(dead_code)]
-pub fn one_usdt_raw_amount() -> &'static str {
-    "1000000"
-}
+pub const ONE_USDT_RAW_AMOUNT: &str = "1000000";
 
 #[allow(dead_code)]
-pub fn usdt_decimals() -> u64 {
-    6
-}
+pub const USDT_DECIMALS: u64 = 6;
 
 #[allow(dead_code)]
-pub fn nile_recipient_t_addr() -> &'static str {
-    "TG7jQ7eGsns6nmQNfcKNgZKyKBFkx7CvXr"
-}
+pub const BS58_ALPHABET: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
 #[allow(dead_code)]
-pub fn secp256k1_generator_pubkey_hex() -> &'static str {
-    "0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798\
-     483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
-}
+pub const U256_MAX_DECIMAL: &str =
+    "115792089237316195423570985008687907853269984665640564039457584007913129639935";
 
 #[allow(dead_code)]
-pub fn bs58_alphabet() -> &'static str {
-    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-}
+pub const TRON_SLIP44_PATH: &str = "m/44'/195'/0'/0/0";
 
 #[allow(dead_code)]
-pub fn u256_max_decimal() -> &'static str {
-    "115792089237316195423570985008687907853269984665640564039457584007913129639935"
-}
+pub const BITCOIN_SLIP44_PATH: &str = "m/44'/0'/0'/0/0";
 
 #[allow(dead_code)]
-pub fn tron_slip44_path() -> &'static str {
-    "m/44'/195'/0'/0/0"
-}
+pub const TRON_XPUB_PATH: &str = "m/44'/195'/0'";
 
 #[allow(dead_code)]
-pub fn bitcoin_slip44_path() -> &'static str {
-    "m/44'/0'/0'/0/0"
-}
+pub const TRC20_CALLDATA_LEN: usize = 68;
 
 #[allow(dead_code)]
-pub fn tron_xpub_path() -> &'static str {
-    "m/44'/195'/0'"
-}
+pub const TRANSFER_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb];
 
 #[allow(dead_code)]
-pub fn trc20_calldata_len() -> usize {
-    68
-}
+pub const APPROVE_SELECTOR: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3];
 
 #[allow(dead_code)]
-pub fn transfer_selector() -> &'static [u8; 4] {
-    &[0xa9, 0x05, 0x9c, 0xbb]
-}
+pub const BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
 
 #[allow(dead_code)]
-pub fn approve_selector() -> &'static [u8; 4] {
-    &[0x09, 0x5e, 0xa7, 0xb3]
-}
+pub const WRONG_SPKI_PIN: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 #[allow(dead_code)]
-pub fn balance_of_selector() -> &'static [u8; 4] {
-    &[0x70, 0xa0, 0x82, 0x31]
-}
+pub const UNKNOWN_TXID: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
 #[allow(dead_code)]
-pub fn wrong_spki_pin() -> &'static str {
-    "0000000000000000000000000000000000000000000000000000000000000000"
-}
+pub const UNCONFIRMED_TXID: &str =
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
 #[allow(dead_code)]
-pub fn unknown_txid() -> &'static str {
-    "0000000000000000000000000000000000000000000000000000000000000001"
-}
-
-#[allow(dead_code)]
-pub fn unconfirmed_txid() -> &'static str {
-    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
-}
-
-#[allow(dead_code)]
-pub fn offline_raw_transaction() -> &'static str {
-    r#"{
+pub const OFFLINE_RAW_TRANSACTION: &str = r#"{
     "ref_block_bytes": "abcd",
     "ref_block_hash": "0123456789abcdef0123456789abcdef01234567",
     "timestamp": 1700000000000,
@@ -630,5 +540,4 @@ pub fn offline_raw_transaction() -> &'static str {
             }
         }
     }]
-}"#
-}
+}"#;

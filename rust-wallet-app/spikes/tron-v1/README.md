@@ -33,6 +33,55 @@ whole point of routing assertions through the CLI binary.
 All gated tests use `#[ignore]` + loud-RED panic when env var is missing
 (per Plan §Conventions → Gated live tests: never silent `return`).
 
+## File structure
+
+```text
+spikes/tron-v1/
+├── Cargo.toml                          # tests-only crate; no [[bin]], no [lib]
+├── README.md                           # this file
+├── RESULT.md                           # Phase 7 PASS evidence scaffold
+└── tests/
+    ├── common/
+    │   └── mod.rs                      # shared helpers + JSON/network accessors
+    │                                   # (see plan §"tests/common/mod.rs structure")
+    ├── v1_compile.rs                   # V1 — `tron --help` subcommand surface
+    ├── v2_protobuf_roundtrip.rs        # V2 — tx encode/decode + trc20 encode-call
+    ├── v3_trc20_abi.rs                 # V3 — TRC-20 selector + calldata shape
+    ├── v4_base58check.rs               # V4 — base58check round-trip
+    ├── v5_resource.rs                  # V5 — resource model (RUN_TRON_NILE=1)
+    ├── v6_nile.rs                      # V6 — Nile chain-id + address (RUN_TRON_NILE=1)
+    ├── v7_spki_pin.rs                  # V7 — SPKI pinned endpoint (Nile + Local)
+    ├── v8_sign_only.rs                 # V8 — sign-only envelope (TRON_NILE_PRIVATE_KEY)
+    ├── v9_token_registry.rs            # V9 — config show + trc20 decimals (Nile)
+    ├── v10_slip44.rs                   # V10 — SLIP-44 derivation + xpub export
+    ├── v11_mainnet_self_send.rs        # V11 — pre-check + mainnet self-send (BLOCKING)
+    ├── trc20_local.rs                  # Task 7.15 — 8-row TRC-20 matrix (RUN_TRON_LOCAL=1)
+    ├── trc20_nile.rs                   # Task 7.15 — 4-row TRC-20 matrix + V7a rebroadcast
+    └── cli_coverage.rs                 # Task 7.16 — 19 black-box CLI smoke tests
+```
+
+**No `src/`, no `build.rs`, no `tokens/`, no `proto/`** — the spike is a
+tests-only verification harness. The deleted `spikes/tron-v1/src/`
+(10 files) used to be a parallel implementation; routing assertions
+through the shipped CLI binary makes drift between spike impl and
+shipped impl surface as a test failure.
+
+### `tests/common/mod.rs` sections (post 2026-09-08 const refactor)
+
+| Section | Items |
+|---|---|
+| Imports + thread-local | `use std::cell::OnceCell`, `use std::path::PathBuf`, `use assert_cmd::Command`; `thread_local! { static TEST_DATA_DIR: OnceCell<PathBuf> ... }` |
+| Test plumbing | `set_test_data_dir`, `tron`, `require_env` |
+| Fixture loaders | `load_nile_fixture`, `nile_sender_mnemonic`, `nile_recipient_address` |
+| Typed registry (NileConfig) | `NileToken`, `NileTest`, `NileConfig`, `nile_config()`; accessors `nile_usdt`, `nile_recipient`, `nile_owner`, `nile_spender` |
+| SPKI pin derivation | `live_spki_pin`, `fixture_spki_pin`, `assert_live_spki_pin` |
+| Network config | `NetworkConfig`, `network_config()`; accessors `nile_rpc_url`, `nile_rpc_host`, `nile_pinned_url`, `nile_network`, `mainnet_network`, `shasta_network`, `local_network`, `mainnet_rpc_url`, `shasta_rpc_url`, `local_rpc_url`, `tronbox_rpc_url`, `closed_port_rpc_url`, `mainnet_owner`, `mainnet_config` |
+| Env-gate constants | `RUN_TRON_NILE`, `RUN_TRON_LOCAL`, `RUN_TRON_MAINNET`, `TRON_NILE_PRIVATE_KEY`, `TRON_MAINNET_OPERATOR_WALLET` |
+| Literal constants | `CANONICAL_MNEMONIC`, `TEST_PASSWORD`, `V10_PASSWORD`, `DEFAULT_FEE_LIMIT_SUN`, `SPEEDUP_FEE_LIMIT_SUN`, `TX_WAIT_TIMEOUT_SECS`, `TX_WAIT_SHORT_TIMEOUT_SECS`, `POLL_INTERVAL_SECS`, `TRANSPORT_ERROR_BUDGET_SECS`, `ONE_USDT_DISPLAY_AMOUNT`, `ONE_USDT_RAW_AMOUNT`, `USDT_DECIMALS`, `BS58_ALPHABET`, `U256_MAX_DECIMAL`, `TRON_SLIP44_PATH`, `BITCOIN_SLIP44_PATH`, `TRON_XPUB_PATH`, `TRC20_CALLDATA_LEN`, `TRANSFER_SELECTOR`, `APPROVE_SELECTOR`, `BALANCE_OF_SELECTOR`, `WRONG_SPKI_PIN`, `UNKNOWN_TXID`, `UNCONFIRMED_TXID`, `OFFLINE_RAW_TRANSACTION` |
+| Function (kept) | `nile_sender_mnemonic`, `nile_recipient_address`, `set_test_data_dir`, `tron`, `require_env`, `load_nile_fixture`, `nile_usdt`, `nile_recipient`, `nile_owner`, `nile_spender`, `nile_rpc_url`, `nile_rpc_host`, `nile_pinned_url`, `mainnet_owner`, `live_spki_pin`, `fixture_spki_pin`, `assert_live_spki_pin`, `nile_config`, `network_config`, `mainnet_config` |
+
+See plan §[`tests/common/mod.rs` structure](docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md) for the per-section purpose column.
+
 ## Run
 
 ### All offline tests (CI-friendly, no network)

@@ -3,6 +3,7 @@
 //! The CLI binary the spike drives (`tron` from `crates/tron/`) must build
 //! + the test binary itself must build. PASS criteria: `cargo build -p
 //! tron-v1-spike` succeeds (tests-only crate; no library) AND
+//!
 //! `cargo build -p tron` succeeds (CLI binary the spike drives) AND the
 //! spawned `tron --help` stdout contains the four top-level subcommand
 //! groups (wallet, trc20, tx, config).

@@ -31,7 +31,7 @@ fn v5_resource_trc20_send_dry_run_estimates_energy() {
             "1",
             "--dry-run",
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
         ])
         .assert()
         .success();
@@ -57,7 +57,7 @@ fn v5_resource_trc20_decimals_returns_6() {
             "--contract",
             common::nile_usdt(),
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -72,7 +72,7 @@ fn v5_resource_trc20_decimals_returns_6() {
         .expect("CLI must emit `decimals` field");
     assert_eq!(
         decimals,
-        common::usdt_decimals(),
+        common::USDT_DECIMALS,
         "USDT-TRC20 decimal precision must be 6"
     );
 }

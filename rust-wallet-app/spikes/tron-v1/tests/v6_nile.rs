@@ -13,7 +13,7 @@ fn isolated_config_home() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().to_path_buf();
     common::set_test_data_dir(path.clone());
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
     (dir, path)
 }
 
@@ -23,13 +23,9 @@ fn tron() -> Command {
 
 #[test]
 fn v6_wallet_address_derives_34_char_t_string() {
+    let mnemonic = common::nile_sender_mnemonic();
     let out = tron()
-        .args([
-            "wallet",
-            "address",
-            "--pubkey",
-            common::secp256k1_generator_pubkey_hex(),
-        ])
+        .args(["address", "new", "--mnemonic", &mnemonic])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout);
@@ -47,10 +43,10 @@ fn v6_wallet_address_derives_34_char_t_string() {
     assert!(
         address[1..]
             .chars()
-            .all(|c| common::bs58_alphabet().contains(c)),
+            .all(|c| common::BS58_ALPHABET.contains(c)),
         "non-prefix chars must be base58 alphabet (no 0/O/I/l); got {address:?}"
     );
-    eprintln!("[V6-row_1] tron wallet address --pubkey (G point) -> {address}");
+    eprintln!("[V6-row_1] tron address new --mnemonic (nile sender) -> {address}");
 }
 
 #[test]
@@ -70,7 +66,7 @@ fn v6_config_show_clean_dir_defaults_to_nile_rpc() {
         .expect("rpc_url field");
     assert_eq!(
         network,
-        common::nile_network(),
+        common::NILE_NETWORK,
         "clean data dir must default to nile"
     );
     assert_eq!(
@@ -86,7 +82,7 @@ fn v6_config_set_network_nile_round_trips_through_show() {
     let (_dir, _path) = isolated_config_home();
 
     tron()
-        .args(["config", "set-network", common::nile_network()])
+        .args(["config", "set-network", common::NILE_NETWORK])
         .assert()
         .success();
 
@@ -95,7 +91,7 @@ fn v6_config_set_network_nile_round_trips_through_show() {
         serde_json::from_slice(&out.get_output().stdout).expect("CLI must emit JSON");
     assert_eq!(
         json.get("network").and_then(|v| v.as_str()),
-        Some(common::nile_network())
+        Some(common::NILE_NETWORK)
     );
     assert_eq!(
         json.get("rpc_url").and_then(|v| v.as_str()),

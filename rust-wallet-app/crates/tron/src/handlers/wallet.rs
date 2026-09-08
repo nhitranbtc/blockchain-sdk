@@ -1,6 +1,10 @@
 //! `tron wallet` handlers — plan §Phase 6 Task 5.2.
 //!
-//! All nine subcommands are wired: the Phase 2/3/5 core carry-overs they needed
+//! All nine subcommands are wired: the Phase 2/3/5 core carry-overs they needed.
+//! Test module sits mid-file (after `send_speedup`); `#[allow]` suppresses
+//! the `items_after_test_module` lint — tests use `super::*` so position
+//! is moot.
+#![allow(clippy::items_after_test_module)]
 //! (`chain::get_account`, `tx::submit_*`, wallet-record metadata) landed
 //! alongside this file.
 //!

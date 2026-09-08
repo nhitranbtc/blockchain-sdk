@@ -51,7 +51,7 @@ fn wallet_create_then_list_shows_id() {
     let _cfg = isolated_config_home();
     // Shipped CLI gates password on `TRON_PASSWORD` env (or interactive
     // TTY). For non-gated smoke we set the env before invoking.
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     // Phase 7 §Task 7.16: dropped `--network` (rejected by CLI) and
     // `--password` (use TRON_PASSWORD env) flags. The shipped `wallet
@@ -65,7 +65,7 @@ fn wallet_create_then_list_shows_id() {
     let create_stderr = String::from_utf8_lossy(&create.get_output().stderr);
 
     // Shipped CLI: stdout = wallet_id (32-hex blob); stderr = mnemonic +
-    // "RECOVERY PHRASE" + common::nile_network() network banner. Assert the wallet_id is
+    // "RECOVERY PHRASE" + common::NILE_NETWORK network banner. Assert the wallet_id is
     // a 32-char hex string on stdout.
     assert!(
         create_stdout.trim().chars().all(|c| c.is_ascii_hexdigit())
@@ -97,15 +97,10 @@ fn wallet_import_then_show_round_trips() {
     // + (optional) `--network`. No `--password` flag on argv; passphrase
     // arrives via `TRON_PASSWORD` env (clap `env = "TRON_PASSWORD"`).
     let _cfg = isolated_config_home();
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     let import = common::tron()
-        .args([
-            "wallet",
-            "import",
-            "--mnemonic",
-            common::canonical_mnemonic(),
-        ])
+        .args(["wallet", "import", "--mnemonic", common::CANONICAL_MNEMONIC])
         .args(["--name", "test-i"])
         .assert()
         .success();
@@ -137,7 +132,7 @@ fn wallet_rename_changes_label() {
     // `--id <hex> --to <label> --password <pw>`. NO `--network` flag — the
     // network is implicit in the stored wallet blob.
     let _cfg = isolated_config_home();
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     // Create a wallet with an initial name.
     let create = common::tron()
@@ -183,7 +178,7 @@ fn wallet_delete_requires_typed_yes() {
     // `--id <hex>` and optional `--confirm-yes`. NO `--network` flag.
     // Without `--confirm-yes`, `confirm()` refuses and exits non-zero.
     let _cfg = isolated_config_home();
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     // Create a wallet we will attempt to delete twice.
     let create = common::tron()
@@ -233,17 +228,17 @@ fn wallet_send_dry_run_does_not_broadcast() {
     // broadcast. Surface: `--mnemonic <phrase>` (or `--wallet-id`), `--to
     // <addr>`, `--amount <n>`, `--dry-run`, optional `--network`. No
     // `--key` flag in shipped CLI.
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     let dry_run = common::tron()
-        .args(["wallet", "send", "--mnemonic", common::canonical_mnemonic()])
+        .args(["wallet", "send", "--mnemonic", common::CANONICAL_MNEMONIC])
         .args(["--to", common::nile_recipient()])
         .args([
             "--amount",
             "1",
             "--dry-run",
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
         ])
         .assert()
         .success();
@@ -266,17 +261,17 @@ fn wallet_send_sign_only_outputs_envelope() {
     // JSON keys emitted: `txid`, `raw_data_hex`, `signature_hex`,
     // `signed_envelope_hex`. Surface: `--mnemonic <phrase>`, `--to
     // <addr>`, `--amount <n>`, `--sign-only`, optional `--network`.
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     let sign_only = common::tron()
-        .args(["wallet", "send", "--mnemonic", common::canonical_mnemonic()])
+        .args(["wallet", "send", "--mnemonic", common::CANONICAL_MNEMONIC])
         .args(["--to", common::nile_recipient()])
         .args([
             "--amount",
             "1",
             "--sign-only",
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -298,7 +293,7 @@ fn wallet_send_speedup_rebuilds_with_higher_fee_limit() {
     // passphrase env.
     common::require_env(&[]);
     let _cfg = isolated_config_home();
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     // Create a wallet to speed up (the speedup CLI requires a real id).
     let create = common::tron()
@@ -318,12 +313,12 @@ fn wallet_send_speedup_rebuilds_with_higher_fee_limit() {
     // send` to exercise the broadcast.
     let speedup = common::tron()
         .args(["wallet", "send-speedup", "--wallet-id", &wallet_id])
-        .args(["--txid", common::wrong_spki_pin()])
+        .args(["--txid", common::WRONG_SPKI_PIN])
         .args([
             "--fee-limit",
             "260000000",
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -345,7 +340,7 @@ fn wallet_send_speedup_rebuilds_with_higher_fee_limit() {
 #[test]
 fn address_new_from_mnemonic_produces_t_addr() {
     let out = common::tron()
-        .args(["address", "new", "--mnemonic", common::canonical_mnemonic()])
+        .args(["address", "new", "--mnemonic", common::CANONICAL_MNEMONIC])
         .args(["--index", "0"])
         .assert()
         .success();
@@ -370,7 +365,7 @@ fn address_xpub_exports_extended_pubkey() {
     // `--password` flag on argv to avoid shell history leaks per Plan
     // §Audit-3). Local-only — no RPC needed.
     let _cfg = isolated_config_home();
-    std::env::set_var("TRON_PASSWORD", common::test_password());
+    std::env::set_var("TRON_PASSWORD", common::TEST_PASSWORD);
 
     // Create a wallet first (the xpub source).
     let create = common::tron()
@@ -402,7 +397,7 @@ fn balance_trx_for_known_address_returns_nonzero() {
 
     let out = common::tron()
         .args(["balance", "--address", common::nile_recipient()])
-        .args(["--network", common::nile_network(), "--json"])
+        .args(["--network", common::NILE_NETWORK, "--json"])
         .assert()
         .success();
     let json: serde_json::Value =
@@ -427,7 +422,7 @@ fn balance_token_returns_decimals_scaled() {
             "--token",
             "USDT",
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -470,15 +465,10 @@ fn trc20_approve_unlimited_requires_typed_yes() {
     common::require_env(&[]);
 
     let refuse = common::tron()
-        .args([
-            "trc20",
-            "approve",
-            "--mnemonic",
-            common::canonical_mnemonic(),
-        ])
+        .args(["trc20", "approve", "--mnemonic", common::CANONICAL_MNEMONIC])
         .args(["--contract", common::nile_usdt()])
         .args(["--spender", common::nile_recipient()])
-        .args(["--amount", "max", "--network", common::nile_network()])
+        .args(["--amount", "max", "--network", common::NILE_NETWORK])
         .assert()
         .failure();
     let stderr = String::from_utf8_lossy(&refuse.get_output().stderr);
@@ -505,7 +495,7 @@ fn trc20_balance_matches_on_chain() {
             "--contract",
             common::nile_usdt(),
         ])
-        .args(["--network", common::nile_network(), "--json"])
+        .args(["--network", common::NILE_NETWORK, "--json"])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout).to_string();
@@ -534,7 +524,7 @@ fn trc20_allowance_returns_grant_or_zero() {
             "--spender",
             common::nile_spender(),
         ])
-        .args(["--network", common::nile_network(), "--json"])
+        .args(["--network", common::NILE_NETWORK, "--json"])
         .assert()
         .success();
     let stdout = String::from_utf8_lossy(&out.get_output().stdout).to_string();
@@ -557,8 +547,8 @@ fn tx_get_returns_full_info() {
     common::require_env(&[]);
 
     let out = common::tron()
-        .args(["tx", "get", "--txid", common::unknown_txid()])
-        .args(["--network", common::nile_network(), "--json"])
+        .args(["tx", "get", "--txid", common::UNKNOWN_TXID])
+        .args(["--network", common::NILE_NETWORK, "--json"])
         .assert()
         .success();
     let json: serde_json::Value =
@@ -579,20 +569,20 @@ fn tx_wait_times_out_on_unconfirmed() {
             "tx",
             "wait",
             "--txid",
-            common::unconfirmed_txid(),
+            common::UNCONFIRMED_TXID,
             "--timeout",
-            common::tx_wait_short_timeout_secs(),
+            common::TX_WAIT_SHORT_TIMEOUT_SECS,
             "--poll-interval",
-            common::poll_interval_secs(),
+            common::POLL_INTERVAL_SECS,
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
         ])
         .assert()
         .failure(); // MUST exit non-zero on timeout
     let elapsed = start.elapsed();
 
     assert!(
-        elapsed <= std::time::Duration::from_secs(common::transport_error_budget_secs()),
+        elapsed <= std::time::Duration::from_secs(common::TRANSPORT_ERROR_BUDGET_SECS),
         "tx wait must surface timeout within 30s; took {elapsed:?}"
     );
     let stderr = String::from_utf8_lossy(&res.get_output().stderr);
@@ -620,13 +610,13 @@ fn config_set_network_resets_rpc_url() {
 
     // Set mainnet first.
     let _ = common::tron()
-        .args(["config", "set-network", common::mainnet_network()])
+        .args(["config", "set-network", common::MAINNET_NETWORK])
         .assert()
         .success();
 
     // Switch to nile.
     common::tron()
-        .args(["config", "set-network", common::nile_network()])
+        .args(["config", "set-network", common::NILE_NETWORK])
         .assert()
         .success();
 
@@ -634,13 +624,12 @@ fn config_set_network_resets_rpc_url() {
     let show = common::tron().args(["config", "show"]).assert().success();
     let show_stdout = String::from_utf8_lossy(&show.get_output().stdout);
     assert!(
-        show_stdout.contains(common::nile_network())
-            || show_stdout.contains(common::nile_rpc_host()),
+        show_stdout.contains(common::NILE_NETWORK) || show_stdout.contains(common::nile_rpc_host()),
         "config show must reflect nile as the active network; got: {show_stdout}"
     );
     // Should NOT carry mainnet RPC forward.
     let stale_mainnet =
-        show_stdout.contains("api.trongrid.io") && show_stdout.contains(common::mainnet_network());
+        show_stdout.contains("api.trongrid.io") && show_stdout.contains(common::MAINNET_NETWORK);
     assert!(
         !stale_mainnet,
         "config show must not pair nile network with mainnet RPC; got: {show_stdout}"

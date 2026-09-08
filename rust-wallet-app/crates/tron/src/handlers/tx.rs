@@ -1,5 +1,9 @@
 //! `tron tx` handlers — plan §Phase 6 Task 5.6.
 //!
+//! Test module placed mid-file (after `wait`); `#[allow]` suppresses the
+//! `items_after_test_module` lint — tests use `super::*` so position is moot.
+#![allow(clippy::items_after_test_module)]
+//!
 //! `get` maps straight onto `TronGridClient::get_tx_info`. `wait` polls that
 //! same call: the poll loop lives here rather than in the core because it is
 //! scheduling, not chain semantics — no signing, no encoding, nothing an FFI

@@ -236,7 +236,7 @@ fn parse_pinned_url(url: &str) -> (String, Option<tron_wallet_core::chain::SpkiP
 /// char or odd length. Only used to read the SPKI pin prefix inside a
 /// `pinned://<pin>@host` URL.
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 2);

@@ -26,7 +26,7 @@ fn v9_trc20_decimals_returns_6_on_nile() {
             "--contract",
             common::nile_usdt(),
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
         .assert()
@@ -40,7 +40,7 @@ fn v9_trc20_decimals_returns_6_on_nile() {
         .expect("CLI must emit `decimals` field");
     assert_eq!(
         decimals,
-        common::usdt_decimals(),
+        common::USDT_DECIMALS,
         "USDT-TRC20 decimals must be 6 on Nile mainnet"
     );
 }

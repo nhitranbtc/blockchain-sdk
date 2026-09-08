@@ -37,9 +37,9 @@ fn v11_pre_check_blocks_non_self_recipient() {
         .arg("--to")
         .arg(other)
         .arg("--amount")
-        .arg(common::one_usdt_display_amount())
+        .arg(common::ONE_USDT_DISPLAY_AMOUNT)
         .arg("--network")
-        .arg(common::mainnet_network())
+        .arg(common::MAINNET_NETWORK)
         .arg("--confirm-yes")
         .assert();
 
@@ -73,9 +73,9 @@ fn v11_mainnet_self_send_succeeds() {
         .arg("--to")
         .arg(operator_wallet)
         .arg("--amount")
-        .arg(common::one_usdt_display_amount()) // $0.001 USDT-TRC20
+        .arg(common::ONE_USDT_DISPLAY_AMOUNT) // $0.001 USDT-TRC20
         .arg("--network")
-        .arg(common::mainnet_network())
+        .arg(common::MAINNET_NETWORK)
         .arg("--confirm-yes")
         .assert();
 
@@ -131,9 +131,9 @@ fn v11_mainnet_self_send_then_balance_increases() {
         .arg("--to")
         .arg(operator_wallet)
         .arg("--amount")
-        .arg(common::one_usdt_display_amount())
+        .arg(common::ONE_USDT_DISPLAY_AMOUNT)
         .arg("--network")
-        .arg(common::mainnet_network())
+        .arg(common::MAINNET_NETWORK)
         .arg("--confirm-yes")
         .assert()
         .success();

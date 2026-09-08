@@ -65,11 +65,11 @@ fn row_1_trx_native_transfer_signs_offline() {
             "--mnemonic",
             TEST_MNEMONIC,
             "--to",
-            common::nile_recipient_t_addr(),
+            common::nile_recipient(),
             "--amount",
             "1",
             "--fee-limit",
-            common::default_fee_limit_sun(),
+            common::DEFAULT_FEE_LIMIT_SUN,
             "--sign-only",
             "--json",
         ])
@@ -138,7 +138,7 @@ fn row_2_trc20_transfer_encode_call() {
             "encode-call",
             "transfer",
             "--to",
-            common::nile_recipient_t_addr(),
+            common::nile_recipient(),
             "--amount",
             "1",
         ])
@@ -183,7 +183,7 @@ fn row_3_trc20_first_time_receive_wallet_address() {
     let out = common::tron()
         .args(["--rpc", rpc_for_refresh()])
         .args(["wallet", "address", "--pubkey"])
-        .arg(&pubkey_hex)
+        .arg(pubkey_hex)
         .assert()
         .success();
 
@@ -217,9 +217,9 @@ fn row_4_trc20_approve_encode_call() {
             "encode-call",
             "approve",
             "--to",
-            common::nile_recipient_t_addr(),
+            common::nile_recipient(),
             "--amount",
-            common::one_usdt_raw_amount(),
+            common::ONE_USDT_RAW_AMOUNT,
         ])
         .assert()
         .success();
@@ -266,7 +266,7 @@ fn row_6_trc20_insufficient_balance_encode_call() {
             "encode-call",
             "transfer",
             "--to",
-            common::nile_recipient_t_addr(),
+            common::nile_recipient(),
             "--amount",
             amount,
         ])
@@ -305,11 +305,11 @@ fn row_7_send_speedup_rebuilds_with_higher_fee() {
             "--mnemonic",
             TEST_MNEMONIC,
             "--to",
-            common::nile_recipient_t_addr(),
+            common::nile_recipient(),
             "--amount",
             "1",
             "--fee-limit",
-            common::default_fee_limit_sun(),
+            common::DEFAULT_FEE_LIMIT_SUN,
             "--sign-only",
             "--json",
         ])
@@ -329,11 +329,11 @@ fn row_7_send_speedup_rebuilds_with_higher_fee() {
             "--mnemonic",
             TEST_MNEMONIC,
             "--to",
-            common::nile_recipient_t_addr(),
+            common::nile_recipient(),
             "--amount",
             "1",
             "--fee-limit",
-            common::speedup_fee_limit_sun(), // 2× speedup
+            common::SPEEDUP_FEE_LIMIT_SUN, // 2× speedup
             "--sign-only",
             "--json",
         ])
@@ -375,11 +375,11 @@ fn row_7a_rebroadcast_idempotency_consistent_envelope_shape() {
                 "--mnemonic",
                 TEST_MNEMONIC,
                 "--to",
-                common::nile_recipient_t_addr(),
+                common::nile_recipient(),
                 "--amount",
                 "1",
                 "--fee-limit",
-                common::default_fee_limit_sun(),
+                common::DEFAULT_FEE_LIMIT_SUN,
                 "--sign-only",
                 "--json",
             ])
@@ -459,7 +459,7 @@ fn row_8_wallet_to_wallet_trc20_address_round_trip() {
     let from_pubkey = common::tron()
         .args(["--rpc", rpc_for_refresh()])
         .args(["wallet", "address", "--pubkey"])
-        .arg(&pubkey_hex)
+        .arg(pubkey_hex)
         .assert()
         .success();
     let pubkey_t_addr = String::from_utf8_lossy(&from_pubkey.get_output().stdout)

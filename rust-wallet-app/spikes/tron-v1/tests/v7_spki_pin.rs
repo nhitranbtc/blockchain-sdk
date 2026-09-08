@@ -19,8 +19,7 @@ fn v7_pinned_endpoint_accepts_correct_pin() {
     // Correct pin comes from the bundled fixture (`tokens/nile.json`).
     // The fixture value is the source of truth for "the cert pin that the
     // shipped CLI must trust"; cross-checked live by `common::assert_live_spki_pin`.
-    let pin = common::fixture_spki_pin()
-        .expect("tokens/nile.json must pin `test.spki_pin_hex` for this row to assert");
+    let pin = common::fixture_spki_pin();
     let rpc = common::nile_pinned_url(&pin);
 
     common::tron()
@@ -34,7 +33,7 @@ fn v7_pinned_endpoint_accepts_correct_pin() {
 #[ignore = "GATED: RUN_TRON_NILE=1. Wrong pin must surface SPKI error + non-zero exit."]
 fn v7_pinned_endpoint_rejects_wrong_pin() {
     common::require_env(&[common::RUN_TRON_NILE]);
-    let rpc = common::nile_pinned_url(common::wrong_spki_pin());
+    let rpc = common::nile_pinned_url(common::WRONG_SPKI_PIN);
 
     let res = common::tron()
         .args(["--rpc", &rpc])
@@ -64,7 +63,7 @@ fn v7_tronbox_local_no_pin_succeeds() {
     }
 
     common::tron()
-        .args(["--rpc", common::tronbox_rpc_url()])
+        .args(["--rpc", common::TRONBOX_RPC_URL])
         .args(["balance", "--address", common::nile_recipient()])
         .assert()
         .success();

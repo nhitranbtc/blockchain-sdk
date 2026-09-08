@@ -21,7 +21,7 @@
 
 mod common;
 
-/// Pinned KAT: `common::canonical_mnemonic()` at `m/44'/195'/0'/0/0` MUST emit this
+/// Pinned KAT: `common::CANONICAL_MNEMONIC` at `m/44'/195'/0'/0/0` MUST emit this
 /// T-address. Captured from `tron address new --mnemonic ... --json` on
 /// 2026-09-08; if derivation changes (e.g. seed-padding tweak, coin-type
 /// flip, keccak step added) this KAT catches it before downstream tests
@@ -36,7 +36,7 @@ const CANONICAL_ABANDON_ABOUT_AT_DEFAULT_PATH: &str = "TUEZSdKsoDHQMeZwihtdoBiN4
 /// JSON — both are CLI contract violations the spike should surface loud.
 fn derive_address(args: &[&str]) -> (String, String) {
     let assert = common::tron()
-        .args(["address", "new", "--mnemonic", common::canonical_mnemonic()])
+        .args(["address", "new", "--mnemonic", common::CANONICAL_MNEMONIC])
         .args(args)
         .args(["--json"])
         .assert()
@@ -72,7 +72,7 @@ fn v10_default_index_uses_tron_slip44_path() {
     let (addr, path) = derive_address(&["--index", "0"]);
     assert_eq!(
         path,
-        common::tron_slip44_path(),
+        common::TRON_SLIP44_PATH,
         "default --index 0 must use SLIP-44 coin type 195; got {path:?}"
     );
     assert!(
@@ -94,9 +94,9 @@ fn v10_default_index_uses_tron_slip44_path() {
 #[test]
 fn v10_index_zero_and_explicit_default_path_match() {
     let (index_addr, index_path) = derive_address(&["--index", "0"]);
-    let (path_addr, path_path) = derive_address(&["--path", common::tron_slip44_path()]);
-    assert_eq!(index_path, common::tron_slip44_path());
-    assert_eq!(path_path, common::tron_slip44_path());
+    let (path_addr, path_path) = derive_address(&["--path", common::TRON_SLIP44_PATH]);
+    assert_eq!(index_path, common::TRON_SLIP44_PATH);
+    assert_eq!(path_path, common::TRON_SLIP44_PATH);
     assert_eq!(
         index_addr, path_addr,
         "--index 0 and --path m/44'/195'/0'/0/0 must derive the same address; \
@@ -135,8 +135,8 @@ fn v10_sibling_index_produces_different_address() {
 /// hardened step separates the keyspaces.
 #[test]
 fn v10_different_coin_type_produces_different_address() {
-    let (btc_addr, _) = derive_address(&["--path", common::bitcoin_slip44_path()]);
-    let (tron_addr, _) = derive_address(&["--path", common::tron_slip44_path()]);
+    let (btc_addr, _) = derive_address(&["--path", common::BITCOIN_SLIP44_PATH]);
+    let (tron_addr, _) = derive_address(&["--path", common::TRON_SLIP44_PATH]);
     assert_ne!(
         btc_addr, tron_addr,
         "BTC (coin 0) and TRON (coin 195) paths must derive different addresses; \
@@ -158,7 +158,7 @@ fn v10_different_coin_type_produces_different_address() {
 #[test]
 fn v10_kat_canonical_abandon_about_at_default_path_is_pinned() {
     let (addr, path) = derive_address(&["--index", "0"]);
-    assert_eq!(path, common::tron_slip44_path());
+    assert_eq!(path, common::TRON_SLIP44_PATH);
     assert_eq!(
         addr, CANONICAL_ABANDON_ABOUT_AT_DEFAULT_PATH,
         "canonical BIP-39 phrase at default TRON path emitted {addr:?}; \
@@ -190,12 +190,12 @@ fn v10_xpub_export_is_deterministic() {
             "wallet",
             "import",
             "--mnemonic",
-            common::canonical_mnemonic(),
+            common::CANONICAL_MNEMONIC,
             "--network",
-            common::nile_network(),
+            common::NILE_NETWORK,
             "--json",
         ])
-        .env("TRON_PASSWORD", common::v10_password())
+        .env("TRON_PASSWORD", common::V10_PASSWORD)
         .assert()
         .success();
     let import_stdout = String::from_utf8_lossy(&import.get_output().stdout);
@@ -224,10 +224,10 @@ fn v10_xpub_export_is_deterministic() {
             "--wallet-id",
             &wallet_id,
             "--path",
-            common::tron_xpub_path(),
+            common::TRON_XPUB_PATH,
             "--json",
         ])
-        .env("TRON_PASSWORD", common::v10_password())
+        .env("TRON_PASSWORD", common::V10_PASSWORD)
         .assert()
         .success();
     let xpub_second = common::tron()
@@ -237,10 +237,10 @@ fn v10_xpub_export_is_deterministic() {
             "--wallet-id",
             &wallet_id,
             "--path",
-            common::tron_xpub_path(),
+            common::TRON_XPUB_PATH,
             "--json",
         ])
-        .env("TRON_PASSWORD", common::v10_password())
+        .env("TRON_PASSWORD", common::V10_PASSWORD)
         .assert()
         .success();
 
