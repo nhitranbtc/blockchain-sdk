@@ -330,6 +330,145 @@ fn row_4_network_failure_recovery_exits_within_30s() {
 // ROW 5 — live SPKI pin derivation (offline-compatible cert-rotation check)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Derive the sender T-address from a mnemonic without touching the
+/// operator's real wallet store. Imports into a throwaway `--data-dir`,
+/// reads `address` from the JSON output, lets `TempDir` clean up on drop.
+/// Avoids adding a `tron-wallet-core` dev-dep to the spike just for one
+/// address derivation in the self-transfer tests below.
+fn derive_sender_address(mnemonic: &str) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = common::tron()
+        .args(["--data-dir"])
+        .arg(dir.path())
+        .args([
+            "wallet",
+            "import",
+            "--mnemonic",
+            mnemonic,
+            "--name",
+            "self-transfer-derive",
+            "--network",
+            common::NILE_NETWORK,
+            "--password",
+            "derive-only-no-funds",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&out.get_output().stdout).expect("CLI must emit JSON");
+    v["address"]
+        .as_str()
+        .expect("wallet import --json must emit `address`")
+        .to_string()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 6 — native TRX self-transfer (sender → sender, NEGATIVE PATH)
+//
+// TRON's native `TransferContract` rejects `owner == to` at the PROTOCOL
+// level on every chain (Nile included) with
+// `CONTRACT_VALIDATE_ERROR Contract validate error : Cannot transfer TRX
+//  to yourself.`. Our CLI's mainnet-only self-send precheck
+// (`trc20.rs:357`) does NOT fire here, so the rejection comes back from
+// the full node — this row pins that the CLI surfaces it cleanly without
+// panicking. (TRC-20 self-transfer succeeds — see row_7 — because the
+// ERC-20-style `transfer(address,uint256)` selector does not compare
+// `msg.sender` to `to`.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1 + funded sender. Protocol-level self-transfer rejection smoke."]
+fn row_6_native_trx_self_transfer() {
+    common::require_env(&["RUN_TRON_NILE"]);
+    let mnemonic = common::nile_sender_mnemonic();
+    let self_addr = derive_sender_address(&mnemonic);
+    assert!(
+        self_addr.starts_with('T'),
+        "derived sender address must be a T-address (base58); got {self_addr}"
+    );
+
+    // CLI must exit non-zero, surface CONTRACT_VALIDATE_ERROR on the
+    // network rejection, and not panic. Mirrors row_4's negative-path
+    // shape (closed-port RPC → transport error) but for protocol-level
+    // rejection.
+    let res = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "wallet",
+            "send",
+            "--to",
+            &self_addr,
+            "--amount",
+            "1", // 1 TRX (display units; UnitArg::Trx default per cli.rs:195)
+            "--mnemonic",
+            &mnemonic,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&res.get_output().stderr);
+    let stdout = String::from_utf8_lossy(&res.get_output().stdout);
+    let combined = format!("{stderr}\n{stdout}");
+    assert!(
+        combined.contains("CONTRACT_VALIDATE_ERROR")
+            || combined.contains("Cannot transfer TRX to yourself"),
+        "native self-transfer must surface CONTRACT_VALIDATE_ERROR; got: {combined}"
+    );
+
+    eprintln!(
+        "[row_6] native TRX self-transfer correctly rejected at protocol layer; \
+         self={self_addr}; stderr (truncated) = {}",
+        combined.chars().take(200).collect::<String>()
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 7 — TRC-20 self-transfer (sender → sender, live Nile broadcast)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "GATED: RUN_TRON_NILE=1 + funded sender. Self-transfer (TRC-20 to own address) smoke."]
+fn row_7_trc20_self_transfer() {
+    common::require_env(&["RUN_TRON_NILE"]);
+    let mnemonic = common::nile_sender_mnemonic();
+    let self_addr = derive_sender_address(&mnemonic);
+
+    // Cert-rotation gate (same rationale as row_1).
+    let pin = common::assert_live_spki_pin();
+    eprintln!("[row_7] live SPKI pin: {pin}");
+
+    let res = common::tron()
+        .args(["--rpc", common::nile_rpc_url()])
+        .args([
+            "trc20",
+            "send",
+            "--contract",
+            common::nile_usdt(),
+            "--to",
+            &self_addr,
+            "--amount",
+            "1", // 1 USDT-display (6 decimals, scaled server-side)
+            "--mnemonic",
+            &mnemonic,
+            "--network",
+            common::NILE_NETWORK,
+            "--json",
+        ])
+        .assert()
+        .success();
+    let v: serde_json::Value =
+        serde_json::from_slice(&res.get_output().stdout).expect("CLI must emit JSON");
+    let txid = v["txid"]
+        .as_str()
+        .expect("CLI must emit `txid` on successful broadcast");
+    assert_eq!(txid.len(), 64, "broadcast txid must be 64 hex chars");
+    eprintln!("[row_7] TRC-20 self-transfer OK: txid={txid} self={self_addr}");
+}
+
 #[test]
 #[ignore = "GATED: RUN_TRON_NILE=1 (touches network for TLS handshake, but does not spend funds)."]
 fn row_5_live_spki_pin_matches_fixture() {

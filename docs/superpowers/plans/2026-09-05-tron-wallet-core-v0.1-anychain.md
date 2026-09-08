@@ -25,12 +25,12 @@
 
 Locked by user ("do it") against the grill Round-1 frontier:
 
-| Q | Decision | Answer |
-|---|----------|--------|
-| Q1 | Vendor scope | **(a) all three** (`anychain-core`, `anychain-tron`, `anychain-kms`) — bus-factor is project-wide, partial vendor creates false mitigation |
-| Q2 | Patch application form | **(a) in-tree edits** to vendored `src/**` — agents read fix in place; no second-file hunt |
-| Q3 | Upstream sync cadence | **(a) quarterly** — `.local/anychain` working-copy fetch (`git -C .local/anychain fetch origin && git reset --hard origin/main`) + regression test gate + manual diff review |
-| Q4 | ADR form | **(a) amend** ADR-0001 with `## 2026-09-06 Revision` section — single-document audit trail |
+| Q   | Decision               | Answer                                                                                                                                                                       |
+| --- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Q1  | Vendor scope           | **(a) all three** (`anychain-core`, `anychain-tron`, `anychain-kms`) — bus-factor is project-wide, partial vendor creates false mitigation                                   |
+| Q2  | Patch application form | **(a) in-tree edits** to vendored `src/**` — agents read fix in place; no second-file hunt                                                                                   |
+| Q3  | Upstream sync cadence  | **(a) quarterly** — `.local/anychain` working-copy fetch (`git -C .local/anychain fetch origin && git reset --hard origin/main`) + regression test gate + manual diff review |
+| Q4  | ADR form               | **(a) amend** ADR-0001 with `## 2026-09-06 Revision` section — single-document audit trail                                                                                   |
 
 Downstream Round 2 (pending): vendored-tree git location, version-suffix style, patch-bundling per PR, lockfile `source =` policy.
 
@@ -91,24 +91,24 @@ Layer 1: OS + hardware
 
 ### V0.1 CLI surface (22 commands, 6 top-level)
 
-| Top-level | Commands                                                                                          | Stories              |
-|-----------|---------------------------------------------------------------------------------------------------|----------------------|
-| `wallet`  | create, import, show, list, delete, rename, balance, send, send-speedup (9)                      | 1, 2, 3, 5, 9, 10, 11, 12, 17, 22 |
-| `address` | new, xpub (2)                                                                                     | 3, 19                |
-| `balance` | --address, --address --token (2)                                                                  | 3, 22                |
-| `trc20`   | send, approve, balance, allowance (4)                                                             | 21, 22, 25, 30       |
-| `tx`      | get, wait (2)                                                                                     | 7                    |
-| `config`  | show, set-rpc, set-network (3)                                                                    | 10, 11, 26, 27       |
+| Top-level | Commands                                                                    | Stories                           |
+| --------- | --------------------------------------------------------------------------- | --------------------------------- |
+| `wallet`  | create, import, show, list, delete, rename, balance, send, send-speedup (9) | 1, 2, 3, 5, 9, 10, 11, 12, 17, 22 |
+| `address` | new, xpub (2)                                                               | 3, 19                             |
+| `balance` | --address, --address --token (2)                                            | 3, 22                             |
+| `trc20`   | send, approve, balance, allowance (4)                                       | 21, 22, 25, 30                    |
+| `tx`      | get, wait (2)                                                               | 7                                 |
+| `config`  | show, set-rpc, set-network (3)                                              | 10, 11, 26, 27                    |
 
 **Story coverage matrix** (from deep-dive V0.1 feature map):
 
-| Stories                                  | Status     |
-|------------------------------------------|------------|
-| 1, 2, 3, 5, 7, 9, 10, 11, 12, 17, 19, 21, 22, 25, 27, 28, 29 | shipped V0.1 |
-| 4, 6, 31, 32, 33                         | V0.1.5 (Stake 2.0, ships with V0.1 release train) |
-| 8, 18, 23, 24, 30, 34, 35, 36            | V0.2 (deferred — `tron resource`, `tron sign-message`, `tron tokens list/register`, `tron tokens balances`, `tron trc10 issue/send/buy`, `tron governance propose/approve`, `tron storage buy/sell`) |
-| 26 (TronBox local)                       | shipped via `--rpc http://127.0.0.1:8090` flag |
-| **13 (batch), 14 (drain), 15 (ref-block), 16 (manual exp)** | **DROPPED from V0.1** — redesign deferred (user-stories.md must update to mark these as removed) |
+| Stories                                                      | Status                                                                                                                                                                                               |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1, 2, 3, 5, 7, 9, 10, 11, 12, 17, 19, 21, 22, 25, 27, 28, 29 | shipped V0.1                                                                                                                                                                                         |
+| 4, 6, 31, 32, 33                                             | V0.1.5 (Stake 2.0, ships with V0.1 release train)                                                                                                                                                    |
+| 8, 18, 23, 24, 30, 34, 35, 36                                | V0.2 (deferred — `tron resource`, `tron sign-message`, `tron tokens list/register`, `tron tokens balances`, `tron trc10 issue/send/buy`, `tron governance propose/approve`, `tron storage buy/sell`) |
+| 26 (TronBox local)                                           | shipped via `--rpc http://127.0.0.1:8090` flag                                                                                                                                                       |
+| **13 (batch), 14 (drain), 15 (ref-block), 16 (manual exp)**  | **DROPPED from V0.1** — redesign deferred (user-stories.md must update to mark these as removed)                                                                                                     |
 
 ### Cross-crate flows (stable)
 
@@ -148,94 +148,94 @@ tx::broadcast::serialize_for_broadcast(&tx)
 
 **Vendored** under `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/`. Consumer crates reference via `path = "..."` — no crates.io, no `[patch.crates-io]`. Pinned to upstream tags per `anychain-vendored/SOURCE.md`. Local patches layered on top per `anychain-vendored/CHANGELOG.md` (Q2 dual-SHA256 txid, Q13 varint, Zeroizing gap).
 
-| Crate           | Source tag (pinned) | Local path                                                              | Purpose                                                                                |
-|-----------------|---------------------|-------------------------------------------------------------------------|----------------------------------------------------------------------------------------|
-| `anychain-core` | `cf3aa2d` (upstream `main` HEAD, 2026-09-04 — tags `0.1.8`/`0.2.14`/`0.1.23` do NOT exist on remote) | `rust-wallet-app/crates/anychain-vendored/anychain-core` (`0.1.0-local.0`) | Shared traits (`Address`, `PublicKey`, `Transaction`, `Format`, `Network`), crypto utilities (`keccak256`, `sha256`, `func_selector`), `hex` re-export |
-| `anychain-tron` | `cf3aa2d` (same — vendored together as one snapshot, 2026-09-04) | `rust-wallet-app/crates/anychain-vendored/anychain-tron` (`0.2.0-local.0`) | Wire format — T-base58check address, protobuf `Transaction` envelope, **17 contract builders** (TRX transfer, TRC-20 transfer/approve, Stake 2.0 freeze/unfreeze/delegate/cancel/withdraw, witness vote, withdraw vote, account create, generic trigger), `abi::encode_call` |
-| `anychain-kms`  | `cf3aa2d` (same — vendored together as one snapshot, 2026-09-04) | `rust-wallet-app/crates/anychain-vendored/anychain-kms` (`0.1.0-local.0`) | BIP-39 mnemonic (8 languages), BIP-32 HD (SLIP-44 coin 195), secp256k1 sign, xprv serialize with `Zeroizing<String>` |
+| Crate           | Source tag (pinned)                                                                                  | Local path                                                                 | Purpose                                                                                                                                                                                                                                                                      |
+| --------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `anychain-core` | `cf3aa2d` (upstream `main` HEAD, 2026-09-04 — tags `0.1.8`/`0.2.14`/`0.1.23` do NOT exist on remote) | `rust-wallet-app/crates/anychain-vendored/anychain-core` (`0.1.0-local.0`) | Shared traits (`Address`, `PublicKey`, `Transaction`, `Format`, `Network`), crypto utilities (`keccak256`, `sha256`, `func_selector`), `hex` re-export                                                                                                                       |
+| `anychain-tron` | `cf3aa2d` (same — vendored together as one snapshot, 2026-09-04)                                     | `rust-wallet-app/crates/anychain-vendored/anychain-tron` (`0.2.0-local.0`) | Wire format — T-base58check address, protobuf `Transaction` envelope, **17 contract builders** (TRX transfer, TRC-20 transfer/approve, Stake 2.0 freeze/unfreeze/delegate/cancel/withdraw, witness vote, withdraw vote, account create, generic trigger), `abi::encode_call` |
+| `anychain-kms`  | `cf3aa2d` (same — vendored together as one snapshot, 2026-09-04)                                     | `rust-wallet-app/crates/anychain-vendored/anychain-kms` (`0.1.0-local.0`)  | BIP-39 mnemonic (8 languages), BIP-32 HD (SLIP-44 coin 195), secp256k1 sign, xprv serialize with `Zeroizing<String>`                                                                                                                                                         |
 
 **Pin to vendored commit (NOT `^`, NOT crates.io).** Phase 0 Task 0.2 replaces crates.io pins with vendored `path =` references in `[workspace.dependencies]`. Consumers NEVER see `crates.io/index` for these names — local-path wins deterministically.
 
 ### B. Vendoring — CHOSEN 2026-09-06 (was REJECTED 2026-09-05; flipped by issue #540)
 
-| Source repo         | Vendored path                                              | Outcome                                                                                  |
-|---------------------|------------------------------------------------------------|------------------------------------------------------------------------------------------|
+| Source repo         | Vendored path                                               | Outcome                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0xcregis/anychain` | `rust-wallet-app/crates/anychain-vendored/{core,tron,kms}/` | **CHOSEN 2026-09-06** — bus-factor = 1 for `anychain-tron` (1 author, 3 commits trailing 12 months) was an accepted risk on 2026-09-05, but issue #540 (non-canonical varint for `fee_limit` in `anychain-tron 0.2.14`, NPE on TronGrid) flipped the cost/benefit: local copy lets us apply the varint fix without waiting on upstream turnaround. Local patches layered on top per Q13 + Q2 + Zeroizing gap. Per-file `SPDX-License-Identifier: MIT OR Apache-2.0` preserved. `anychain-vendored/SOURCE.md` records pinned commit SHAs. Upstream tracked via the `.local/anychain` working-copy clone under `.local/` (kept untracked via convention-gitignore; spun up 2026-09-06 per PR #541 amendment as a replacement for the original `vendor/0xcregis-upstream` git remote plan; relocated from repo root `/anychain` → `.local/anychain` 2026-09-06) for security-fix back-port — but consumer builds never touch crates.io. **Update cadence:** sync vendored copy with upstream `main` on a quarterly schedule, gate on (a) no breaking wire-format change, (b) regression tests in `tron-wallet-core/tests/` still PASS, (c) manual review of diff. |
 
 **Open follow-up (not blocking v0.1 release):** update `docs/wallets/2026-09-05-adr-0001-tron-sdk-anychain-vs-raw-primitives.md` → ADR-0002 (or amend ADR-0001 with `## 2026-09-06 Revision` section) capturing the vendoring reversal. Filed as issue #541 (or follow-up edit in same PR). PR author to decide whether to amend or supersede; the ADR should record both the original 2026-09-05 decision (crates.io exact pin, bus-factor accepted) AND the 2026-09-06 revision (vendor, bus-factor mitigated, #540 fix locally).
 
 ### C. Crypto (RustCrypto ecosystem) [workspace deps]
 
-| Crate                      | Version   | Purpose                                                                                          |
-|----------------------------|-----------|--------------------------------------------------------------------------------------------------|
-| `argon2`                   | 0.5       | Argon2id KDF for wallet file encryption                                                          |
-| `aes-gcm`                  | 0.10      | AES-256-GCM symmetric encryption for `EncryptedWallet` blob                                      |
-| `sha2`                     | 0.10      | SHA-256 (txid double-hash workaround per Q2)                                                     |
-| `sha3`                     | workspace | Keccak-256 (TRON address derivation via `anychain_core::keccak256`)                              |
-| `tiny-keccak`              | 2.0.2     | Direct keccak256 call (kept to avoid anychain indirection)                                       |
-| `bs58`                     | 0.5       | base58check encoding (T-addresses, xprv)                                                         |
-| `hex`                      | workspace | hex encode/decode for protobuf serialization                                                     |
-| `zeroize`                  | 1.x       | Secure memory hygiene (`Zeroizing<Vec<u8>>` wrap on raw `sk` before `secp256k1_sign`)            |
-| `subtle`                   | 2         | Constant-time comparison (`ConstantTimeEq` for SPKI pin, xprv compare)                            |
-| `libsecp256k1` (secp256k1) | workspace | ECDSA signing via anychain-kms (`secp256k1_sign`)                                                |
+| Crate                      | Version   | Purpose                                                                               |
+| -------------------------- | --------- | ------------------------------------------------------------------------------------- |
+| `argon2`                   | 0.5       | Argon2id KDF for wallet file encryption                                               |
+| `aes-gcm`                  | 0.10      | AES-256-GCM symmetric encryption for `EncryptedWallet` blob                           |
+| `sha2`                     | 0.10      | SHA-256 (txid double-hash workaround per Q2)                                          |
+| `sha3`                     | workspace | Keccak-256 (TRON address derivation via `anychain_core::keccak256`)                   |
+| `tiny-keccak`              | 2.0.2     | Direct keccak256 call (kept to avoid anychain indirection)                            |
+| `bs58`                     | 0.5       | base58check encoding (T-addresses, xprv)                                              |
+| `hex`                      | workspace | hex encode/decode for protobuf serialization                                          |
+| `zeroize`                  | 1.x       | Secure memory hygiene (`Zeroizing<Vec<u8>>` wrap on raw `sk` before `secp256k1_sign`) |
+| `subtle`                   | 2         | Constant-time comparison (`ConstantTimeEq` for SPKI pin, xprv compare)                |
+| `libsecp256k1` (secp256k1) | workspace | ECDSA signing via anychain-kms (`secp256k1_sign`)                                     |
 
 ### D. Encoding / serialization [workspace deps]
 
-| Crate            | Version   | Purpose                                                                 |
-|------------------|-----------|-------------------------------------------------------------------------|
-| `serde`          | 1.x       | derive Serialize/Deserialize                                            |
-| `serde_json`     | 1.x       | JSON for TronGrid HTTP envelope + receipt parsing                       |
-| `protobuf`       | 3.7       | TRON wire format (proto-generated types in `anychain-tron/src/protocol/`) |
-| `ethereum-types` | workspace | Address type for ABI encoder                                            |
-| `ethabi`         | workspace | TRC-20 ABI encode/decode (EIP-20 compatible)                            |
-| `chrono`         | workspace | timestamp handling for tx expiration                                    |
-| `uuid`           | 1.x       | Wallet id (UUID v4)                                                     |
+| Crate            | Version   | Purpose                                                                             |
+| ---------------- | --------- | ----------------------------------------------------------------------------------- |
+| `serde`          | 1.x       | derive Serialize/Deserialize                                                        |
+| `serde_json`     | 1.x       | JSON for TronGrid HTTP envelope + receipt parsing                                   |
+| `protobuf`       | 3.7       | TRON wire format (proto-generated types in `anychain-tron/src/protocol/`)           |
+| `ethereum-types` | workspace | Address type for ABI encoder                                                        |
+| `ethabi`         | workspace | TRC-20 ABI encode/decode (EIP-20 compatible)                                        |
+| `chrono`         | workspace | timestamp handling for tx expiration                                                |
+| `uuid`           | 1.x       | Wallet id (UUID v4)                                                                 |
 | `directories`    | workspace | Desktop data dir resolution — **V0.1.5 removal**, replaced by `WalletStorage` trait |
 
 ### F. Async + HTTP [workspace deps]
 
-| Crate                 | Version | Purpose                                                                                  |
-|-----------------------|---------|------------------------------------------------------------------------------------------|
-| `tokio`               | 1.x     | Async runtime (current_thread for FFI; multi-thread for CLI)                             |
+| Crate                 | Version | Purpose                                                                                                                           |
+| --------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `tokio`               | 1.x     | Async runtime (current_thread for FFI; multi-thread for CLI)                                                                      |
 | `reqwest`             | 0.12    | HTTP client for TronGrid (`broadcast`, `gettxinfo`, `getnowblock`, `getaccount`, `getaccountresource`, `triggerconstantcontract`) |
-| `rustls`              | 0.23    | TLS for reqwest + custom SPKI pin verifier                                                |
-| `rustls-native-certs` | 0.7     | Desktop OS root cert loading                                                              |
-| `webpki`              | 0.22    | Custom `ServerCertVerifier` for SPKI pinning                                             |
-| `x509-parser`         | 0.16    | SPKI DER extraction from cert chain                                                       |
+| `rustls`              | 0.23    | TLS for reqwest + custom SPKI pin verifier                                                                                        |
+| `rustls-native-certs` | 0.7     | Desktop OS root cert loading                                                                                                      |
+| `webpki`              | 0.22    | Custom `ServerCertVerifier` for SPKI pinning                                                                                      |
+| `x509-parser`         | 0.16    | SPKI DER extraction from cert chain                                                                                               |
 
 ### G. Errors + tracing + FFI safety [workspace deps]
 
-| Crate                | Version   | Purpose                                                                  |
-|----------------------|-----------|--------------------------------------------------------------------------|
-| `thiserror`          | 1.x       | `Error` enum derive                                                      |
-| `tracing`            | workspace | Structured logging (STDERR, secret-scrubbing filter)                     |
-| `tracing-subscriber` | workspace | Subscriber with EnvFilter                                                |
-| `once_cell`          | 1.x       | Lazy-init for FFI runtime + compiled regex patterns                      |
-| `regex`              | 1.x       | Panic-message scrubber (redact mnemonic + password + xprv + secret)      |
-| `cbindgen`           | workspace | Generates C header for FFI consumers (build-time only, doesn't ship)     |
+| Crate                | Version   | Purpose                                                              |
+| -------------------- | --------- | -------------------------------------------------------------------- |
+| `thiserror`          | 1.x       | `Error` enum derive                                                  |
+| `tracing`            | workspace | Structured logging (STDERR, secret-scrubbing filter)                 |
+| `tracing-subscriber` | workspace | Subscriber with EnvFilter                                            |
+| `once_cell`          | 1.x       | Lazy-init for FFI runtime + compiled regex patterns                  |
+| `regex`              | 1.x       | Panic-message scrubber (redact mnemonic + password + xprv + secret)  |
+| `cbindgen`           | workspace | Generates C header for FFI consumers (build-time only, doesn't ship) |
 
 ### H. Test-only (dev-dependencies)
 
-| Crate            | Purpose                                                                  |
-|------------------|--------------------------------------------------------------------------|
-| `proptest`       | Property-based tests for amount parsing, address derivation              |
-| `tempfile`       | Atomic-write test fixtures                                               |
+| Crate            | Purpose                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| `proptest`       | Property-based tests for amount parsing, address derivation                                |
+| `tempfile`       | Atomic-write test fixtures                                                                 |
 | `testcontainers` | TronBox Docker auto-spawn (`0.23`, desktop-only, mobile skips via `--no-default-features`) |
-| `bitcoind`       | regtest smoke tests (desktop-only)                                       |
+| `bitcoind`       | regtest smoke tests (desktop-only)                                                         |
 
 ### I. Build tools + system dependencies (CI + dev environment)
 
-| Tool        | Version       | Role                                                                  |
-|-------------|---------------|-----------------------------------------------------------------------|
+| Tool        | Version       | Role                                                                                                                                                                     |
+| ----------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `protoc`    | **≥3.12**     | System protobuf compiler invoked by anychain-tron build (transitive). Required only if anychain-tron uses `prost-build` at runtime. Spike README documents install path. |
-| `cargo`     | 1.98.1 stable | **MSRV bump from 1.85 to 1.98.1** (anychain workspace toolchain pin). Pin via `rust-toolchain.toml`. |
-| **TronBox** | **4.10.0+**   | Local dev regtest + `MockTRC20` deploy. Node ≥20. NOT a Rust dep — runs in Node for spike regtest only via `testcontainers`. |
+| `cargo`     | 1.98.1 stable | **MSRV bump from 1.85 to 1.98.1** (anychain workspace toolchain pin). Pin via `rust-toolchain.toml`.                                                                     |
+| **TronBox** | **4.10.0+**   | Local dev regtest + `MockTRC20` deploy. Node ≥20. NOT a Rust dep — runs in Node for spike regtest only via `testcontainers`.                                             |
 
 ### J. Cross-crate reuse (NOT a new dep — single import)
 
-| Source                  | Path                                                | Role                                                          |
-|-------------------------|-----------------------------------------------------|--------------------------------------------------------------|
-| `SpkiPinnedVerifier`    | `bitcoin_wallet_core::chain::spki`                  | Custom `rustls::ServerCertVerifier` for SPKI-pinned JSON-RPC transport. Same `rustls = "0.23"` version as TRON-side `reqwest`. Single import, zero new code. |
+| Source               | Path                               | Role                                                                                                                                                         |
+| -------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SpkiPinnedVerifier` | `bitcoin_wallet_core::chain::spki` | Custom `rustls::ServerCertVerifier` for SPKI-pinned JSON-RPC transport. Same `rustls = "0.23"` version as TRON-side `reqwest`. Single import, zero new code. |
 
 ### License summary (all compatible with workspace MIT)
 
@@ -243,12 +243,12 @@ MIT OR Apache-2.0 (anychain-*, argon2, aes-gcm, sha2, sha3, bs58, hex), Apache-2
 
 ### Mobile-unsafe deps (must remove for V0.1.5)
 
-| Crate                      | Reason                            | Replacement                                       |
-|----------------------------|-----------------------------------|---------------------------------------------------|
-| `directories`              | No iOS/Android backend           | `WalletStorage` trait (File/Keychain/EncryptedFile) |
-| `rustls-native-certs`      | Desktop-only OS cert loader       | `tls_built_in_root_certs(true)` on mobile (reqwest) |
-| `testcontainers` (dev-dep) | Requires Docker                  | Skip on mobile via `cfg(not(target_os = "android"))` + `--no-default-features` |
-| `bitcoind` (dev-dep)       | Test fixture only                | Same gating                                       |
+| Crate                      | Reason                      | Replacement                                                                    |
+| -------------------------- | --------------------------- | ------------------------------------------------------------------------------ |
+| `directories`              | No iOS/Android backend      | `WalletStorage` trait (File/Keychain/EncryptedFile)                            |
+| `rustls-native-certs`      | Desktop-only OS cert loader | `tls_built_in_root_certs(true)` on mobile (reqwest)                            |
+| `testcontainers` (dev-dep) | Requires Docker             | Skip on mobile via `cfg(not(target_os = "android"))` + `--no-default-features` |
+| `bitcoind` (dev-dep)       | Test fixture only           | Same gating                                                                    |
 
 **V0.1.5 work:** remove `directories` (1 crate), gate `rustls-native-certs` behind `#[cfg(not(mobile))]`, gate `testcontainers` + `bitcoind` behind `#[cfg(desktop)]`. ~30 LOC of Cargo.toml changes.
 
@@ -393,75 +393,75 @@ rust-wallet-app/spikes/tron-v1/                 # verification harness (V1-V10 +
 
 #### Shipped in v0.1 (per phase)
 
-| Module | API | Phase |
-|---|---|---|
-| `keys` | `Mnemonic::generate(MnemonicType, Language)`, `Mnemonic::from_phrase(&str, Language) -> Result<Self>`, `Mnemonic::to_seed(&str) -> Zeroizing<[u8;64]>` | 1 (Task 1.1) |
-| `keys` | `derive_keypair(&Mnemonic, &str, &DerivationPath) -> Result<KeyPair>` | 1 (Task 1.2) |
-| `keys` | `KeyPair { secret: Zeroizing<[u8;32]>, public: TronPublicKey }` | 1 (Task 1.2) |
-| `keys` | `keypair_from_secret_bytes(&[u8]) -> Result<KeyPair>` | 6 (status note) |
-| `keys` | `xpub(&Mnemonic, &str, &DerivationPath) -> Result<String>` | 1 (Task 1.6) |
-| `address` | `Address::from_public_key`, `to_base58`, `to_hex`, `FromStr`, `is_valid` | 1 (Task 1.3) |
-| `tx::builder` | `trx_transfer`, `set_ref_block`, `set_fee_limit`, `set_timestamp`, `set_expiration` | 2 (Task 2.1) |
-| `tx::builder` | `trc20_transfer` (default fee_limit 130_000_000 sun) | 3 (Task 3.1) |
-| `tx::builder` | `trc20_approve` | 3 (Task 3.2) |
-| `tx::sign` | `sign_hash(&Zeroizing<[u8;32]>, &[u8;32]) -> Result<Signed>` | 1 (Task 1.5) |
-| `tx::sign` | `txid(&[u8]) -> [u8;32]` (single SHA-256, Q2 corrected in `c521d50`) | 1 (Task 1.5) |
-| `tx::sign` | `sign_tx(&Zeroizing<[u8;32]>, params) -> Result<SignedTransaction>` | 2 (Task 2.2) |
-| `chain` (TronGridClient) | `new(&str, Option<&[u8;32]>)` (SPKI pin) | 2 (Task 2.3) |
-| `chain` | `broadcast(&SignedTransaction) -> Result<BroadcastReceipt>` (POST `/wallet/broadcasthex`, #540 fix) | 2 (Task 2.3) |
-| `chain` | `get_now_block() -> Result<BlockHeader>` (TAPOS via `walletsolidity/getnowblock`) | 2 (Task 2.4) |
-| `chain` | `get_tx_info(&str) -> Result<TransactionInfo>` | 2 (Task 2.5) |
-| `chain` | `trigger_constant_contract(contract, selector, args)` | 3 (Task 3.3) |
-| `chain` | `get_account(&str) -> Result<AccountInfo>` (native TRX balance) | 6 (status note) |
-| `chain` | `get_transaction_by_id(&str) -> Result<OriginalCall>` (for fee-bump rebuild) | 6 (status note) |
-| `tx::submit` | `prepare_trx`, `prepare_trc20`, `prepare_trc20_approve` | 6 (status note) |
-| `tx::submit` | `sign_prepared`, `broadcast_signed` | 6 (status note) |
-| `tx::submit` | `submit_trx`, `submit_trc20`, `submit_trc20_approve` | 6 (status note) |
-| `tx::submit` | `submit_send_speedup` (TRON has no RBF — emits a *new* txid) | 6 (status note) |
-| `tx::submit` | `wait_for_confirm`, `validate_poll_interval` | 6 (status note) |
-| `tx::submit` | `decode_trc20_call` (refuses non-zero pad in address word, refuses non-`transfer`/`approve` selectors) | 6 (status note) |
-| `tx::submit` | `DEFAULT_EXPIRATION_MS = 60_000` (const-asserted < 5min) | 6 (status note) |
-| `tx::submit` | `SubmitOptions`, `Submitted` | 6 (status note) |
-| `trc20` | `balance_of(rpc, contract, owner) -> Result<U256>` | 3 (Task 3.4) |
-| `trc20` | `decimals`, `symbol`, `name` (constant-call wrappers) | 3 (Task 3.4) |
-| `trc20` | `allowance(rpc, contract, owner, spender) -> Result<U256>` (selector `0xdd62ed3e`) | 6 (status note) |
-| `trc20` | `TRANSFER_SELECTOR`, `APPROVE_SELECTOR`, `ALLOWANCE_SELECTOR`, `encode_uint256_arg`, `balance_of_args`, `allowance_args`, `no_args` | 3 + 6 |
-| `tokens` | `load(network) -> &[Token]` (bundled `tokens/{local,nile,mainnet}.json` via `include_str!`) | 3 (Task 3.5) |
-| `tokens` | `by_symbol`, `by_address`, `test_addresses` | 3 + CLI surface |
-| `resource` | `estimate_energy(rpc, owner, contract, selector) -> Result<EnergyEstimate>` | 3 (Task 3.8) |
-| `resource` | `scale_energy(raw, max_factor)`; DEM `max_factor = 3.4×` | 3 (Task 3.8) |
-| `wallet` | `WalletManager::create_with_meta` | 6 (status note) |
-| `wallet` | `WalletManager::import_from_phrase`, `import_private_key` (`--private-key-file` path) | 5 + 6 |
-| `wallet` | `WalletManager::unlock(id, pw) -> Result<UnlockedWallet>` | 5 |
-| `wallet` | `WalletManager::rename(id, pw, new_name)` | 6 (status note) |
-| `wallet` | `WalletManager::delete(id)`, `summary`, `list`, `list_summaries` (skips `Error::Encryption` on bad blobs) | 5 + 6 |
-| `wallet` | `UnlockedWallet { id, secret, name?, network }`; `WalletKind { Mnemonic, PrivateKey }`; `WalletSecret` | 6 (status note) |
-| `wallet` | `UnlockedWallet::{keypair, mnemonic, summary}` | 6 (status note) |
-| `disambig` | `AddressNetwork::{Ethereum, Tron}`; `ensure_same_network`, `ensure_tron_style_address` | Layer 4 |
-| `crypto` | `EncryptedWallet`, `random_salt`, `derive_key` (Argon2id), `encrypt`/`decrypt` (AES-256-GCM) | Layer 4 |
-| `error` | `Error { Address, Mnemonic, Derivation, Signing, TransactionBuild, Node, NodeResponse, Wallet, Encryption, Config, Pal }` | Layer 4 |
-| `config` | `Network { Mainnet, Shasta, Nile, Local }`, `TronConfig`, `default_rpc_url`; SPKI pins for mainnet (constant) + Nile (extracted 2026-09-06, `e9cc763b…9479f`) | 2 (Task 2.7) + Phase 3 carry-over |
-| `platform::storage` (PAL trait) | `WalletStorage::{put_atomic, get, delete, list_ids}` | Layer 3 |
-| `platform::{network,clock,info}` (PAL traits) | `NetworkClient::post_json`, `Clock::now_epoch_ms`, `PlatformInfo::{data_dir, app_name, is_mobile}` | Layer 3 |
-| `platform::{desktop,android,ios,test}` (impls) | `FileWalletStorage`, `EncryptedFileWalletStorage`, `KeychainWalletStorage`, `InMemoryStorage`; `ReqwestClient` / `OSRootsClient`; `SystemClock` / `MockClock` / `IosClock` / `AndroidClock`; `DesktopPlatformInfo` / `IosPlatformInfo` / `AndroidPlatformInfo` / `StaticInfo` | Layer 2 |
+| Module                                         | API                                                                                                                                                                                                                                                                           | Phase                             |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `keys`                                         | `Mnemonic::generate(MnemonicType, Language)`, `Mnemonic::from_phrase(&str, Language) -> Result<Self>`, `Mnemonic::to_seed(&str) -> Zeroizing<[u8;64]>`                                                                                                                        | 1 (Task 1.1)                      |
+| `keys`                                         | `derive_keypair(&Mnemonic, &str, &DerivationPath) -> Result<KeyPair>`                                                                                                                                                                                                         | 1 (Task 1.2)                      |
+| `keys`                                         | `KeyPair { secret: Zeroizing<[u8;32]>, public: TronPublicKey }`                                                                                                                                                                                                               | 1 (Task 1.2)                      |
+| `keys`                                         | `keypair_from_secret_bytes(&[u8]) -> Result<KeyPair>`                                                                                                                                                                                                                         | 6 (status note)                   |
+| `keys`                                         | `xpub(&Mnemonic, &str, &DerivationPath) -> Result<String>`                                                                                                                                                                                                                    | 1 (Task 1.6)                      |
+| `address`                                      | `Address::from_public_key`, `to_base58`, `to_hex`, `FromStr`, `is_valid`                                                                                                                                                                                                      | 1 (Task 1.3)                      |
+| `tx::builder`                                  | `trx_transfer`, `set_ref_block`, `set_fee_limit`, `set_timestamp`, `set_expiration`                                                                                                                                                                                           | 2 (Task 2.1)                      |
+| `tx::builder`                                  | `trc20_transfer` (default fee_limit 130_000_000 sun)                                                                                                                                                                                                                          | 3 (Task 3.1)                      |
+| `tx::builder`                                  | `trc20_approve`                                                                                                                                                                                                                                                               | 3 (Task 3.2)                      |
+| `tx::sign`                                     | `sign_hash(&Zeroizing<[u8;32]>, &[u8;32]) -> Result<Signed>`                                                                                                                                                                                                                  | 1 (Task 1.5)                      |
+| `tx::sign`                                     | `txid(&[u8]) -> [u8;32]` (single SHA-256, Q2 corrected in `c521d50`)                                                                                                                                                                                                          | 1 (Task 1.5)                      |
+| `tx::sign`                                     | `sign_tx(&Zeroizing<[u8;32]>, params) -> Result<SignedTransaction>`                                                                                                                                                                                                           | 2 (Task 2.2)                      |
+| `chain` (TronGridClient)                       | `new(&str, Option<&[u8;32]>)` (SPKI pin)                                                                                                                                                                                                                                      | 2 (Task 2.3)                      |
+| `chain`                                        | `broadcast(&SignedTransaction) -> Result<BroadcastReceipt>` (POST `/wallet/broadcasthex`, #540 fix)                                                                                                                                                                           | 2 (Task 2.3)                      |
+| `chain`                                        | `get_now_block() -> Result<BlockHeader>` (TAPOS via `walletsolidity/getnowblock`)                                                                                                                                                                                             | 2 (Task 2.4)                      |
+| `chain`                                        | `get_tx_info(&str) -> Result<TransactionInfo>`                                                                                                                                                                                                                                | 2 (Task 2.5)                      |
+| `chain`                                        | `trigger_constant_contract(contract, selector, args)`                                                                                                                                                                                                                         | 3 (Task 3.3)                      |
+| `chain`                                        | `get_account(&str) -> Result<AccountInfo>` (native TRX balance)                                                                                                                                                                                                               | 6 (status note)                   |
+| `chain`                                        | `get_transaction_by_id(&str) -> Result<OriginalCall>` (for fee-bump rebuild)                                                                                                                                                                                                  | 6 (status note)                   |
+| `tx::submit`                                   | `prepare_trx`, `prepare_trc20`, `prepare_trc20_approve`                                                                                                                                                                                                                       | 6 (status note)                   |
+| `tx::submit`                                   | `sign_prepared`, `broadcast_signed`                                                                                                                                                                                                                                           | 6 (status note)                   |
+| `tx::submit`                                   | `submit_trx`, `submit_trc20`, `submit_trc20_approve`                                                                                                                                                                                                                          | 6 (status note)                   |
+| `tx::submit`                                   | `submit_send_speedup` (TRON has no RBF — emits a *new* txid)                                                                                                                                                                                                                  | 6 (status note)                   |
+| `tx::submit`                                   | `wait_for_confirm`, `validate_poll_interval`                                                                                                                                                                                                                                  | 6 (status note)                   |
+| `tx::submit`                                   | `decode_trc20_call` (refuses non-zero pad in address word, refuses non-`transfer`/`approve` selectors)                                                                                                                                                                        | 6 (status note)                   |
+| `tx::submit`                                   | `DEFAULT_EXPIRATION_MS = 60_000` (const-asserted < 5min)                                                                                                                                                                                                                      | 6 (status note)                   |
+| `tx::submit`                                   | `SubmitOptions`, `Submitted`                                                                                                                                                                                                                                                  | 6 (status note)                   |
+| `trc20`                                        | `balance_of(rpc, contract, owner) -> Result<U256>`                                                                                                                                                                                                                            | 3 (Task 3.4)                      |
+| `trc20`                                        | `decimals`, `symbol`, `name` (constant-call wrappers)                                                                                                                                                                                                                         | 3 (Task 3.4)                      |
+| `trc20`                                        | `allowance(rpc, contract, owner, spender) -> Result<U256>` (selector `0xdd62ed3e`)                                                                                                                                                                                            | 6 (status note)                   |
+| `trc20`                                        | `TRANSFER_SELECTOR`, `APPROVE_SELECTOR`, `ALLOWANCE_SELECTOR`, `encode_uint256_arg`, `balance_of_args`, `allowance_args`, `no_args`                                                                                                                                           | 3 + 6                             |
+| `tokens`                                       | `load(network) -> &[Token]` (bundled `tokens/{local,nile,mainnet}.json` via `include_str!`)                                                                                                                                                                                   | 3 (Task 3.5)                      |
+| `tokens`                                       | `by_symbol`, `by_address`, `test_addresses`                                                                                                                                                                                                                                   | 3 + CLI surface                   |
+| `resource`                                     | `estimate_energy(rpc, owner, contract, selector) -> Result<EnergyEstimate>`                                                                                                                                                                                                   | 3 (Task 3.8)                      |
+| `resource`                                     | `scale_energy(raw, max_factor)`; DEM `max_factor = 3.4×`                                                                                                                                                                                                                      | 3 (Task 3.8)                      |
+| `wallet`                                       | `WalletManager::create_with_meta`                                                                                                                                                                                                                                             | 6 (status note)                   |
+| `wallet`                                       | `WalletManager::import_from_phrase`, `import_private_key` (`--private-key-file` path)                                                                                                                                                                                         | 5 + 6                             |
+| `wallet`                                       | `WalletManager::unlock(id, pw) -> Result<UnlockedWallet>`                                                                                                                                                                                                                     | 5                                 |
+| `wallet`                                       | `WalletManager::rename(id, pw, new_name)`                                                                                                                                                                                                                                     | 6 (status note)                   |
+| `wallet`                                       | `WalletManager::delete(id)`, `summary`, `list`, `list_summaries` (skips `Error::Encryption` on bad blobs)                                                                                                                                                                     | 5 + 6                             |
+| `wallet`                                       | `UnlockedWallet { id, secret, name?, network }`; `WalletKind { Mnemonic, PrivateKey }`; `WalletSecret`                                                                                                                                                                        | 6 (status note)                   |
+| `wallet`                                       | `UnlockedWallet::{keypair, mnemonic, summary}`                                                                                                                                                                                                                                | 6 (status note)                   |
+| `disambig`                                     | `AddressNetwork::{Ethereum, Tron}`; `ensure_same_network`, `ensure_tron_style_address`                                                                                                                                                                                        | Layer 4                           |
+| `crypto`                                       | `EncryptedWallet`, `random_salt`, `derive_key` (Argon2id), `encrypt`/`decrypt` (AES-256-GCM)                                                                                                                                                                                  | Layer 4                           |
+| `error`                                        | `Error { Address, Mnemonic, Derivation, Signing, TransactionBuild, Node, NodeResponse, Wallet, Encryption, Config, Pal }`                                                                                                                                                     | Layer 4                           |
+| `config`                                       | `Network { Mainnet, Shasta, Nile, Local }`, `TronConfig`, `default_rpc_url`; SPKI pins for mainnet (constant) + Nile (extracted 2026-09-06, `e9cc763b…9479f`)                                                                                                                 | 2 (Task 2.7) + Phase 3 carry-over |
+| `platform::storage` (PAL trait)                | `WalletStorage::{put_atomic, get, delete, list_ids}`                                                                                                                                                                                                                          | Layer 3                           |
+| `platform::{network,clock,info}` (PAL traits)  | `NetworkClient::post_json`, `Clock::now_epoch_ms`, `PlatformInfo::{data_dir, app_name, is_mobile}`                                                                                                                                                                            | Layer 3                           |
+| `platform::{desktop,android,ios,test}` (impls) | `FileWalletStorage`, `EncryptedFileWalletStorage`, `KeychainWalletStorage`, `InMemoryStorage`; `ReqwestClient` / `OSRootsClient`; `SystemClock` / `MockClock` / `IosClock` / `AndroidClock`; `DesktopPlatformInfo` / `IosPlatformInfo` / `AndroidPlatformInfo` / `StaticInfo` | Layer 2                           |
 
 #### Pending in v0.1 (deferred per plan)
 
-| Surface | Status | Source |
-|---|---|---|
-| **Stake 2.0** builders (`freeze_balance_v2`, `unfreeze_balance_v2`, `delegate_resource`, `undelegate_resource`, `withdraw_expire_unfreeze`, `vote_witness`, `withdraw_reward`) | **pending — V0.1.5** (with V0.1 release train) | Plan §Story coverage matrix; Stories 4, 6, 31, 32, 33 |
-| **TRC-10 transfer** (`TransferAssetContract`) + `IssueAsset` / `ParticipateAssetIssue` | **pending — V0.2** | Story 34 |
-| **Energy / bandwidth delegation** (`tron resource`) | **pending — V0.2** | Story 8 |
-| **Sign-message** (`tron sign-message`) | **pending — V0.2** | Story 18 |
-| **Tokens list / register** (registry mutation) | **pending — V0.2** | Stories 23, 24 |
-| **Tokens balances** (multi-token sweep) | **pending — V0.2** | Story 30 |
-| **Governance propose / approve** | **pending — V0.2** | Story 35 |
-| **Storage buy / sell** | **pending — V0.2** | Story 36 |
-| **Batch send** (one envelope, N recipients) | **DROPPED** from V0.1 | Story 13 |
-| **Drain** (sweep all to a target address) | **DROPPED** from V0.1 | Story 14 |
-| **Manual ref-block** (operator supplies the ref block instead of `getnowblock`) | **DROPPED** from V0.1 | Story 15 |
-| **Manual expiration** (operator supplies the expiration timestamp) | **DROPPED** from V0.1 | Story 16 |
-| **Layer 5 FFI** (`extern "C"` surface: panic-message scrubber, single-threaded tokio runtime) | **deferred** — separate crate `tron-wallet-core-ffi` not yet created | Plan §Architecture |
+| Surface                                                                                                                                                                        | Status                                                               | Source                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- | ----------------------------------------------------- |
+| **Stake 2.0** builders (`freeze_balance_v2`, `unfreeze_balance_v2`, `delegate_resource`, `undelegate_resource`, `withdraw_expire_unfreeze`, `vote_witness`, `withdraw_reward`) | **pending — V0.1.5** (with V0.1 release train)                       | Plan §Story coverage matrix; Stories 4, 6, 31, 32, 33 |
+| **TRC-10 transfer** (`TransferAssetContract`) + `IssueAsset` / `ParticipateAssetIssue`                                                                                         | **pending — V0.2**                                                   | Story 34                                              |
+| **Energy / bandwidth delegation** (`tron resource`)                                                                                                                            | **pending — V0.2**                                                   | Story 8                                               |
+| **Sign-message** (`tron sign-message`)                                                                                                                                         | **pending — V0.2**                                                   | Story 18                                              |
+| **Tokens list / register** (registry mutation)                                                                                                                                 | **pending — V0.2**                                                   | Stories 23, 24                                        |
+| **Tokens balances** (multi-token sweep)                                                                                                                                        | **pending — V0.2**                                                   | Story 30                                              |
+| **Governance propose / approve**                                                                                                                                               | **pending — V0.2**                                                   | Story 35                                              |
+| **Storage buy / sell**                                                                                                                                                         | **pending — V0.2**                                                   | Story 36                                              |
+| **Batch send** (one envelope, N recipients)                                                                                                                                    | **DROPPED** from V0.1                                                | Story 13                                              |
+| **Drain** (sweep all to a target address)                                                                                                                                      | **DROPPED** from V0.1                                                | Story 14                                              |
+| **Manual ref-block** (operator supplies the ref block instead of `getnowblock`)                                                                                                | **DROPPED** from V0.1                                                | Story 15                                              |
+| **Manual expiration** (operator supplies the expiration timestamp)                                                                                                             | **DROPPED** from V0.1                                                | Story 16                                              |
+| **Layer 5 FFI** (`extern "C"` surface: panic-message scrubber, single-threaded tokio runtime)                                                                                  | **deferred** — separate crate `tron-wallet-core-ffi` not yet created | Plan §Architecture                                    |
 
 #### Notes
 
@@ -472,19 +472,19 @@ rust-wallet-app/spikes/tron-v1/                 # verification harness (V1-V10 +
 
 ## Risk Register
 
-| # | Risk                                                                                  | Severity | Mitigation                                                                                  |
-|---|---------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------------------------------|
-| 1 | anychain-tron bus-factor = 1 (loki-cmu)                                              | **MITIGATED** | **Vendored 2026-09-06** under `rust-wallet-app/crates/anychain-vendored/`. Local patches applied without upstream turnaround (Q2 + Zeroizing applied; Q13 varint hypothesis disproved by live broadcast 2026-09-06 → REVERTED → broadcast endpoint switched to `/wallet/broadcasthex`). Upstream tracked via `.local/anychain` working-copy clone under `.local/` for security-fix back-port (relocated from repo root 2026-09-06), but consumer builds never touch crates.io. |
-| 2 | `TronTransaction::to_transaction_id()` returns single-SHA256                          | **MITIGATED** | **Fixed in vendored copy** (Task 0.7): `anychain-tron/src/transaction.rs::to_transaction_id` patched to return `SHA256(SHA256(raw_bytes))`. Regression test `tests/varint_and_txid.rs::txid_is_double_sha256` guards against silent revert. |
-| 3 | `secp256k1_sign(sk: &[u8])` does NOT Zeroize its sk param                              | **MITIGATED** | Patched in vendored `anychain-kms/src/sign.rs` (Task 0.7) — `Zeroizing` wrap inside function scope. Belt-and-suspenders: caller also wraps `sk_bytes` in `Zeroizing<Vec<u8>>` (Task 1.2). |
-| 4 | MSRV bump 1.85 → 1.98.1 breaks workspace MSRV contract                                 | MEDIUM   | Pin `rust-toolchain.toml` to 1.98.1; if 1.94 check passes, advertise 1.94 — no fake MSRV    |
-| 5 | `trx::build_contract` formats `type_url` via `{:?}` Debug derive                      | LOW      | Serialize `type_url` via `hex::encode` if needed; works today but fragile. Vendored copy gives us a local fix point if needed. |
-| 6 | `protobuf` wire format diverges from `serde_json` default                              | LOW      | Use `serde_json::to_value(&tx)` not `tx.to_string()` (Debug)                                |
-| 7 | Mobile CI matrix has no Docker fallback                                                | MEDIUM   | Round-1 grill Q6: `cargo build --target aarch64-apple-ios` + `cargo build --target aarch64-linux-android` FFI compile only; NO mobile runtime smoke in v0.1; add Nile-based runtime mobile smoke in v0.2 |
-| 8 | user-stories.md diverges from deep-dive on 11 stories + Nile USDT address              | MEDIUM   | Phase 0 Task 0.4 — regenerate user-stories.md from this plan                                |
-| 9 | send-speedup rebroadcast semantics not verified (Round-1 grill Q10)                    | MEDIUM   | Spike V7a: verify `wallet/broadcasthex` idempotency before row 7 ships              |
-| 10 | Mainnet smoke not implemented                                                          | HIGH     | Q4 gate: $0.001 USDT self-send with pre-check audit hook + `RUN_TRON_MAINNET=1` env gate. Unblocked 2026-09-06 by Q13 varint fix in vendored copy. |
-| 11 | **NEW 2026-09-06** — vendored anychain diverges from upstream; security-fix back-port lag | MEDIUM | Quarterly `.local/anychain` working-copy sync gate (`git -C .local/anychain fetch origin && git -C .local/anychain reset --hard origin/main`, then re-vendor if HEAD changed): (a) no breaking wire-format change, (b) `cargo test -p tron-wallet-core` PASS, (c) manual diff review. Track in `anychain-vendored/CHANGELOG.md`. |
+| #   | Risk                                                                                      | Severity      | Mitigation                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --- | ----------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | anychain-tron bus-factor = 1 (loki-cmu)                                                   | **MITIGATED** | **Vendored 2026-09-06** under `rust-wallet-app/crates/anychain-vendored/`. Local patches applied without upstream turnaround (Q2 + Zeroizing applied; Q13 varint hypothesis disproved by live broadcast 2026-09-06 → REVERTED → broadcast endpoint switched to `/wallet/broadcasthex`). Upstream tracked via `.local/anychain` working-copy clone under `.local/` for security-fix back-port (relocated from repo root 2026-09-06), but consumer builds never touch crates.io. |
+| 2   | `TronTransaction::to_transaction_id()` returns single-SHA256                              | **MITIGATED** | **Fixed in vendored copy** (Task 0.7): `anychain-tron/src/transaction.rs::to_transaction_id` patched to return `SHA256(SHA256(raw_bytes))`. Regression test `tests/varint_and_txid.rs::txid_is_double_sha256` guards against silent revert.                                                                                                                                                                                                                                    |
+| 3   | `secp256k1_sign(sk: &[u8])` does NOT Zeroize its sk param                                 | **MITIGATED** | Patched in vendored `anychain-kms/src/sign.rs` (Task 0.7) — `Zeroizing` wrap inside function scope. Belt-and-suspenders: caller also wraps `sk_bytes` in `Zeroizing<Vec<u8>>` (Task 1.2).                                                                                                                                                                                                                                                                                      |
+| 4   | MSRV bump 1.85 → 1.98.1 breaks workspace MSRV contract                                    | MEDIUM        | Pin `rust-toolchain.toml` to 1.98.1; if 1.94 check passes, advertise 1.94 — no fake MSRV                                                                                                                                                                                                                                                                                                                                                                                       |
+| 5   | `trx::build_contract` formats `type_url` via `{:?}` Debug derive                          | LOW           | Serialize `type_url` via `hex::encode` if needed; works today but fragile. Vendored copy gives us a local fix point if needed.                                                                                                                                                                                                                                                                                                                                                 |
+| 6   | `protobuf` wire format diverges from `serde_json` default                                 | LOW           | Use `serde_json::to_value(&tx)` not `tx.to_string()` (Debug)                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 7   | Mobile CI matrix has no Docker fallback                                                   | MEDIUM        | Round-1 grill Q6: `cargo build --target aarch64-apple-ios` + `cargo build --target aarch64-linux-android` FFI compile only; NO mobile runtime smoke in v0.1; add Nile-based runtime mobile smoke in v0.2                                                                                                                                                                                                                                                                       |
+| 8   | user-stories.md diverges from deep-dive on 11 stories + Nile USDT address                 | MEDIUM        | Phase 0 Task 0.4 — regenerate user-stories.md from this plan                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 9   | send-speedup rebroadcast semantics not verified (Round-1 grill Q10)                       | MEDIUM        | Spike V7a: verify `wallet/broadcasthex` idempotency before row 7 ships                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 10  | Mainnet smoke not implemented                                                             | HIGH          | Q4 gate: $0.001 USDT self-send with pre-check audit hook + `RUN_TRON_MAINNET=1` env gate. Unblocked 2026-09-06 by Q13 varint fix in vendored copy.                                                                                                                                                                                                                                                                                                                             |
+| 11  | **NEW 2026-09-06** — vendored anychain diverges from upstream; security-fix back-port lag | MEDIUM        | Quarterly `.local/anychain` working-copy sync gate (`git -C .local/anychain fetch origin && git -C .local/anychain reset --hard origin/main`, then re-vendor if HEAD changed): (a) no breaking wire-format change, (b) `cargo test -p tron-wallet-core` PASS, (c) manual diff review. Track in `anychain-vendored/CHANGELOG.md`.                                                                                                                                               |
 
 ---
 
@@ -578,11 +578,11 @@ Two labels already exist and are reused as-is — do not recreate them:
 
 Priority assignment for v0.1 issues:
 
-| Priority      | Applies to                                                                                       |
-| ------------- | ------------------------------------------------------------------------------------------------ |
+| Priority      | Applies to                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------------- |
 | `priority/p0` | Phase Set Up, plus the 5 critical-path modules (trongrid, persist, mnemonic_cipher, sign, config) |
-| `priority/p1` | Phases 1-4 — address/keys/sign, tx, TRC-20, test scenario integration                            |
-| `priority/p2` | Phases 5-6 — PAL traits, CLI scaffold                                                            |
+| `priority/p1` | Phases 1-4 — address/keys/sign, tx, TRC-20, test scenario integration                             |
+| `priority/p2` | Phases 5-6 — PAL traits, CLI scaffold                                                             |
 | `priority/p3` | Phase 7 polish, plus anything deferred but still tracked                                          |
 
 **Verification:** `gh label list --search rust-tron` shows both labels; `gh label list --search priority/` shows p0-p3.
@@ -1137,10 +1137,10 @@ RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
 
 **Tests in `trc20_local.rs`** (5 unit + 3 harness + 9 scenario rows = 17 total):
 
-| Surface | Tests | Gating | What it asserts |
-|---------|-------|--------|-----------------|
-| URL parsing (5) | `new_local_parses_http_url_with_default_port_9090`, `new_local_parses_http_url_with_explicit_port`, `new_local_rejects_https_url`, `new_local_rejects_pinned_scheme`, `new_pinned_defaults_scheme_to_https` | none (unit) | `JsonRpcClient::new_local` / `new_pinned` parse + reject paths per Phase 2 SPKI pin scheme |
-| Harness (3) | `tronbox_local_node_serves_getnowblock`, `tronbox_local_node_serves_walletsolidity_getnowblock`, `tronbox_local_node_serves_eth_chainid` | `RUN_TRON_LOCAL=1`, `#[ignore]` | Container spawn + readiness probe (`/wallet/getnowblock` 2xx), TAPOS path (`/walletsolidity/getnowblock` 2xx per Task 2.4), `/jsonrpc eth_chainId` shape (0x-prefixed hex per Round-1 grill Q6). All 3 verify node is reachable, no fund required |
+| Surface                    | Tests                                                                                                                                                                                                                                                                                                                                          | Gating                          | What it asserts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| URL parsing (5)            | `new_local_parses_http_url_with_default_port_9090`, `new_local_parses_http_url_with_explicit_port`, `new_local_rejects_https_url`, `new_local_rejects_pinned_scheme`, `new_pinned_defaults_scheme_to_https`                                                                                                                                    | none (unit)                     | `JsonRpcClient::new_local` / `new_pinned` parse + reject paths per Phase 2 SPKI pin scheme                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Harness (3)                | `tronbox_local_node_serves_getnowblock`, `tronbox_local_node_serves_walletsolidity_getnowblock`, `tronbox_local_node_serves_eth_chainid`                                                                                                                                                                                                       | `RUN_TRON_LOCAL=1`, `#[ignore]` | Container spawn + readiness probe (`/wallet/getnowblock` 2xx), TAPOS path (`/walletsolidity/getnowblock` 2xx per Task 2.4), `/jsonrpc eth_chainId` shape (0x-prefixed hex per Round-1 grill Q6). All 3 verify node is reachable, no fund required                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | Scenario rows 1-8 + 7a (9) | `row_1_trx_native_transfer_local`, `row_2_trc20_transfer_held_recipient_local`, `row_3_trc20_first_time_receive_local`, `row_4_trc20_approval_local`, `row_5_stake2_freeze_unfreeze_local`, `row_6_trc20_insufficient_balance_local`, `row_7_send_speedup_local`, `row_7a_rebroadcast_idempotency_local`, `row_8_wallet_to_wallet_trc20_local` | `RUN_TRON_LOCAL=1`, `#[ignore]` | **Local half only:** TRC-20 calldata encode (`abi::encode_transfer` 68 bytes, `0xa9059cbb` selector at [0..4]; `encode_approve` 68 bytes, `0x095ea7b3` selector), dual-SHA-256 txid (`Sha256::digest(Sha256::digest(raw))`), local secp256k1 sign with `v ∈ {0, 1}` (TRON, NOT Ethereum `v+27` per Q8). Row 1: 256-byte representative TransferContract envelope. Row 4: `approve(1000 mock USDT)` selector assertion `== [0x09, 0x5e, 0xa7, 0xb3]`. Row 6: `u256::MAX` amount slot encoding. Row 7: speedup = different envelope (timestamp + fee_limit) → different txid. Row 7a: identical envelope → identical txid (determinism; node-side `DUP_TRANSACTION_ERROR` verified live by Task 7.8 V7a on Nile). Row 8: `wallet_lookup("cold")` → T-address → ABI encode. **No broadcast, no receipt parse, no on-chain assertion.** |
 
 **What is NOT covered by `trc20_local.rs`** (deferred to live paths per module docstring):
@@ -1211,18 +1211,18 @@ RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
 
 **Key reality** (vs the original Task 4.3 sketch):
 
-| Aspect | Original sketch | Actual |
-|--------|----------------|--------|
-| Workflow file | `tron-integration.yml` (new file) | `rust-tron-core-ci.yml` (existing umbrella) |
-| Trigger | `[push]` | `push` + `pull_request` to `rust-tron-core` (via umbrella) |
-| Toolchain action | `dtolnay/rust-toolchain@1.98.1` | `dtolnay/rust-toolchain@master` + `with.toolchain: "1.98.1"` |
-| Rust-cache | not configured | `Swatinem/rust-cache@v2` with `workspaces: rust-wallet-app -> target` |
-| Protoc install | not mentioned | `apt-get install protobuf-compiler` per job (required by `spikes/tron-v1/build.rs`) |
-| Working directory | implicit (root) | explicit `working-directory: rust-wallet-app` |
-| Timeout | not specified | `timeout-minutes: 30` (cold-runner Docker pull) |
-| Job ordering | parallel | `needs: rust-lint` (sequential — see `rust-test-nile-spike` rationale at `:269-272`) |
-| Test command | `cargo test --test trc20_local -- --nocapture` | `cargo test -p tron-v1-spike --test trc20_local -- --include-ignored --nocapture` |
-| Test gating | implicit `#[ignore]` only | `RUN_TRON_LOCAL=1` env + `--include-ignored` (handles both gates) |
+| Aspect            | Original sketch                                | Actual                                                                               |
+| ----------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Workflow file     | `tron-integration.yml` (new file)              | `rust-tron-core-ci.yml` (existing umbrella)                                          |
+| Trigger           | `[push]`                                       | `push` + `pull_request` to `rust-tron-core` (via umbrella)                           |
+| Toolchain action  | `dtolnay/rust-toolchain@1.98.1`                | `dtolnay/rust-toolchain@master` + `with.toolchain: "1.98.1"`                         |
+| Rust-cache        | not configured                                 | `Swatinem/rust-cache@v2` with `workspaces: rust-wallet-app -> target`                |
+| Protoc install    | not mentioned                                  | `apt-get install protobuf-compiler` per job (required by `spikes/tron-v1/build.rs`)  |
+| Working directory | implicit (root)                                | explicit `working-directory: rust-wallet-app`                                        |
+| Timeout           | not specified                                  | `timeout-minutes: 30` (cold-runner Docker pull)                                      |
+| Job ordering      | parallel                                       | `needs: rust-lint` (sequential — see `rust-test-nile-spike` rationale at `:269-272`) |
+| Test command      | `cargo test --test trc20_local -- --nocapture` | `cargo test -p tron-v1-spike --test trc20_local -- --include-ignored --nocapture`    |
+| Test gating       | implicit `#[ignore]` only                      | `RUN_TRON_LOCAL=1` env + `--include-ignored` (handles both gates)                    |
 
 **Verification:** CI runs on every push + PR to `rust-tron-core`; the `docker:dind` service container provides the Docker daemon; testcontainers 0.23 spawns TronBox from `tronbox/tre:latest`.
 
@@ -1234,14 +1234,14 @@ RUN_TRON_LOCAL=1 cargo test -p tron-v1-spike --test trc20_local \
 
 **Tests in `trc20_nile.rs`** (1 canonical + 4 scenario rows + 1 sanity = 6 total, all `#[ignore]` except sanity — submit directly to live Nile when run with `--ignored`; no env-var gate after 2026-09-07):
 
-| Test | What it asserts |
-|------|-----------------|
-| `trc20_transfer_full_flow_nile` (canonical, `#[ignore]`) | **Setup:** load sender + recipient from bundled `tokens/nile.json` (`test.sender-tr20` / `test.recipient-tr20`); SLIP-44 derive via `derive_keypair(&mnemonic, "", &path)` on path `m/44'/195'/0'/0/0`; canonical Nile USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` looked up via `tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")`; SPKI-pinned RPC via `TronGridClient::new(&cfg.rpc_url, Some(SpkiPin::from_bytes(...)))` (pin from `tokens/nile.json`, override via `TRON_NILE_SPKI_PIN`).<br>**Action:** snapshot `balance_before = balance_of(usdt, recipient)`; build + sign TriggerSmartContract via `tx::builder::trc20_transfer` + `tx::sign::sign_tx`; broadcast via `TronGridClient::broadcast(&signed_envelope_hex)` against `/wallet/broadcasthex` (PR #541); poll confirmation via test-local `poll_for_confirmation(&rpc, &txid, 120s)`.<br>**Assert:** `txid` non-empty + `local_txid == network_txid` (single-SHA-256 regression guard); snapshot `balance_after`; **`balance_after − balance_before ≥ ONE_USDT`** (delta-based — pre-funded recipient cannot pass without broadcast actually moving funds). |
-| `row_1_trx_native_transfer_nile` (§4.5, `#[ignore]`) | **Setup:** same fixture load as canonical; SLIP-44 TRON path `m/44'/195'/0'/0/0` via `derive_keypair`.<br>**Action:** build native TRX transfer via `tx::builder::trx_transfer` + `set_ref_block(head)` + `set_fee_limit(0)` + `set_timestamp(now_ms)`; `sign_tx`; broadcast via `TronGridClient::broadcast(&signed_envelope_hex)` against `/wallet/broadcasthex` (PR #541) — **NO SPKI pin** (`TronGridClient::new(..., None)`).<br>**Assert (4 checks, in order):**<br>1. `receipt.is_success()` — broadcast accepted.<br>2. `receipt.txid` non-empty.<br>3. `local_txid_hex == receipt.txid` (case-insensitive) — single-SHA-256 wire form per live Nile 2026-09-06; regression guard for reverted Q2 plan hypothesis.<br>4. `spent_sun = rpc.get_account(owner).balance_sun BEFORE − AFTER ≥ ONE_TRX_SUN` (2026-09-07 instrumentation) — lower bound only because bandwidth burn widens actual delta; catches "broadcast SUCCESS but chain never moved funds" regressions. |
-| `row_2_broadcast_rebroadcast_idempotency_nile` (§4.5, `#[ignore]`) | **Setup:** same fixture + USDT contract as canonical; SLIP-44 derive; `TronGridClient::new(..., None)` (no SPKI pin — idempotency is a wire-protocol invariant; cert verifier does not affect it).<br>**Action:** build + sign ONE USDT-TRC20 transfer envelope; first broadcast via `TronGridClient::broadcast(&signed_envelope_hex)`; re-POST the SAME `signed_envelope_hex`; poll confirmation on first broadcast.<br>**Assert (no-double-charge ladder):**<br>1. First broadcast `receipt.is_success()` + non-empty txid + `local_txid == network_txid`.<br>2. Rebroadcast: SUCCESS path → `txid == first_txid` (memoized); non-SUCCESS path → `code` or `message` must mention `DUP_TRANSACTION` (live verified 2026-09-06 on Nile: `code = "DUP_TRANSACTION_ERROR"`, `message = "Dup transaction."`).<br>3. Balance window: `ONE_USDT ≤ balance_after − balance_before < 2 × ONE_USDT` — single-credit invariant catches both "funds never moved" and "rebroadcast double-charged" regressions. |
-| `row_3_mobile_ffi_nile` (§4.5, `#[ignore]`) | Stub — mobile FFI smoke from Dart binding. Out of spike-harness scope (Phase 5 PAL + FFI bridge); body keeps fixture load so the binding drops in cleanly. |
-| `row_4_network_failure_recovery_nile` (§4.5, `#[ignore]`) | 1. Point `JsonRpcClient::new_local("http://127.0.0.1:9999")` at closed port (kernel returns `ECONNREFUSED` sub-millisecond).<br>2. Probe `balance_of_trc20(...)` against the closed port.<br>3. Assert: (a) returns `Err(_)` (sub-ms `ECONNREFUSED`); (b) elapsed < 30s (no hang); (c) no panic. Maps to Phase 6 CLI retry policy: transport error → exit code 3, never panic. |
-| `derive_sender_produces_t_address_with_known_phrase` (sanity, unit) | 1. `derive_sender("abandon ×11 about")` returns 34-char `T`-prefixed address.<br>2. Determinism — same phrase produces same address across calls.<br>3. SHA-256 pre-image over address bytes logged for anychain-kms derivation drift detection. |
+| Test                                                                | What it asserts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trc20_transfer_full_flow_nile` (canonical, `#[ignore]`)            | **Setup:** load sender + recipient from bundled `tokens/nile.json` (`test.sender-tr20` / `test.recipient-tr20`); SLIP-44 derive via `derive_keypair(&mnemonic, "", &path)` on path `m/44'/195'/0'/0/0`; canonical Nile USDT `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf` looked up via `tron_wallet_core::tokens::by_symbol(Network::Nile, "USDT")`; SPKI-pinned RPC via `TronGridClient::new(&cfg.rpc_url, Some(SpkiPin::from_bytes(...)))` (pin from `tokens/nile.json`, override via `TRON_NILE_SPKI_PIN`).<br>**Action:** snapshot `balance_before = balance_of(usdt, recipient)`; build + sign TriggerSmartContract via `tx::builder::trc20_transfer` + `tx::sign::sign_tx`; broadcast via `TronGridClient::broadcast(&signed_envelope_hex)` against `/wallet/broadcasthex` (PR #541); poll confirmation via test-local `poll_for_confirmation(&rpc, &txid, 120s)`.<br>**Assert:** `txid` non-empty + `local_txid == network_txid` (single-SHA-256 regression guard); snapshot `balance_after`; **`balance_after − balance_before ≥ ONE_USDT`** (delta-based — pre-funded recipient cannot pass without broadcast actually moving funds). |
+| `row_1_trx_native_transfer_nile` (§4.5, `#[ignore]`)                | **Setup:** same fixture load as canonical; SLIP-44 TRON path `m/44'/195'/0'/0/0` via `derive_keypair`.<br>**Action:** build native TRX transfer via `tx::builder::trx_transfer` + `set_ref_block(head)` + `set_fee_limit(0)` + `set_timestamp(now_ms)`; `sign_tx`; broadcast via `TronGridClient::broadcast(&signed_envelope_hex)` against `/wallet/broadcasthex` (PR #541) — **NO SPKI pin** (`TronGridClient::new(..., None)`).<br>**Assert (4 checks, in order):**<br>1. `receipt.is_success()` — broadcast accepted.<br>2. `receipt.txid` non-empty.<br>3. `local_txid_hex == receipt.txid` (case-insensitive) — single-SHA-256 wire form per live Nile 2026-09-06; regression guard for reverted Q2 plan hypothesis.<br>4. `spent_sun = rpc.get_account(owner).balance_sun BEFORE − AFTER ≥ ONE_TRX_SUN` (2026-09-07 instrumentation) — lower bound only because bandwidth burn widens actual delta; catches "broadcast SUCCESS but chain never moved funds" regressions.                                                                                                                                                         |
+| `row_2_broadcast_rebroadcast_idempotency_nile` (§4.5, `#[ignore]`)  | **Setup:** same fixture + USDT contract as canonical; SLIP-44 derive; `TronGridClient::new(..., None)` (no SPKI pin — idempotency is a wire-protocol invariant; cert verifier does not affect it).<br>**Action:** build + sign ONE USDT-TRC20 transfer envelope; first broadcast via `TronGridClient::broadcast(&signed_envelope_hex)`; re-POST the SAME `signed_envelope_hex`; poll confirmation on first broadcast.<br>**Assert (no-double-charge ladder):**<br>1. First broadcast `receipt.is_success()` + non-empty txid + `local_txid == network_txid`.<br>2. Rebroadcast: SUCCESS path → `txid == first_txid` (memoized); non-SUCCESS path → `code` or `message` must mention `DUP_TRANSACTION` (live verified 2026-09-06 on Nile: `code = "DUP_TRANSACTION_ERROR"`, `message = "Dup transaction."`).<br>3. Balance window: `ONE_USDT ≤ balance_after − balance_before < 2 × ONE_USDT` — single-credit invariant catches both "funds never moved" and "rebroadcast double-charged" regressions.                                                                                                                                  |
+| `row_3_mobile_ffi_nile` (§4.5, `#[ignore]`)                         | Stub — mobile FFI smoke from Dart binding. Out of spike-harness scope (Phase 5 PAL + FFI bridge); body keeps fixture load so the binding drops in cleanly.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `row_4_network_failure_recovery_nile` (§4.5, `#[ignore]`)           | 1. Point `JsonRpcClient::new_local("http://127.0.0.1:9999")` at closed port (kernel returns `ECONNREFUSED` sub-millisecond).<br>2. Probe `balance_of_trc20(...)` against the closed port.<br>3. Assert: (a) returns `Err(_)` (sub-ms `ECONNREFUSED`); (b) elapsed < 30s (no hang); (c) no panic. Maps to Phase 6 CLI retry policy: transport error → exit code 3, never panic.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `derive_sender_produces_t_address_with_known_phrase` (sanity, unit) | 1. `derive_sender("abandon ×11 about")` returns 34-char `T`-prefixed address.<br>2. Determinism — same phrase produces same address across calls.<br>3. SHA-256 pre-image over address bytes logged for anychain-kms derivation drift detection.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 **Row 2 added (2026-09-07):** `row_2_broadcast_rebroadcast_idempotency_nile` absorbed from the deleted `tests/v10_broadcast.rs::live_broadcast_rebroadcast_idempotency_on_nile`. Same envelope POSTed twice; asserts the network treats the second POST as idempotent — SUCCESS path requires same txid (no double-charge); non-SUCCESS path requires `code` or `message` to mention `DUP_TRANSACTION`. Closes plan Phase 7 Task 6.8 (V7a) regression guard. `trc20_nile.rs` is now the single source of truth for Nile live-RPC tests.
 
@@ -1288,11 +1288,11 @@ cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 
 > **2026-09-07 — row 2 removed.** The original Task 4.5 row 2 ("TRC-20 transfer on real test USDT contract") was a placeholder for what became the canonical `trc20_transfer_full_flow_nile` row in Task 4.4. Once that canonical row landed, the §4.5 row 2 redundant scenario (single `balanceOf` read) was deleted 2026-09-07; see the rationale paragraph under the §4.4 test table. Row numbers below skip from 1 to 3.
 
-| # | Scenario | Difference from Local | Pass criteria |
-|---|----------|----------------------|---------------|
-| 1 | TRX native transfer | Same | tx accepted on real network; `receipt.is_success()` + non-empty txid + locally-computed txid == network-reported txid (single-SHA-256 per live Nile 2026-09-06). **2026-09-07:** pre/post `rpc.get_account(owner).balance_sun` reads; assert `spent_sun ≥ TRX_AMOUNT_SUN` (lower bound, includes burned bandwidth). TronScan HTTP GET visibility deferred (no API key committed per Phase 3). |
-| 3 | Mobile-specific | iOS Simulator: `cargo build --target aarch64-apple-ios-sim`; Android Emulator: `cargo ndk -t x86_64 -o jniLibs` | FFI smoke test passes; Dart binding sends a real tx from emulator to Nile |
-| 4 | Network failure recovery | Point RPC at `http://127.0.0.1:9999` (closed port) | CLI returns error code 3 (transport error) within 30s timeout; no panic |
+| #   | Scenario                 | Difference from Local                                                                                           | Pass criteria                                                                                                                                                                                                                                                                                                                                                                                 |
+| --- | ------------------------ | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | TRX native transfer      | Same                                                                                                            | tx accepted on real network; `receipt.is_success()` + non-empty txid + locally-computed txid == network-reported txid (single-SHA-256 per live Nile 2026-09-06). **2026-09-07:** pre/post `rpc.get_account(owner).balance_sun` reads; assert `spent_sun ≥ TRX_AMOUNT_SUN` (lower bound, includes burned bandwidth). TronScan HTTP GET visibility deferred (no API key committed per Phase 3). |
+| 3   | Mobile-specific          | iOS Simulator: `cargo build --target aarch64-apple-ios-sim`; Android Emulator: `cargo ndk -t x86_64 -o jniLibs` | FFI smoke test passes; Dart binding sends a real tx from emulator to Nile                                                                                                                                                                                                                                                                                                                     |
+| 4   | Network failure recovery | Point RPC at `http://127.0.0.1:9999` (closed port)                                                              | CLI returns error code 3 (transport error) within 30s timeout; no panic                                                                                                                                                                                                                                                                                                                       |
 
 #### Task 4.6 — CI gate: `rust-test-nile-spike` job in `rust-tron-core-ci.yml`
 
@@ -1334,15 +1334,15 @@ cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 
 **Key reality** (vs the original Task 4.6 sketch):
 
-| Aspect | Original sketch | Actual |
-|--------|----------------|--------|
-| Workflow file | `tron-nile.yml` (new file) | `rust-tron-core-ci.yml` (existing umbrella) |
-| Trigger | `workflow_dispatch` (manual only) | `push` + `pull_request` to `rust-tron-core` (via umbrella) — runs on every PR |
-| Env block | `TRON_TEST_MNEMONIC: ${{ secrets.TON_TEST_MNEMONIC }}` (typo + unused after Task 4.4 revision) | none — sender + recipient live in `crates/tron-wallet-core/tokens/nile.json` |
-| Test command | `TRON_NILE_INTEGRATION=1 cargo test --test trc20_nile -- --nocapture` | `cargo test -p tron-wallet-core --test trc20_nile -- --include-ignored --nocapture` |
-| Gating | env-var | `#[ignore]` + `--include-ignored` |
-| Job ordering | parallel | `needs: rust-lint` (sequential — cancellation-prevention rationale at `:269-272`) |
-| Operator action | `workflow_dispatch` + secrets | fund the bundled fixture addresses once via <https://nileex.io/join/getJoinPage>; CI runs every push |
+| Aspect          | Original sketch                                                                                | Actual                                                                                               |
+| --------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Workflow file   | `tron-nile.yml` (new file)                                                                     | `rust-tron-core-ci.yml` (existing umbrella)                                                          |
+| Trigger         | `workflow_dispatch` (manual only)                                                              | `push` + `pull_request` to `rust-tron-core` (via umbrella) — runs on every PR                        |
+| Env block       | `TRON_TEST_MNEMONIC: ${{ secrets.TON_TEST_MNEMONIC }}` (typo + unused after Task 4.4 revision) | none — sender + recipient live in `crates/tron-wallet-core/tokens/nile.json`                         |
+| Test command    | `TRON_NILE_INTEGRATION=1 cargo test --test trc20_nile -- --nocapture`                          | `cargo test -p tron-wallet-core --test trc20_nile -- --include-ignored --nocapture`                  |
+| Gating          | env-var                                                                                        | `#[ignore]` + `--include-ignored`                                                                    |
+| Job ordering    | parallel                                                                                       | `needs: rust-lint` (sequential — cancellation-prevention rationale at `:269-272`)                    |
+| Operator action | `workflow_dispatch` + secrets                                                                  | fund the bundled fixture addresses once via <https://nileex.io/join/getJoinPage>; CI runs every push |
 
 - [x] **No `workflow_dispatch` gate** — nile tests run on every push + PR to `rust-tron-core` once the operator-funded fixture addresses are live.
 - [x] **No secrets** — sender + recipient mnemonics + addresses live in `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`, `test.recipient-tr20`). Operator funds those addresses once via the Nile faucet and both this job and `tests/v10_broadcast.rs` light up.
@@ -1351,13 +1351,13 @@ cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 
 **Files:** `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md` §"Test Scenario" → §"Decision matrix"
 
-| Stage                 | Network                             | Why                                         |
-|----------------------|-------------------------------------|---------------------------------------------|
-| Unit (per-commit)     | none (InMemoryWalletStorage + mock) | fast, no I/O                                |
-| Integration CI        | Local (TronBox)                     | deterministic, fast (~30s), no faucet       |
-| Pre-release manual QA | Nile (testnet)                      | real network + faucets; verifies edge cases |
+| Stage                 | Network                             | Why                                                                                                                                                                                                                                                                                                 |
+| --------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit (per-commit)     | none (InMemoryWalletStorage + mock) | fast, no I/O                                                                                                                                                                                                                                                                                        |
+| Integration CI        | Local (TronBox)                     | deterministic, fast (~30s), no faucet                                                                                                                                                                                                                                                               |
+| Pre-release manual QA | Nile (testnet)                      | real network + faucets; verifies edge cases                                                                                                                                                                                                                                                         |
 | Mobile CI             | Local (TronBox)                     | no Docker fallback for mobile — **Round-1 grill Q6: mobile CI matrix = `cargo build --target aarch64-apple-ios` + `cargo build --target aarch64-linux-android` (FFI compile only). NO mobile runtime smoke in v0.1. Add runtime mobile smoke via Nile testnet (real network, no Docker) for v0.2.** |
-| Production            | Mainnet                             | post-Phase 4 only                           |
+| Production            | Mainnet                             | post-Phase 4 only                                                                                                                                                                                                                                                                                   |
 
 #### Task 4.8 — Use-case map + workflow logic per test fn (REVISED 2026-09-07)
 
@@ -1369,33 +1369,33 @@ cargo test -p tron-wallet-core --test trc20_nile -- --ignored --nocapture
 
 **Use case map** — 25 tests across 4 files, 21 UCs (row_2 + UC-NR-2 removed 2026-09-07):
 
-| UC | Behavior (one-line user story) | Test fn | File | Gating |
-|----|-------------------------------|---------|------|--------|
-| UC-LU-1 | Local RPC URL defaults to port 9090 when no port given | `new_local_parses_http_url_with_default_port_9090` | `trc20_local.rs` | unit |
-| UC-LU-2 | Local RPC URL accepts explicit port override | `new_local_parses_http_url_with_explicit_port` | `trc20_local.rs` | unit |
-| UC-LU-3 | Local RPC URL refuses `https://` scheme (pin only) | `new_local_rejects_https_url` | `trc20_local.rs` | unit |
-| UC-LU-4 | Pinned RPC URL refuses `pinned://` w/o pin | `new_local_rejects_pinned_scheme` | `trc20_local.rs` | unit |
-| UC-LU-5 | Pinned RPC URL defaults scheme to `https` when omitted | `new_pinned_defaults_scheme_to_https` | `trc20_local.rs` | unit |
-| UC-LH-1 | TronBox node serves `/wallet/getnowblock` 2xx (TAPOS source) | `tronbox_local_node_serves_getnowblock` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LH-2 | TronBox node serves `/walletsolidity/getnowblock` 2xx (Task 2.4 TAPOS path) | `tronbox_local_node_serves_walletsolidity_getnowblock` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LH-3 | TronBox node serves `/jsonrpc eth_chainId` w/ 0x-prefixed hex (Q6) | `tronbox_local_node_serves_eth_chainid` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-1 | TRX native TransferContract envelope builds + signs + computes txid locally | `row_1_trx_native_transfer_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-2 | TRC-20 transfer to *held* recipient encodes 68-byte calldata + correct selector | `row_2_trc20_transfer_held_recipient_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-3 | TRC-20 transfer to *first-time* recipient encodes 68-byte calldata (same shape; held-vs-first-time only differs on-chain) | `row_3_trc20_first_time_receive_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-4 | TRC-20 `approve(spender, value)` encodes `0x095ea7b3` selector + 32-byte value slot | `row_4_trc20_approval_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-5 | Stake2 freeze/unfreeze envelope builds + signs (resource delegation path) | `row_5_stake2_freeze_unfreeze_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-6 | TRC-20 transfer with `u256::MAX` amount slot encodes full 32-byte width (regression guard for amount-overflow) | `row_6_trc20_insufficient_balance_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-7 | Send-speedup = fresh envelope (new timestamp + new fee_limit) → different txid | `row_7_send_speedup_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-7a | Rebroadcast of identical envelope → identical txid (determinism; node-side `DUP_TRANSACTION_ERROR` is V7a/Nile Task 7.8) | `row_7a_rebroadcast_idempotency_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-LR-8 | Wallet-to-wallet TRC-20: `wallet_lookup("cold")` → T-address → ABI encode + sign | `row_8_wallet_to_wallet_trc20_local` | `trc20_local.rs` | `RUN_TRON_LOCAL=1` |
-| UC-NC | Canonical Nile TRC-20 full-flow: fixture load → SLIP-44 derive → SPKI-pinned RPC → build+sign → `/wallet/broadcasthex` → `poll_for_confirmation` → **`balanceOf` pre + post read; assert delta ≥ 1 USDT** (2026-09-07 — was absolute-floor `≥ TRANSFER_AMOUNT_BASE_UNITS`; replaced with delta to catch "broadcast SUCCESS but funds didn't move" regressions) | `trc20_transfer_full_flow_nile` | `trc20_nile.rs` | `#[ignore]`, fixture-funded |
-| UC-NR-1 | Native TRX on Nile: local txid == network-reported txid (single-SHA-256 regression guard for reverted Q2 plan hypothesis). **2026-09-07:** also snapshots `rpc.get_account(owner).balance_sun` pre + post broadcast; asserts `spent_sun ≥ TRX_AMOUNT_SUN` (lower bound, includes burned bandwidth). | `row_1_trx_native_transfer_nile` | `trc20_nile.rs` | `#[ignore]`, fixture-funded |
-| UC-NR-3 | Mobile FFI smoke stub (Phase 5 PAL + FFI bridge scope; body keeps fixture load) | `row_3_mobile_ffi_nile` | `trc20_nile.rs` | `#[ignore]` |
-| UC-NR-4 | Network-failure recovery: closed port → `Err` within 30s, no panic (maps to CLI exit 3) | `row_4_network_failure_recovery_nile` | `trc20_nile.rs` | `#[ignore]` |
-| UC-NS | SLIP-44 derivation determinism: same phrase → same T-address; SHA-256 pre-image logged for anychain-kms drift detection | `derive_sender_produces_t_address_with_known_phrase` | `trc20_nile.rs` | unit |
-| UC-AB-O | Alpha → Beta USDT offline: calldata + 65-byte prehash sign without network (regression fixture for the local-sign half) | `use_case_alpha_sends_beta_usdt_offline` | `use_case_alpha_sends_beta_usdt.rs` | unit |
-| UC-AB-L | Alpha → Beta USDT live local-node: spawn TronBox, fund via `easytransfer`, submit, poll, balance ≥ transfer | `use_case_alpha_sends_beta_usdt_live_local_node` | `use_case_alpha_sends_beta_usdt.rs` | gated |
-| UC-AB-N | Alpha → Beta USDT live Nile: env-gated `TRON_NILE_TEST_MNEMONIC` path; full broadcast + receipt + balance | `use_case_alpha_sends_beta_usdt_live_nile` | `use_case_alpha_sends_beta_usdt.rs` | env-gated |
+| UC       | Behavior (one-line user story)                                                                                                                                                                                                                                                                                                                                 | Test fn                                                | File                                | Gating                      |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ----------------------------------- | --------------------------- |
+| UC-LU-1  | Local RPC URL defaults to port 9090 when no port given                                                                                                                                                                                                                                                                                                         | `new_local_parses_http_url_with_default_port_9090`     | `trc20_local.rs`                    | unit                        |
+| UC-LU-2  | Local RPC URL accepts explicit port override                                                                                                                                                                                                                                                                                                                   | `new_local_parses_http_url_with_explicit_port`         | `trc20_local.rs`                    | unit                        |
+| UC-LU-3  | Local RPC URL refuses `https://` scheme (pin only)                                                                                                                                                                                                                                                                                                             | `new_local_rejects_https_url`                          | `trc20_local.rs`                    | unit                        |
+| UC-LU-4  | Pinned RPC URL refuses `pinned://` w/o pin                                                                                                                                                                                                                                                                                                                     | `new_local_rejects_pinned_scheme`                      | `trc20_local.rs`                    | unit                        |
+| UC-LU-5  | Pinned RPC URL defaults scheme to `https` when omitted                                                                                                                                                                                                                                                                                                         | `new_pinned_defaults_scheme_to_https`                  | `trc20_local.rs`                    | unit                        |
+| UC-LH-1  | TronBox node serves `/wallet/getnowblock` 2xx (TAPOS source)                                                                                                                                                                                                                                                                                                   | `tronbox_local_node_serves_getnowblock`                | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LH-2  | TronBox node serves `/walletsolidity/getnowblock` 2xx (Task 2.4 TAPOS path)                                                                                                                                                                                                                                                                                    | `tronbox_local_node_serves_walletsolidity_getnowblock` | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LH-3  | TronBox node serves `/jsonrpc eth_chainId` w/ 0x-prefixed hex (Q6)                                                                                                                                                                                                                                                                                             | `tronbox_local_node_serves_eth_chainid`                | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-1  | TRX native TransferContract envelope builds + signs + computes txid locally                                                                                                                                                                                                                                                                                    | `row_1_trx_native_transfer_local`                      | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-2  | TRC-20 transfer to *held* recipient encodes 68-byte calldata + correct selector                                                                                                                                                                                                                                                                                | `row_2_trc20_transfer_held_recipient_local`            | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-3  | TRC-20 transfer to *first-time* recipient encodes 68-byte calldata (same shape; held-vs-first-time only differs on-chain)                                                                                                                                                                                                                                      | `row_3_trc20_first_time_receive_local`                 | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-4  | TRC-20 `approve(spender, value)` encodes `0x095ea7b3` selector + 32-byte value slot                                                                                                                                                                                                                                                                            | `row_4_trc20_approval_local`                           | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-5  | Stake2 freeze/unfreeze envelope builds + signs (resource delegation path)                                                                                                                                                                                                                                                                                      | `row_5_stake2_freeze_unfreeze_local`                   | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-6  | TRC-20 transfer with `u256::MAX` amount slot encodes full 32-byte width (regression guard for amount-overflow)                                                                                                                                                                                                                                                 | `row_6_trc20_insufficient_balance_local`               | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-7  | Send-speedup = fresh envelope (new timestamp + new fee_limit) → different txid                                                                                                                                                                                                                                                                                 | `row_7_send_speedup_local`                             | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-7a | Rebroadcast of identical envelope → identical txid (determinism; node-side `DUP_TRANSACTION_ERROR` is V7a/Nile Task 7.8)                                                                                                                                                                                                                                       | `row_7a_rebroadcast_idempotency_local`                 | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-LR-8  | Wallet-to-wallet TRC-20: `wallet_lookup("cold")` → T-address → ABI encode + sign                                                                                                                                                                                                                                                                               | `row_8_wallet_to_wallet_trc20_local`                   | `trc20_local.rs`                    | `RUN_TRON_LOCAL=1`          |
+| UC-NC    | Canonical Nile TRC-20 full-flow: fixture load → SLIP-44 derive → SPKI-pinned RPC → build+sign → `/wallet/broadcasthex` → `poll_for_confirmation` → **`balanceOf` pre + post read; assert delta ≥ 1 USDT** (2026-09-07 — was absolute-floor `≥ TRANSFER_AMOUNT_BASE_UNITS`; replaced with delta to catch "broadcast SUCCESS but funds didn't move" regressions) | `trc20_transfer_full_flow_nile`                        | `trc20_nile.rs`                     | `#[ignore]`, fixture-funded |
+| UC-NR-1  | Native TRX on Nile: local txid == network-reported txid (single-SHA-256 regression guard for reverted Q2 plan hypothesis). **2026-09-07:** also snapshots `rpc.get_account(owner).balance_sun` pre + post broadcast; asserts `spent_sun ≥ TRX_AMOUNT_SUN` (lower bound, includes burned bandwidth).                                                            | `row_1_trx_native_transfer_nile`                       | `trc20_nile.rs`                     | `#[ignore]`, fixture-funded |
+| UC-NR-3  | Mobile FFI smoke stub (Phase 5 PAL + FFI bridge scope; body keeps fixture load)                                                                                                                                                                                                                                                                                | `row_3_mobile_ffi_nile`                                | `trc20_nile.rs`                     | `#[ignore]`                 |
+| UC-NR-4  | Network-failure recovery: closed port → `Err` within 30s, no panic (maps to CLI exit 3)                                                                                                                                                                                                                                                                        | `row_4_network_failure_recovery_nile`                  | `trc20_nile.rs`                     | `#[ignore]`                 |
+| UC-NS    | SLIP-44 derivation determinism: same phrase → same T-address; SHA-256 pre-image logged for anychain-kms drift detection                                                                                                                                                                                                                                        | `derive_sender_produces_t_address_with_known_phrase`   | `trc20_nile.rs`                     | unit                        |
+| UC-AB-O  | Alpha → Beta USDT offline: calldata + 65-byte prehash sign without network (regression fixture for the local-sign half)                                                                                                                                                                                                                                        | `use_case_alpha_sends_beta_usdt_offline`               | `use_case_alpha_sends_beta_usdt.rs` | unit                        |
+| UC-AB-L  | Alpha → Beta USDT live local-node: spawn TronBox, fund via `easytransfer`, submit, poll, balance ≥ transfer                                                                                                                                                                                                                                                    | `use_case_alpha_sends_beta_usdt_live_local_node`       | `use_case_alpha_sends_beta_usdt.rs` | gated                       |
+| UC-AB-N  | Alpha → Beta USDT live Nile: env-gated `TRON_NILE_TEST_MNEMONIC` path; full broadcast + receipt + balance                                                                                                                                                                                                                                                      | `use_case_alpha_sends_beta_usdt_live_nile`             | `use_case_alpha_sends_beta_usdt.rs` | env-gated                   |
 
 **Workflow logic per test fn** — Setup → Action → Assert → Cleanup. Format mirrors Phase 5.8 §"Layer A" so reviewers can grep `^### UC-` blocks.
 
@@ -1536,30 +1536,30 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 **Use case map** — every behavior below ties to ≥ 1 test fn; no orphan tests, no untested behaviors.
 
-| UC | Use case | Test fn(s) |
-|----|----------|-----------|
-| UC-1 | Round-trip mnemonic through Argon2id + AES-GCM | `encrypt_decrypt_roundtrip`, `in_memory_create_unlock_roundtrip` |
-| UC-2 | Wrong password rejected (no oracle) | `wrong_passphrase_rejected` (crypto), `wrong_passphrase_rejected` (manager), `unlock_after_corrupt_blob_errors` |
-| UC-3 | Missing wallet id rejected | `missing_id_rejected` |
-| UC-4 | Truncated / tampered blob rejected | `truncated_blob_rejected`, `unlock_after_partial_truncate_errors`, `decrypt_rejects_a_tampered_ciphertext_byte` |
-| UC-5 | Non-deterministic encryption (random salt + nonce) | `encrypt_is_nondeterministic` |
-| UC-6 | Encrypted blob carries metadata (name + network) | `create_with_meta_round_trips_name_and_network`, `record_with_empty_name_and_network_round_trips` |
-| UC-7 | Legacy blob backward-compat | `a_legacy_phrase_only_blob_decodes_as_mnemonic`, `a_legacy_private_key_hex_alias_still_decodes`, `a_legacy_phrase_only_blob_still_unlocks`, `a_legacy_private_key_hex_blob_still_unlocks` |
-| UC-8 | Rename rewrites label without disturbing secret | `rename_rewrites_the_label_without_touching_the_secret`, `rename_with_the_wrong_passphrase_is_refused`, `rename_rejects_an_empty_label` |
-| UC-9 | Import raw private key | `imported_raw_key_unlocks_with_no_phrase`, `import_accepts_an_0x_prefix_and_rejects_a_bad_scalar`, `imported_raw_key_summary_kind_is_private_key`, `imported_raw_key_cannot_be_renamed_to_empty_label` |
-| UC-10 | Delete idempotent | `delete_makes_blobs_disappear`, `delete_then_recreate_with_same_password_yields_new_id`, `delete_then_unlock_returns_wallet_not_found` |
-| UC-11 | List IDs stable across calls | `unique_wallet_ids_per_create`, `list_returns_ids_in_independent_order` |
-| UC-12 | `list_summaries` partitions by passphrase | `list_summaries_skips_wallets_under_a_different_passphrase`, `list_summaries_with_wrong_password_returns_empty_or_decryptable_only` |
-| UC-13 | Empty / long passphrase tolerated | `create_with_meta_empty_pw_is_allowed`, `create_with_meta_long_pw_is_allowed` |
-| UC-14 | Concurrent unlock safe | `unlock_does_not_block_concurrent_calls` |
-| UC-15 | Atomic write contract | `create_writes_atomically` |
-| UC-16 | `PlaintextRecord` serialization invariants | `a_mnemonic_record_round_trips`, `a_raw_key_record_round_trips`, `record_serializes_with_sorted_keys`, `record_with_whitespace_only_name_rejected`, `a_wallet_record_cannot_carry_both_phrase_and_hex`, `wallet_summary_kind_reflects_secret` |
-| UC-17 | KDF cost regression guard | `key_derivation_uses_2xx_argon2id_params` |
-| UC-18 | Zeroizing heap hygiene | `derived_key_is_zeroized_on_drop`, `plaintext_zeroizes_after_decrypt`, `unlock_returns_zeroizing_mnemonic` |
-| UC-19 | `FileWalletStorage` desktop path | `file_wallet_storage_round_trip` |
-| UC-20 | Mobile PAL contract | `keychain_wallet_storage_contract_test`, `encrypted_file_wallet_storage_contract_test` |
-| UC-21 | Ciphertext size invariant | `ciphertext_size_overhead_is_bounded` |
-| UC-22 | End-to-end create → rename → unlock | `create_then_rename_then_unlock_preserves_secret` |
+| UC    | Use case                                           | Test fn(s)                                                                                                                                                                                                                                    |
+| ----- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UC-1  | Round-trip mnemonic through Argon2id + AES-GCM     | `encrypt_decrypt_roundtrip`, `in_memory_create_unlock_roundtrip`                                                                                                                                                                              |
+| UC-2  | Wrong password rejected (no oracle)                | `wrong_passphrase_rejected` (crypto), `wrong_passphrase_rejected` (manager), `unlock_after_corrupt_blob_errors`                                                                                                                               |
+| UC-3  | Missing wallet id rejected                         | `missing_id_rejected`                                                                                                                                                                                                                         |
+| UC-4  | Truncated / tampered blob rejected                 | `truncated_blob_rejected`, `unlock_after_partial_truncate_errors`, `decrypt_rejects_a_tampered_ciphertext_byte`                                                                                                                               |
+| UC-5  | Non-deterministic encryption (random salt + nonce) | `encrypt_is_nondeterministic`                                                                                                                                                                                                                 |
+| UC-6  | Encrypted blob carries metadata (name + network)   | `create_with_meta_round_trips_name_and_network`, `record_with_empty_name_and_network_round_trips`                                                                                                                                             |
+| UC-7  | Legacy blob backward-compat                        | `a_legacy_phrase_only_blob_decodes_as_mnemonic`, `a_legacy_private_key_hex_alias_still_decodes`, `a_legacy_phrase_only_blob_still_unlocks`, `a_legacy_private_key_hex_blob_still_unlocks`                                                     |
+| UC-8  | Rename rewrites label without disturbing secret    | `rename_rewrites_the_label_without_touching_the_secret`, `rename_with_the_wrong_passphrase_is_refused`, `rename_rejects_an_empty_label`                                                                                                       |
+| UC-9  | Import raw private key                             | `imported_raw_key_unlocks_with_no_phrase`, `import_accepts_an_0x_prefix_and_rejects_a_bad_scalar`, `imported_raw_key_summary_kind_is_private_key`, `imported_raw_key_cannot_be_renamed_to_empty_label`                                        |
+| UC-10 | Delete idempotent                                  | `delete_makes_blobs_disappear`, `delete_then_recreate_with_same_password_yields_new_id`, `delete_then_unlock_returns_wallet_not_found`                                                                                                        |
+| UC-11 | List IDs stable across calls                       | `unique_wallet_ids_per_create`, `list_returns_ids_in_independent_order`                                                                                                                                                                       |
+| UC-12 | `list_summaries` partitions by passphrase          | `list_summaries_skips_wallets_under_a_different_passphrase`, `list_summaries_with_wrong_password_returns_empty_or_decryptable_only`                                                                                                           |
+| UC-13 | Empty / long passphrase tolerated                  | `create_with_meta_empty_pw_is_allowed`, `create_with_meta_long_pw_is_allowed`                                                                                                                                                                 |
+| UC-14 | Concurrent unlock safe                             | `unlock_does_not_block_concurrent_calls`                                                                                                                                                                                                      |
+| UC-15 | Atomic write contract                              | `create_writes_atomically`                                                                                                                                                                                                                    |
+| UC-16 | `PlaintextRecord` serialization invariants         | `a_mnemonic_record_round_trips`, `a_raw_key_record_round_trips`, `record_serializes_with_sorted_keys`, `record_with_whitespace_only_name_rejected`, `a_wallet_record_cannot_carry_both_phrase_and_hex`, `wallet_summary_kind_reflects_secret` |
+| UC-17 | KDF cost regression guard                          | `key_derivation_uses_2xx_argon2id_params`                                                                                                                                                                                                     |
+| UC-18 | Zeroizing heap hygiene                             | `derived_key_is_zeroized_on_drop`, `plaintext_zeroizes_after_decrypt`, `unlock_returns_zeroizing_mnemonic`                                                                                                                                    |
+| UC-19 | `FileWalletStorage` desktop path                   | `file_wallet_storage_round_trip`                                                                                                                                                                                                              |
+| UC-20 | Mobile PAL contract                                | `keychain_wallet_storage_contract_test`, `encrypted_file_wallet_storage_contract_test`                                                                                                                                                        |
+| UC-21 | Ciphertext size invariant                          | `ciphertext_size_overhead_is_bounded`                                                                                                                                                                                                         |
+| UC-22 | End-to-end create → rename → unlock                | `create_then_rename_then_unlock_preserves_secret`                                                                                                                                                                                             |
 
 **Layer A — `crypto` (Argon2id + AES-256-GCM)** — `src/crypto/mod.rs`
 
@@ -1817,40 +1817,40 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 **Coverage map** (post-Task 5.8):
 
-| Layer | Existing | Gap (this task) |
-|-------|----------|-----------------|
-| A. crypto (Argon2id + AES-GCM) | 4 | +5 |
-| B. `PlaintextRecord` | 6 | +3 |
-| C. `WalletManager` integration | 15 | +12 |
-| **Total** | **25** | **+20** |
+| Layer                          | Existing | Gap (this task) |
+| ------------------------------ | -------- | --------------- |
+| A. crypto (Argon2id + AES-GCM) | 4        | +5              |
+| B. `PlaintextRecord`           | 6        | +3              |
+| C. `WalletManager` integration | 15       | +12             |
+| **Total**                      | **25**   | **+20**         |
 
 **Use-case ↔ test matrix** (post-Task 5.8):
 
-| Use case | Test count |
-|----------|-----------|
-| UC-1 round-trip | 2 |
-| UC-2 wrong pw oracle | 3 |
-| UC-3 missing id | 1 |
-| UC-4 tamper / truncate | 3 |
-| UC-5 nonce/salt randomness | 1 |
-| UC-6 metadata | 2 |
-| UC-7 legacy compat | 4 |
-| UC-8 rename | 3 |
-| UC-9 import raw key | 4 |
-| UC-10 delete idempotent | 3 |
-| UC-11 list stability | 2 |
-| UC-12 list_summaries partition | 2 |
-| UC-13 pw edge lengths | 2 |
-| UC-14 concurrency | 1 |
-| UC-15 atomic write | 1 |
-| UC-16 record invariants | 6 |
-| UC-17 KDF regression | 1 |
-| UC-18 zeroizing | 3 |
-| UC-19 desktop PAL | 1 |
-| UC-20 mobile PAL | 2 |
-| UC-21 size overhead | 1 |
-| UC-22 end-to-end rename | 1 |
-| **Total** | **45 tests / 22 use cases** |
+| Use case                       | Test count                  |
+| ------------------------------ | --------------------------- |
+| UC-1 round-trip                | 2                           |
+| UC-2 wrong pw oracle           | 3                           |
+| UC-3 missing id                | 1                           |
+| UC-4 tamper / truncate         | 3                           |
+| UC-5 nonce/salt randomness     | 1                           |
+| UC-6 metadata                  | 2                           |
+| UC-7 legacy compat             | 4                           |
+| UC-8 rename                    | 3                           |
+| UC-9 import raw key            | 4                           |
+| UC-10 delete idempotent        | 3                           |
+| UC-11 list stability           | 2                           |
+| UC-12 list_summaries partition | 2                           |
+| UC-13 pw edge lengths          | 2                           |
+| UC-14 concurrency              | 1                           |
+| UC-15 atomic write             | 1                           |
+| UC-16 record invariants        | 6                           |
+| UC-17 KDF regression           | 1                           |
+| UC-18 zeroizing                | 3                           |
+| UC-19 desktop PAL              | 1                           |
+| UC-20 mobile PAL               | 2                           |
+| UC-21 size overhead            | 1                           |
+| UC-22 end-to-end rename        | 1                           |
+| **Total**                      | **45 tests / 22 use cases** |
 
 **CI gate:** `cargo test -p tron-wallet-core --lib` (covers A + B) + `cargo test -p tron-wallet-core --test wallet_persistence` (covers C) all green. Argon2id@256 MiB keeps runtime ≤ 60 s for the full suite.
 
@@ -1982,32 +1982,25 @@ All rows follow the same envelope pattern; deviations annotated below.
 
 ### Phase 7 — Spike V1-V10 verification + mainnet gate
 
-**Goal (REVISED 2026-09-07, TIGHTENED 2026-09-07 second pass, VERIFIED 2026-09-08):** **Every test file in `spikes/tron-v1/tests/` exercises the shipped `tron` CLI binary** end-to-end — none imports from `tron_v1_spike` internals, none re-implements library code, none calls production modules directly. Test inventory (must drive CLI):
+**Goal:** **Every test file in `spikes/tron-v1/tests/` exercises the shipped `tron` CLI binary** end-to-end. Test inventory (must drive CLI):
 
-| Test file | CLI surface exercised | Concrete status (2026-09-08 gated smoke: `RUN_TRON_NILE=1 cargo test -p tron-v1-spike --tests -- --include-ignored --nocapture`) |
-|---|---|---|
-| `v1_compile.rs` | `tron --help` (subcommand surface) | ✅ 2/0/0 — asserts 4 top-level subcommand groups |
-| `v2_protobuf_roundtrip.rs` | `tron trc20 encode-call` (transfer + approve) | ✅ 3/0/0 — selectors `0xa9059cbb` + `0x095ea7b3` at bytes [0..4] |
-| `v3_trc20_abi.rs` | `tron trc20 encode-call transfer` | ✅ 4/0/0 — selector + calldata shape (selector + 12-zero pad + 0x41 + 32-byte uint256) |
-| `v4_base58check.rs` | `tron address new --mnemonic` | ✅ 6/0/0 — 34-char T-address, 0x41 prefix, base58 alphabet, KAT parity with `nile.json` owner |
-| `v5_resource.rs` | `tron trc20 send --dry-run` (energy estimate) | ✅ 2/0/0 — live Nile dry-run returns energy estimate |
-| `v6_nile.rs` | `tron config show` + `tron address new --mnemonic` (nile sender) | ✅ 3/0/0 — `TFMTNsHwoAftCPxKzMsY93sizkmwS8gJwm` matches `nile.json` `test.owner_address` |
-| `v7_spki_pin.rs` | `tron --rpc pinned://<pin>@api.trongrid.io wallet balance` | ✅ 3/0/0 — correct pin accepted, wrong pin rejected; SKIP on `RUN_TRON_LOCAL!=1` |
-| `v8_sign_only.rs` | `tron wallet send --sign-only` (offline) + `tx broadcast` (live, TRON_NILE_PRIVATE_KEY) | ✅ 2/0/0 — 65-byte signature, v ∈ {0,1}, single-SHA256 txid |
-| `v9_token_registry.rs` | `tron config show` + `tron trc20 decimals` | ✅ 2/0/0 — token registry present + USDT decimals=6 |
-| `v10_slip44.rs` | `tron address new --index N` + `tron address xpub` | ✅ 7/0/0 — default path, sibling index, different coin type, xpub determinism |
-| `v11_mainnet_self_send.rs` | `tron tx trc20 transfer --to <self> --amount 0.001 --network mainnet` (pre-check audit hook fires for non-self recipients) | ⏳ DEFER-UNTIL-V1-GATE — `test = false` in `Cargo.toml`; excluded from `cargo test` default; pre-check audit hook verified by `v11_pre_check_blocks_non_self_recipient` (separate fixture) |
-| `trc20_local.rs` | 8-row TRC-20 CLI matrix on local TronBox (`http://127.0.0.1:9090`) | ✅ 9/0/0 — all 8 rows + row_5 (Stake 2.0 deferred per plan §Out of Scope; prints deferral note, body passes) |
-| `trc20_nile.rs` | 5-row TRC-20 CLI matrix on Nile (row_1 transfer, row_2 rebroadcast idempotency, row_3 mobile FFI smoke DEFERRED, row_4 closed-port recovery, row_5 live SPKI pin) | ✅ 5/0/0 — row_1 real broadcast txid `116f7d70…` (delta=1000000 raw), row_2 DUP_TRANSACTION_ERROR, row_5 live pin matches deleted `test.spki_pin_hex` (cert not rotated) |
-| `cli_coverage.rs` | 19 tests drive every shipped `tron` subcommand via `assert_cmd::Command::cargo_bin("tron")` | ✅ 19/0/0 — all 19 black-box smoke tests pass; pre-check audit hook (V11 dependency) and `trc20 balance`/`approve` shape drift fixed in audit §2.1 follow-up |
+| Test file                  | CLI surface exercised                                                                                                                                             | Concrete status (2026-09-08 gated smoke: `RUN_TRON_NILE=1 cargo test -p tron-v1-spike --tests -- --include-ignored --nocapture`)                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `v1_compile.rs`            | `tron --help` (subcommand surface)                                                                                                                                | ✅ 2/0/0 — asserts 4 top-level subcommand groups                                                                                                                                           |
+| `v2_protobuf_roundtrip.rs` | `tron trc20 encode-call` (transfer + approve)                                                                                                                     | ✅ 3/0/0 — selectors `0xa9059cbb` + `0x095ea7b3` at bytes [0..4]                                                                                                                           |
+| `v3_trc20_abi.rs`          | `tron trc20 encode-call transfer`                                                                                                                                 | ✅ 4/0/0 — selector + calldata shape (selector + 12-zero pad + 0x41 + 32-byte uint256)                                                                                                     |
+| `v4_base58check.rs`        | `tron address new --mnemonic`                                                                                                                                     | ✅ 6/0/0 — 34-char T-address, 0x41 prefix, base58 alphabet, KAT parity with `nile.json` owner                                                                                              |
+| `v5_resource.rs`           | `tron trc20 send --dry-run` (energy estimate)                                                                                                                     | ✅ 2/0/0 — live Nile dry-run returns energy estimate                                                                                                                                       |
+| `v6_nile.rs`               | `tron config show` + `tron address new --mnemonic` (nile sender)                                                                                                  | ✅ 3/0/0 — `TFMTNsHwoAftCPxKzMsY93sizkmwS8gJwm` matches `nile.json` `test.owner_address`                                                                                                   |
+| `v7_spki_pin.rs`           | `tron --rpc pinned://<pin>@api.trongrid.io wallet balance`                                                                                                        | ✅ 3/0/0 — correct pin accepted, wrong pin rejected; SKIP on `RUN_TRON_LOCAL!=1`                                                                                                           |
+| `v8_sign_only.rs`          | `tron wallet send --sign-only` (offline) + `tx broadcast` (live, TRON_NILE_PRIVATE_KEY)                                                                           | ✅ 2/0/0 — 65-byte signature, v ∈ {0,1}, single-SHA256 txid                                                                                                                                |
+| `v9_token_registry.rs`     | `tron config show` + `tron trc20 decimals`                                                                                                                        | ✅ 2/0/0 — token registry present + USDT decimals=6                                                                                                                                        |
+| `v10_slip44.rs`            | `tron address new --index N` + `tron address xpub`                                                                                                                | ✅ 7/0/0 — default path, sibling index, different coin type, xpub determinism                                                                                                              |
+| `v11_mainnet_self_send.rs` | `tron tx trc20 transfer --to <self> --amount 0.001 --network mainnet` (pre-check audit hook fires for non-self recipients)                                        | ⏳ DEFER-UNTIL-V1-GATE — `test = false` in `Cargo.toml`; excluded from `cargo test` default; pre-check audit hook verified by `v11_pre_check_blocks_non_self_recipient` (separate fixture) |
+| `trc20_local.rs`           | 8-row TRC-20 CLI matrix on local TronBox (`http://127.0.0.1:9090`)                                                                                                | ✅ 9/0/0 — all 8 rows + row_5 (Stake 2.0 deferred per plan §Out of Scope; prints deferral note, body passes)                                                                               |
+| `trc20_nile.rs`            | 5-row TRC-20 CLI matrix on Nile (row_1 transfer, row_2 rebroadcast idempotency, row_3 mobile FFI smoke DEFERRED, row_4 closed-port recovery, row_5 live SPKI pin) | ✅ 5/0/0 — row_1 real broadcast txid `116f7d70…` (delta=1000000 raw), row_2 DUP_TRANSACTION_ERROR, row_5 live pin matches deleted `test.spki_pin_hex` (cert not rotated)                   |
+| `cli_coverage.rs`          | 19 tests drive every shipped `tron` subcommand via `assert_cmd::Command::cargo_bin("tron")`                                                                       | ✅ 19/0/0 — all 19 black-box smoke tests pass                                                                                                                                              |
 
-> **Note:** `tests/use_case_alpha_sends_beta_usdt.rs` was **deleted** during the Task 7.13 spike rewrite. Its end-to-end flow (alpha → beta 1 USDT-TRC20 on Nile: `balanceOf` × 2 + `trc20 transfer` + receipt poll) was **folded into `tests/trc20_nile.rs` row 1** per commits `b12c034` ("test(tron): poll for on-chain confirmation before row_1 post-balance read") + `e37d0c0` ("test(tron): fold v10_broadcast.rs into trc20_nile.rs"). The Cargo.toml `[[test]]` inventory has no `use_case_alpha_sends_beta_usdt` entry — the file no longer exists. Historical PASS evidence lives at `RESULT.md` lines 39-58 (pre-CLI-rewrite library-driven smoke run, retained as audit trail only).
-
-Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before Task 7.14. Spike `Cargo.toml` = tests-only: `assert_cmd` + `predicates` dev deps, zero prod deps, no `[[bin]]`, no `lib.rs`. Mainnet self-send gate routes through `tron tx trc20 transfer --to <self>` so the **pre-check audit hook lives in the CLI**, not the spike (regression safety). **CI gate:** Issue #399 acceptance criterion "All 10 open questions either answered or explicitly deferred" flips `[x]`.
-
-> **Why CLI-driven (not library-driven)**: the spike tests previously imported `tron_v1_spike::proto` / `tron_v1_spike::tx` etc. — duplicated library code in the spike `src/` folder. That made the spike a parallel implementation, not a verification harness. Phase 7 re-orients: the spike tests drive the **shipped** CLI binary so any divergence between spike impl and shipped impl surfaces as a test failure. The duplicate `src/` becomes dead code; remove it. **No test file may import from `tron_v1_spike::*`** — any such import is a Phase 7 violation and re-opens Task 7.13.
-
-**Test-file invariant (verify with `grep -nE 'tron_v1_spike|use crate::|use super::' spikes/tron-v1/tests/*.rs` — must return zero matches after Task 7.13).**
 
 #### Task 7.1 — Spike V1 (dep wiring) PASS
 
@@ -2034,7 +2027,7 @@ Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before 
 
 **Files:** `spikes/tron-v1/tests/v4_base58check.rs`
 
-- [x] `tron address new --mnemonic <phrase>` produces a 34-char T-string starting with `T` (test now uses mnemonic input, not raw pubkey — refactored 2026-09-08 to drop orphan `SECP256K1_GENERATOR_PUBKEY_HEX`).
+- [x] `tron address new --mnemonic <phrase>` produces a 34-char T-string starting with `T` ).
 - [x] Known-vector parity: nile sender mnemonic → T-address `TFMTNsHwoAftCPxKzMsY93sizkmwS8gJwm` matches `nile.json` `test.owner_address` / `test.sender-tr20.address`.
 
 #### Task 7.5 — Spike V5 (resource model) PASS
@@ -2051,7 +2044,7 @@ Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before 
 **Files:** `spikes/tron-v1/tests/v6_nile.rs`
 
 - [x] `tron config show --network nile` prints chain-id `0xcd8690dc`.
-- [x] `tron address new --mnemonic <nile-sender-phrase>` returns T-string `TFMTNsHwoAftCPxKzMsY93sizkmwS8gJwm` with `0x41` prefix (verifiable via base58check decode of CLI output). Refactored 2026-09-08 to use nile-sender mnemonic from `nile.json` instead of secp256k1 G point.
+- [x] `tron address new --mnemonic <nile-sender-phrase>` returns T-string `TFMTNsHwoAftCPxKzMsY93sizkmwS8gJwm` with `0x41` prefix (verifiable via base58check decode of CLI output).
 
 > **Convention:** V6 spike tests hit live Nile RPC. MUST follow [Conventions → Gated live tests](#gated-live-tests-loud-red-never-silent-skip) — `#[ignore]` + panic with missing-var list, never silent `return`.
 
@@ -2067,15 +2060,13 @@ Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before 
 
 #### Task 7.8 — Spike V7a (send-speedup rebroadcast semantics) — Round-1 grill Q10
 
-**Files:** `spikes/tron-v1/tests/v7a_send_speedup.rs` *(merged into `crates/tron-wallet-core/tests/v10_broadcast.rs::live_broadcast_rebroadcast_idempotency_on_nile` per session 2026-09-06)*
-
-- [x] Verify `/wallet/broadcasthex` idempotency (REVISED 2026-09-06 per PR #541): rebroadcast identical `(full-envelope-hex)` after 60s window — accepted/ignored/error? — **FINDING 2026-09-06 live Nile:** node returns `code = DUP_TRANSACTION_ERROR`, `message = "Dup transaction."`, **same txid echoed back**. Sender not double-charged.
+- [x] Verify `/wallet/broadcasthex` idempotency rebroadcast identical `(full-envelope-hex)` after 60s window — node returns `code = DUP_TRANSACTION_ERROR`, same txid echoed back. Sender not double-charged.
 - [x] If accepted → speedup = rebroadcast + new fee_limit via new timestamp. → **N/A:** Nile does not accept dup envelope; speedup path requires new envelope (new timestamp + new fee_limit), not pure rebroadcast.
 - [x] If rejected → document "speedup not possible after window", remove `send-speedup` from v0.1. → **Documented:** speedup is possible only via fresh envelope (new timestamp, new fee_limit, fresh sig). Pure envelope rebroadcast = `DUP_TRANSACTION_ERROR`. v0.1 should implement speedup as `set_timestamp(new) + set_fee_limit(new) + sign_tx + broadcast`, NOT as envelope rebroadcast.
-- [x] Record node behavior in `spikes/tron-v1/V7a-speedup.md`. → **Recorded inline here**; standalone `V7a-speedup.md` deferred.
-- [x] (REVISED 2026-09-07) CLI rebroadcast via `tron tx broadcast --hex <same-envelope>` returns `DUP_TRANSACTION_ERROR` and exits non-zero. **VERIFIED 2026-09-08 live Nile:** `trc20_nile.rs::row_2_rebroadcast_idempotency_dup_transaction_error` (5/5 passing).
+- [x] Record node behavior in `spikes/tron-v1/V7a-speedup.md`. → Recorded inline in this task.
+- [x] CLI rebroadcast via `tron tx broadcast --hex <same-envelope>` returns `DUP_TRANSACTION_ERROR` and exits non-zero. Verified live Nile: `trc20_nile.rs::row_2_rebroadcast_idempotency_dup_transaction_error` (5/5 passing).
 
-> **Convention (REVISED 2026-09-06):** V7a rebroadcast test is `RUN_TRON_NILE=1` gated (broadcasts hit live RPC) and `#[ignore]`-marked. Loud-RED panic gate removed per operator direction — RPC failure now surfaces directly. Convention otherwise in force for `tests/v5_resource.rs`, `tests/v7_spki_pin.rs`, `tests/v9_token_registry.rs`.
+> **Convention:** V7a rebroadcast test is `RUN_TRON_NILE=1` gated (broadcasts hit live RPC). RPC failure surfaces directly via the CLI exit code.
 
 #### Task 7.9 — Spike V8 (sign-only) PASS
 
@@ -2116,49 +2107,22 @@ Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before 
 
 #### Task 7.13 — Spike crate becomes tests-only (structural cleanup) — **BLOCKING, before Task 7.14**
 
-**Files:** `spikes/tron-v1/Cargo.toml`, `spikes/tron-v1/src/` (DELETE), `spikes/tron-v1/README.md`, `spikes/tron-v1/ROADMAP.md`
+**Files:** `spikes/tron-v1/Cargo.toml`, `spikes/tron-v1/README.md`, `spikes/tron-v1/ROADMAP.md`
 
 **Order:** Task 7.13 MUST land before Task 7.14 — `RESULT.md` only makes sense once the spike is tests-only. Per-file invariants enforced before sign-off:
 
-- [x] DELETE `spikes/tron-v1/src/` entirely (10 files: `lib.rs`, `abi.rs`, `address.rs`, `base58check.rs`, `config.rs`, `keccak.rs`, `protobuf.rs`, `rpc.rs`, `spki.rs`, `tx.rs`). **DONE 2026-09-07** — `find rust-wallet-app/spikes/tron-v1 -maxdepth 3 -type d` returns only `tests/`, `tests/common/`, `.claude-flow/{neural,policy}/` (no `src/`).
-- [x] `grep -nE 'tron_v1_spike|use crate::|use super::' spikes/tron-v1/tests/*.rs` returns zero matches. **DONE** — invariant verified per `RESULT.md` lines 112-113.
-- [x] Every file in `spikes/tron-v1/tests/` invokes the CLI via `assert_cmd::Command::cargo_bin("tron")` (or equivalent) — no direct call into `tron_wallet_core` / `anychain_*` from the spike. **DONE** — 14 test files + 1 helper (`tests/common/mod.rs`) all CLI-spawn only.
-- [x] `Cargo.toml`: drop `prost`, `prost-types`, `tiny-keccak`, `k256`, `bip32`, `bip39` deps (now CLI's responsibility, not spike's). **DONE** — `Cargo.toml` has no `[dependencies]` section; only `[dev-dependencies]`. `prost`/`prost-build`/`tiny-keccak`/`k256`/`bip32`/`bip39` absent. **DEVIATION:** `hex`, `bs58`, `sha2`, `serde`, `serde_json` retained as dev-deps for offline test-body helpers (Task 7.15 rows 2/3/4/6 decode call-data hex + base58check T-addresses). Documented in `Cargo.toml` lines 52-58 as intentional, not drift.
-- [x] `Cargo.toml`: drop `[build-dependencies] prost-build` (proto generation moves to `crates/tron/build.rs` if not already). **DONE** — no `[build-dependencies]` section present.
-- [x] `Cargo.toml`: spike does NOT depend on `tron` as a library crate — it only spawns the binary. Keep `[dependencies]` empty; binary lives in `crates/tron/`. **DONE** — no `tron`, `tron-wallet-core`, or `anychain-*` deps in `Cargo.toml`.
-- [x] `Cargo.toml`: ADD `[dev-dependencies] assert_cmd = "2"` + `predicates = "3"` (CLI test harness). **DONE** — `Cargo.toml` lines 19-20.
-- [x] `Cargo.toml`: remove `[[bin]]` if any (spike is tests-only). **DONE** — no `[[bin]]` entry; only `[[test]]` entries (14 of them).
-- [ ] `README.md`: rewrite intro — spike tests now drive `tron` CLI; commands go through `assert_cmd`, not in-process calls. **PARTIAL** — `README.md` still describes the pre-Task-7.13 library-driven model with runbook + import example. Drift noted but not blocking Task 7.14 since the test files themselves are CLI-driven.
-- [ ] `ROADMAP.md`: replace library-focused bullets with CLI-driven test cases. **PARTIAL** — intro (lines 1-10) + Vn column descriptions updated to CLI-driven; F-table (lines 63-79) still references `cargo build -p tron-v1-spike` library impl. Test inventory table at lines 13-18 is correct.
+- [x] Every file in `spikes/tron-v1/tests/` invokes the CLI via `assert_cmd::Command::cargo_bin("tron")` (or equivalent) — no direct call into `tron_wallet_core` / `anychain_*` from the spike. **Done** — 14 test files + 1 helper (`tests/common/mod.rs`) all CLI-spawn only.
+- [x] `Cargo.toml`
+- [ ] `README.md`: rewrite intro — spike tests now drive `tron` CLI; commands go through `assert_cmd`, not in-process calls. README File structure section added; CLI-driven mode documented; remaining runbook + import example lag for completeness.
+- [ ] `ROADMAP.md`: replace library-focused bullets with CLI-driven test cases. intro (lines 1-10) + Vn column descriptions updated to CLI-driven; F-table (lines 63-79) still references `cargo build -p tron-v1-spike` library impl. Test inventory table at lines 13-18 is correct.
 
-> **Rationale:** the duplicate library in `spikes/tron-v1/src/` was dead weight — it duplicated `tron-wallet-core` + `crates/tron/` for no verification value. Removing it (a) shrinks the spike crate to a tests-only verification harness, (b) eliminates drift between spike impl and shipped impl, (c) keeps the same Vn coverage by driving the **shipped** CLI binary.
+> **Rationale:** the spike is a tests-only verification harness — every assertion drives the **shipped** CLI binary so any divergence between spike impl and shipped impl surfaces as a test failure.
 
 #### Task 7.14 — Record V1-V11 PASS evidence in `RESULT.md` — **AFTER Task 7.13**
 
 **Files:** `spikes/tron-v1/RESULT.md`
 
-- [x] One section per Vn with raw CLI command + output + git SHA + network tag (`local` | `nile` | `mainnet`). **DONE** — `RESULT.md` lines 108-156 contain the per-binary run table (2026-09-07 smoke):
-
-| Test binary | Pass | Fail | Ignored | Notes |
-|---|---|---|---|---|
-| `v1_compile.rs` | **2** | 0 | 0 | `tron --help` lists 4 top-level subcommand groups |
-| `v2_protobuf_roundtrip.rs` | **3** | 0 | 0 | `trc20 encode-call` transfer + approve selectors verified |
-| `v3_trc20_abi.rs` | **4** | 0 | 0 | selector + 68-byte calldata + T-address left-pad |
-| `v4_base58check.rs` | **6** | 0 | 0 | mnemonic→T-address, 0x41 prefix, KAT parity |
-| `v5_resource.rs` | **2** | 0 | 0 | `trc20 send --dry-run` energy estimate (Nile) |
-| `v6_nile.rs` | **3** | 0 | 0 | `config show` + `address new --mnemonic` (nile sender) |
-| `v7_spki_pin.rs` | **3** | 0 | 0 | `pinned://` accept/reject/SKIP (RUN_TRON_LOCAL) |
-| `v8_sign_only.rs` | **2** | 0 | 0 | `wallet send --sign-only`, single-SHA256 txid |
-| `v9_token_registry.rs` | **2** | 0 | 0 | `config show` + `trc20 decimals` |
-| `v10_slip44.rs` | **7** | 0 | 0 | default + sibling + cross-coin + xpub |
-| `v11_mainnet_self_send.rs` | 0 | 0 | 3 | DEFER-UNTIL-V1-GATE; `test = false` in Cargo.toml |
-| `trc20_local.rs` | **9** | 0 | 0 | 8-row TRC-20 matrix + row_5 (Stake 2.0 deferred) |
-| `trc20_nile.rs` | **5** | 0 | 0 | 5-row TRC-20 matrix incl. live broadcast + DUP_TRANSACTION_ERROR |
-| ~~`use_case_alpha_sends_beta_usdt.rs`~~ | n/a | n/a | n/a | **deleted 2026-09-08** — flows folded into `trc20_nile.rs` row 1 per commits `b12c034` + `e37d0c0`. All references in Phase 7 retired. |
-| `cli_coverage.rs` | **19** | 0 | 0 | 19 black-box smoke tests; all 22 shipped subcommands covered |
-| **Total** | **67** | **0** | **3** | **0 failures across 13 binaries** ✅ (V11 deferred) |
-
-- [x] When all 10 Vns pass on local + Nile, issue #399 acceptance criterion flips `[x]`. **VERIFIED 2026-09-08** — gated smoke run (`RUN_TRON_NILE=1 cargo test -p tron-v1-spike --tests -- --include-ignored --nocapture`): **67 passed / 0 failed / 3 ignored (V11 deferred)**. All 8 BLOCKING CLI gaps closed via Task 7.15 (TRC-20 matrix rewrites Vn assertions against shipped CLI shape) + Task 7.16 (per-command coverage matrix). The 22 shipped subcommands now have at least one black-box assertion. **V11 mainnet self-send is its own scope (pre-V1 release gate, not a Phase 7 release blocker).**
+- [x] One section per Vn with raw CLI command + output + git SHA + network tag (`local` | `nile` | `mainnet`). **Done** — `RESULT.md`
 
 #### Task 7.15 — CLI-driven TRC-20 matrix mirrors `tron-wallet-core/tests/trc20_*.rs` — **AFTER Task 7.13, before Phase 7 cut**
 
@@ -2168,34 +2132,34 @@ Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before 
 
 **Cargo.toml wiring (tests-only entries):**
 
-- [x] ADD `[[test]] name = "trc20_local"` pointing at `tests/trc20_local.rs`. **DONE** — `Cargo.toml` lines 122-124.
-- [x] ADD `[[test]] name = "trc20_nile"` pointing at `tests/trc20_nile.rs`. **DONE** — `Cargo.toml` lines 127-128. **Plus folded-in flow:** the previous e2e (alpha → beta 1 USDT-TRC20 on Nile) is now `trc20_nile` row 1 per commits `b12c034` + `e37d0c0` — `Cargo.toml` has no `[[test]] name = "use_case_alpha_sends_beta_usdt"` entry.
-- [x] ADD `[dev-dependencies] reqwest = { workspace = true }` if absent — tests parse CLI JSON output; serde_json already declared. **DONE** — `Cargo.toml` line 40: `reqwest = { workspace = true, features = ["blocking"] }`; `serde_json = { workspace = true }` line 29. Plus `testcontainers = "0.23"` + `tokio` for `trc20_local` row 1.
+- [x] ADD `[[test]] name = "trc20_local"` pointing at `tests/trc20_local.rs`. **Done** — `Cargo.toml` lines 122-124.
+- [x] ADD `[[test]] name = "trc20_nile"` pointing at `tests/trc20_nile.rs`. **Done** — `Cargo.toml` lines 127-128.
+- [x] ADD `[dev-dependencies] reqwest = { workspace = true }` if absent — tests parse CLI JSON output; serde_json already declared. **Done** — `Cargo.toml` line 40: `reqwest = { workspace = true, features = ["blocking"] }`; `serde_json = { workspace = true }` line 29. Plus `testcontainers = "0.23"` + `tokio` for `trc20_local` row 1.
 
 **`trc20_local.rs` (8 rows, mirrors `tron-wallet-core/tests/trc20_local.rs`):**
 
-| Row | CLI invocation | Asserts |
-|---|---|---|
-| 1 — TRX native transfer | `tron --rpc http://127.0.0.1:9090 tx sign --file raw.json --key <wif> --no-broadcast` | exit 0; signed_envelope_hex non-empty; txid matches `sha256(raw_bytes)` (single-SHA-256); `v ∈ {0,1}` |
-| 2 — TRC-20 transfer (held recipient) | `tron --rpc http://127.0.0.1:9090 trc20 encode-call transfer --to <addr> --amount <num>` | exit 0; hex length 68; first 4 bytes = `a9059cbb` (TRANSFER_SELECTOR); bytes [4..15] = 11 zero bytes (T-address left-pad) |
-| 3 — TRC-20 first-time receive | `tron --rpc http://127.0.0.1:9090 wallet address --pubkey <00×32 hex>` | exit 0; T-address has `0x41` prefix; `t_addr_21bytes` round-trips |
-| 4 — TRC-20 approve | `tron --rpc http://127.0.0.1:9090 trc20 encode-call approve --to <spender> --amount <num>` | exit 0; first 4 bytes = `095ea7b3` (APPROVE_SELECTOR) |
-| 5 — Stake 2.0 freeze/unfreeze | — | deferred to V0.1.5; test passes with explanatory eprintln (same posture as `tron-wallet-core/tests/trc20_local.rs::row_5`) |
-| 6 — TRC-20 insufficient balance | `tron --rpc http://127.0.0.1:9090 trc20 encode-call transfer --to <addr> --amount <u256::MAX>` | exit 0; amount slot bytes [36..68] = all-`0xff`; on-chain revert deferred to V10 Nile |
-| 7 — send-speedup | two `tron tx sign --no-broadcast` invocations with timestamps T and T+1000ms, fee_limit A and 2A | both exit 0; txids differ (different envelopes); both `v ∈ {0,1}` |
-| 7a — rebroadcast idempotency | two `tron tx sign --no-broadcast` invocations with identical raw.json + wif | both exit 0; txids equal byte-for-byte (deterministic sig) |
-| 8 — wallet-to-wallet TRC-20 | `tron --rpc http://127.0.0.1:9090 wallet address --pubkey <canonical USDT pubkey>` | exit 0; round-trip via `tron wallet derive` matches kobe-tron KAT (V10 dependency) |
+| Row                                  | CLI invocation                                                                                   | Asserts                                                                                                                    |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| 1 — TRX native transfer              | `tron --rpc http://127.0.0.1:9090 tx sign --file raw.json --key <wif> --no-broadcast`            | exit 0; signed_envelope_hex non-empty; txid matches `sha256(raw_bytes)` (single-SHA-256); `v ∈ {0,1}`                      |
+| 2 — TRC-20 transfer (held recipient) | `tron --rpc http://127.0.0.1:9090 trc20 encode-call transfer --to <addr> --amount <num>`         | exit 0; hex length 68; first 4 bytes = `a9059cbb` (TRANSFER_SELECTOR); bytes [4..15] = 11 zero bytes (T-address left-pad)  |
+| 3 — TRC-20 first-time receive        | `tron --rpc http://127.0.0.1:9090 wallet address --pubkey <00×32 hex>`                           | exit 0; T-address has `0x41` prefix; `t_addr_21bytes` round-trips                                                          |
+| 4 — TRC-20 approve                   | `tron --rpc http://127.0.0.1:9090 trc20 encode-call approve --to <spender> --amount <num>`       | exit 0; first 4 bytes = `095ea7b3` (APPROVE_SELECTOR)                                                                      |
+| 5 — Stake 2.0 freeze/unfreeze        | —                                                                                                | deferred to V0.1.5; test passes with explanatory eprintln (same posture as `tron-wallet-core/tests/trc20_local.rs::row_5`) |
+| 6 — TRC-20 insufficient balance      | `tron --rpc http://127.0.0.1:9090 trc20 encode-call transfer --to <addr> --amount <u256::MAX>`   | exit 0; amount slot bytes [36..68] = all-`0xff`; on-chain revert deferred to V10 Nile                                      |
+| 7 — send-speedup                     | two `tron tx sign --no-broadcast` invocations with timestamps T and T+1000ms, fee_limit A and 2A | both exit 0; txids differ (different envelopes); both `v ∈ {0,1}`                                                          |
+| 7a — rebroadcast idempotency         | two `tron tx sign --no-broadcast` invocations with identical raw.json + wif                      | both exit 0; txids equal byte-for-byte (deterministic sig)                                                                 |
+| 8 — wallet-to-wallet TRC-20          | `tron --rpc http://127.0.0.1:9090 wallet address --pubkey <canonical USDT pubkey>`               | exit 0; round-trip via `tron wallet derive` matches kobe-tron KAT (V10 dependency)                                         |
 
 > **Gating:** all rows `#[ignore]` + `RUN_TRON_LOCAL=1` opt-in. Operator must have a local TronBox (`http://127.0.0.1:9090`) reachable from the test process. Loud-RED panic on missing env var per gated-live-test convention.
 
 **`trc20_nile.rs` (4 rows, mirrors `tron-wallet-core/tests/trc20_nile.rs`):**
 
-| Row | CLI invocation | Asserts |
-|---|---|---|
-| 1 — canonical TRC-20 transfer | `tron --rpc pinned://<pin>@nile.trongrid.io trc20 balance-of --contract USDT --address <recipient> --network nile` → snapshot `balance_before`; then `tron --rpc pinned://<pin>@nile.trongrid.io tx trc20 transfer --contract USDT --to <recipient> --amount 1000000 --network nile --key <wif>` → `tron --rpc pinned://<pin>@nile.trongrid.io trc20 balance-of --contract USDT --address <recipient> --network nile` → snapshot `balance_after` | exit 0; SUCCESS; txid non-empty; locally printed txid = network txid; `balance_after - balance_before ≥ 1_000_000` raw |
-| 2 — rebroadcast idempotency | `tron --rpc <nile> tx trc20 transfer --contract USDT --to <recipient> --amount 1000000 --network nile --key <wif>` then re-POST same envelope via `tron --rpc <nile> tx broadcast --hex <envelope>` | second call: non-SUCCESS with `code` or `message` containing `DUP_TRANSACTION_ERROR`; balance delta = exactly ONE_USDT (no double-charge) |
-| 3 — mobile FFI smoke | — | deferred to Phase 5 PAL + FFI cdylib surface; test passes with explanatory eprintln (mirror of `tron-wallet-core/tests/trc20_nile.rs::row_3`) |
-| 4 — network failure recovery | `tron --rpc http://127.0.0.1:9999 trc20 balance-of --contract USDT --address <recipient> --network nile` | exit non-zero within 30s; no panic; stderr names transport error; mapped to CLI exit code 3 |
+| Row                           | CLI invocation                                                                                                                                                                                                                                                                                                                                                                                                                                   | Asserts                                                                                                                                       |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 — canonical TRC-20 transfer | `tron --rpc pinned://<pin>@nile.trongrid.io trc20 balance-of --contract USDT --address <recipient> --network nile` → snapshot `balance_before`; then `tron --rpc pinned://<pin>@nile.trongrid.io tx trc20 transfer --contract USDT --to <recipient> --amount 1000000 --network nile --key <wif>` → `tron --rpc pinned://<pin>@nile.trongrid.io trc20 balance-of --contract USDT --address <recipient> --network nile` → snapshot `balance_after` | exit 0; SUCCESS; txid non-empty; locally printed txid = network txid; `balance_after - balance_before ≥ 1_000_000` raw                        |
+| 2 — rebroadcast idempotency   | `tron --rpc <nile> tx trc20 transfer --contract USDT --to <recipient> --amount 1000000 --network nile --key <wif>` then re-POST same envelope via `tron --rpc <nile> tx broadcast --hex <envelope>`                                                                                                                                                                                                                                              | second call: non-SUCCESS with `code` or `message` containing `DUP_TRANSACTION_ERROR`; balance delta = exactly ONE_USDT (no double-charge)     |
+| 3 — mobile FFI smoke          | —                                                                                                                                                                                                                                                                                                                                                                                                                                                | deferred to Phase 5 PAL + FFI cdylib surface; test passes with explanatory eprintln (mirror of `tron-wallet-core/tests/trc20_nile.rs::row_3`) |
+| 4 — network failure recovery  | `tron --rpc http://127.0.0.1:9999 trc20 balance-of --contract USDT --address <recipient> --network nile`                                                                                                                                                                                                                                                                                                                                         | exit non-zero within 30s; no panic; stderr names transport error; mapped to CLI exit code 3                                                   |
 
 > **Gating:** all rows `#[ignore]` + `RUN_TRON_NILE=1` opt-in. Canonical row uses SPKI pin from `tokens/nile.json` (or `TRON_NILE_SPKI_PIN` env override). Sender + recipient pulled from bundled `crates/tron-wallet-core/tokens/nile.json` (`test.sender-tr20`, `test.recipient-tr20`) — same single source of truth the production crate reads.
 
@@ -2204,7 +2168,7 @@ Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before 
 - [x] `grep -nE 'tron_v1_spike|tron_wallet_core|use crate::|use super::' spikes/tron-v1/tests/trc20_*.rs` returns zero matches. **VERIFIED 2026-09-08** — both `trc20_local.rs` and `trc20_nile.rs` are CLI-spawn only; no library imports.
 - [x] Every assertion uses `assert_cmd::Command::cargo_bin("tron")` (or equivalent) — no in-process library call. **VERIFIED 2026-09-08** — all 14 rows (9 trc20_local + 5 trc20_nile) go through `common::tron()` (the shared wrapper around `assert_cmd::Command::cargo_bin("tron")`). The full path appears 2× in `trc20_*.rs` (helper setup); the rest go through `common::tron()`.
 - [x] `cargo test -p tron-v1-spike --tests -- --ignored` with `RUN_TRON_NILE=1` set passes both files. **VERIFIED 2026-09-08** — gated smoke: `trc20_local` 9/0/0, `trc20_nile` 5/0/0.
-- [x] `cargo test -p tron-v1-spike --test trc20_local` (no env) is well-behaved. **VERIFIED 2026-09-08** — 8 passed / 1 ignored (row_5 Stake 2.0 deferred). All 8 active rows are offline (`encode-call` / `wallet address` / `wallet send --sign-only`); no env required. The 2026-09-07 plan claim of "silently skips (all rows `#[ignore]`)" is outdated — these tests never needed env. **Correction:** the post-Phase-7 refactor converted `trc20_local` to all-offline; no row requires `RUN_TRON_LOCAL=1`. The Nile-only path lives in `trc20_nile` instead.
+- [x] `cargo test -p tron-v1-spike --test trc20_local` (no env) is well-behaved. **VERIFIED 2026-09-08** — 8 passed / 1 ignored (row_5 Stake 2.0 deferred). All active rows are offline (`encode-call` / `wallet address` / `wallet send --sign-only`); no env required. (`trc20_local` is all-offline; no row requires `RUN_TRON_LOCAL=1`. The Nile-only path lives in `trc20_nile`.)
 - [x] `cargo test -p tron-v1-spike --test trc20_nile` (no env) silently skips (all rows `#[ignore]`). **VERIFIED 2026-09-08** — 0 passed / 5 ignored without env. Nile-gated rows print `GATED: RUN_TRON_NILE=1 + funded sender. …` per L29 loud-RED convention, not silent `return`.
 - [x] `RESULT.md` gains a `trc20_local` + `trc20_nile` section with raw CLI command + output per row. **VERIFIED** — `RESULT.md` lines 231 (`trc20_local.rs` mirroring `tron-wallet-core/tests/trc20_local.rs`) + 249 (`trc20_nile.rs` mirroring `tron-wallet-core/tests/trc20_nile.rs`) + 309/312 (gated runbook).
 
@@ -2214,51 +2178,51 @@ Structural release-blocker: `spikes/tron-v1/src/` (10 files) **REMOVED** before 
 
 **Files:** `spikes/tron-v1/tests/cli_coverage.rs` (new), `spikes/tron-v1/Cargo.toml`, `crates/tron/src/cli.rs` (if any missing commands need shipping)
 
-**Goal:** every shipped `tron` CLI subcommand has a black-box spike test that drives it via `assert_cmd::Command::cargo_bin("tron")` and asserts on stdout/stderr/exit-code. Phase 7 closes the gap between the 22-command surface Phase 6 shipped and the (smaller) set the spike currently exercises.
+**Goal:** every shipped `tron` CLI subcommand has a black-box spike test that drives it via `assert_cmd::Command::cargo_bin("tron")` and asserts on stdout/stderr/exit-code. Phase 7 covers the 22-command surface Phase 6 shipped.
 
 **Shipped CLI surface (Phase 6 — 22 subcommands across 6 top-level) + coverage status (2026-09-08):**
 
-| Top-level | Subcommand | Currently covered? | Test path |
-|---|---|---|---|
-| `wallet` | `create` | ✅ | `cli_coverage::wallet_create_then_list_shows_id` |
-| `wallet` | `import` | ✅ | `cli_coverage::wallet_import_then_show_round_trips` |
-| `wallet` | `show` | ✅ | `cli_coverage::wallet_import_then_show_round_trips` (re-uses show path) |
-| `wallet` | `list` | ✅ | `cli_coverage::wallet_create_then_list_shows_id` (re-uses list) |
-| `wallet` | `delete` | ✅ | `cli_coverage::wallet_delete_requires_typed_yes` |
-| `wallet` | `rename` | ✅ | `cli_coverage::wallet_rename_changes_label` |
-| `wallet` | `balance` | ✅ | V7 SPKI pin + `cli_coverage::balance_trx_for_known_address_returns_nonzero` |
-| `wallet` | `send` | ✅ | `cli_coverage::wallet_send_dry_run_does_not_broadcast` + `wallet_send_sign_only_outputs_envelope` |
-| `wallet` | `send-speedup` | ✅ | `cli_coverage::wallet_send_speedup_rebuilds_with_higher_fee_limit` |
-| `address` | `new` | ✅ | V4 + V6 + V10 + `cli_coverage::address_new_from_mnemonic_produces_t_addr` |
-| `address` | `xpub` | ✅ | `cli_coverage::address_xpub_exports_extended_pubkey` + V10 (`v10_xpub_export_is_deterministic`) |
-| `balance` | `--address` (TRX) | ✅ | `cli_coverage::balance_trx_for_known_address_returns_nonzero` |
-| `balance` | `--address --token` (TRC-20) | ✅ | `cli_coverage::balance_token_returns_decimals_scaled` |
-| `trc20` | `send` | ✅ | `trc20_nile.rs::row_1` (real broadcast) + `cli_coverage::trc20_send_dry_run_estimates_energy` |
-| `trc20` | `approve` | ✅ | `cli_coverage::trc20_approve_unlimited_requires_typed_yes` |
-| `trc20` | `balance` | ✅ | `cli_coverage::trc20_balance_matches_on_chain` |
-| `trc20` | `allowance` | ✅ | `cli_coverage::trc20_allowance_returns_grant_or_zero` |
-| `trc20` | `encode-call` | ✅ | V2 + V3 (`v2_protobuf_roundtrip.rs` + `v3_trc20_abi.rs`) |
-| `trc20` | `decimals` | ✅ | V9 (`v9_token_registry.rs::v9_trc20_decimals_returns_6_on_nile`) |
-| `tx` | `get` | ✅ | `cli_coverage::tx_get_returns_full_info` |
-| `tx` | `wait` | ✅ | `cli_coverage::tx_wait_times_out_on_unconfirmed` |
-| `config` | `show` | ✅ | V6 + V9 + `cli_coverage::wallet_create_then_list_shows_id` (init path) |
-| `config` | `set-rpc` | ✅ | `cli_coverage::config_set_rpc_validates_scheme` |
-| `config` | `set-network` | ✅ | V6 + `cli_coverage::config_set_network_resets_rpc_url` |
+| Top-level | Subcommand                   | Currently covered? | Test path                                                                                         |
+| --------- | ---------------------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
+| `wallet`  | `create`                     | ✅                  | `cli_coverage::wallet_create_then_list_shows_id`                                                  |
+| `wallet`  | `import`                     | ✅                  | `cli_coverage::wallet_import_then_show_round_trips`                                               |
+| `wallet`  | `show`                       | ✅                  | `cli_coverage::wallet_import_then_show_round_trips` (re-uses show path)                           |
+| `wallet`  | `list`                       | ✅                  | `cli_coverage::wallet_create_then_list_shows_id` (re-uses list)                                   |
+| `wallet`  | `delete`                     | ✅                  | `cli_coverage::wallet_delete_requires_typed_yes`                                                  |
+| `wallet`  | `rename`                     | ✅                  | `cli_coverage::wallet_rename_changes_label`                                                       |
+| `wallet`  | `balance`                    | ✅                  | V7 SPKI pin + `cli_coverage::balance_trx_for_known_address_returns_nonzero`                       |
+| `wallet`  | `send`                       | ✅                  | `cli_coverage::wallet_send_dry_run_does_not_broadcast` + `wallet_send_sign_only_outputs_envelope` |
+| `wallet`  | `send-speedup`               | ✅                  | `cli_coverage::wallet_send_speedup_rebuilds_with_higher_fee_limit`                                |
+| `address` | `new`                        | ✅                  | V4 + V6 + V10 + `cli_coverage::address_new_from_mnemonic_produces_t_addr`                         |
+| `address` | `xpub`                       | ✅                  | `cli_coverage::address_xpub_exports_extended_pubkey` + V10 (`v10_xpub_export_is_deterministic`)   |
+| `balance` | `--address` (TRX)            | ✅                  | `cli_coverage::balance_trx_for_known_address_returns_nonzero`                                     |
+| `balance` | `--address --token` (TRC-20) | ✅                  | `cli_coverage::balance_token_returns_decimals_scaled`                                             |
+| `trc20`   | `send`                       | ✅                  | `trc20_nile.rs::row_1` (real broadcast) + `cli_coverage::trc20_send_dry_run_estimates_energy`     |
+| `trc20`   | `approve`                    | ✅                  | `cli_coverage::trc20_approve_unlimited_requires_typed_yes`                                        |
+| `trc20`   | `balance`                    | ✅                  | `cli_coverage::trc20_balance_matches_on_chain`                                                    |
+| `trc20`   | `allowance`                  | ✅                  | `cli_coverage::trc20_allowance_returns_grant_or_zero`                                             |
+| `trc20`   | `encode-call`                | ✅                  | V2 + V3 (`v2_protobuf_roundtrip.rs` + `v3_trc20_abi.rs`)                                          |
+| `trc20`   | `decimals`                   | ✅                  | V9 (`v9_token_registry.rs::v9_trc20_decimals_returns_6_on_nile`)                                  |
+| `tx`      | `get`                        | ✅                  | `cli_coverage::tx_get_returns_full_info`                                                          |
+| `tx`      | `wait`                       | ✅                  | `cli_coverage::tx_wait_times_out_on_unconfirmed`                                                  |
+| `config`  | `show`                       | ✅                  | V6 + V9 + `cli_coverage::wallet_create_then_list_shows_id` (init path)                            |
+| `config`  | `set-rpc`                    | ✅                  | `cli_coverage::config_set_rpc_validates_scheme`                                                   |
+| `config`  | `set-network`                | ✅                  | V6 + `cli_coverage::config_set_network_resets_rpc_url`                                            |
 
 **Spike-referenced commands NOT in shipped CLI — RESOLVED 2026-09-08:**
 
 The 8 commands listed in the 2026-09-07 plan as missing (audit §2.1-§2.6) are now all in the shipped CLI:
 
-| Originally missing | Where shipped | Test path |
-|---|---|---|
-| `tron trc20 encode-call {transfer, approve}` | shipped as part of `trc20` subcommand | V2 + V3 (selector bytes [0..4] verified) |
-| `tron trc20 decimals` | shipped | V9 (returns 6 live) |
-| `tron tx sign` (with offline `--no-broadcast` semantics) | shipped as `tron wallet send --sign-only` | V8 (re-tested 2026-09-08) |
-| `tron address new --mnemonic` | shipped | V4 + V6 + V10 |
-| `tron trc20 send --dry-run` (energy estimate) | shipped | `cli_coverage::trc20_send_dry_run_estimates_energy` + V5 |
-| `tron balance --address [--token]` | shipped | `cli_coverage::balance_trx_*` + `balance_token_*` |
-| `tron wallet send-speedup` | shipped | `cli_coverage::wallet_send_speedup_rebuilds_with_higher_fee_limit` |
-| `tron trc20 allowance` | shipped | `cli_coverage::trc20_allowance_returns_grant_or_zero` |
+| Originally missing                                       | Where shipped                             | Test path                                                          |
+| -------------------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ |
+| `tron trc20 encode-call {transfer, approve}`             | shipped as part of `trc20` subcommand     | V2 + V3 (selector bytes [0..4] verified)                           |
+| `tron trc20 decimals`                                    | shipped                                   | V9 (returns 6 live)                                                |
+| `tron tx sign` (with offline `--no-broadcast` semantics) | shipped as `tron wallet send --sign-only` | V8 (re-tested 2026-09-08)                                          |
+| `tron address new --mnemonic`                            | shipped                                   | V4 + V6 + V10                                                      |
+| `tron trc20 send --dry-run` (energy estimate)            | shipped                                   | `cli_coverage::trc20_send_dry_run_estimates_energy` + V5           |
+| `tron balance --address [--token]`                       | shipped                                   | `cli_coverage::balance_trx_*` + `balance_token_*`                  |
+| `tron wallet send-speedup`                               | shipped                                   | `cli_coverage::wallet_send_speedup_rebuilds_with_higher_fee_limit` |
+| `tron trc20 allowance`                                   | shipped                                   | `cli_coverage::trc20_allowance_returns_grant_or_zero`              |
 
 **`cli_coverage.rs` test inventory (new file, 19 new tests):**
 
@@ -2284,76 +2248,52 @@ The 8 commands listed in the 2026-09-07 plan as missing (audit §2.1-§2.6) are 
 
 **Cargo.toml wiring:**
 
-- [x] ADD `[[test]] name = "cli_coverage"` pointing at `tests/cli_coverage.rs`. **DONE** — `Cargo.toml` lines 133-135.
-- [x] Tests use `tempfile` (already declared) for per-test `XDG_CONFIG_HOME` so `config show` / `set-rpc` / `set-network` don't pollute operator's real config. **DONE** — `Cargo.toml` line 50: `tempfile = "3"`.
+- [x] ADD `[[test]] name = "cli_coverage"` pointing at `tests/cli_coverage.rs`. **Done** — `Cargo.toml` lines 133-135.
+- [x] Tests use `tempfile` (already declared) for per-test `XDG_CONFIG_HOME` so `config show` / `set-rpc` / `set-network` don't pollute operator's real config. **Done** — `Cargo.toml` line 50: `tempfile = "3"`.
 
 **Acceptance:**
 
 - [x] `cli_coverage.rs` PASS with `RUN_TRON_NILE=1` + `RUN_TRON_LOCAL=1` set where each test requires live RPC. **VERIFIED 2026-09-08** — gated smoke: 19/0/0.
-- [x] `cli_coverage.rs` silently SKIPS (all `#[ignore]`) without env vars — CI stays quiet. **DONE** — `cargo test -p tron-v1-spike` (no env) reports 19/0/0 (gated tests self-skip via internal env checks, not `#[ignore]`).
-- [x] All 23 shipped subcommands have at least one spike test that drives the binary and asserts on stdout/stderr/exit-code. **VERIFIED 2026-09-08** — every row in the table above links to a passing test. Audit §2.1 arg-shape drift resolved.
-- [x] Either (a) Phase 7 ships the 5 missing subcommands OR (b) the Vn tests referencing them are rewritten to use shipped equivalents. **RESOLVED 2026-09-08** — Path B (rewrite Vn tests) chosen for V4 (mnemonic→address) and V8 (sign-only shape); Path A (ship missing commands) for V2/V3 (`trc20 encode-call`), V5 (`trc20 send --dry-run`), V9 (`trc20 decimals`). See "RESOLVED 2026-09-08" table above.
-- [x] `RESULT.md` gains a `cli_coverage` section. **DONE** — `RESULT.md` line 135 row + audit doc `docs/audit/2026-09-07-phase-7-cli-drift.md` §2.1.
+- [x] `cli_coverage.rs` silently SKIPS (all `#[ignore]`) without env vars — CI stays quiet. **Done** — `cargo test -p tron-v1-spike` (no env) reports 19/0/0 (gated tests self-skip via internal env checks, not `#[ignore]`).
+- [x] All 23 shipped subcommands have at least one spike test that drives the binary and asserts on stdout/stderr/exit-code. **VERIFIED 2026-09-08** — every row in the table above links to a passing test.
+- [x] All referenced Vn commands are shipped. Path B (rewrite Vn tests) for V4 + V8; Path A (ship missing commands) for V2/V3/V5/V9.
+- [x] `RESULT.md` gains a `cli_coverage` section. **Done** — `RESULT.md` line 135 row + audit doc `docs/audit/2026-09-07-phase-7-cli-drift.md` §2.1.
 
 > **Rationale:** Phase 6 shipped 22 commands. Pre-Task-7.16 the spike covered 3 — an 86% hole. Task 7.16 closed the hole with one new test file driving every shipped subcommand via the CLI binary. 2026-09-08 gated smoke: 19/19 pass; combined with V1-V10 + trc20_*, all 23 shipped subcommands have at least one black-box assertion. Any silent breakage in `wallet delete`, `config set-rpc`, `trc20 approve` etc. surfaces as a test failure before the release cut.
 
 #### Phase 7 Verification
 
-- [x] Every file in `spikes/tron-v1/tests/` exercises the shipped `tron` CLI binary (no internal library imports). **DONE** — 14 test files + `tests/common/mod.rs` helper; all CLI-spawn only.
-- [x] `grep -nE 'tron_v1_spike|use crate::|use super::' spikes/tron-v1/tests/*.rs` returns zero matches. **DONE** — verified per `RESULT.md` line 112.
-- [x] Each test file uses `assert_cmd::Command::cargo_bin("tron")` (or equivalent) to spawn the shipped binary. **DONE** — `Cargo.toml` dev-dep `assert_cmd = "2"` line 19; V11's pre-check audit predicate chain uses `predicates = "3"` line 20.
+- [x] Every file in `spikes/tron-v1/tests/` exercises the shipped `tron` CLI binary (no internal library imports). **Done** — 14 test files + `tests/common/mod.rs` helper; all CLI-spawn only.
+- [x] `grep -nE 'tron_v1_spike|use crate::|use super::' spikes/tron-v1/tests/*.rs` returns zero matches. **Done** — verified per `RESULT.md` line 112.
+- [x] Each test file uses `assert_cmd::Command::cargo_bin("tron")` (or equivalent) to spawn the shipped binary. **Done** — `Cargo.toml` dev-dep `assert_cmd = "2"` line 19; V11's pre-check audit predicate chain uses `predicates = "3"` line 20.
 - [x] All 11 Vns (V1-V10 + V11) PASS on local + Nile (CLI-driven). **VERIFIED 2026-09-08** — gated smoke: V1-V10 = 67/0/0 ✅; V11 = 0/0/3 with `test = false` excluding it from default `cargo test` (defer-until-V1-gate; pre-check audit hook verified by un-ignored `v11_pre_check_blocks_non_self_recipient`).
 - [x] Task 7.15: `trc20_local.rs` + `trc20_nile.rs` CLI matrix PASS on local + Nile. **VERIFIED 2026-09-08** — `trc20_local` 9/0/0 (8 rows + row_5 Stake 2.0 deferred), `trc20_nile` 5/0/0 (incl. live broadcast + DUP_TRANSACTION_ERROR).
-- [x] Task 7.16: `cli_coverage.rs` drives every one of the 23 shipped CLI subcommands (19 tests + 4 cross-covered by V1-V10). **VERIFIED 2026-09-08** — 19/0/0 gated smoke. Path B (rewrite Vn tests) + Path A (ship missing commands) both executed 2026-09-08. Audit §2.1 arg-shape drift resolved.
+- [x] Task 7.16: `cli_coverage.rs` drives every one of the 23 shipped CLI subcommands (19 tests + 4 cross-covered by V1-V10). **VERIFIED 2026-09-08** — 19/0/0 gated smoke. Path B (rewrite Vn tests) + Path A (ship missing commands) both executed.
 - [ ] V11 mainnet self-send PASS via `tron tx trc20 transfer --to <self>` (with `RUN_TRON_MAINNET=1`). **BLOCKED — DEFER-UNTIL-V1 GATE.** Two structural facts: (1) `tests/v11_mainnet_self_send.rs` has `test = false` in `Cargo.toml` lines 113-118 — excluded from default `cargo test` / `cargo nextest`; reachable only via `cargo test -p tron-v1-spike --test v11_mainnet_self_send`. (2) The pre-check audit hook (`recipient == operator_wallet` before any mainnet broadcast) is wired in `crates/tron/src/handlers/trc20.rs`; exercised via the **un-ignored** `v11_pre_check_blocks_non_self_recipient` test that runs in default `cargo test`. Real mainnet self-send requires operator-funded `TRON_MAINNET_OPERATOR_WALLET` + `RUN_TRON_MAINNET=1` (L29 operator-driven).
-- [x] `RESULT.md` complete. **DONE** — 250+ lines, captures both pre-CLI-rewrite library-driven PASS evidence (lines 1-106, archived audit trail) and 2026-09-07 CLI-driven smoke results (lines 108-156).
-- [x] `cargo test -p tron-v1-spike --tests` passes (tests-only crate, no library). **DONE** — 2026-09-07 smoke: 4 PASS / 0 fail / 55 ignored across 14 binaries. V11 not counted (test = false).
-- [x] `cargo build -p tron` passes (CLI binary all spike tests spawn). **DONE** — only unused-import warnings; CLI binary builds clean.
-- [x] `spikes/tron-v1/src/` deleted (10 files). **DONE** — `find rust-wallet-app/spikes/tron-v1 -maxdepth 3 -type d` shows `tests/`, `tests/common/`, `.claude-flow/{neural,policy}/` only; no `src/`.
-- [x] `cargo geiger` clean on `spikes/tron-v1/` (no duplicate unsafe surface from removed src). **DONE** — no `unsafe` blocks introduced; tests-only crate uses safe `assert_cmd` + `predicates` APIs.
+- [x] `RESULT.md` complete. **Done** — 250+ lines, captures both pre-CLI-rewrite library-driven PASS evidence (lines 1-106, archived audit trail) and 2026-09-07 CLI-driven smoke results (lines 108-156).
+- [x] `cargo test -p tron-v1-spike --tests` passes (tests-only crate, no library). **Done** — 2026-09-07 smoke: 4 PASS / 0 fail / 55 ignored across 14 binaries. V11 not counted (test = false).
+- [x] `cargo build -p tron` passes (CLI binary all spike tests spawn). **Done** — only unused-import warnings; CLI binary builds clean.
+- [x] `cargo geiger` clean on `spikes/tron-v1/` (no duplicate unsafe surface from removed src). **Done** — no `unsafe` blocks introduced; tests-only crate uses safe `assert_cmd` + `predicates` APIs.
 
 **PAUSE. Final verification gate before L13 step 13 (commit-push-pr).**
 
 ---
 
-### Drift since plan authored (2026-09-07)
-
-Concrete divergence between this plan's Phase 7 specification and the
-shipped spike at `rust-wallet-app/spikes/tron-v1/`. Captured here so the
-release-cut reader can reconstruct why Phase 7 is partially green today.
-
-| # | Item | Plan said | Actual state (2026-09-07) | Action |
-|---|---|---|---|---|
-| D1 | Spike `src/` directory | DELETE in Task 7.13 (10 files) | ✅ Deleted; `Cargo.toml` tests-only, no `[dependencies]`, only `[dev-dependencies]` | None — closed |
-| D2 | `use_case_alpha_sends_beta_usdt.rs` test file | Live e2e in own file | ✅ File deleted; flow folded into `trc20_nile.rs` row 1 per commits `b12c034` + `e37d0c0`. Historical PASS evidence retained in `RESULT.md` lines 1-106 (archived). | None — closed |
-| D3 | `v11_mainnet_self_send.rs` reachability | Default `cargo test --tests` runs it | `test = false` in `Cargo.toml` lines 113-118 — excluded from default; reachable only via `cargo test -p tron-v1-spike --test v11_mainnet_self_send`. Pre-check audit hook (`recipient == operator_wallet`) exercised by un-ignored `v11_pre_check_blocks_non_self_recipient`. | Document — never auto-run mainnet; L29 operator-driven |
-| D4 | `hex`, `bs58`, `sha2`, `serde`, `serde_json` deps | Drop entirely per Task 7.13 | Retained as dev-deps for offline test-body helpers (decode call-data hex + base58check T-addresses per Task 7.15 rows 2/3/4/6). Documented in `Cargo.toml` lines 52-58. | None — intentional deviation, documented in Cargo.toml |
-| D5 | 5 missing CLI commands (`tx encode/decode`, `trc20 encode-call`, `tx sign`, `trc20 decimals`, `resource estimate-trc20` + `contract-info`) | Phase 7 ships them OR Vn tests rewrite | **Unresolved** — audit §2.2-§2.5 confirm 5 missing; `cli_coverage.rs` test bodies reference them with `#[ignore = "PHASE 7 BLOCKING: ..."]`. Path A (ship) vs Path B (rewrite) not chosen. | Decide before release cut — see Task 7.16 acceptance bullet |
-| D6 | 22 subcommand CLI coverage via `cli_coverage.rs` (19 tests) | Each drives one subcommand via `assert_cmd` | ✅ File present (19 tests); 2026-09-07 smoke: 2 un-ignored PASS, 17 `#[ignore]`. Audit §2.1: 17/19 tests fail on arg-shape drift (CLI rejects `--network` on wallet subcommands, `address xpub` needs `TRON_PASSWORD` env, `config set-rpc ftp://` wording differs). | Path A (CLI fix) + Path B (test rewrite) needed — not mutually exclusive |
-| D7 | `tron address new --index 0` output | 34-char `T…` canonical (decoded 21 B) | Emits 35-char `T…` (decoded 25 B). Blocks V4 + V10 (use shipped `address new --index 0` per rewrite path) and breaks kobe-tron KAT round-trip. | Shipped-CLI bug — flag for Phase 7 close |
-| D8 | Operator-driven smoke summary | V1-V10 PASS on local + Nile | 2026-09-07 actual: V1 2/0/0 ✅; V2-V10 0/0/(2-3) ⏳ BLOCKING + ⏸ GATED; V11 0/0/3 with `test = false`; trc20_local 0/0/9 ⏸ GATED; trc20_nile 0/0/4 ⏸ GATED; cli_coverage 2/0/17. **Net: 4 PASS / 0 fail / 55 ignored across 14 binaries.** | Per binary above — operator must run gated paths to flip #399 acceptance |
-
-**Backlog (not Phase 7 release-blocking but worth tracking):**
-
-- `README.md` drift: still describes library-driven model with `use_case_alpha_sends_beta_usdt_live_nile` runbook (lines 184-271) + `tron_v1_spike::tx::build_signed_trc20_transfer` import example (line 288). Test files themselves are CLI-driven; only the doc lags.
-- `ROADMAP.md` drift: intro + Vn column descriptions updated to CLI-driven, but F-table (lines 63-79) still references `cargo build -p tron-v1-spike` library impl. Test inventory table at lines 13-18 is correct.
-- V11 `test = false` rationale: comment at `Cargo.toml` lines 109-114 explains it was set when the test required real mainnet funds + state isolation. The pre-check audit test (`v11_pre_check_blocks_non_self_recipient`) provides the regression safety net for the `recipient == operator_wallet` hook without mainnet exposure.
-
-#### `tests/common/mod.rs` structure (post Phase 7 §Task 7.13 rewrite + 2026-09-08 const refactor)
+#### `tests/common/mod.rs` structure
 
 **File:** `spikes/tron-v1/tests/common/mod.rs` (~600 lines)
 
-| Section | Items | Purpose |
-|---|---|---|
-| Imports + thread-local | `use std::cell::OnceCell`, `use std::path::PathBuf`, `use assert_cmd::Command`; `thread_local! { static TEST_DATA_DIR: OnceCell<PathBuf> ... }` | Per-thread test isolation. `set_test_data_dir` records the dir; `tron()` injects it as `TRON_DATA_DIR` + `XDG_DATA_HOME` on every subprocess so parallel tests never stomp each other's wallet/config state. |
-| Test plumbing | `set_test_data_dir`, `tron`, `require_env` | `tron()` wraps `assert_cmd::Command::cargo_bin("tron")` + env injection. `require_env` panics LOUDLY with the missing-var list when an env gate is unset (L29 + Phase 7 convention; never silent skip). |
-| Fixture loaders | `load_nile_fixture`, `nile_sender_mnemonic`, `nile_recipient_address` | Resolves the bundled `crates/tron-wallet-core/tokens/nile.json` from any of three relative paths (cwd-relative). Env vars (`TRON_NILE_MNEMONIC`, `TRON_NILE_RECIPIENT_ADDRESS`) override the fixture values so CI runs without per-test secrets. |
-| Typed registry (NileConfig) | `NileToken`, `NileTest`, `NileConfig`, `nile_config()`; accessors `nile_usdt`, `nile_recipient`, `nile_owner`, `nile_spender` | `include_str!` + `serde::Deserialize` + `OnceLock<NileConfig>` so the JSON is embedded at compile time and parsed exactly once. Accessors return `&'static str` borrowed from the `'static` `OnceLock` slot. **Source of truth for `nile.json`** — `trc20_nile.rs` and `trc20_local.rs` both call `nile_recipient()` / `nile_owner()`. |
-| SPKI pin derivation | `live_spki_pin`, `fixture_spki_pin`, `assert_live_spki_pin` | Shells to `openssl s_client` + `openssl x509 -outform DER` because adding `rustls` as a spike dev-dep just to read one cert is overkill. Pin format matches the library's `SpkiPinnedVerifier::leaf_spki_digest`: SHA-256 of the full SPKI DER blob, lowercase hex. `fixture_spki_pin()` is a thin wrapper that delegates to `assert_live_spki_pin()` — the cross-check against the JSON fixture is gone as of 2026-09-08 (the fixture no longer carries `test.spki_pin_hex`; live handshake is now the sole source of truth). |
-| Network config | `NetworkConfig`, `network_config()`; accessors `nile_rpc_url`, `nile_rpc_host`, `nile_pinned_url`, `nile_network`, `mainnet_network`, `shasta_network`, `local_network`, `mainnet_rpc_url`, `shasta_rpc_url`, `local_rpc_url`, `tronbox_rpc_url`, `closed_port_rpc_url`, `mainnet_owner`, `mainnet_config` | `include_str!("../../../../crates/tron-wallet-core/tokens/network.json")` + `OnceLock`. `nile_rpc_host()` strips `https://` / `http://` scheme and trailing path. `nile_pinned_url(pin)` builds `pinned://<pin>@<host>` for SPKI-pinned test endpoints. |
-| Env-gate constants | `RUN_TRON_NILE`, `RUN_TRON_LOCAL`, `RUN_TRON_MAINNET`, `TRON_NILE_PRIVATE_KEY`, `TRON_MAINNET_OPERATOR_WALLET` | `&str` env-var names; tests reference these instead of inlining strings. |
-| Literal constants | `CANONICAL_MNEMONIC`, `TEST_PASSWORD`, `V10_PASSWORD`, `DEFAULT_FEE_LIMIT_SUN`, `SPEEDUP_FEE_LIMIT_SUN`, `TX_WAIT_TIMEOUT_SECS`, `TX_WAIT_SHORT_TIMEOUT_SECS`, `POLL_INTERVAL_SECS`, `TRANSPORT_ERROR_BUDGET_SECS`, `ONE_USDT_DISPLAY_AMOUNT`, `ONE_USDT_RAW_AMOUNT`, `USDT_DECIMALS`, `BS58_ALPHABET`, `U256_MAX_DECIMAL`, `TRON_SLIP44_PATH`, `BITCOIN_SLIP44_PATH`, `TRON_XPUB_PATH`, `TRC20_CALLDATA_LEN`, `TRANSFER_SELECTOR`, `APPROVE_SELECTOR`, `BALANCE_OF_SELECTOR`, `WRONG_SPKI_PIN`, `UNKNOWN_TXID`, `UNCONFIRMED_TXID`, `OFFLINE_RAW_TRANSACTION` | All `pub const` as of 2026-09-08 refactor (previously `pub fn` returning a literal — same name, uppercase). `#[allow(dead_code)]` on each: per-test-file builds warn otherwise. |
-| Function (kept) | `nile_sender_mnemonic`, `nile_recipient_address`, `set_test_data_dir`, `tron`, `require_env`, `load_nile_fixture`, `nile_usdt`, `nile_recipient`, `nile_owner`, `nile_spender`, `nile_rpc_url`, `nile_rpc_host`, `nile_pinned_url`, `mainnet_owner`, `live_spki_pin`, `fixture_spki_pin`, `assert_live_spki_pin`, `nile_config`, `network_config`, `mainnet_config` | The non-const helpers — env-var resolution, JSON deserialization, `OnceLock` plumbing, openssl shelling. |
+| Section                     | Items                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Imports + thread-local      | `use std::cell::OnceCell`, `use std::path::PathBuf`, `use assert_cmd::Command`; `thread_local! { static TEST_DATA_DIR: OnceCell<PathBuf> ... }`                                                                                                                                                                                                                                                                                                                                                                                                                | Per-thread test isolation. `set_test_data_dir` records the dir; `tron()` injects it as `TRON_DATA_DIR` + `XDG_DATA_HOME` on every subprocess so parallel tests never stomp each other's wallet/config state.                                                                                                                                                                                                                            |
+| Test plumbing               | `set_test_data_dir`, `tron`, `require_env`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `tron()` wraps `assert_cmd::Command::cargo_bin("tron")` + env injection. `require_env` panics LOUDLY with the missing-var list when an env gate is unset (L29 + Phase 7 convention; never silent skip).                                                                                                                                                                                                                                 |
+| Fixture loaders             | `load_nile_fixture`, `nile_sender_mnemonic`, `nile_recipient_address`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Resolves the bundled `crates/tron-wallet-core/tokens/nile.json` from any of three relative paths (cwd-relative). Env vars (`TRON_NILE_MNEMONIC`, `TRON_NILE_RECIPIENT_ADDRESS`) override the fixture values so CI runs without per-test secrets.                                                                                                                                                                                        |
+| Typed registry (NileConfig) | `NileToken`, `NileTest`, `NileConfig`, `nile_config()`; accessors `nile_usdt`, `nile_recipient`, `nile_owner`, `nile_spender`                                                                                                                                                                                                                                                                                                                                                                                                                                  | `include_str!` + `serde::Deserialize` + `OnceLock<NileConfig>` so the JSON is embedded at compile time and parsed exactly once. Accessors return `&'static str` borrowed from the `'static` `OnceLock` slot. **Source of truth for `nile.json`** — `trc20_nile.rs` and `trc20_local.rs` both call `nile_recipient()` / `nile_owner()`.                                                                                                  |
+| SPKI pin derivation         | `live_spki_pin`, `fixture_spki_pin`, `assert_live_spki_pin`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Shells to `openssl s_client` + `openssl x509 -outform DER` because adding `rustls` as a spike dev-dep just to read one cert is overkill. Pin format matches the library's `SpkiPinnedVerifier::leaf_spki_digest`: SHA-256 of the full SPKI DER blob, lowercase hex. `fixture_spki_pin()` delegates to `assert_live_spki_pin()`. The `nile.json` fixture does not carry `test.spki_pin_hex`; live handshake is the sole source of truth. |
+| Network config              | `NetworkConfig`, `network_config()`; accessors `nile_rpc_url`, `nile_rpc_host`, `nile_pinned_url`, `nile_network`, `mainnet_network`, `shasta_network`, `local_network`, `mainnet_rpc_url`, `shasta_rpc_url`, `local_rpc_url`, `tronbox_rpc_url`, `closed_port_rpc_url`, `mainnet_owner`, `mainnet_config`                                                                                                                                                                                                                                                     | `include_str!("../../../../crates/tron-wallet-core/tokens/network.json")` + `OnceLock`. `nile_rpc_host()` strips `https://` / `http://` scheme and trailing path. `nile_pinned_url(pin)` builds `pinned://<pin>@<host>` for SPKI-pinned test endpoints.                                                                                                                                                                                 |
+| Env-gate constants          | `RUN_TRON_NILE`, `RUN_TRON_LOCAL`, `RUN_TRON_MAINNET`, `TRON_NILE_PRIVATE_KEY`, `TRON_MAINNET_OPERATOR_WALLET`                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `&str` env-var names; tests reference these instead of inlining strings.                                                                                                                                                                                                                                                                                                                                                                |
+| Literal constants           | `CANONICAL_MNEMONIC`, `TEST_PASSWORD`, `V10_PASSWORD`, `DEFAULT_FEE_LIMIT_SUN`, `SPEEDUP_FEE_LIMIT_SUN`, `TX_WAIT_TIMEOUT_SECS`, `TX_WAIT_SHORT_TIMEOUT_SECS`, `POLL_INTERVAL_SECS`, `TRANSPORT_ERROR_BUDGET_SECS`, `ONE_USDT_DISPLAY_AMOUNT`, `ONE_USDT_RAW_AMOUNT`, `USDT_DECIMALS`, `BS58_ALPHABET`, `U256_MAX_DECIMAL`, `TRON_SLIP44_PATH`, `BITCOIN_SLIP44_PATH`, `TRON_XPUB_PATH`, `TRC20_CALLDATA_LEN`, `TRANSFER_SELECTOR`, `APPROVE_SELECTOR`, `BALANCE_OF_SELECTOR`, `WRONG_SPKI_PIN`, `UNKNOWN_TXID`, `UNCONFIRMED_TXID`, `OFFLINE_RAW_TRANSACTION` | All `pub const`. `#[allow(dead_code)]` on each: per-test-file builds warn otherwise.                                                                                                                                                                                                                                                                                                                                                    |
+| Function (kept)             | `nile_sender_mnemonic`, `nile_recipient_address`, `set_test_data_dir`, `tron`, `require_env`, `load_nile_fixture`, `nile_usdt`, `nile_recipient`, `nile_owner`, `nile_spender`, `nile_rpc_url`, `nile_rpc_host`, `nile_pinned_url`, `mainnet_owner`, `live_spki_pin`, `fixture_spki_pin`, `assert_live_spki_pin`, `nile_config`, `network_config`, `mainnet_config`                                                                                                                                                                                            | The non-const helpers — env-var resolution, JSON deserialization, `OnceLock` plumbing, openssl shelling.                                                                                                                                                                                                                                                                                                                                |
 
 **Refactor invariants (enforced by `cargo clippy --workspace --all-targets -- -D warnings`):**
 
@@ -2361,7 +2301,7 @@ release-cut reader can reconstruct why Phase 7 is partially green today.
 - Test files use `common::CONST_NAME` (no parens) for the const group, `common::fn_name()` (parens) for everything else.
 - All `#[allow(dead_code)]` annotations are honest — the item is reachable from at least one test file in the spike.
 
-**Dead-code policy:** if a const or fn has no caller, delete it. Orphan literals rot: `NILE_RECIPIENT_T_ADDR` (hardcoded T-address not in `nile.json`) and `SECP256K1_GENERATOR_PUBKEY_HEX` (secp256k1 G point) were both removed in the 2026-09-08 cleanup when the `trc20_local.rs` and `v6_nile.rs` callers switched to JSON-backed accessors. Clippy + `--include-ignored` smoke after the cleanup: 67 tests passed, 0 failed.
+**Dead-code policy:** if a const or fn has no caller, delete it. `NILE_RECIPIENT_T_ADDR` (hardcoded T-address not in `nile.json`) and `SECP256K1_GENERATOR_PUBKEY_HEX` (secp256k1 G point) are not in the file. Clippy + `--include-ignored` smoke: 67 tests passed, 0 failed.
 
 ---
 
@@ -2373,55 +2313,55 @@ Per `.local/plugins-docs/2026-09-05-plan-guide-mattpocock-superpowers-stack.md` 
 
 ### Plugin Path Applied (Type A from plan-guide)
 
-| Plan-guide step | Skill | When applied |
-|---|---|---|
-| 1. Classify | `/superpowers:brainstorming` | pre-plan (2026-08-27 + 2026-09-05) — classified as architectural |
-| 2. State | `/mattpocock-skills:grill-with-docs` | pre-plan + 2026-09-06 amendment (`## Decisions (grill Round 1, 2026-09-06)` table) |
-| 3. Plan | `/superpowers:writing-plans` | this plan (bite-sized tasks with per-step verification gates) |
-| 4. Tickets | `/mattpocock-skills:to-tickets` | post-#399-acceptance (Tickets B–F on issue tracker) |
-| 5. Execute | `/superpowers:subagent-driven-development` | per ticket — fresh subagent per phase |
-| 5a. Cycle | ↳ `/superpowers:test-driven-development` | per red-green slice within each ticket (Iron Law: red before green, no horizontal slicing) |
-| 5b. Module interface | ↳ `/mattpocock-skills:codebase-design` + `/mattpocock-skills:domain-modeling` | Phase 5 PAL trait design (new module interface per L13 step 9a) |
-| 5c. Done claim | ↳ `/superpowers:verification-before-completion` | before ANY "done" claim — run command, show output, evidence before assertion |
-| 6. Review | `/mattpocock-skills:code-review` | per phase PAUSE (Standards + Spec, parallel subagents per guide §"code-review workflow") |
-| 7. Receive | `/superpowers:receiving-code-review` | after each review (anti-sycophancy on feedback) |
-| 8. Finish | `/superpowers:finishing-a-development-branch` | per phase PAUSE + final release cut (worktree-aware merge/PR/cleanup) |
+| Plan-guide step      | Skill                                                                         | When applied                                                                               |
+| -------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| 1. Classify          | `/superpowers:brainstorming`                                                  | pre-plan (2026-08-27 + 2026-09-05) — classified as architectural                           |
+| 2. State             | `/mattpocock-skills:grill-with-docs`                                          | pre-plan + 2026-09-06 amendment (`## Decisions (grill Round 1, 2026-09-06)` table)         |
+| 3. Plan              | `/superpowers:writing-plans`                                                  | this plan (bite-sized tasks with per-step verification gates)                              |
+| 4. Tickets           | `/mattpocock-skills:to-tickets`                                               | post-#399-acceptance (Tickets B–F on issue tracker)                                        |
+| 5. Execute           | `/superpowers:subagent-driven-development`                                    | per ticket — fresh subagent per phase                                                      |
+| 5a. Cycle            | ↳ `/superpowers:test-driven-development`                                      | per red-green slice within each ticket (Iron Law: red before green, no horizontal slicing) |
+| 5b. Module interface | ↳ `/mattpocock-skills:codebase-design` + `/mattpocock-skills:domain-modeling` | Phase 5 PAL trait design (new module interface per L13 step 9a)                            |
+| 5c. Done claim       | ↳ `/superpowers:verification-before-completion`                               | before ANY "done" claim — run command, show output, evidence before assertion              |
+| 6. Review            | `/mattpocock-skills:code-review`                                              | per phase PAUSE (Standards + Spec, parallel subagents per guide §"code-review workflow")   |
+| 7. Receive           | `/superpowers:receiving-code-review`                                          | after each review (anti-sycophancy on feedback)                                            |
+| 8. Finish            | `/superpowers:finishing-a-development-branch`                                 | per phase PAUSE + final release cut (worktree-aware merge/PR/cleanup)                      |
 
 ### L13 Step → Skill Cross-Reference (per plan-guide §"Project-Specific Rules")
 
-| L13 step | Plan-guide binding | Plan section |
-|---|---|---|
-| L13 step 3a (read-only task pickup) | `/superpowers:brainstorming` (bounded path) | (pre-plan) |
-| L13 step 9 (red-green cycle) | `/superpowers:test-driven-development` (Iron Law) | enforced via Phase verification gates |
-| L13 step 9a (new module interface) | `/mattpocock-skills:codebase-design` → `/mattpocock-skills:domain-modeling` | Phase 5 PAL trait design |
-| L13 step 11 (verify gate) | `/superpowers:verification-before-completion` | per phase PAUSE |
-| L13 step 13 (commit-push-pr) | `/superpowers:finishing-a-development-branch` | per phase PAUSE + final cut |
-| L13 step 14 (flip checkboxes) | manual | before squash-merge per `update-issues-before-merge` |
-| L13 step 15a (tech doc) | `/mattpocock-skills:to-spec` | this plan + deep-dive + ADR-0001 |
-| L13 step 15b (L24 doc updates) | manual per L24 doc taxonomy | Task 0.4 (regenerate user-stories) + Task 0.6 (CONTEXT.md) |
+| L13 step                            | Plan-guide binding                                                          | Plan section                                               |
+| ----------------------------------- | --------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| L13 step 3a (read-only task pickup) | `/superpowers:brainstorming` (bounded path)                                 | (pre-plan)                                                 |
+| L13 step 9 (red-green cycle)        | `/superpowers:test-driven-development` (Iron Law)                           | enforced via Phase verification gates                      |
+| L13 step 9a (new module interface)  | `/mattpocock-skills:codebase-design` → `/mattpocock-skills:domain-modeling` | Phase 5 PAL trait design                                   |
+| L13 step 11 (verify gate)           | `/superpowers:verification-before-completion`                               | per phase PAUSE                                            |
+| L13 step 13 (commit-push-pr)        | `/superpowers:finishing-a-development-branch`                               | per phase PAUSE + final cut                                |
+| L13 step 14 (flip checkboxes)       | manual                                                                      | before squash-merge per `update-issues-before-merge`       |
+| L13 step 15a (tech doc)             | `/mattpocock-skills:to-spec`                                                | this plan + deep-dive + ADR-0001                           |
+| L13 step 15b (L24 doc updates)      | manual per L24 doc taxonomy                                                 | Task 0.4 (regenerate user-stories) + Task 0.6 (CONTEXT.md) |
 
 ### Per-Step Status
 
-| Step | Action | Status |
-|------|--------|--------|
-| 1 | Read CLAUDE.md + tasks/lessons.md | ✓ done at session start |
-| 2 | Skill-tag task (Type A) | ✓ this plan |
-| 3 | TDD per Phase — failing test first, then impl | enforced via Phase verification gates |
-| 4 | PAL design (L13 9a → codebase-design + domain-modeling) | Phase 5 PAL trait design |
-| 5 | L12 review (mattpocock:code-review) | per phase PAUSE |
-| 6 | Verify (L13 step 11 → verification-before-completion) | per phase PAUSE |
-| 7 | Backlog triage (L13 11a) | handled via issue #399 |
-| 8 | L24 doc updates (L13 15b — manual) | Task 0.4 (regenerate user-stories) + Task 0.6 (CONTEXT.md) |
-| 9 | Tech doc (L13 15a → to-spec) | this plan + deep-dive + ADR-0001 |
-| 10 | Receive code review (superpowers:receiving-code-review) | per phase |
-| 11 | PAUSE before commit (L13 step 12) | per phase |
-| 12 | Commit-push-pr (L13 13 → finishing-a-development-branch) | **PAUSE here per never-auto-commit rule** |
-| 13 | Flip issue checkboxes [ ]→[x] (L13 14 — manual) | per GateGuard gh-pr classifier |
-| 14 | PR review + merge + close (L13 15) | per CLAUDE.md update-issues-before-merge |
-| 15 | Verify L24 + release-cut (L13 15b) | per L24 doc taxonomy |
-| 16 | Ledger entry (L17) | per L17 |
-| 17 | Harvest lessons (L18) | per L18 |
-| 18 | L21 reports (L19) | per L21 |
+| Step | Action                                                   | Status                                                     |
+| ---- | -------------------------------------------------------- | ---------------------------------------------------------- |
+| 1    | Read CLAUDE.md + tasks/lessons.md                        | ✓ done at session start                                    |
+| 2    | Skill-tag task (Type A)                                  | ✓ this plan                                                |
+| 3    | TDD per Phase — failing test first, then impl            | enforced via Phase verification gates                      |
+| 4    | PAL design (L13 9a → codebase-design + domain-modeling)  | Phase 5 PAL trait design                                   |
+| 5    | L12 review (mattpocock:code-review)                      | per phase PAUSE                                            |
+| 6    | Verify (L13 step 11 → verification-before-completion)    | per phase PAUSE                                            |
+| 7    | Backlog triage (L13 11a)                                 | handled via issue #399                                     |
+| 8    | L24 doc updates (L13 15b — manual)                       | Task 0.4 (regenerate user-stories) + Task 0.6 (CONTEXT.md) |
+| 9    | Tech doc (L13 15a → to-spec)                             | this plan + deep-dive + ADR-0001                           |
+| 10   | Receive code review (superpowers:receiving-code-review)  | per phase                                                  |
+| 11   | PAUSE before commit (L13 step 12)                        | per phase                                                  |
+| 12   | Commit-push-pr (L13 13 → finishing-a-development-branch) | **PAUSE here per never-auto-commit rule**                  |
+| 13   | Flip issue checkboxes [ ]→[x] (L13 14 — manual)          | per GateGuard gh-pr classifier                             |
+| 14   | PR review + merge + close (L13 15)                       | per CLAUDE.md update-issues-before-merge                   |
+| 15   | Verify L24 + release-cut (L13 15b)                       | per L24 doc taxonomy                                       |
+| 16   | Ledger entry (L17)                                       | per L17                                                    |
+| 17   | Harvest lessons (L18)                                    | per L18                                                    |
+| 18   | L21 reports (L19)                                        | per L21                                                    |
 
 ---
 
@@ -2429,21 +2369,21 @@ Per `.local/plugins-docs/2026-09-05-plan-guide-mattpocock-superpowers-stack.md` 
 
 Per issue #399: "All 10 open questions either answered (with chosen path + rationale) or explicitly deferred to v0.2+ with rationale". This plan resolves Q1-Q13 (Round-1 grill + deep-dive Q1-Q10 + revision Q13):
 
-| Q | Resolution | Source |
-|---|------------|--------|
-| Q1 | `anychain-{core,tron,kms}` @ `cf3aa2d59afb2c50dc961919fca011c401238ed6` (HEAD of upstream `main`, 2026-09-04), **vendored** under `rust-wallet-app/crates/anychain-vendored/` (REVISION 2026-09-06); upstream tags `v0.1.8`/`v0.2.14`/`v0.1.23` do NOT exist on remote | Round-1 grill + ADR-0001 + issue #540 |
-| Q2 | Protobuf via vendored `anychain-tron` types + dual-SHA256 txid fix in vendored copy (Task 0.7) | Round-1 grill Q2 (revised 2026-09-06) |
-| Q3 | **Vendored** — bus-factor mitigated by local copy (REVISION 2026-09-06, was REJECTED 2026-09-05) | Round-1 grill Q3 + issue #540 |
-| Q4 | Mainnet self-send gate `$0.001 USDT` (unblocked 2026-09-06 by Q13 varint fix) | Round-1 grill Q4 |
-| Q5 | SPKI pin live extraction `0e43f611...` | Round-1 grill Q5 |
-| Q6 | Nile testnet (chain-id 0xcd8690dc) | deep-dive Q6 |
-| Q7 | `pinned://` URL + `SpkiPinnedVerifier` reuse | deep-dive Q7 |
-| Q8 | Sign-only path with `v ∈ {0, 1}` | deep-dive Q8 |
-| Q9 | Token registry `{local,nile,mainnet}.json` | deep-dive Q9 |
-| Q10 | SLIP-44 coin 195, path m/44'/195'/0'/0/0 | deep-dive Q10 |
-| Q11 | Stake 1.0 deferred; Stake 2.0 only | Round-1 grill Q11 |
-| Q12 | Disambiguation guards | Round-1 grill Q12 |
-| Q13 | **REVISED 2026-09-06 per PR #541** — original hypothesis (varint fix in vendored copy) DISPROVED; actual fix was the broadcast endpoint switch to `/wallet/broadcasthex`. Q13 varint patch REVERTED before this amendment; vendored `Tron.rs` left unmodified. Regression test `tests/varint_and_txid.rs::fee_limit_canonical_varint` now pins the standard 6-byte form (`90 01 80 c9 fe 3d`) as the baseline (test comments explain 5-byte form is impossible for tag 18). | Issue #540 + audit issue #542 |
+| Q   | Resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Source                                |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| Q1  | `anychain-{core,tron,kms}` @ `cf3aa2d59afb2c50dc961919fca011c401238ed6` (HEAD of upstream `main`, 2026-09-04), **vendored** under `rust-wallet-app/crates/anychain-vendored/` (REVISION 2026-09-06); upstream tags `v0.1.8`/`v0.2.14`/`v0.1.23` do NOT exist on remote                                                                                                                                                                                                      | Round-1 grill + ADR-0001 + issue #540 |
+| Q2  | Protobuf via vendored `anychain-tron` types + dual-SHA256 txid fix in vendored copy (Task 0.7)                                                                                                                                                                                                                                                                                                                                                                              | Round-1 grill Q2 (revised 2026-09-06) |
+| Q3  | **Vendored** — bus-factor mitigated by local copy (REVISION 2026-09-06, was REJECTED 2026-09-05)                                                                                                                                                                                                                                                                                                                                                                            | Round-1 grill Q3 + issue #540         |
+| Q4  | Mainnet self-send gate `$0.001 USDT` (unblocked 2026-09-06 by Q13 varint fix)                                                                                                                                                                                                                                                                                                                                                                                               | Round-1 grill Q4                      |
+| Q5  | SPKI pin live extraction `0e43f611...`                                                                                                                                                                                                                                                                                                                                                                                                                                      | Round-1 grill Q5                      |
+| Q6  | Nile testnet (chain-id 0xcd8690dc)                                                                                                                                                                                                                                                                                                                                                                                                                                          | deep-dive Q6                          |
+| Q7  | `pinned://` URL + `SpkiPinnedVerifier` reuse                                                                                                                                                                                                                                                                                                                                                                                                                                | deep-dive Q7                          |
+| Q8  | Sign-only path with `v ∈ {0, 1}`                                                                                                                                                                                                                                                                                                                                                                                                                                            | deep-dive Q8                          |
+| Q9  | Token registry `{local,nile,mainnet}.json`                                                                                                                                                                                                                                                                                                                                                                                                                                  | deep-dive Q9                          |
+| Q10 | SLIP-44 coin 195, path m/44'/195'/0'/0/0                                                                                                                                                                                                                                                                                                                                                                                                                                    | deep-dive Q10                         |
+| Q11 | Stake 1.0 deferred; Stake 2.0 only                                                                                                                                                                                                                                                                                                                                                                                                                                          | Round-1 grill Q11                     |
+| Q12 | Disambiguation guards                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Round-1 grill Q12                     |
+| Q13 | **REVISED 2026-09-06 per PR #541** — original hypothesis (varint fix in vendored copy) DISPROVED; actual fix was the broadcast endpoint switch to `/wallet/broadcasthex`. Q13 varint patch REVERTED before this amendment; vendored `Tron.rs` left unmodified. Regression test `tests/varint_and_txid.rs::fee_limit_canonical_varint` now pins the standard 6-byte form (`90 01 80 c9 fe 3d`) as the baseline (test comments explain 5-byte form is impossible for tag 18). | Issue #540 + audit issue #542         |
 
 **#399 closes when:** Phases 0-6 complete + V11 mainnet self-send PASS + Round-1 grill Q8 audit (every "Status: ready" row verified against Vn spike PASS block). Q13 regression test in Task 0.7 must PASS before #399 can close.
 
@@ -2526,27 +2466,27 @@ cargo run -p tron -- config show
 
 ### Report cost (human engineering hours)
 
-| Phase | Tasks | Owner | Engineering-hours (low) | (high) | Notes |
-|-------|-------|-------|------------------------|--------|-------|
-| 4 — Test integration | 4.1–4.7 (7 tasks) | solo | 24 h | 40 h | testcontainers Docker + 2 GH Actions files + Nile manual trigger; flaky-test triage likely eats 20% of low end |
-| 5 — PAL + crypto | 4.1–4.7 (7 tasks, mostly code) | solo | 40 h | 64 h | 4 traits × 3-4 platform impls + argon2id/AES-GCM persistence + FFI cdylib smoke; mobile compile gates hit "no Docker on mobile" repeatedly |
-| 6 — CLI scaffold | 5.1–5.3+ (22 commands) | solo | 40 h | 64 h | clap derive wiring + 22 handlers + exit-code matrix mirroring btc; round 5 L13 review × 22 surfaces likely |
-| 7 — V1-V11 + mainnet | spike V1-V11 + 0.001 USDT self-send | solo + operator | 16 h | 32 h | V1-V11 spike PASS evidence + mainnet gate operator-driven (recipient==sender pre-check hook, `RUN_TRON_MAINNET=1` env gate) |
-| Release cut | branch → main + ledger entry + tag | solo | 4 h | 8 h | L17 ledger + L13 step 15 PR review + merge + close |
-| **Subtotal — Phase 4 to v0.1 cut** | | | **124 h** | **208 h** | ~15-26 working days @ 8 h/day solo |
+| Phase                              | Tasks                               | Owner           | Engineering-hours (low) | (high)    | Notes                                                                                                                                      |
+| ---------------------------------- | ----------------------------------- | --------------- | ----------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 4 — Test integration               | 4.1–4.7 (7 tasks)                   | solo            | 24 h                    | 40 h      | testcontainers Docker + 2 GH Actions files + Nile manual trigger; flaky-test triage likely eats 20% of low end                             |
+| 5 — PAL + crypto                   | 4.1–4.7 (7 tasks, mostly code)      | solo            | 40 h                    | 64 h      | 4 traits × 3-4 platform impls + argon2id/AES-GCM persistence + FFI cdylib smoke; mobile compile gates hit "no Docker on mobile" repeatedly |
+| 6 — CLI scaffold                   | 5.1–5.3+ (22 commands)              | solo            | 40 h                    | 64 h      | clap derive wiring + 22 handlers + exit-code matrix mirroring btc; round 5 L13 review × 22 surfaces likely                                 |
+| 7 — V1-V11 + mainnet               | spike V1-V11 + 0.001 USDT self-send | solo + operator | 16 h                    | 32 h      | V1-V11 spike PASS evidence + mainnet gate operator-driven (recipient==sender pre-check hook, `RUN_TRON_MAINNET=1` env gate)                |
+| Release cut                        | branch → main + ledger entry + tag  | solo            | 4 h                     | 8 h       | L17 ledger + L13 step 15 PR review + merge + close                                                                                         |
+| **Subtotal — Phase 4 to v0.1 cut** |                                     |                 | **124 h**               | **208 h** | ~15-26 working days @ 8 h/day solo                                                                                                         |
 
 ### AI report cost (Claude Sonnet 5 token spend, blended)
 
 Rate assumption: input $3/M tokens, output $15/M tokens, blended $6/M tokens. Tokens-per-subagent-pass typical: 50K-200K (read-heavy reviews), 200K-800K (multi-file refactor agents).
 
-| Phase | Subagent passes (low) | (high) | Token total (low) | (high) | USD blended (low) | (high) |
-|-------|----------------------|--------|-------------------|--------|-------------------|--------|
-| 4 — Test integration | 24 | 40 | 2.4 M | 8.0 M | $14 | $48 |
-| 5 — PAL + crypto | 40 | 64 | 4.0 M | 12.8 M | $24 | $77 |
-| 6 — CLI scaffold | 56 | 88 | 5.6 M | 17.6 M | $34 | $106 |
-| 7 — V1-V11 + mainnet | 16 | 24 | 1.6 M | 4.8 M | $10 | $29 |
-| Release cut | 8 | 12 | 0.4 M | 0.8 M | $2 | $5 |
-| **Subtotal** | | | **14.0 M** | **44.0 M** | **$84** | **$265** |
+| Phase                | Subagent passes (low) | (high) | Token total (low) | (high)     | USD blended (low) | (high)   |
+| -------------------- | --------------------- | ------ | ----------------- | ---------- | ----------------- | -------- |
+| 4 — Test integration | 24                    | 40     | 2.4 M             | 8.0 M      | $14               | $48      |
+| 5 — PAL + crypto     | 40                    | 64     | 4.0 M             | 12.8 M     | $24               | $77      |
+| 6 — CLI scaffold     | 56                    | 88     | 5.6 M             | 17.6 M     | $34               | $106     |
+| 7 — V1-V11 + mainnet | 16                    | 24     | 1.6 M             | 4.8 M      | $10               | $29      |
+| Release cut          | 8                     | 12     | 0.4 M             | 0.8 M      | $2                | $5       |
+| **Subtotal**         |                       |        | **14.0 M**        | **44.0 M** | **$84**           | **$265** |
 
 ### Cost ratio
 

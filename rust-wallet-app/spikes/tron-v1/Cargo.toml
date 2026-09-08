@@ -19,6 +19,22 @@ publish = false
 assert_cmd = "2"
 predicates = "3"
 
+# Make `assert_cmd::cargo_bin("tron")` resolve under spike-only `cargo test`.
+# Cargo sets `CARGO_BIN_EXE_tron` only when the binary crate is in the test
+# build graph — without this dev-dep, the spike test compilation can't see
+# the `tron` binary and `cargo_bin("tron")` panics with
+# `CARGO_BIN_EXE_tron is unset`. Workspace already declares `tron` at root
+# (`rust-wallet-app/Cargo.toml:40`) for exactly this purpose — wire it via
+# the workspace alias.
+#
+# The Plan §Phase 7 §7.13 invariant ("tests may not import from
+# tron_v1_spike / tron_wallet_core / anychain_*") still holds: adding
+# `tron` as a dev-dep exposes BOTH the lib and bin targets, but
+# `cargo_bin` only resolves the bin; spike tests never write
+# `use tron::…`. The invariant check
+# `grep 'tron_wallet_core\|anychain_\|tron_v1_spike'` stays green.
+tron = { workspace = true }
+
 # Predicate combinators used in test stderr assertions (e.g., v11's
 # pre-check audit predicate chain that asserts the CLI's failure message
 # contains "recipient" OR "operator" OR "self" OR "pre-check" OR "audit").

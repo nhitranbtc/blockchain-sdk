@@ -484,3 +484,117 @@ fn row_8_wallet_to_wallet_trc20_address_round_trip() {
         "both T-addresses must be canonical 34-char form"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW 9 — self-send: native TRX + TRC-20 to the wallet's own address
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn row_9_self_send_native_and_trc20() {
+    // Self-send = sender == recipient. Derive the wallet's own T-address
+    // from the canonical mnemonic via BIP-44 path m/44'/195'/0'/0/0, then
+    // drive both send paths against it.
+    //
+    // Native: `wallet send --to <self> --sign-only --json` — emits a
+    // full offline envelope; never broadcasts.
+    //
+    // TRC-20: `trc20 send` ships WITHOUT a `--sign-only` flag today, so the
+    // offline equivalent is `--dry-run` (handler returns `dry_run=true` and
+    // skips signing + broadcast; reads `decimals()` + `estimate_energy` only).
+    // Both paths target the same derived T-address; the row proves the CLI
+    // round-trips a derived address into both the native and TRC-20 send
+    // surfaces without address-validation rejection.
+
+    let derived = common::tron()
+        .args(["--rpc", rpc_for_refresh()])
+        .args(["address", "new", "--mnemonic"])
+        .arg(TEST_MNEMONIC)
+        .args(["--path", common::TRON_SLIP44_PATH])
+        .assert()
+        .success();
+    let self_addr = String::from_utf8_lossy(&derived.get_output().stdout)
+        .trim()
+        .to_string();
+    assert!(
+        self_addr.starts_with('T') && self_addr.len() == 34,
+        "derived self T-address must be 34 chars starting with T, got {self_addr:?}"
+    );
+
+    // ── Native self-send (sign-only) ─────────────────────────────────────
+    let native_out = common::tron()
+        .args(["--rpc", rpc_for_refresh()])
+        .args([
+            "wallet",
+            "send",
+            "--mnemonic",
+            TEST_MNEMONIC,
+            "--to",
+            &self_addr,
+            "--amount",
+            "1",
+            "--fee-limit",
+            common::DEFAULT_FEE_LIMIT_SUN,
+            "--sign-only",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let native_json: serde_json::Value = serde_json::from_slice(&native_out.get_output().stdout)
+        .expect("wallet send --sign-only --json must emit JSON");
+
+    let native_txid = native_json["txid"]
+        .as_str()
+        .expect("native self-send must emit txid");
+    let native_env = native_json["signed_envelope_hex"]
+        .as_str()
+        .expect("native self-send must emit signed_envelope_hex");
+    assert_eq!(
+        native_txid.len(),
+        64,
+        "native self-send txid must be 64 hex"
+    );
+    assert!(
+        !native_env.is_empty(),
+        "native self-send envelope must be non-empty"
+    );
+
+    // ── TRC-20 self-send (dry-run, Nile USDT) ─────────────────────────────
+    let trc20_out = common::tron()
+        .args(["--rpc", rpc_for_refresh()])
+        .args([
+            "trc20",
+            "send",
+            "--mnemonic",
+            TEST_MNEMONIC,
+            "--contract",
+            common::nile_usdt(),
+            "--to",
+            &self_addr,
+            "--amount",
+            common::ONE_USDT_DISPLAY_AMOUNT,
+            "--fee-limit",
+            common::DEFAULT_FEE_LIMIT_SUN,
+            "--dry-run",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let trc20_json: serde_json::Value = serde_json::from_slice(&trc20_out.get_output().stdout)
+        .expect("trc20 send --dry-run --json must emit JSON");
+
+    assert_eq!(
+        trc20_json["dry_run"].as_bool(),
+        Some(true),
+        "trc20 self-send must be a dry run (no broadcast)"
+    );
+    assert_eq!(
+        trc20_json["to"].as_str(),
+        Some(self_addr.as_str()),
+        "trc20 self-send recipient must equal derived self T-address"
+    );
+    assert_eq!(
+        trc20_json["contract"].as_str(),
+        Some(common::nile_usdt()),
+        "trc20 self-send contract must equal Nile USDT address"
+    );
+}
