@@ -24,9 +24,9 @@
 //! | 14 | `getEpochInfo`                    | `get_epoch_info() -> Result<EpochInfo>`                   | info |
 //! | 15 | `getHealth`                       | `get_health() -> Result<()>`                               | info (probe) |
 //!
-//! `requestAirdrop` (Task 5.2) + `getTransaction` (Task 5.3) are added
-//! in their own tasks; `accountSubscribe` etc. (5 WS subscribes) are
-//! V0.1.5 watch mode.
+//! `requestAirdrop` (Task 5.2 — landed) + `getTransaction` (Task 5.3 —
+//! pending) are added in their own tasks; `accountSubscribe` etc. (5 WS
+//! subscribes) are V0.1.5 watch mode.
 //!
 //! Importers: `tx::broadcast` (send_and_confirm uses
 //! `latest_blockhash` + `send_transaction`; wait_for_confirm uses
@@ -563,4 +563,115 @@ pub type SolanaClient = RpcClient;
 #[allow(dead_code)]
 pub fn map_client_error<E: std::fmt::Display>(_err: E) -> Error {
     Error::Transport("legacy helper: use RpcClient::post's typed errors".to_string())
+}
+
+// =============================================================================
+// 16 — requestAirdrop (Task 5.2 — devnet-only helper)
+// =============================================================================
+//
+// Hosts permitted to receive airdrops. Mainnet rejects `requestAirdrop`;
+// this is a CLUSTER-level restriction (Tier 3 finding #6).
+//
+// Per grilled decision Q8: PER-METHOD host check (not a RpcClient mode
+// flag). `request_airdrop` checks `rpc.host()` against this allowlist;
+// `send` / `sendTransaction` work on any host (mainnet, devnet, testnet,
+// local).
+pub const DEVNET_HOST_ALLOWLIST: &[&str] = &[
+    "api.devnet.solana.com",
+    "api.testnet.solana.com",
+    "localhost",
+    "127.0.0.1",
+];
+
+/// Devnet-only airdrop helper. Refuses mainnet / unknown hosts (Tier 3
+/// finding #6 — mainnet rejects airdrops; calling it accidentally is a
+/// loss-of-funds + DoS vector).
+///
+/// Returns the airdrop transaction signature on success. The actual
+/// SOL appears after a few seconds (Anza convention) — callers should
+/// `wait_for_confirm` if they need to know landing time.
+pub async fn request_airdrop(rpc: &RpcClient, pubkey: &Pubkey, lamports: u64) -> Result<Signature> {
+    let host = rpc.host();
+    if !DEVNET_HOST_ALLOWLIST.contains(&host) {
+        return Err(Error::Transport(format!(
+            "requestAirdrop: host '{host}' not in devnet allowlist (mainnet rejects airdrop); allowed: {}",
+            DEVNET_HOST_ALLOWLIST.join(", ")
+        )));
+    }
+    let raw: Value = rpc
+        .post("requestAirdrop", json!([pubkey.to_string(), lamports]))
+        .await?;
+    let sig_str = raw
+        .as_str()
+        .ok_or_else(|| Error::Transport("requestAirdrop: result not a string".to_string()))?;
+    sig_str
+        .parse::<Signature>()
+        .map_err(|e| Error::Transport(format!("requestAirdrop: parse Signature: {e}")))
+}
+
+// =============================================================================
+// 17 — getTransaction (Task 5.3 — full log decode for `sol tx`)
+// =============================================================================
+
+/// Local minimal wire struct for `getTransaction` response (Task 5.3).
+///
+/// The JSON-RPC `result` field has the shape:
+/// ```json
+/// {
+///   "slot": 1234,
+///   "blockTime": 1700000000,
+///   "transaction": ...,
+///   "meta": {...}
+/// }
+/// ```
+///
+/// Anza 4.x doesn't re-export the full `EncodedConfirmedTransactionWithStatusMeta`
+/// from the 1.18-series `solana-transaction-status` family. V0.1 surfaces
+/// just the slot + blockTime + an opaque `meta` JSON (Phase 7 `sol tx`
+/// renders the inner fields lazily). Full decode (logs + token-balance
+/// deltas + inner instructions) deferred to V0.1.5.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionResponse {
+    pub slot: u64,
+    pub block_time: Option<i64>,
+    /// Raw `meta` object — Phase 7 CLI formats selected fields (fee,
+    /// status, log-truncation); full struct decode deferred.
+    pub meta: serde_json::Value,
+}
+
+/// Fetch a confirmed transaction by signature, returning slot + blockTime
+/// + raw `meta` JSON.
+///
+/// V0.1 ships a minimal struct (slot + blockTime + opaque meta) so Phase 7
+/// `sol tx <signature>` can render the basics. Full `UiTransaction`
+/// decode (logs, inner instructions, token-balance deltas, loaded
+/// addresses) deferred to V0.1.5 when the 1.18-series wire types can
+/// land without the #555 sub-dep conflict.
+///
+/// Params: `[signature, {"encoding": "json", "commitment": "confirmed", "maxSupportedTransactionVersion": 0}]`.
+pub async fn get_transaction(
+    rpc: &RpcClient,
+    signature: &Signature,
+) -> Result<Option<TransactionResponse>> {
+    let raw: Value = rpc
+        .post(
+            "getTransaction",
+            json!([
+                signature.to_string(),
+                {
+                    "encoding": "json",
+                    "commitment": "confirmed",
+                    "maxSupportedTransactionVersion": 0
+                }
+            ]),
+        )
+        .await?;
+    if raw.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value::<TransactionResponse>(raw)
+        .map(Some)
+        .map_err(|e| Error::Transport(format!("getTransaction: parse TransactionResponse: {e}")))
 }

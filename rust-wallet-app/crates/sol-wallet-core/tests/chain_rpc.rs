@@ -18,7 +18,8 @@ use sol_wallet_core::chain::{
     get_account_info, get_balance, get_epoch_info, get_health, get_latest_blockhash,
     get_minimum_balance_for_rent_exemption, get_multiple_accounts, get_recent_prioritization_fees,
     get_signature_status, get_token_account_balance, get_token_accounts_by_owner, get_token_supply,
-    get_version, ConfirmationStatus, TransactionStatus,
+    get_transaction, get_version, request_airdrop, ConfirmationStatus, TransactionResponse,
+    TransactionStatus,
 };
 use sol_wallet_core::disambig::TokenProgram;
 use sol_wallet_core::error::Error;
@@ -647,5 +648,195 @@ async fn wait_for_confirm_returns_confirm_pending_at_half_timeout() {
     assert!(
         elapsed < Duration::from_millis(1500),
         "should fire at ~1s, was {elapsed:?}"
+    );
+}
+
+// =============================================================================
+// Task 5.2 — request_airdrop with devnet host allowlist (Tier 3 finding #6)
+// =============================================================================
+
+#[tokio::test]
+#[serial]
+async fn request_airdrop_rejects_mainnet_host() {
+    // Q8 grilled decision: requestAirdrop is a CLUSTER-LEVEL restriction
+    // (mainnet rejects it). The RpcClient doesn't carry a mode flag —
+    // the method enforces its own host policy.
+    let rpc = RpcClient::new("https://api.mainnet-beta.solana.com").unwrap();
+    let err = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
+        .await
+        .unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("mainnet-beta.solana.com"),
+        "error should mention offending host, got: {msg}"
+    );
+    assert!(
+        msg.contains("devnet allowlist"),
+        "error should mention devnet allowlist, got: {msg}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn request_airdrop_rejects_unknown_host() {
+    let rpc = RpcClient::new("https://attacker.com").unwrap();
+    let err = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
+        .await
+        .unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("attacker.com"),
+        "error should mention offending host, got: {msg}"
+    );
+}
+
+#[tokio::test]
+#[serial]
+async fn request_airdrop_accepts_localhost() {
+    let rpc = mock_rpc_with_body(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "result": "5".to_string() + &"1".repeat(86)
+    }))
+    .await;
+    let sig = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
+        .await
+        .unwrap();
+    assert!(sig.to_string().len() >= 87);
+}
+
+#[tokio::test]
+#[serial]
+async fn request_airdrop_rejects_non_string_result() {
+    let rpc = mock_rpc_with_body(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "result": 42
+    }))
+    .await;
+    let err = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
+        .await
+        .unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("not a string"),
+        "error should mention type mismatch, got: {msg}"
+    );
+}
+
+// =============================================================================
+// Task 5.3 — get_transaction (full log decode for `sol tx`)
+// =============================================================================
+
+#[tokio::test]
+#[serial]
+async fn get_transaction_returns_some_on_confirmed_tx() {
+    let rpc = mock_rpc_with_body(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "result": {
+            "slot": 1234,
+            "blockTime": 1700000000,
+            "meta": {"err": null, "fee": 5000}
+        }
+    }))
+    .await;
+    let keypair = Keypair::new();
+    let sig = {
+        let mut b = [0u8; 64];
+        b.copy_from_slice(&keypair.to_bytes()[..64]);
+        Signature::from(b)
+    };
+    let resp: Option<TransactionResponse> = get_transaction(&rpc, &sig).await.unwrap();
+    let r = resp.expect("transaction should be Some");
+    assert_eq!(r.slot, 1234);
+    assert_eq!(r.block_time, Some(1700000000));
+    assert_eq!(r.meta.get("fee").and_then(|v| v.as_u64()), Some(5000));
+}
+
+#[tokio::test]
+#[serial]
+async fn get_transaction_returns_none_on_null() {
+    let rpc = mock_rpc_with_body(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "result": null
+    }))
+    .await;
+    let keypair = Keypair::new();
+    let sig = {
+        let mut b = [0u8; 64];
+        b.copy_from_slice(&keypair.to_bytes()[..64]);
+        Signature::from(b)
+    };
+    let resp: Option<TransactionResponse> = get_transaction(&rpc, &sig).await.unwrap();
+    assert!(resp.is_none());
+}
+
+#[tokio::test]
+#[serial]
+async fn get_transaction_rejects_missing_slot() {
+    let rpc = mock_rpc_with_body(serde_json::json!({
+        "jsonrpc": "2.0", "id": 1,
+        "result": {"blockTime": 1700000000, "meta": {"err": null}}
+    }))
+    .await;
+    let keypair = Keypair::new();
+    let sig = {
+        let mut b = [0u8; 64];
+        b.copy_from_slice(&keypair.to_bytes()[..64]);
+        Signature::from(b)
+    };
+    let err = get_transaction(&rpc, &sig).await.unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("missing field `slot`") || msg.contains("missing slot"),
+        "expected missing-slot error, got: {msg}"
+    );
+}
+
+// =============================================================================
+// Task 5.5 — SPKI pin escape hatch (Tier 3 finding #2)
+// =============================================================================
+
+#[test]
+fn spki_pin_empty_bytes_rejected() {
+    // V0.1 refuses to construct an unpinned client — caller must supply
+    // real SPKI bytes (DER encoding of the cluster's leaf cert pubkey).
+    let err =
+        RpcClient::new_with_pinned_spki("https://api.mainnet-beta.solana.com", vec![]).unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("empty DER bytes"),
+        "expected empty-bytes rejection, got: {msg}"
+    );
+    assert!(
+        msg.contains("refusing to construct an unpinned client"),
+        "expected security message, got: {msg}"
+    );
+}
+
+#[test]
+fn spki_pin_accepts_valid_bytes() {
+    // 91 bytes is a typical RSA-2048 SPKI envelope; the V0.1 constructor
+    // stores them verbatim (live TLS-level verification deferred to V0.1.5).
+    let spki = vec![0x30u8; 91];
+    let rpc = RpcClient::new_with_pinned_spki("https://api.mainnet-beta.solana.com", spki.clone())
+        .expect("pinned client should construct");
+    assert_eq!(rpc.pinned_spki(), Some(&spki));
+}
+
+#[test]
+fn spki_pin_default_new_returns_none() {
+    // `RpcClient::new` (no pin) returns `None` for `pinned_spki()` —
+    // distinguishes pinned vs unpinned clients at runtime.
+    let rpc = RpcClient::new("https://api.devnet.solana.com").unwrap();
+    assert_eq!(rpc.pinned_spki(), None);
+}
+
+#[test]
+fn spki_pin_rejects_non_allowlisted_url() {
+    // The allowlist runs FIRST (Tier 1 #1). A pinned mainnet URL is fine
+    // (https + any host); a pinned non-loopback http URL is rejected.
+    let spki = vec![0x30u8; 91];
+    let err = RpcClient::new_with_pinned_spki("http://attacker.com", spki).unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("RPC URL must be https"),
+        "expected allowlist rejection, got: {msg}"
     );
 }

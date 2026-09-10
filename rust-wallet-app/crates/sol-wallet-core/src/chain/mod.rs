@@ -34,7 +34,8 @@ pub use account::{
     get_account_info, get_balance, get_epoch_info, get_health, get_latest_blockhash,
     get_minimum_balance_for_rent_exemption, get_multiple_accounts, get_recent_prioritization_fees,
     get_signature_status, get_token_account_balance, get_token_accounts_by_owner, get_token_supply,
-    get_version, ConfirmationStatus, TransactionStatus,
+    get_transaction, get_version, request_airdrop, ConfirmationStatus, TransactionResponse,
+    TransactionStatus, DEVNET_HOST_ALLOWLIST,
 };
 pub use client::{
     BlockhashCache, BlockhashCacheEntry, RateLimiter, RpcClient, DEFAULT_BLOCKHASH_TTL,

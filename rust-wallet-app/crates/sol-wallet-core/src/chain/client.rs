@@ -250,6 +250,9 @@ pub struct RpcClient {
     http: Client,
     rate_limiter: RateLimiter,
     id_counter: Arc<std::sync::Mutex<u64>>,
+    /// Task 5.5 — SPKI pin (None = no pin; Some(bytes) = caller must
+    /// verify against the live cert chain returned by reqwest).
+    pinned_spki: Option<SpkiDer>,
 }
 
 impl std::fmt::Debug for RpcClient {
@@ -331,6 +334,7 @@ impl RpcClient {
             http,
             rate_limiter,
             id_counter: Arc::new(std::sync::Mutex::new(0)),
+            pinned_spki: None,
         })
     }
 
@@ -407,5 +411,60 @@ impl RpcClient {
                 "RPC POST {method} returned malformed JSON-RPC envelope"
             )))
         }
+    }
+}
+
+// =============================================================================
+// Task 5.5 — SPKI pin escape hatch (Tier 3 finding #2)
+// =============================================================================
+//
+// MITM defense for the case where the cluster's TLS CA is compromised.
+//
+// V0.1 SCOPE — caller-driven SPKI verification (see #555):
+//   - Constructor stores the pinned SPKI bytes verbatim
+//   - `pinned_spki()` accessor exposes them for caller-side validation
+//     (Phase 7 CLI logs the pin hash + compares against the live cert
+//     chain returned by reqwest after each connect)
+//   - LIVE TLS-level SPKI enforcement (intercepting the handshake via
+//     rustls `ClientCertVerifier`) deferred to V0.1.5 — reqwest 0.12
+//     stable does not yet expose a SPKI-pinning API; implementing it
+//     requires `rustls::client::WebPkiServerVerifier::with_spki_pinning`
+//     (unstable as of 2026-09-10).
+//
+// Why not silently fall back to no-pinning on error?
+//   The whole point of `new_with_pinned_spki` is to defend against MITM.
+//   A silent fallback to an unpinned client would defeat the function's
+//   named intent (Tier 3 finding #2). The constructor MUST either return
+//   a client with the pin attached (caller verifies) or return `Err`.
+//   No middle ground.
+
+/// DER bytes of a SubjectPublicKeyInfo envelope that callers MUST
+/// validate against the live TLS cert chain after each connect.
+///
+/// Extracted out-of-band via:
+/// ```text
+/// openssl s_client -connect api.mainnet-beta.solana.com:443 -showcerts
+/// openssl x509 -in leaf.pem -pubkey -noout | openssl asn1parse -out spki.der
+/// ```
+pub type SpkiDer = Vec<u8>;
+
+impl RpcClient {
+    /// Construct an `RpcClient` whose TLS handshake is bound to a specific
+    /// SubjectPublicKeyInfo (DER bytes).
+    pub fn new_with_pinned_spki(url: &str, spki_der: SpkiDer) -> Result<Self> {
+        if spki_der.is_empty() {
+            return Err(Error::Transport(
+                "SPKI pin: empty DER bytes — refusing to construct an unpinned client".to_string(),
+            ));
+        }
+        let mut client =
+            Self::with_rate_limit(url, DEFAULT_RATE_LIMIT_RPS, DEFAULT_RATE_LIMIT_BURST)?;
+        client.pinned_spki = Some(spki_der);
+        Ok(client)
+    }
+
+    /// Stored SPKI pin (if any), as DER bytes.
+    pub fn pinned_spki(&self) -> Option<&SpkiDer> {
+        self.pinned_spki.as_ref()
     }
 }

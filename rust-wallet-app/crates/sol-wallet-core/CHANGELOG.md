@@ -325,3 +325,35 @@ Recipe 2 from #555: drop Anza `solana-rpc-client` (intrinsic sub-dep conflict pe
 ### Test count
 
 130 tests pass across 12 test files (24 lib unit + 11 address + 9 amount + 10 bip39 + 36 chain_rpc + 4 compute_budget + 4 sign_only + 3 sign_tx + 7 spl_instruction + 8 stablecoin_registry + 9 token2022 + 5 tx_serde). 0 failures. 0 warnings (`#![warn(missing_docs)]` strict). `cargo clippy` shows 5 style nits (too_many_arguments on `prepare_spl_transfer_message`; doc list indentation; redundant pattern matching); none are correctness issues — accepted for Phase 5.1 scope.
+
+---
+
+## Phase 5.2/5.3/5.5 — 2026-09-10 — `request_airdrop` + `get_transaction` + SPKI pin escape hatch
+
+Completes Phase 5's RPC client surface. 11 new tests (4 + 3 + 4). Total: 141 tests pass.
+
+### Added
+
+- **`chain::account::request_airdrop`** (~45 LoC). Devnet-only airdrop helper. Per-method host check (`rpc.host()` against `DEVNET_HOST_ALLOWLIST`: `api.devnet.solana.com`, `api.testnet.solana.com`, `localhost`, `127.0.0.1`). Per **Tier 3 finding #6** — calling `requestAirdrop` on mainnet is a loss-of-funds + DoS vector; the method refuses with `Error::Transport("host '<host>' not in devnet allowlist (mainnet rejects airdrop); allowed: ...")` and lists the allowed hosts in the error message so the CLI can render a clear "this is a devnet-only command" hint.
+- **`chain::account::get_transaction`** (~30 LoC). Fetch a confirmed transaction by signature, returning slot + blockTime + raw `meta` JSON. Local minimal wire struct `TransactionResponse { slot, blockTime, meta: serde_json::Value }` avoids the Anza 1.18-series `EncodedConfirmedTransactionWithStatusMeta`. Full decode (logs, inner instructions, token-balance deltas) deferred to V0.1.5.
+- **`chain::client::RpcClient::new_with_pinned_spki`** (~25 LoC). SPKI pin escape hatch for **Tier 3 finding #2** — MITM defense for the case where the cluster's TLS CA is compromised. Constructor stores `Vec<u8>` SPKI bytes on the client; the caller must validate against the live cert chain returned by reqwest after each connect. **The constructor NEVER silently degrades to an unpinned client** — empty DER bytes → `Err(Error::Transport(...))` with a security-named message ("refusing to construct an unpinned client"). V0.1 wires caller-driven SPKI verification; live TLS-level pinning via `rustls::ClientCertVerifier::with_spki_pinning` is V0.1.5 (reqwest 0.12 stable does not yet expose a SPKI-pinning API as of 2026-09-10).
+- **`chain::client::RpcClient::pinned_spki()`** — accessor returning `Option<&[u8]>` so Phase 7 CLI can log the pin hash + compare against the live cert chain.
+- **`SpkiDer` type alias** in `chain::client` for clarity at call sites.
+
+### Tests
+
+- `tests/chain_rpc.rs` — 11 new tests (all pass):
+  - 4 `request_airdrop`: mainnet reject + unknown-host reject + localhost accept + non-string result reject
+  - 3 `get_transaction`: confirmed-tx parse + null result + missing-slot reject
+  - 4 SPKI: empty-bytes reject + valid-bytes accept + default `new()` returns None + non-allowlisted URL reject
+
+### Test count after this PR
+
+141 tests pass across 12 test files (24 lib + 11 address + 9 amount + 10 bip39 + 47 chain_rpc + 4 compute_budget + 4 sign_only + 3 sign_tx + 7 spl_instruction + 8 stablecoin_registry + 9 token2022 + 5 tx_serde). 0 failures. 0 warnings.
+
+### Remaining deferred work (V0.1.5)
+
+- **Retry-on-stale-hash** — `send_with_retry` (3 attempts, exponential backoff 100ms→200ms→400ms) + `BlockhashCache` TTL use (cache struct compiles, `get_or_fetch` is unused)
+- **5 WS subscribes** — `account_subscribe`, `signature_subscribe`, `program_subscribe`, `logs_subscribe`, `slot_subscribe` (return `Error::Unimplemented` today)
+- **Live SPKI TLS-level pinning** — rustls `WebPkiServerVerifier::with_spki_pinning` (unstable API; deferred until reqwest exposes a stable SPKI-pinning hook)
+- **Devnet integration tests** — `tests/send_native.rs` + `tests/send_token.rs` gated on `RUN_SOL_DEVNET=1` (Phase 5.1 covered RPC methods + preflight + broadcast via wiremock; the live send tests are Phase 7 CLI's concern)
