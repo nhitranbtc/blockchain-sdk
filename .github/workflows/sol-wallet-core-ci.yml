@@ -1,0 +1,187 @@
+name: sol-wallet-core
+
+# CI for the `sol-wallet-core` integration branch.
+#
+# Scope: any PR that targets `sol-wallet-core` (NOT main). The umbrella
+# `ci.yml` triggers on `main` only, so a PR into this integration branch
+# receives no gate from it — this file therefore carries the full
+# fmt/clippy/test set rather than only the chain-unique jobs. That is the
+# opposite of `evm-polygon-ci.yml`, which may lean on the umbrella
+# precisely because its triggers are `main`-scoped.
+#
+# Branch rule (plan Phase Set Up, Task S.2): task branches are cut from
+# `sol-wallet-core`, never from `main`, and PR back into `sol-wallet-core`,
+# never into `main`. The single exception is the v0.1 cut PR at the end of
+# Phase 9. `gh pr create` must pass `--base sol-wallet-core` explicitly —
+# the repo default base is `main`.
+#
+# MSRV: `rust-wallet-app/rust-toolchain.toml` hard-pins channel 1.98.1 and
+# overrides whatever toolchain the action installs for every cargo
+# invocation inside that directory. The plan asked for 1.89.0 (Anza's
+# declared `rust-version`); 1.98.1 satisfies that floor, so the workspace
+# pin is used as-is rather than declaring a number the build ignores.
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the
+# umbrella ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain`,
+# `Swatinem/rust-cache@v2`). Resolved SHAs land in a follow-up commit
+# after the first green run captures them.
+#
+# Phase Set Up gate: every sol-specific job skips cleanly while
+# `crates/sol-wallet-core` does not exist, so the no-op PR that proves this
+# workflow wired up correctly can go green before any Rust code is written
+# (Phase 0 creates the crate). The guards come out once the crate lands.
+
+on:
+  push:
+    branches: [sol-wallet-core]
+  pull_request:
+    branches: [sol-wallet-core]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # fmt + clippy share a runner so a single protoc install + rust-cache warm
+  # covers both (repo convention since the 998cc1fc consolidation). fmt runs
+  # first — it needs no compile, so a formatting regression fails before
+  # clippy spends minutes building.
+  rust-lint:
+    name: Rust lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+        with:
+          components: rustfmt, clippy
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs, which is a workspace member —
+        # `cargo fmt --all` and any workspace-wide cargo invocation touch it.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo fmt --check
+        # Workspace-wide: no crate guard needed, and it catches formatting
+        # drift in sibling crates too.
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+      - name: cargo clippy (sol-wallet-core)
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/sol-wallet-core ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo clippy -p sol-wallet-core --all-targets -- -D warnings
+
+  rust-test:
+    name: Rust test (sol-wallet-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test (sol-wallet-core)
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/sol-wallet-core ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo test -p sol-wallet-core --lib --tests
+
+  # Dependency policy gate. Enforces Q12 (no Metaplex): `deny.toml` `[bans]`
+  # denies `mpl-token-metadata` + `mpl-core`, so a future `cargo add` that
+  # pulls either in fails this job instead of landing unnoticed. Copyleft is
+  # excluded by omission from the `[licenses] allow` list.
+  #
+  # No crate guard: `cargo deny check` operates on the whole workspace and is
+  # meaningful before sol-wallet-core exists — it is also the job that will
+  # catch a banned crate arriving with the very first Phase 0 commit.
+  rust-deny:
+    name: Rust dep policy (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny
+        # Advisory ignores + license allow-list + Metaplex bans all live in
+        # `rust-wallet-app/deny.toml` — that file is the canonical list.
+        working-directory: rust-wallet-app
+        run: cargo deny check
+
+  # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)" + Q17.
+  # `sol-wallet-core` MUST compile for iOS + Android arm64 with no source
+  # changes, so a platform-incompatible dep is caught the moment it enters
+  # the tree rather than at V0.1.5 integration time.
+  #
+  # `cargo check` runs no linker, but the iOS target pulls `ring` (rustls
+  # default crypto) whose build needs `xcrun` from the macOS SDK — only
+  # macos-* runners carry it. The Android arm64 leg is Linux-gated for the
+  # symmetric NDK reason, so on this macOS runner it is a documented no-op
+  # placeholder until a Linux leg is added (mirrors rust-tron-core-ci.yml).
+  #
+  # Runtime smoke on a real device is out of scope for v0.1.
+  mobile-check:
+    name: Mobile compile-only (iOS + Android arm64)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+        with:
+          targets: aarch64-apple-ios,aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo check (aarch64-apple-ios)
+        # iOS toolchain (xcrun + Apple SDK) is macOS-only.
+        if: runner.os == 'macOS'
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/sol-wallet-core ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo check -p sol-wallet-core --target aarch64-apple-ios
+      - name: cargo check (aarch64-linux-android)
+        # Android NDK toolchain is Linux-only.
+        if: runner.os == 'Linux'
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -d crates/sol-wallet-core ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo check -p sol-wallet-core --target aarch64-linux-android
