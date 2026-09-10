@@ -46,6 +46,18 @@ pub enum Error {
     /// bytes after decoding, or the base58 alphabet was malformed.
     #[error("sol-wallet-core: base58 secret must decode to 64 bytes (32-byte secret + 32-byte pubkey); got {0} bytes")]
     InvalidBase58Secret(usize),
+
+    /// User-supplied Solana address failed to parse — malformed base58,
+    /// wrong length, or the resulting bytes are NOT on the Ed25519
+    /// curve (i.e. a PDA-shaped address used as a wallet recipient).
+    ///
+    /// The Phantom wallet refuses to send to off-curve addresses
+    /// because no private key exists for a PDA — sending to one would
+    /// burn the funds. V0.1 mirrors that guard at the parser
+    /// boundary so callers see `Error::InvalidAddress` instead of an
+    /// `Err(PubkeyError)` from `solana_sdk`.
+    #[error("sol-wallet-core: invalid Solana address — {0}")]
+    InvalidAddress(String),
 }
 
 /// Crate-wide result alias.
