@@ -889,31 +889,23 @@ Twelve deltas between the plan text and the live Anza 4.1.0 / spl-token 9.0.0 / 
 4. Priority-fee auto-estimation → on by default for `sol send --priority-fee auto`; falls back to 0 if RPC unavailable. Off via `--no-priority-fee-auto`.
 5. Send dry-run default → `simulateTransaction` runs before every send unless `--no-simulate`; surfaces compute-budget overrun as `Error::ComputeBudgetExceeded` before broadcast.
 
-### Task 5.1 (TBD): `chain::rpc` (15 HTTP methods via reqwest JSON-RPC) + `tx::{send_native, send_token, broadcast}` + `chain::preflight`
+### Task 5.1 (TBD): `chain::{client, account, preflight}` (15 HTTP methods via reqwest JSON-RPC) + `tx::{broadcast, native, spl}` + Phase 5.1 test suite (36 tests)
 
 **Files:**
 
-- Create: `src/chain/mod.rs` (re-export `RpcClient`, `RpcError`, `CommitmentLevel`, `SendConfig`)
-- Create: `src/chain/rpc.rs` (~1000 LoC: `RpcClient { url, http }` + 15 JSON-RPC methods + JSON-RPC error envelope parsing + base64 transaction encoding for `sendTransaction`)
-- Create: `src/chain/preflight.rs` (~100 LoC: native balance, SPL token account balance + existence, mint decimals from on-chain Mint state, auto-ATA detection, rent exemption check)
-- Create: `src/tx/broadcast.rs` (~120 LoC: `send_and_confirm(rpc, tx, timeout) -> Result<Signature>` — single send + `get_signature_status` poll with 200ms→2s exponential backoff, 30s default timeout)
-- Create: `src/tx/send_native.rs` (~50 LoC: `prepare_sol_transfer_message(from, to, lamports, cu_limit, cu_price, blockhash) -> Message` — Phase 3 builder orchestration)
-- Create: `src/tx/send_token.rs` (~80 LoC: `prepare_spl_transfer_message(wallet_pubkey, source_ata, dest_ata, mint, program, amount, decimals, cu_limit, cu_price, blockhash, prepend_ata_create) -> Message` — Phase 4 builder orchestration + TokenProgram dispatch + optional `prepend_create_ata`)
-- Modify: `src/tx/mod.rs` (`pub mod broadcast; pub mod send_native; pub mod send_token;`)
+- Create: `src/chain/mod.rs` (re-export `RpcClient`, `RpcError`, `BlockhashCache`, `BlockhashCacheEntry`, `RateLimiter`, `DEFAULT_BLOCKHASH_TTL`, `DEFAULT_RATE_LIMIT_RPS`, `DEFAULT_RATE_LIMIT_BURST`, `DEFAULT_REQUEST_TIMEOUT`; 15 RPC method thin wrappers from `account`)
+- Create: `src/chain/client.rs` (~430 LoC: `RpcClient { url, host, http, rate_limiter, id_counter }` + URL allowlist (https-only + http://localhost/127.0.0.1) + custom `Debug` impl stripping URL query string + `RateLimiter` (token bucket, 50 req/s, burst 100) + `BlockhashCache` V0.1.5 stub + `post<T>()` JSON-RPC helper with typed `RpcResponse<T>` + `RpcErrorEnvelope`)
+- Create: `src/chain/account.rs` (~560 LoC: 15 RPC method wrappers + V0.1 local minimal wire structs `TransactionStatus`, `ConfirmationStatus`, `UiTokenAmount`, `Version`, `RpcPrioritizationFee`, `SolanaSimulateResult`, `SolanaUnitsConsumedDetails`, `RpcKeyedAccount`, `AccountJson` — all `#[serde(rename_all = "camelCase")]` matching Anza wire format; `bincode::serialize` for `sendTransaction` pinned `=1.3.3`; base64 envelope via `base64::engine::general_purpose::STANDARD`)
+- Create: `src/chain/preflight.rs` (~135 LoC: `check_native_balance` + `check_token_balance` + `check_ata_exists` + `resolve_mint_decimals` via `spl_token::state::Mint::unpack` + `check_rent_exempt`)
+- Create: `src/tx/broadcast.rs` (~165 LoC: `send_and_confirm(rpc, tx, commitment, timeout) -> Result<Signature>` + `wait_for_confirm` with 200ms→2s exponential backoff + `ConfirmPending` at `timeout/2` + `ConfirmTimeout` at full `timeout` + `level_rank()` helper because Anza 4.x `CommitmentLevel` does not impl `PartialOrd`)
+- Create: `src/tx/native.rs` (~55 LoC: `prepare_sol_transfer_message(from, to, lamports, cu_limit, cu_price, blockhash) -> Message` — Phase 3 builder orchestration via `Message::new_with_blockhash(&ixs, Some(payer), &blockhash)`)
+- Create: `src/tx/spl.rs` (~85 LoC: `prepare_spl_transfer_message(wallet_pubkey, source_ata, dest_ata, mint, program, amount, decimals, cu_limit, cu_price, blockhash, prepend_ata_create) -> Message` — Phase 4 builder orchestration + TokenProgram dispatch + optional `prepend_create_ata`; Q10 `transfer_checked` invariant)
+- Modify: `src/tx/mod.rs` (`pub mod broadcast; pub mod builder; pub mod native; pub mod spl;` + re-exports of `prepare_sol_transfer_message`, `prepare_spl_transfer_message`, `send_and_confirm`, `wait_for_confirm`, `DEFAULT_CONFIRM_TIMEOUT`, `DEFAULT_SEND_MAX_ATTEMPTS`)
 - Modify: `src/lib.rs` (`pub mod chain;`)
-- Modify: `src/error.rs` (add 7 variants: `Transport(String)`, `Rpc { code: i32, message: String }`, `InsufficientFunds { needed: u64, have: u64 }`, `BroadcastFailed { kind: String }`, `ConfirmTimeout { signature: String, waited_ms: u64 }`, `ComputeBudgetExceeded { needed_cu: u32, available_cu: u32 }`, `Unimplemented(&'static str)`)
-- Modify: `rust-wallet-app/crates/sol-wallet-core/Cargo.toml` (add `reqwest = { workspace = true }` — already in workspace with `rustls-tls` + `json` features; add `wiremock` to `[dev-dependencies]` for HTTP mocks; NO Anza `solana-rpc-client` dep)
-- Create: `tests/rpc_methods_mock.rs` (~18 tests: wiremock-style mock HTTP server returning canned responses for all 15 methods + JSON-RPC error envelope parsing + connection-refused timeout + HTTP 5xx; 5.2 adds 2 more for `requestAirdrop`; 5.3 adds 2 more for `getTransaction`)
-- Create: `tests/preflight.rs` (~5 tests: native balance, SPL token balance, mint decimals, ATA existence, under-funded `InsufficientFunds`)
-- Create: `tests/send_native.rs` (~6 tests: unit + devnet integration)
-- Create: `tests/send_token.rs` (~8 tests: unit + devnet integration)
-- Create: `tests/balance.rs` (~4 tests: `getBalance` + `getTokenAccountBalance`)
-- Create: `tests/list_tokens.rs` (~6 tests: `getTokenAccountsByOwner` + batched mint decimals)
-- Create: `tests/token_info.rs` (~4 tests: `getTokenSupply` + `getAccountInfo(mint)` + decimals unpack)
-- Create: `tests/rent.rs` (~3 tests: `getMinimumBalanceForRentExemption`)
-- Create: `tests/priority_fee.rs` (~4 tests: `getRecentPrioritizationFees` mock + auto-estimation logic)
-- Create: `tests/info.rs` (~6 tests: `getVersion` + `getEpochInfo` + `getHealth`)
-- Create: `tests/transport_failure.rs` (~4 tests: connection refused + timeout + HTTP 5xx + malformed JSON envelope)
+- Modify: `src/error.rs` (add 8 variants: `Transport(String)`, `Rpc { code: i32, message: String }`, `InsufficientFunds { needed: have }`, `BroadcastFailed { kind, context }`, `ConfirmTimeout { signature, waited_ms }`, `ComputeBudgetExceeded { needed_cu, available_cu }`, `ConfirmPending { signature, commitment, elapsed_ms }`, `Unimplemented(&'static str)`)
+- Modify: `rust-wallet-app/crates/sol-wallet-core/Cargo.toml` (`reqwest` from workspace + `url = "2"` + `base64 = "0.22"` + `phf = "0.11"` w/ `macros` + `ascii = "1"`; Anza ABI split: `solana-account = "=4.4.0"` + `solana-commitment-config = "=3.1.1"` + `solana-program-pack = "=3.1.0"` + `bincode = "=1.3.3"` + `tokio` from workspace; dev-deps: `wiremock = "0.6"` + `serial_test = "3"` for `#[serial(tokio)]` on parallel `#[tokio::test]` runs; NO Anza `solana-rpc-client` dep — Recipe 2 from #555)
+- Create: `tests/chain_rpc.rs` (36 tests, ~1000 LoC: 6 URL allowlist + 1 JSON-RPC envelope + 1 bincode round-trip + 1 Debug + 2 rate limiter + 12 RPC method smokes + 3 preflight + 4 native/SPL/broadcast + 1 `wait_for_confirm` half-timeout; `#[serial(tokio)]` because wiremock 0.6 + parallel tokio runtime = flaky — alternative: set `RUST_TEST_THREADS=1`)
+- Devnet integration tests (`tests/send_native.rs` + `tests/send_token.rs` with `RUN_SOL_DEVNET=1`) + per-method split files (`tests/balance.rs` + `tests/list_tokens.rs` + `tests/token_info.rs` + `tests/rent.rs` + `tests/priority_fee.rs` + `tests/info.rs` + `tests/transport_failure.rs`) deferred to V0.1 follow-up PR; Phase 5.1 ships the consolidated `tests/chain_rpc.rs` covering all 15 method smokes + preflight + broadcast in one file
 
 **Wire-format invariants (Phantom-equivalent parity):**
 

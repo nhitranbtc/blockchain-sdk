@@ -24,6 +24,7 @@
 
 pub mod address;
 pub mod amount;
+pub mod chain;
 pub mod disambig;
 pub mod error;
 pub mod read_only_wallet;

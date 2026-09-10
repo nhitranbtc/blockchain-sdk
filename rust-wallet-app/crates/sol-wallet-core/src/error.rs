@@ -11,6 +11,7 @@ use thiserror::Error;
 
 /// Crate-wide error.
 #[derive(Debug, Error)]
+#[allow(missing_docs)]
 pub enum Error {
     /// Placeholder. Replaced by per-domain variants in Phase 5+.
     #[error("sol-wallet-core: placeholder (Phase 0)")]
@@ -86,6 +87,67 @@ pub enum Error {
     /// non-mint account passed into the decimals-fetch path.
     #[error("sol-wallet-core: failed to unpack SPL mint state — {0}")]
     InvalidTokenState(String),
+
+    /// Phase 5 — reqwest connect/DNS/TLS error or HTTP non-success
+    /// response bubbled up from `chain::RpcClient::post`. Carries the
+    /// verbatim `Display` of the underlying reqwest error or status.
+    /// URL allowlist failures also land here (Tier 1 finding #1).
+    #[error("sol-wallet-core: RPC transport error — {0}")]
+    Transport(String),
+
+    /// Phase 5 — JSON-RPC error envelope (`{"error": {"code": N, "message": "..."}}`)
+    /// returned by the cluster. `code` is the raw i32 (Solana uses
+    /// -32700..-32099 for protocol errors, -32005 for "Node is unhealthy",
+    /// -32003 for "airdrop limit" on devnet). `message` is the verbatim
+    /// cluster message. Phase 7 CLI renders as `"RPC error <code>: <message>"`.
+    #[error("sol-wallet-core: RPC error {code} — {message}")]
+    Rpc { code: i32, message: String },
+
+    /// Phase 5 — `preflight::check_native_balance` (or similar) found
+    /// the wallet's SOL balance insufficient to cover `needed` (transfer
+    /// amount + tx fee). Surfaced before broadcast so the user gets a
+    /// clear error rather than a `sendTransaction` rejection.
+    #[error("sol-wallet-core: insufficient funds — needed {needed} lamports, have {have}")]
+    InsufficientFunds { needed: u64, have: u64 },
+
+    /// Phase 5 — `sendTransaction` returned an error (e.g. blockhash
+    /// not found, account not found, signature verification failed).
+    /// `kind` stores the Anza `ClientError` variant name (PascalCase
+    /// per grilled decision Q13). CLI matches on these exact strings.
+    #[error("sol-wallet-core: broadcast failed — {kind} ({context})")]
+    BroadcastFailed { kind: String, context: String },
+
+    /// Phase 5 — `wait_for_confirm` polled for `timeout` without the
+    /// signature reaching the requested commitment level. The tx may
+    /// still land; CLI surfaces "tx may or may not land — check
+    /// <explorer>".
+    #[error("sol-wallet-core: confirm timeout — {signature} not seen after {waited_ms}ms")]
+    ConfirmTimeout { signature: String, waited_ms: u64 },
+
+    /// Phase 5 — `simulateTransaction` returned `units_consumed` that
+    /// exceeds the CU limit set in the message's Compute Budget ix.
+    /// Surfaced before broadcast (Tier 4 finding #4 caveat applies:
+    /// cluster state may have changed between simulate and send).
+    #[error("sol-wallet-core: compute budget exceeded — needed {needed_cu} CU, available {available_cu} CU")]
+    ComputeBudgetExceeded { needed_cu: u32, available_cu: u32 },
+
+    /// Phase 5 — `wait_for_confirm` returned a status at `timeout / 2`
+    /// but the requested commitment was not yet reached. The tx is
+    /// still valid; CLI surfaces "tx pending — check <explorer>".
+    /// Distinct from `ConfirmTimeout` (which fires at full `timeout`).
+    #[error("sol-wallet-core: confirm pending — {signature} not yet {commitment:?} after {elapsed_ms}ms")]
+    ConfirmPending {
+        signature: String,
+        commitment: solana_commitment_config::CommitmentConfig,
+        elapsed_ms: u64,
+    },
+
+    /// Phase 5 — placeholder for WS subscribes (V0.1.5) and any
+    /// not-yet-implemented method. The 5 WS subscribes in
+    /// `chain::account` return this variant.
+    #[allow(missing_docs)]
+    #[error("sol-wallet-core: not yet implemented — {0}")]
+    Unimplemented(&'static str),
 }
 
 /// Crate-wide result alias.
