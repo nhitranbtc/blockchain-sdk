@@ -4,11 +4,12 @@
 //! declares three empty module stubs. No behaviour. Phase 1+ fills them
 //! in via the per-Phase plan tickets:
 //!
-//! | Phase | Lands in                              |
-//! |-------|---------------------------------------|
-//! | 1     | `wallet` (Phantom-equivalent keypair) |
-//! | 2     | `address` (base58 + is_on_curve + PDA)|
-//! | 5-7   | `error` (full 21-variant enum)        |
+//! | Phase | Lands in                                          |
+//! |-------|---------------------------------------------------|
+//! | 1     | `wallet` (Phantom-equivalent keypair)             |
+//! | 2     | `address` (base58 + is_on_curve + PDA)            |
+//! | 3     | `amount` + `tx::builder` (SOL transfer + CU)      |
+//! | 5-7   | `error` (full 21-variant enum)                    |
 //!
 //! Threat model + spec: `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md`
 //! and `docs/superpowers/plans/2026-09-09-sol-wallet-core-v0.1.md`.
@@ -21,8 +22,10 @@
 #![warn(missing_docs)]
 
 pub mod address;
+pub mod amount;
 pub mod error;
 pub mod read_only_wallet;
+pub mod tx;
 pub mod wallet;
 
 pub use error::{Error, Result};

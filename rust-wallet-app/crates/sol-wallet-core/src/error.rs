@@ -58,6 +58,16 @@ pub enum Error {
     /// `Err(PubkeyError)` from `solana_sdk`.
     #[error("sol-wallet-core: invalid Solana address — {0}")]
     InvalidAddress(String),
+
+    /// User-supplied SOL amount failed to parse — NaN, ±Inf,
+    /// negative, or beyond `u64::MAX` lamports.
+    ///
+    /// Wraps `f64`-to-`u64` overflow at the parser boundary so the
+    /// wallet UI surfaces a single error rather than the validator's
+    /// opaque `InvalidLamports` rejection. Mirrors Phantom's "Send"
+    /// form's input validator.
+    #[error("sol-wallet-core: invalid SOL amount — {0}")]
+    InvalidAmount(String),
 }
 
 /// Crate-wide result alias.

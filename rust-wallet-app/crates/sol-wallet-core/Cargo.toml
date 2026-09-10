@@ -26,6 +26,7 @@ crate-type = ["rlib"]
 #
 # Phase 1 — Anza SDK + ed25519-bip32 + bip39 (Wallet keypair, HD via SLIP-0010).
 # Phase 2 — base58 / curve helpers (no new workspace deps).
+# Phase 3 — system_instruction + Compute Budget (modern Anza split).
 # Phase 4 — SPL crates.
 # Phase 5 — tokio / reqwest / rustls / webpki / x509-parser.
 # Phase 6 — argon2 / aes-gcm / chrono / uuid / serde_json.
@@ -50,7 +51,20 @@ zeroize        = { workspace = true }
 hmac           = { workspace = true }
 sha2           = { workspace = true }
 bs58           = { workspace = true }
+# Phase 3 — `system_instruction::transfer` is in `solana-system-interface`
+# in the modern Anza split; `ComputeBudgetInstruction` lives in
+# `solana-compute-budget-interface`. Both declared directly so the
+# builder does not depend on `solana-program` pulling them transitively
+# (`solana-program` 4.1.0 documents ComputeBudgetInstruction but does
+# not declare the dep — see workspace Cargo.toml comment).
+solana-system-interface         = { workspace = true }
+solana-compute-budget-interface = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = { workspace = true }
+# Phase 3 — `bincode` 1.3.3 is already transitive via `solana-sdk`;
+# declare directly so `tests/tx_serde.rs` can serialize `Message` values
+# without relying on the transitive re-export. Exact-pin matches what
+# Anza 4.1.0 pulls.
+bincode = "=1.3.3"
