@@ -27,9 +27,16 @@ name: sol-wallet-core
 # after the first green run captures them.
 #
 # Phase Set Up gate: every sol-specific job skips cleanly while
-# `crates/sol-wallet-core` does not exist, so the no-op PR that proves this
-# workflow wired up correctly can go green before any Rust code is written
-# (Phase 0 creates the crate). The guards come out once the crate lands.
+# `crates/sol-wallet-core/Cargo.toml` does not exist, so the no-op commit
+# that proves this workflow wired up correctly can go green before any Rust
+# code is written (Phase 0 creates the crate). The guards come out once the
+# crate lands.
+#
+# The guard tests the MANIFEST, not the directory: Phase Set Up itself puts
+# a CHANGELOG.md in `crates/sol-wallet-core/`, so a `-d` test would pass
+# while the package still does not exist and every `cargo -p sol-wallet-core`
+# would fail with "package ID specification did not match any packages"
+# (observed in run 34433048858).
 
 on:
   push:
@@ -78,7 +85,7 @@ jobs:
       - name: cargo clippy (sol-wallet-core)
         working-directory: rust-wallet-app
         run: |
-          if [ ! -d crates/sol-wallet-core ]; then
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
@@ -103,7 +110,7 @@ jobs:
       - name: cargo test (sol-wallet-core)
         working-directory: rust-wallet-app
         run: |
-          if [ ! -d crates/sol-wallet-core ]; then
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
@@ -170,7 +177,7 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: rust-wallet-app
         run: |
-          if [ ! -d crates/sol-wallet-core ]; then
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
@@ -180,7 +187,7 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: rust-wallet-app
         run: |
-          if [ ! -d crates/sol-wallet-core ]; then
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi

@@ -40,6 +40,10 @@ Branch, tracker vocabulary, and CI gate established before any Rust code. This e
 
 - `rust-wallet-app/deny.toml` — `[bans]` now denies `mpl-token-metadata` and `mpl-core`, enforcing Q12 (no Metaplex surface in v0.1). A future `cargo add` that pulls either in fails `cargo deny check` rather than landing unnoticed.
 
+### Fixed
+
+- CI skip-guard tested `[ -d crates/sol-wallet-core ]`, but this phase's own `CHANGELOG.md` creates that directory — so the guard passed while the cargo package still did not exist, and `rust-lint`, `rust-test`, and `mobile-check` all failed run `34433048858` with `error: package ID specification 'sol-wallet-core' did not match any packages`. Guard now tests `[ -f crates/sol-wallet-core/Cargo.toml ]`, which is the condition the surrounding comment always claimed. `rust-deny` was unaffected — it is workspace-scoped and carries no guard.
+
 ### Notes — plan drift recorded at execution time
 
 Five deltas between the plan text and live repo state, resolved as follows:
