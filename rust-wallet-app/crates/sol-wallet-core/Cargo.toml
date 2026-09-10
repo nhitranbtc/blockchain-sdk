@@ -1,0 +1,40 @@
+[package]
+name = "sol-wallet-core"
+description = "Solana wallet engine — Anza SDK re-exports + Phantom-equivalent Wallet API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# repository.workspace = true  # uncomment if workspace.repository set
+
+[features]
+default = []
+
+# Phase 0 ships rlib only. Phase 8 (FFI cdylib) appends "cdylib" to this
+# list; the rust-sol-core-ci.yml `rust-ffi-cdylib` job is guarded on the
+# `cdylib` literal appearing here, so the order matters — Phase 8 is
+# the first PR that flips the job from `skipping` to actually building.
+[lib]
+crate-type = ["rlib"]
+
+# Phase 0 keeps the lib dep-free so the empty module stubs compile. The
+# Anza SDK + SPL + ed25519-bip32 + crypto deps live in workspace.dependencies
+# (Cargo.toml at the umbrella) and are wired here in Phase 1, once
+# `cargo tree` has surfaced a compatible exact-pin set (plan §Task 0.1
+# Step 6 deferred to Phase 1 — see CHANGELOG.md entry "Phase 0 — 2026-09-10"
+# for the pin-drift rationale).
+#
+# Phase 1+ uncomments one block at a time as it lands:
+#   * Phase 1 — Anza SDK + ed25519 + bip39 (Wallet keypair)
+#   * Phase 2 — base58 / curve helpers (no new workspace deps)
+#   * Phase 4 — SPL crates
+#   * Phase 5 — tokio / reqwest / rustls / webpki / x509-parser
+#   * Phase 6 — argon2 / aes-gcm / zeroize / chrono / uuid / serde_json
+[dependencies]
+# thiserror alone — the Phase 0 `error.rs` stub needs it. Anza/SPL/crypto
+# follow in Phase 1+ (see above).
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }

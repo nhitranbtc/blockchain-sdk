@@ -5944,6 +5944,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sol"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+ "sol-wallet-core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sol-wallet-core"
+version = "0.2.0"
+dependencies = [
+ "proptest",
+ "tempfile",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
