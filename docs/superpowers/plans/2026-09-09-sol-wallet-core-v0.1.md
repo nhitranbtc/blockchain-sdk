@@ -727,15 +727,34 @@ tempfile    = { workspace = true }
 - Create: `rust-wallet-app/crates/sol-wallet-core/tests/tx_serde.rs` (deep-dive row 15 SOL part — bincode tx message round-trip)
 
 **Steps:**
-- [ ] Step 1: Implement `build_sol_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Vec<Instruction>` → `system_instruction::transfer(from, to, lamports)`
-- [ ] Step 2: Implement `prepend_compute_budget(units: u32, micro_lamports: u64) -> [Instruction; 2]` → `[ComputeBudgetInstruction::set_compute_unit_limit(units), ComputeBudgetInstruction::set_compute_unit_price(micro_lamports)]`
-- [ ] Step 3: Implement `build_sol_transfer_with_budget(from, to, lamports, cu_limit, priority_fee) -> Vec<Instruction>` → calls both; returns 3-ix vector
-- [ ] Step 4: Wire defaults: `cu_limit = 150_000`, `priority_fee = 0` (Q8) per `SolanaConfig`; read full per-tx-type 6-row defaults table from deep-dive §C (line 1592) before Phase 5 integration
-- [ ] Step 5: Implement `tests/tx_serde.rs` — bincode `Message::new_with_blockhash(&[ix, cu_ix], Some(&from), &blockhash)` round-trip; decoded message equals input for every builder (100% builder coverage)
-- [ ] Step 6: Implement `tests/amount_lamport.rs` — `Amount::from_lamports(u64)` + `as_lamport()` + `Amount::from_sol(f64)`; proptest round-trip via `proptest!`; reject overflow at `u64::MAX`; assert `Amount::ZERO.lamports() == 0`
-- [ ] Step 7: Implement `tests/compute_budget.rs` — against surfpool; fresh blockhash → sign with keypair → send_tx → assert `get_balance` recipient == lamports transferred - 5000 base fee; verify auto-attach prepends ComputeBudget ix in correct position
-- [ ] Step 8: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test amount_lamport --test tx_serde --test compute_budget`
-- [ ] Step 9: PAUSE — commit-push-pr
+- [x] Step 1: Implement `build_sol_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Vec<Instruction>` → `system_instruction::transfer(from, to, lamports)`
+- [x] Step 2: Implement `prepend_compute_budget(units: u32, micro_lamports: u64) -> [Instruction; 2]` → `[ComputeBudgetInstruction::set_compute_unit_limit(units), ComputeBudgetInstruction::set_compute_unit_price(micro_lamports)]`
+- [x] Step 3: Implement `build_sol_transfer_with_budget(from, to, lamports, cu_limit, priority_fee) -> Vec<Instruction>` → calls both; returns 3-ix vector
+- [x] Step 4: Wire defaults: `cu_limit = 150_000`, `priority_fee = 0` (Q8) per `SolanaConfig`; read full per-tx-type 6-row defaults table from deep-dive §C (line 1592) before Phase 5 integration
+- [x] Step 5: Implement `tests/tx_serde.rs` — bincode `Message::new_with_blockhash(&[ix, cu_ix], Some(&from), &blockhash)` round-trip; decoded message equals input for every builder (100% builder coverage)
+- [x] Step 6: Implement `tests/amount_lamport.rs` — `Amount::from_lamports(u64)` + `as_lamport()` + `Amount::from_sol(f64)`; proptest round-trip via `proptest!`; reject overflow at `u64::MAX`; assert `Amount::ZERO.lamports() == 0`
+- [x] Step 7: Implement `tests/compute_budget.rs` — against surfpool; fresh blockhash → sign with keypair → send_tx → assert `get_balance` recipient == lamports transferred - 5000 base fee; verify auto-attach prepends ComputeBudget ix in correct position
+- [x] Step 8: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test amount_lamport --test tx_serde --test compute_budget`
+- [x] Step 9: PAUSE — commit-push-pr
+
+### Phase 3 drift recorded at execution time (PR #552, commit `1aec6bea`)
+
+1. **`system_instruction::transfer` is feature-gated behind `bincode`/`wincode`** in `solana-system-interface` 3.3.0 (`src/instruction.rs` line 902). A naive `solana-system-interface = "=3.3.0"` workspace entry fails to compile the builder — the function symbol is `cfg`-stripped. Fixed by adding `features = ["bincode"]` to the workspace entry. The `bincode` feature is also what Anza 4.1.0 pulls transitively, so no transitive-pin drift.
+
+2. **`ComputeBudgetInstruction` uses Borsh on the wire, not serde** — `solana-compute-budget-interface` 3.1.0's serde derive uses a different variant-tag layout than the Borsh derive the Solana runtime uses. Initial `tests/compute_budget.rs` decoded the data field via `bincode::deserialize::<ComputeBudgetInstruction>` (after enabling `serde` feature) and failed with "invalid value: integer `51200002`, expected variant index 0 <= i < 5". Switched the assertions to manual Borsh decode: `data[0]` variant tag (`0x02` = `SetComputeUnitLimit`, `0x03` = `SetComputeUnitPrice`) + little-endian payload. Tag values match the `to_instruction!` macro at `solana-compute-budget-interface-3.1.0/src/lib.rs` lines 26-29.
+
+3. **`solana_sdk::system_program::id()` is no longer re-exported by `solana-sdk` 4.1.0** — the modern Anza split hoists the system_program ID to `solana_system_interface::program::ID`. Plan §Task 3.1 Step 1 referenced `system_instruction::transfer` without naming the source crate; the implicit assumption (that the `system_program` module lives under `solana_sdk`) no longer holds. Replaced all four call sites with `solana_system_interface::program::ID` (renamed to `SYSTEM_PROGRAM_ID` locally).
+
+4. **Phase 3 test surface is 18 tests + 9 inline unit tests, not 7 tests** as the plan §Step 5-7 implied. The plan described one test file per step; we landed three integration files (`amount_lamport` 9 tests, `tx_serde` 5 tests, `compute_budget` 4 tests) covering wire-format invariants the plan only sketched. The total `sol-wallet-core` suite moved from 33 tests (post-Phase 2) to 60 tests (post-Phase 3) — 27 tests added, +0 regressions.
+
+### Phase 3 deliverable summary
+
+- **Commit:** `7c290905` (feature branch); `1aec6bea` (squash-merged into `rust-sol-core`)
+- **PR:** #552
+- **CI:** 6/6 jobs green (lint, test, dep checks, FFI cdylib, geiger, mobile-check)
+- **Test count:** 60/60 pass (was 33 after Phase 2; +27 from Phase 3)
+- **Public surface added:** `Amount` newtype + `tx::builder::{build_sol_transfer, compute_budget_instructions, build_sol_transfer_with_budget, DEFAULT_COMPUTE_UNIT_LIMIT}` + `Error::InvalidAmount`
+- **Workspace deps added:** `solana-system-interface = "=3.3.0"` (bincode feature), `solana-compute-budget-interface = "=3.1.0"` (serde feature)
 
 ---
 
