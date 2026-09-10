@@ -215,8 +215,9 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
-          if ! grep -q 'cdylib' crates/sol-wallet-core/Cargo.toml; then
-            echo "cdylib crate-type not declared yet (plan Phase 8) - skipping"
+          if ! grep -E -q '^[[:space:]]*crate-type[[:space:]]*=' crates/sol-wallet-core/Cargo.toml \
+             || ! grep -E -q '"cdylib"' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) - skipping"
             exit 0
           fi
           cargo build -p sol-wallet-core
@@ -293,7 +294,11 @@ jobs:
         with:
           workspaces: rust-wallet-app -> target
       - name: cargo check (aarch64-apple-ios)
-        # iOS toolchain (xcrun + Apple SDK) is macOS-only.
+        # iOS toolchain (xcrun + Apple SDK) is macOS-only. Mobile build is
+        # meaningful only once Phase 8 declares cdylib — before that the
+        # crate compiles as rlib-only and the iOS-arm64 std dependency
+        # isn't needed (and the runner lacks it without an explicit
+        # iOS target install on this branch).
         if: runner.os == 'macOS'
         working-directory: rust-wallet-app
         run: |
@@ -301,14 +306,24 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
+          if ! grep -E -q '^[[:space:]]*crate-type[[:space:]]*=' crates/sol-wallet-core/Cargo.toml \
+             || ! grep -E -q '"cdylib"' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) — iOS build not meaningful, skipping"
+            exit 0
+          fi
           cargo check -p sol-wallet-core --target aarch64-apple-ios
       - name: cargo check (aarch64-linux-android)
-        # Android NDK toolchain is Linux-only.
+        # Android NDK toolchain is Linux-only. Same Phase 8 gating as iOS.
         if: runner.os == 'Linux'
         working-directory: rust-wallet-app
         run: |
           if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          if ! grep -E -q '^[[:space:]]*crate-type[[:space:]]*=' crates/sol-wallet-core/Cargo.toml \
+             || ! grep -E -q '"cdylib"' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) — Android build not meaningful, skipping"
             exit 0
           fi
           cargo check -p sol-wallet-core --target aarch64-linux-android
