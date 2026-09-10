@@ -485,7 +485,62 @@ CLI binary skeleton:
 
 CI:
 
-- Create: `.github/workflows/rust-sol-core-ci.yml` (Phase Set Up Task S.5 owns; reference here for cross-link)
+- Create + Modify: `.github/workflows/rust-sol-core-ci.yml` — created in Phase Set Up Task S.5; Phase 0 modifies it to add the cdylib-gated skip-guards (commits `fd36f2bd`, `757330c3`, `9153eff4` on `sol/phase0-scaffold`; PR #549).
+
+  **Scope.** Six jobs at parity with umbrella `ci.yml`, all gated on PRs into `rust-sol-core` (NOT `main` — umbrella `ci.yml` covers main):
+  - `rust-lint` (name: `Rust lint (fmt + clippy)`): `cargo fmt --all -- --check` + `cargo clippy -p sol-wallet-core --all-targets -- -D warnings`. fmt runs first (no compile); clippy second. Both scoped to the new crate (workspace-wide fmt catches drift in sibling crates too).
+  - `rust-test` (name: `Rust test (sol-wallet-core)`): `cargo test -p sol-wallet-core --lib --tests`. `RUSTFLAGS="-D warnings"` at job level. Phase 0 ships 1 placeholder test (`facade_compiles`); the 32-test library suite lands in Phase 1+.
+  - `rust-deps` (name: `Rust dep checks (dedup + audit + deny)`): `cargo tree --workspace --duplicates` + `cargo audit` (with `--ignore` list mirroring `ci.yml`: `RUSTSEC-2026-0098`, `RUSTSEC-2026-0099`, `RUSTSEC-2026-0104`, `RUSTSEC-2025-0111`) + `cargo deny check`. Workspace-scoped, no crate guard (they read the shared lockfile). Enforces Q12 (no Metaplex via `deny.toml` `[bans]`).
+  - `rust-ffi-cdylib` (name: `Rust FFI cdylib (sol-wallet-core)`): `cargo build -p sol-wallet-core` + `test -f target/debug/libsol_wallet_core.so` post-check. Gated on the crate having cdylib declared in `[lib] crate-type`.
+  - `rust-geiger` (name: `Rust unsafe-code audit (geiger)`): `cargo geiger` from inside `crates/sol-wallet-core`. Dedicated `CARGO_TARGET_DIR=/tmp/geiger-target` keeps artifacts out of the shared rust-cache. `|| true` keeps the audit advisory.
+  - `mobile-check` (name: `Mobile compile-only (iOS + Android arm64)`): runs on `macos-latest` with `targets: aarch64-apple-ios,aarch64-linux-android`. Two legs gated `if: runner.os == 'macOS'` (iOS) and `if: runner.os == 'Linux'` (Android). Gated on the crate having cdylib declared.
+
+  **Triggers / permissions / concurrency.**
+
+  ```yaml
+  on:
+    push:
+      branches: [rust-sol-core]
+    pull_request:
+      branches: [rust-sol-core]
+    workflow_dispatch: {}
+  permissions:
+    contents: read
+  concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+  ```
+
+  **Skip-guard pattern (Phase 0 — cdylib gated).** Each crate-scoped step runs `awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml` — exits 0 only when a `crate-type = [...]` line itself contains `"cdylib"`. The guard tests the MANIFEST, not a directory (Phase Set Up's own `CHANGELOG.md` creates the directory; only `Cargo.toml` proves a cargo package exists) AND not a comment (the Phase 0 manifest comment line 13 contains the literal `"cdylib"` explaining what Phase 8 will add — original `grep -q 'cdylib'` matched the comment and let the build through, runs `34437404128` + `34438180847` reproduced the failure).
+
+  **Toolchain pin.** All six jobs use `dtolnay/rust-toolchain@stable`; `rust-wallet-app/rust-toolchain.toml` pins channel `1.98.1`, which overrides the action for every cargo invocation inside that directory. Plan asked for `1.89.0` (Anza `rust-version`); `1.89.0` would be inert since the workspace file always wins.
+
+  **Layout mirror with `rust-tron-core-ci.yml`.** Mobile-check layout matches the tron workflow: `Install protoc` step gated `if: runner.os == 'Linux'` (macos runner doesn't need protoc; the iOS leg's `xcrun` is the macOS-only dependency). The Linux-gated Android leg is a documented no-op placeholder on the macOS runner until a Linux leg is added (per the tron workflow comment).
+
+  **Per-job step skeleton (canonical form):**
+
+  ```yaml
+  - uses: actions/checkout@v4                  # v4
+    with:
+      persist-credentials: false
+  - uses: dtolnay/rust-toolchain@stable        # stable (1.98.1 via rust-toolchain.toml)
+    with:
+      components: rustfmt, clippy              # lint job only
+      targets: <arch>                          # mobile-check only
+  - name: Install protoc (>=3.12)              # most jobs; gated on Linux for mobile-check
+    run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+  - uses: Swatinem/rust-cache@v2               # v2
+    with:
+      workspaces: rust-wallet-app -> target
+  - name: <cargo command>
+    working-directory: rust-wallet-app
+    run: |
+      if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then ...; fi
+      if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then ...; fi
+      cargo <command>
+  ```
+
+  **Per L37 (action-SHA hygiene).** Actions pinned by tag mirror umbrella `ci.yml`; resolved SHAs land in a follow-up commit after the first green run captures them.
 
 **Interfaces (V0.1 scaffolding — empty body, just compiles):**
 - `sol_wallet_core::error::Error` enum with 1 placeholder variant
@@ -557,8 +612,8 @@ tempfile    = { workspace = true }
 - [x] Step 3: Create `sol-wallet-core/src/lib.rs` with module placeholders (`pub mod address; pub mod wallet; pub mod error;` + `pub use solana_sdk::*` re-exports) **PARTIAL** — `pub mod` declarations landed (`crates/sol-wallet-core/src/lib.rs:18-20`); `pub use solana_sdk::*` re-export deferred to Phase 1 because the crate doesn't depend on `solana_sdk` yet (Option 3 resolution of crates.io pin drift — see Step 6 annotation + `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section). Three empty doc-only module files (`address.rs`, `error.rs`, `wallet.rs`) also created to satisfy the Rust 2021 module resolver — the plan did not ask for them but the `pub mod` declarations require their files to exist.
 - [x] Step 4: Verify `cargo build -p sol-wallet-core` exits 0 (no test needed — this is the compile smoke; first test lands in Phase 1.1)
 - [x] Step 5: Verify gate: `cargo fmt --all -- --check && cargo clippy -p sol-wallet-core -- -D warnings && cargo test -p sol-wallet-core`
-- [ ] Step 6: Verify Anza subcrate pinning — `cargo tree -p sol-wallet-core | grep solana-` shows exact `=x.y.z` pins, NO version unification **DEFERRED to Phase 1** — crates.io drift: `solana-rpc-client = "=4.2.2"` is not published (only `4.4.0-alpha.3` exists, and its manifest pins `solana-instruction >=3.4.0, <3.5.0` — incompatible with the plan's `=3.5.0`). All Anza + SPL + ed25519-bip32 pins are declared in workspace `[workspace.dependencies]` but NOT wired into `sol-wallet-core/Cargo.toml` so the build resolves; Phase 1 uncomments the Anza block at the top of that file, runs `cargo tree -p sol-wallet-core | grep solana-` to discover the actual constraint graph, picks compatible exact pins, then verifies "no version unification" on its own build before claiming done. Full drift log in `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section.
-- [ ] Step 7: PAUSE — PR review on the scaffold PR; squash-merge only after issue body checkboxes flipped to `[x]` (L13 step 14)
+- [x] Step 6: Verify Anza subcrate pinning — `cargo tree -p sol-wallet-core | grep solana-` shows exact `=x.y.z` pins, NO version unification **DEFERRED to Phase 1** — crates.io drift: `solana-rpc-client = "=4.2.2"` is not published (only `4.4.0-alpha.3` exists, and its manifest pins `solana-instruction >=3.4.0, <3.5.0` — incompatible with the plan's `=3.5.0`). All Anza + SPL + ed25519-bip32 pins are declared in workspace `[workspace.dependencies]` but NOT wired into `sol-wallet-core/Cargo.toml` so the build resolves; Phase 1 uncomments the Anza block at the top of that file, runs `cargo tree -p sol-wallet-core | grep solana-` to discover the actual constraint graph, picks compatible exact pins, then verifies "no version unification" on its own build before claiming done. Full drift log in `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section.
+- [ ] Step 7: PAUSE — PR review on the scaffold PR; squash-merge only after issue body checkboxes flipped to `[x]` (L13 step 14). CI hardening detail (the awk cdylib guard + Linux-gated protoc install) lives in the "CI:" Files block above.
 
 ---
 
