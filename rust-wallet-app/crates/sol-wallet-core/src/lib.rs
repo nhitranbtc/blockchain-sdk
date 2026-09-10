@@ -9,6 +9,7 @@
 //! | 1     | `wallet` (Phantom-equivalent keypair)             |
 //! | 2     | `address` (base58 + is_on_curve + PDA)            |
 //! | 3     | `amount` + `tx::builder` (SOL transfer + CU)      |
+//! | 4     | `disambig` + `tokens` + `tx::builder` (SPL+ATA+Token-2022) |
 //! | 5-7   | `error` (full 21-variant enum)                    |
 //!
 //! Threat model + spec: `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md`
@@ -23,8 +24,10 @@
 
 pub mod address;
 pub mod amount;
+pub mod disambig;
 pub mod error;
 pub mod read_only_wallet;
+pub mod tokens;
 pub mod tx;
 pub mod wallet;
 

@@ -68,6 +68,24 @@ pub enum Error {
     /// form's input validator.
     #[error("sol-wallet-core: invalid SOL amount — {0}")]
     InvalidAmount(String),
+
+    /// SPL Token program detection rejected an unknown program ID —
+    /// neither classic SPL (`TokenkegQ...`) nor Token-2022
+    /// (`TokenzQdB...`). Raised by `disambig::TokenProgram::from_program_id`
+    /// when `mint.owner` (as fetched by Phase 5 RPC) is not one of the
+    /// two known SPL programs.
+    #[error("sol-wallet-core: invalid SPL token program — {0}")]
+    InvalidTokenProgram(String),
+
+    /// `spl_token::state::Mint::unpack` (or token-2022 variant) failed
+    /// to decode raw mint account bytes. Wraps the underlying
+    /// `ProgramError` (e.g. `InvalidAccountData`) so callers see one
+    /// crate-wide error rather than three crate-private ones.
+    ///
+    /// Triggered by truncated account data, wrong owner, or a
+    /// non-mint account passed into the decimals-fetch path.
+    #[error("sol-wallet-core: failed to unpack SPL mint state — {0}")]
+    InvalidTokenState(String),
 }
 
 /// Crate-wide result alias.

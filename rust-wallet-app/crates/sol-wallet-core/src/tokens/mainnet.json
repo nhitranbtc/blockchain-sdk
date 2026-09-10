@@ -1,0 +1,20 @@
+[
+  {
+    "symbol": "USDC",
+    "program": "classic",
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "decimals": 6
+  },
+  {
+    "symbol": "USDT",
+    "program": "classic",
+    "mint": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "decimals": 6
+  },
+  {
+    "symbol": "USDS",
+    "program": "token2022",
+    "mint": "USDSwrNX9dKoTt7dxbNyX8t6G2zqV4AGMyc7jVfmJf8",
+    "decimals": 6
+  }
+]
