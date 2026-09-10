@@ -54,6 +54,11 @@ Five deltas between the plan text and live repo state, resolved as follows:
 4. **Labels were absent, not pre-existing.** Both created fresh.
 5. **Milestone was absent.** Only `tron-v0.1` existed.
 
-### Notes — Task S.6 (branch protection) deferred
+### Notes — Task S.6 (branch protection) applied
 
-Branch protection is available on this repo (`main` already requires the `CI` context). It is not yet applied to `sol-wallet-core`: a required status check that has never produced a run can never turn green, so protection configured before the first CI run would block the very push that delivers the workflow. Sequence is push → first green run → then require the four contexts (`Rust lint (fmt + clippy)`, `Rust test (sol-wallet-core)`, `Rust dep policy (cargo-deny)`, `Mobile compile-only (iOS + Android arm64)`) plus one review. Until then the L13 PAUSE points are the gate, per Task S.6's own soft-gate fallback.
+Protection is live on `sol-wallet-core`, mirroring `main`'s policy: four required status checks (`Rust lint (fmt + clippy)`, `Rust test (sol-wallet-core)`, `Rust dep policy (cargo-deny)`, `Mobile compile-only (iOS + Android arm64)`), strict up-to-date branches, linear history, one approving review, stale reviews dismissed, no force-push, no deletion.
+
+`enforce_admins` is `false`, matching `main`. That is deliberate on a solo-maintainer repo: a required review that an author cannot supply themselves would otherwise hard-block every merge. The admin bypass is the release valve, not an oversight.
+
+Ordering note: protection could not be applied until after the first green run — a required status check that has never produced a run can never be satisfied, so configuring it earlier would have blocked the very push that delivered the workflow. Sequence used: push → run `34433375026` green → protect.
+
