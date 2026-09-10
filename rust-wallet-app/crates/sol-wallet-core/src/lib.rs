@@ -22,6 +22,7 @@
 
 pub mod address;
 pub mod error;
+pub mod read_only_wallet;
 pub mod wallet;
 
 pub use error::{Error, Result};
