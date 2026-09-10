@@ -1,8 +1,8 @@
-name: sol-wallet-core
+name: rust-sol-core
 
-# CI for the `sol-wallet-core` integration branch.
+# CI for the `rust-sol-core` integration branch.
 #
-# Scope: any PR that targets `sol-wallet-core` (NOT main). The umbrella
+# Scope: any PR that targets `rust-sol-core` (NOT main). The umbrella
 # `ci.yml` triggers on `main` only, so a PR into this integration branch
 # receives no gate from it — this file therefore mirrors the umbrella's full
 # job set rather than carrying only chain-unique jobs. That is the opposite
@@ -21,10 +21,16 @@ name: sol-wallet-core
 # Dep-tree jobs stay workspace-wide because they read one shared lockfile.
 #
 # Branch rule (plan Phase Set Up, Task S.2): task branches are cut from
-# `sol-wallet-core`, never from `main`, and PR back into `sol-wallet-core`,
+# `rust-sol-core`, never from `main`, and PR back into `rust-sol-core`,
 # never into `main`. The single exception is the v0.1 cut PR at the end of
-# Phase 9. `gh pr create` must pass `--base sol-wallet-core` explicitly —
+# Phase 9. `gh pr create` must pass `--base rust-sol-core` explicitly —
 # the repo default base is `main`.
+#
+# Note: the branch is `rust-sol-core` (matching the `rust-sol-core` label
+# and the `rust-<chain>-core-ci.yml` sibling workflows); the CRATE it gates
+# is `sol-wallet-core` at `crates/sol-wallet-core/`. The two names differ on
+# purpose — every `-p sol-wallet-core` below refers to the crate, not the
+# branch.
 #
 # MSRV: `rust-wallet-app/rust-toolchain.toml` hard-pins channel 1.98.1 and
 # overrides whatever toolchain the action installs for every cargo
@@ -51,9 +57,9 @@ name: sol-wallet-core
 
 on:
   push:
-    branches: [sol-wallet-core]
+    branches: [rust-sol-core]
   pull_request:
-    branches: [sol-wallet-core]
+    branches: [rust-sol-core]
   workflow_dispatch: {}
 
 # Least-privilege token. CI doesn't push or comment.

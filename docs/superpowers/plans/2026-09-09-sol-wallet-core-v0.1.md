@@ -325,51 +325,51 @@ rust-wallet-app/crates/sol/tests/  # Phase 7.1 + Phase 7.2 + Phase 9.1 (CLI test
 
 ## Phase Set Up — Branch, labels, milestone, CI (mirror TRON plan Phase Set Up)
 
-**Goal:** the `sol-wallet-core` integration branch, its tracker vocabulary, and its CI gate all exist before any Rust code is written. Mirrors `rust-tron-core` precedent (see `.github/workflows/rust-tron-core-ci.yml`) per L25, and the `rust-eth-core` precedent before it. **Gate:** a no-op PR into `sol-wallet-core` triggers `.github/workflows/sol-wallet-core-ci.yml` and passes.
+**Goal:** the `rust-sol-core` integration branch, its tracker vocabulary, and its CI gate all exist before any Rust code is written. Mirrors `rust-tron-core` precedent (see `.github/workflows/rust-tron-core-ci.yml`) per L25, and the `rust-eth-core` precedent before it. **Gate:** a no-op PR into `rust-sol-core` triggers `.github/workflows/rust-sol-core-ci.yml` and passes.
 
 This phase is repo plumbing only — no crate code, no `cargo` changes. It exists because branch and tracker mistakes are expensive to unwind after work has landed: a task branched off `main` inherits none of the integration branch's history, and a PR opened against `main` bypasses the whole v0.1 review train.
 
-### Task S.1 — Cut the `sol-wallet-core` integration branch from `main`
+### Task S.1 — Cut the `rust-sol-core` integration branch from `main`
 
 **Files:** none (git refs only)
 
 - [ ] Confirm `main` is clean and up to date: `git status --short` empty, `git fetch origin && git rev-parse main origin/main` match.
-- [ ] Create the branch from `main`: `git checkout main && git pull --ff-only && git checkout -b sol-wallet-core`.
-- [ ] Push and set upstream: `git push -u origin sol-wallet-core`.
+- [ ] Create the branch from `main`: `git checkout main && git pull --ff-only && git checkout -b rust-sol-core`.
+- [ ] Push and set upstream: `git push -u origin rust-sol-core`.
 - [ ] Record the base commit SHA in the ledger entry (L17) so the eventual cut PR back to `main` has a known fork point.
 
-**Verification:** `git rev-parse --abbrev-ref HEAD` returns `sol-wallet-core`; `gh api repos/:owner/:repo/branches/sol-wallet-core --jq .name` returns `sol-wallet-core`.
+**Verification:** `git rev-parse --abbrev-ref HEAD` returns `rust-sol-core`; `gh api repos/:owner/:repo/branches/rust-sol-core --jq .name` returns `rust-sol-core`.
 
-**Note:** `origin/docs/2026-09-08-solana-rust-sdks-deep-dive` (parent branch for this planning doc) already exists and holds the research + planning docs. It is a docs branch, not the integration branch — do not reuse it, and do not branch `sol-wallet-core` from it.
+**Note:** `origin/docs/2026-09-08-solana-rust-sdks-deep-dive` (parent branch for this planning doc) already exists and holds the research + planning docs. It is a docs branch, not the integration branch — do not reuse it, and do not branch `rust-sol-core` from it.
 
-### Task S.2 — Branch rule: every task branches from `sol-wallet-core`, never `main`
+### Task S.2 — Branch rule: every task branches from `rust-sol-core`, never `main`
 
 **Files:** this plan (the rule below is the reference every later phase points at)
 
 The rule, stated once so every later phase can cite it:
 
-- **Branch from:** `sol-wallet-core`. Never `main`, never another task branch.
-- **PR into:** `sol-wallet-core`. Never `main`.
-- **Only exception:** the final v0.1 cut PR, `sol-wallet-core` → `main`, opened once at the end of Phase 9 after the acceptance criteria pass.
+- **Branch from:** `rust-sol-core`. Never `main`, never another task branch.
+- **PR into:** `rust-sol-core`. Never `main`.
+- **Only exception:** the final v0.1 cut PR, `rust-sol-core` → `main`, opened once at the end of Phase 9 after the acceptance criteria pass.
 - **Naming:** `sol/<phase>-<slug>`, e.g. `sol/phase1-wallet-keypair`, `sol/phase4-spl-ata-disambig`.
 
 Per-task ritual:
 
 ```bash
-git checkout sol-wallet-core
-git pull --ff-only origin sol-wallet-core
+git checkout rust-sol-core
+git pull --ff-only origin rust-sol-core
 git checkout -b sol/phase1-wallet-keypair
 # ... work, commit (PAUSE per never-auto-commit) ...
 git push -u origin sol/phase1-wallet-keypair
-gh pr create --base sol-wallet-core --body-file /tmp/pr-body.md   # --base is mandatory
+gh pr create --base rust-sol-core --body-file /tmp/pr-body.md   # --base is mandatory
 ```
 
-- [ ] `gh pr create` always passes `--base sol-wallet-core` explicitly — the repo default base is `main`, so omitting the flag silently targets the wrong branch.
-- [ ] Before opening any PR, confirm the base: `gh pr view --json baseRefName --jq .baseRefName` must return `sol-wallet-core`.
-- [ ] If a PR is opened against `main` by mistake, retarget it rather than reopening: `gh pr edit <n> --base sol-wallet-core`.
+- [ ] `gh pr create` always passes `--base rust-sol-core` explicitly — the repo default base is `main`, so omitting the flag silently targets the wrong branch.
+- [ ] Before opening any PR, confirm the base: `gh pr view --json baseRefName --jq .baseRefName` must return `rust-sol-core`.
+- [ ] If a PR is opened against `main` by mistake, retarget it rather than reopening: `gh pr edit <n> --base rust-sol-core`.
 - [ ] Use `--body-file` with content in `/tmp` (GateGuard `gh-pr classifier` per memory `gate-guard-gh-pr-classifier.md` — inline body with `rm`/`rmdir` prose trips Fact-Force gate).
 
-**Verification:** a scratch branch cut from `sol-wallet-core` shows the integration branch in its history — `git merge-base --is-ancestor sol-wallet-core HEAD` exits 0.
+**Verification:** a scratch branch cut from `rust-sol-core` shows the integration branch in its history — `git merge-base --is-ancestor rust-sol-core HEAD` exits 0.
 
 ### Task S.3 — Confirm and extend tracker labels
 
@@ -409,7 +409,7 @@ The repo may already have `polygon-v0.1` / `tron-v0.1` milestones; create the SO
 ```bash
 gh api repos/:owner/:repo/milestones -f title='sol-wallet-core v0.1' \
   -f state='open' \
-  -f description='sol-wallet-core v0.1 + sol CLI v0.1 — integration branch sol-wallet-core. Closes with the cut PR to main.'
+  -f description='sol-wallet-core v0.1 + sol CLI v0.1 — integration branch rust-sol-core. Closes with the cut PR to main.'
 ```
 
 - [ ] Attach every v0.1 issue to it as issues are filed: `gh issue edit <n> --milestone sol-wallet-core v0.1`.
@@ -418,13 +418,13 @@ gh api repos/:owner/:repo/milestones -f title='sol-wallet-core v0.1' \
 
 **Verification:** `gh api repos/:owner/:repo/milestones --jq '.[].title'` includes `sol-wallet-core v0.1`.
 
-### Task S.5 — Add `.github/workflows/sol-wallet-core-ci.yml`
+### Task S.5 — Add `.github/workflows/rust-sol-core-ci.yml`
 
-**Files (new):** `.github/workflows/sol-wallet-core-ci.yml`
+**Files (new):** `.github/workflows/rust-sol-core-ci.yml`
 
 Copy the structure of `.github/workflows/rust-tron-core-ci.yml` and retarget it. Same jobs, same action pins, same least-privilege token.
 
-- [ ] `on.push.branches: [sol-wallet-core]` and `on.pull_request.branches: [sol-wallet-core]`, plus `workflow_dispatch: {}`. **Do not** add `main` to either list — the umbrella `ci.yml` covers main.
+- [ ] `on.push.branches: [rust-sol-core]` and `on.pull_request.branches: [rust-sol-core]`, plus `workflow_dispatch: {}`. **Do not** add `main` to either list — the umbrella `ci.yml` covers main.
 - [ ] `permissions: contents: read` only.
 - [ ] `concurrency` group keyed on workflow + ref with `cancel-in-progress: true`.
 - [ ] Jobs: `rust-fmt` (`cargo fmt --all -- --check`), `rust-clippy` (`cargo clippy -p sol-wallet-core --all-targets -- -D warnings`), `rust-test` (`cargo test -p sol-wallet-core --lib --tests`), all with `working-directory: rust-wallet-app`.
@@ -432,25 +432,25 @@ Copy the structure of `.github/workflows/rust-tron-core-ci.yml` and retarget it.
 - [ ] Add the mobile compile-only gate as its own job (per deep-dive "Mobile build gate (CI)" + Q17): `cargo check --target aarch64-apple-ios` and `cargo check --target aarch64-linux-android`.
 - [ ] Pin the MSRV toolchain to `1.89.0` to match Task 0.1 rather than floating on `stable` (Anza crates pin `rust-version = "1.89.0"`).
 - [ ] Action pins follow L37: tag-based to mirror the umbrella `ci.yml`, with resolved SHAs captured in a follow-up commit after the first green run.
-- [ ] Header comment states the scope explicitly: "any PR that targets `sol-wallet-core` (NOT main)".
+- [ ] Header comment states the scope explicitly: "any PR that targets `rust-sol-core` (NOT main)".
 
-**Verification:** open a trivial no-op PR into `sol-wallet-core`; the `sol-wallet-core-ci` workflow appears in checks and every job passes. `gh run list --workflow sol-wallet-core-ci.yml --limit 1` shows a `success` conclusion.
+**Verification:** open a trivial no-op PR into `sol-wallet-core`; the `rust-sol-core` workflow appears in checks and every job passes. `gh run list --workflow rust-sol-core-ci.yml --limit 1` shows a `success` conclusion.
 
-### Task S.6 — Optional branch protection on `sol-wallet-core`
+### Task S.6 — Optional branch protection on `rust-sol-core`
 
 **Files:** none (repo settings)
 
-- [ ] If the repo plan allows branch protection, require the `sol-wallet-core-ci` checks to pass before merge, and require at least one review.
+- [ ] If the repo plan allows branch protection, require the `rust-sol-core` checks to pass before merge, and require at least one review.
 - [ ] If protection is unavailable, record that here and rely on the L13 PAUSE points instead — this is a soft gate, not a blocker for Phase 0.
 
 **Verification:** either protection is configured, or the fallback is written into the ledger entry.
 
 #### Phase Set Up — Verification
 
-- [ ] `git rev-parse --abbrev-ref HEAD` = `sol-wallet-core`, and the branch exists on `origin`.
+- [ ] `git rev-parse --abbrev-ref HEAD` = `rust-sol-core`, and the branch exists on `origin`.
 - [ ] `gh label list --search rust-sol` shows `rust-sol-core` + `rust-sol-cli`.
 - [ ] `gh api repos/:owner/:repo/milestones --jq '.[].title'` includes `sol-wallet-core v0.1`.
-- [ ] `.github/workflows/sol-wallet-core-ci.yml` exists and its first run concluded `success`.
+- [ ] `.github/workflows/rust-sol-core-ci.yml` exists and its first run concluded `success`.
 - [ ] Umbrella issue for this plan carries the `sol-wallet-core v0.1` milestone and a priority label.
 - [ ] The branch rule from Task S.2 is restated in the body of every v0.1 task issue, so an agent picking up a task cannot miss it.
 - [ ] `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` exists; first entry covers Phase Set Up (plumbing) per L24 doc-update rule.
@@ -485,7 +485,7 @@ CLI binary skeleton:
 
 CI:
 
-- Create: `.github/workflows/sol-wallet-core-ci.yml` (Phase Set Up Task S.5 owns; reference here for cross-link)
+- Create: `.github/workflows/rust-sol-core-ci.yml` (Phase Set Up Task S.5 owns; reference here for cross-link)
 
 **Interfaces (V0.1 scaffolding — empty body, just compiles):**
 - `sol_wallet_core::error::Error` enum with 1 placeholder variant
@@ -768,7 +768,7 @@ tempfile    = { workspace = true }
 
 **Marking discipline (L13 step 14 + `never-auto-commit` rule):**
 - Each `- [ ] Step N:` stays unchecked until that step has been RUN locally by the operator.
-- The nested `- [ ] Verified:` sub-checkbox flips to `[x]` only after: (a) step ran with exit 0, (b) operator recorded commit SHA + date in the `Verified by:` line, (c) PR merged into `sol-wallet-core` per L13 step 15.
+- The nested `- [ ] Verified:` sub-checkbox flips to `[x]` only after: (a) step ran with exit 0, (b) operator recorded commit SHA + date in the `Verified by:` line, (c) PR merged into `rust-sol-core` per L13 step 15.
 - **Do not auto-mark** boxes — operator flips them by hand per the workflow-approval-required rule.
 - Loud-RED gate: any parent step box unchecked blocks Phase 7 start.
 
@@ -821,7 +821,7 @@ tempfile    = { workspace = true }
 
 **Steps:**
 - [ ] Step 1: Run `cargo build -p sol-wallet-core --tests` — confirm all 32 named library test files compile (per `## Test File Structure` layout). Loud-RED if any compile error.
-  - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after step exits 0 + PR merges into `sol-wallet-core`)
+  - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after step exits 0 + PR merges into `rust-sol-core`)
 - [ ] Step 2: Run `cargo test -p sol-wallet-core --lib` — confirm all unit tests pass. Loud-RED if any test fails.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after step exits 0)
 - [ ] Step 3: Run `cargo test -p sol-wallet-core --tests` (excludes `--lib` integration; includes `--test <name>` for each of the 32 files). Loud-RED if any test fails.
@@ -850,7 +850,7 @@ tempfile    = { workspace = true }
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `cargo doc -p sol-wallet-core --no-deps` shows all 9 names)
 - [ ] Step 2: Confirm `common/mod.rs` exports `mock_spl_usdc`, `surfpool_spawn`, `faucet`, `keypair_fixture` for `crates/sol/tests/` reuse per deep-dive `### Shared helpers reused from sol-wallet-core`.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `grep` audit of `common/mod.rs`)
-- [ ] Step 3: Open a no-op scratch PR `sol/phase6.2-library-verified → sol-wallet-core` — title "chore(sol): Phase 6.2 library completeness verified — 33/34 rows GREEN". CI must pass.
+- [ ] Step 3: Open a no-op scratch PR `sol/phase6.2-library-verified → rust-sol-core` — title "chore(sol): Phase 6.2 library completeness verified — 33/34 rows GREEN". CI must pass.
   - [ ] Verified by: PR number `<pending>` + commit SHA `<pending-sha>` on `<pending-date>` (operator fills after `gh pr create` returns PR URL + CI green)
 - [ ] Step 4: PAUSE — merge the no-op PR; Phase 7 can now begin.
   - [ ] Verified by: squash-merge commit SHA `<pending-sha>` on `<pending-date>` (operator fills after `gh pr merge --squash` exits 0 per `update-issues-before-merge` rule)
@@ -871,7 +871,7 @@ tempfile    = { workspace = true }
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after Task 6.2.1 Step 8 `grep` audit)
 - [ ] CHANGELOG.md entry written (per L24).
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after Task 6.2.1 Step 9 CHANGELOG.md commit lands)
-- [ ] No-op scratch PR merged into `sol-wallet-core`.
+- [ ] No-op scratch PR merged into `rust-sol-core`.
   - [ ] Verified by: PR number `<pending>` + squash-merge commit SHA `<pending-sha>` on `<pending-date>` (operator fills after Task 6.2.2 Step 4 merge)
 
 **Loud-RED gate:** any step above fails → STOP Phase 6.2; return to the owning phase to fix the gap before re-running Phase 6.2. Do NOT begin Phase 7 until this verification exits 0.
@@ -976,7 +976,7 @@ CLI tests (crates/sol/tests/) — Phase 7.2 owns the remaining 4 CLI test files 
 
 **Scope:** 21 of 22 rows in Phase 7 verification scope. Row 22 (mainnet $0.001 USDC self-send) is **explicitly owned by Phase 9.1** per Q4 Q-gate + `## V0.1 mainnet gate` section; Phase 7 verification asserts row 22 is on the Phase 9.1 backlog, NOT on the V0.1 library gate.
 
-**Marking discipline (L13 step 14 + `never-auto-commit` rule):** same as Phase 6.2 — each `- [ ] Step N:` stays unchecked until that step has been RUN locally by the operator; the nested `- [ ] Verified:` sub-checkbox flips to `[x]` only after the step exits 0 + commit SHA + date filled in + PR merged into `sol-wallet-core` per L13 step 15.
+**Marking discipline (L13 step 14 + `never-auto-commit` rule):** same as Phase 6.2 — each `- [ ] Step N:` stays unchecked until that step has been RUN locally by the operator; the nested `- [ ] Verified:` sub-checkbox flips to `[x]` only after the step exits 0 + commit SHA + date filled in + PR merged into `rust-sol-core` per L13 step 15.
 
 ### Row-to-CLI-test-file ownership matrix (22 rows)
 
@@ -1032,7 +1032,7 @@ CLI tests (crates/sol/tests/) — Phase 7.2 owns the remaining 4 CLI test files 
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `grep -rn "#\[ignore\]" crates/sol/tests/` audit)
 - [ ] Step 11: Update `CHANGELOG.md` per L24 — append Phase 7 verification entry: "CLI completeness verified: 21/22 deep-dive rows GREEN (row 22 deferred Phase 9.1); 10/10 CLI test files compile; rows 7+13 extended via Phase 4.1/3.1 Modify."
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after CHANGELOG.md commit lands)
-- [ ] Step 12: Open a no-op scratch PR `sol/phase7-verified → sol-wallet-core` — title "chore(sol): Phase 7 CLI completeness verified — 21/22 rows GREEN". CI must pass.
+- [ ] Step 12: Open a no-op scratch PR `sol/phase7-verified → rust-sol-core` — title "chore(sol): Phase 7 CLI completeness verified — 21/22 rows GREEN". CI must pass.
   - [ ] Verified by: PR number `<pending>` + squash-merge commit SHA `<pending-sha>` on `<pending-date>` (operator fills after `gh pr create` returns URL + CI green + `gh pr merge --squash` exits 0)
 
 #### Phase 7 verification — Verification block
@@ -1055,7 +1055,7 @@ CLI tests (crates/sol/tests/) — Phase 7.2 owns the remaining 4 CLI test files 
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after Task 7.3 Step 10)
 - [ ] CHANGELOG.md entry written (per L24).
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after Task 7.3 Step 11)
-- [ ] No-op scratch PR merged into `sol-wallet-core`.
+- [ ] No-op scratch PR merged into `rust-sol-core`.
   - [ ] Verified by: PR number `<pending>` + squash-merge commit SHA `<pending-sha>` on `<pending-date>` (operator fills after Task 7.3 Step 12)
 
 **Loud-RED gate:** any step above fails → STOP Phase 7 verification; return to the owning phase (4.1/5.1/7.1/7.2) to fix the gap before re-running. Do NOT begin Phase 8 until this verification exits 0.
