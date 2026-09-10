@@ -185,6 +185,16 @@ solana-instruction            = "=3.5.0"
 solana-client                 = "=4.2.2"
 solana-rpc-client             = "=4.2.2"
 solana-compute-budget-program = "=4.2.2"
+# Phase 3 (tx::builder) — modern Anza split: `solana-system-interface`
+# re-exports `system_instruction::transfer` (the canonical SOL-transfer
+# builder used by every Phantom-shaped wallet). `solana-compute-budget-interface`
+# carries `ComputeBudgetInstruction` — note `solana-program` 4.1.0's lib.rs
+# doc-comment references this type but does NOT declare the dep; we
+# declare it directly so the builder can produce Compute Budget
+# instructions without forcing the Solana-program runtime crate.
+# Exact-pin per CONTEXT.md hard rule #6 (Anza ABI = 4.1.0 lineage).
+solana-system-interface         = { version = "=3.3.0", features = ["bincode"] }
+solana-compute-budget-interface = { version = "=3.1.0", features = ["serde"] }
 
 # SPL — pinned versions match what the Anza SDK 4.1.0 ABI declares in its
 # Cargo.toml. Each crate's published version tracks Anza's monorepo tag,

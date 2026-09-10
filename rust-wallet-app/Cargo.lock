@@ -6162,13 +6162,16 @@ dependencies = [
 name = "sol-wallet-core"
 version = "0.2.0"
 dependencies = [
+ "bincode",
  "bip39",
  "bs58 0.5.1",
  "ed25519-bip32",
  "hmac 0.12.1",
  "proptest",
  "sha2 0.10.9",
+ "solana-compute-budget-interface",
  "solana-sdk",
+ "solana-system-interface",
  "tempfile",
  "thiserror 1.0.69",
  "zeroize",
@@ -6289,6 +6292,18 @@ dependencies = [
  "solana-sdk-ids",
  "solana-sdk-macro",
  "solana-sysvar-id",
+]
+
+[[package]]
+name = "solana-compute-budget-interface"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0139c131989ae133c23b31c04ecf03949c198a335e5dc028ddd54bb5c9fe6ee8"
+dependencies = [
+ "serde",
+ "serde_derive",
+ "solana-instruction",
+ "solana-sdk-ids",
 ]
 
 [[package]]
@@ -7030,7 +7045,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e2d5311d0584af231c6c2b0503ba1c3aa50118ead4f503ab215ccbdd1ffac57"
 dependencies = [
  "num-traits",
+ "serde",
+ "serde_derive",
  "solana-address 2.7.0",
+ "solana-instruction",
  "solana-msg",
  "solana-program-error",
 ]

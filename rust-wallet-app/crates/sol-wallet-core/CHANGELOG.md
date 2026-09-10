@@ -12,7 +12,6 @@ Conventions: `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Securit
 
 - Phase 0 — crate scaffold + compile/`--help` check (no crate source exists yet)
 - Phase 1 — Phantom-equivalent `Wallet` keypair (`fromMnemonic`, `fromMnemonicAt`, `fromBase58`, `fromPublicKey`, sign APIs)
-- Phase 3 — `tx::builder` native SOL transfer + Compute Budget prepend
 - Phase 4 — SPL `transfer_checked` + ATA lifecycle + Token-2022 disambiguation
 - Phase 5 — RPC client + `send_with_retry` + `wait_for_confirm`
 - Phase 6 — wallet persistence (Argon2id + AES-GCM) + `WalletManager`
@@ -150,6 +149,53 @@ Five wrappers land around `solana_sdk::pubkey::Pubkey` so the wallet app, the CL
 
 - **All-zero 32-byte buffer is ON the Ed25519 curve, not off.** Plan §Phase 2 Step 6 specified `reject off-curve bytes (e.g. all-zeros)` as a negative fixture. `Pubkey::new_from_array([0u8; 32]).is_on_curve()` returns `true` because the Ed25519 identity point satisfies the curve equation. A naive `assert!(!zero.is_on_curve())` precondition failed the integration test. Replaced with a derived PDA from `find_pda(&[b"off-curve-fixture"], &program_id)` — `find_pda` is contractually guaranteed to return an off-curve address (Solana enforces this to prevent PDA-curve exploits), so the negative-fixture path is robust regardless of how the underlying curve library evolves.
 - **`assert!(bump < 256)` is a useless comparison.** The `bump` field returned by `find_pda` is `u8`, so `< 256` is always true and trips `clippy::unused_comparisons`. Dropped the assertion; the off-curve check + determinism check (same inputs → same bump byte) still prove the contract.
+
+---
+
+## Phase 3 — 2026-09-10 — tx::builder (native SOL + Compute Budget)
+
+The transaction construction surface that Phase 7's `wallet send` handler consumes. Native SOL transfer via the modern Anza split (`solana-system-interface` 3.3.0) + auto-attached Compute Budget (`solana-compute-budget-interface` 3.1.0). No signing or broadcast here — those land in Phase 5.
+
+### Added
+
+- `crates/sol-wallet-core/src/amount.rs` — lamport safety wrapper newtype:
+  - `Amount(u64)` newtype with `Clone + Copy + PartialEq + Eq + Hash`. Wire-level constructor `Amount::from_lamports(u64)` is infallible.
+  - `Amount::ZERO` const for "reset form" UX parity with Phantom's Send screen.
+  - `Amount::from_sol(f64) -> Result<Self>` — user-decimal parser. Rejects NaN, ±Inf, negative, and values past `u64::MAX` lamports (SOL supply ceiling ~6e8 SOL is well below the overflow boundary — anything larger is a caller bug). Truncates sub-lamport precision (the wire format has no fractional lamport unit).
+  - 6 inline unit tests — zero, round-trip, 1 SOL = 1e9, 0.001 SOL = 1e6 (truncation), NaN/Inf/negative rejection, overflow rejection.
+- `crates/sol-wallet-core/src/tx/mod.rs` — `tx` module facade. Re-exports nothing from Phase 4/5 surfaces (`tx::broadcast`) on purpose — the Phase 7 CLI pulls `tx::builder` + `tx::broadcast` separately to keep the dependency graph shallow.
+- `crates/sol-wallet-core/src/tx/builder.rs` — three builders:
+  - `build_sol_transfer(from: &Pubkey, to: &Pubkey, lamports: u64) -> Vec<Instruction>` — 1-ix vec wrapping `solana_system_interface::instruction::transfer`. Phantom's SOL send path; the system_program is `11111111111111111111111111111111` (resolved via `solana_system_interface::program::ID`).
+  - `compute_budget_instructions(units: u32, priority_fee_micro_lamports: u64) -> [Instruction; 2]` — 2-ix array `[set_cu_limit, set_cu_price]`. Wire-format invariant: budget ix MUST land before payload ix so the validator applies CU limits to the rest of the message.
+  - `build_sol_transfer_with_budget(from, to, lamports, cu_limit, priority_fee_micro_lamports) -> Vec<Instruction>` — 3-ix vec returning `[cu_limit, cu_price, transfer]`. The default shape for `wallet send` (matches Phantom UX + Q8 defaults).
+  - `DEFAULT_COMPUTE_UNIT_LIMIT: u32 = 150_000` const. Matches Solana's validator default with headroom for a single SOL transfer; user overrides via `--cu-limit` in Phase 7.1.
+  - 3 inline unit tests — `build_sol_transfer` emits one system ix, `compute_budget_instructions` returns two budget ix in canonical order (distinct variant tags confirmed), `build_sol_transfer_with_budget` emits 3 ix in the right order.
+- `crates/sol-wallet-core/src/lib.rs` — `pub mod amount; pub mod tx;` added to expose the new surface.
+- `crates/sol-wallet-core/src/error.rs` — `Error::InvalidAmount(String)` variant added. Used by `Amount::from_sol` for NaN/Inf/negative/overflow rejection; surfaces a human-readable reason instead of an opaque validator rejection.
+- `crates/sol-wallet-core/tests/amount_lamport.rs` (new) — 9 tests covering the lamport newtype (zero, round-trip, 1 SOL = 1e9, 0.001 SOL truncation, NaN/Inf/negative rejection, overflow rejection, supply-limit success, proptest round-trip).
+- `crates/sol-wallet-core/tests/tx_serde.rs` (new) — 5 tests for the builder wire format (1-ix system_program, bincode round-trip, budget prepended in order, helper invariants, 3-ix round-trip).
+- `crates/sol-wallet-core/tests/compute_budget.rs` (new) — 4 tests for the Compute Budget builder (default constant, Borsh wire-format decode, zero-price pass-through, determinism).
+- Workspace deps added in `rust-wallet-app/Cargo.toml`:
+  - `solana-system-interface = { version = "=3.3.0", features = ["bincode"] }` — modern Anza split; `system_instruction::transfer` is feature-gated behind `bincode`.
+  - `solana-compute-budget-interface = { version = "=3.1.0", features = ["serde"] }` — `ComputeBudgetInstruction`; serde feature enables the `bincode` round-trip path used in `tx_serde.rs`.
+- Dev-dep added in `sol-wallet-core/Cargo.toml`: `bincode = "=1.3.3"` (exact-pin to match Anza 4.1.0's transitive).
+
+### Changed
+
+- `crates/sol-wallet-core/CHANGELOG.md` — Phase 3 line removed from `[Unreleased]` "Planned" list (now delivered).
+
+### Drift recorded at execution time
+
+- **`system_instruction::transfer` is feature-gated behind `bincode`.** `solana-system-interface` 3.3.0's `instruction.rs` gates `pub fn transfer(...)` behind `#[cfg(any(feature = "bincode", feature = "wincode"))]`. A naive `solana-system-interface = "=3.3.0"` workspace entry fails to compile the builder — `cargo build` errors with "not found in `system_instruction`". Fixed by adding `features = ["bincode"]` to the workspace entry; the bincode feature is also what Anza 4.1.0's transitive graph pulls, so no transitive-pin drift.
+- **`ComputeBudgetInstruction` uses Borsh on the wire, not serde.** Initial `tests/compute_budget.rs` decoded the `data` field via `bincode::deserialize::<ComputeBudgetInstruction>` after enabling the `serde` feature on `solana-compute-budget-interface`. The bincode decode failed with "invalid value: integer 51200002, expected variant index 0 <= i < 5" — the serde derive uses a different variant-tag layout than the Borsh derive the Solana runtime uses. Switched the assertions to manual Borsh decoding (`data[0]` tag + little-endian payload), matching the `to_instruction!` macro in `solana-compute-budget-interface-3.1.0/src/lib.rs`. Tag values confirmed: `SetComputeUnitLimit` = `0x02`, `SetComputeUnitPrice` = `0x03`.
+- **`solana_sdk::system_program::id()` is not re-exported by `solana-sdk` 4.1.0.** The `solana-sdk` umbrella crate no longer carries a `system_program` module — the modern Anza split hoists it to `solana-system_interface::program::ID`. Replaced all four call sites (`src/tx/builder.rs` unit tests + `tests/tx_serde.rs` integration tests) with `solana_system_interface::program::ID` (renamed to `SYSTEM_PROGRAM_ID` locally for readability).
+- **Cargo.toml / lib.rs / error.rs edits all tripped the GateGuard fact-forcing gate** (8 denials this session). Each Edit/Write required inline presentation of (1) importers, (2) affected public API, (3) data schemas, (4) verbatim user instruction. Cost is roughly +200 tokens per denial — total overhead ~1.6k tokens. Tracked here as drift because future phases will hit the same wall on any `Cargo.toml` / `lib.rs` / `error.rs` change.
+
+### Test coverage
+
+- New: 18 integration tests across 3 new files (`amount_lamport` 9 + `tx_serde` 5 + `compute_budget` 4) + 9 new inline unit tests (`amount.rs` 6 + `builder.rs` 3).
+- Total `sol-wallet-core` suite: 60 tests pass (was 33 after Phase 2; +27 from Phase 3).
+- Verify gate: `cargo fmt --check` + `cargo clippy -p sol-wallet-core --all-targets -- -D warnings` + `cargo test -p sol-wallet-core` all clean.
 
 ---
 
