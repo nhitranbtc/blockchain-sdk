@@ -688,14 +688,29 @@ tempfile    = { workspace = true }
 - Modify: `rust-wallet-app/crates/sol-wallet-core/tests/address_derivation.rs` (Phase 1.1 file; add base58 round-trip + invalid base58 reject + off-curve bytes reject cases; deep-dive row 2 part)
 
 **Steps:**
-- [ ] Step 1: Implement `pubkey_from_bytes(bytes: [u8; 32]) -> Pubkey` → `solana_sdk::Pubkey::new_from_array`
-- [ ] Step 2: Implement `pubkey_to_base58(pk: &Pubkey) -> String` → `pk.to_string()` (32-44 chars, no prefix)
-- [ ] Step 3: Implement `is_on_curve(bytes: &[u8]) -> bool` → `solana_sdk::Pubkey::is_on_curve` (rejects PDA-from-bytes footgun — PDA may NOT be on Ed25519 curve)
-- [ ] Step 4: Implement `parse_user_address(s: &str) -> Result<Pubkey>` → `Pubkey::from_str(s)` + `is_on_curve` check; reject invalid base58 + reject off-curve bytes
-- [ ] Step 5: Implement `find_pda(seeds: &[&[u8]], program_id: &Pubkey) -> (Pubkey, u8)` → `Pubkey::find_program_address` (V0.1.5 staking use; V0.1 internal)
-- [ ] Step 6: Extend `tests/address_derivation.rs` — bytes → base58 → bytes round-trip; assert accepts known valid address `2mcFPzAo2kfHkNyNgAniGZvdPYn3kNeJjPV1rCAb5NAH`; reject invalid base58 (`not-base58!!!`); reject off-curve bytes (e.g. all-zeros); accept known SHA-2/256-bip44 vector from Phantom canonical
-- [ ] Step 7: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test address_derivation`
-- [ ] Step 8: PAUSE — commit-push-pr
+- [x] Step 1: Implement `pubkey_from_bytes(bytes: [u8; 32]) -> Pubkey` → `solana_sdk::Pubkey::new_from_array`
+- [x] Step 2: Implement `pubkey_to_base58(pk: &Pubkey) -> String` → `pk.to_string()` (32-44 chars, no prefix)
+- [x] Step 3: Implement `is_on_curve(bytes: &[u8]) -> bool` → `solana_sdk::Pubkey::is_on_curve` (rejects PDA-from-bytes footgun — PDA may NOT be on Ed25519 curve)
+- [x] Step 4: Implement `parse_user_address(s: &str) -> Result<Pubkey>` → `Pubkey::from_str(s)` + `is_on_curve` check; reject invalid base58 + reject off-curve bytes
+- [x] Step 5: Implement `find_pda(seeds: &[&[u8]], program_id: &Pubkey) -> (Pubkey, u8)` → `Pubkey::find_program_address` (V0.1.5 staking use; V0.1 internal)
+- [x] Step 6: Extend `tests/address_derivation.rs` — bytes → base58 → bytes round-trip; assert accepts known valid address `2mcFPzAo2kfHkNyNgAniGZvdPYn3kNeJjPV1rCAb5NAH`; reject invalid base58 (`not-base58!!!`); reject off-curve bytes (e.g. all-zeros); accept known SHA-2/256-bip44 vector from Phantom canonical
+- [x] Step 7: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test address_derivation`
+- [x] Step 8: PAUSE — commit-push-pr
+
+### Phase 2 drift recorded at execution time (PR #551, commit `3d5745bb`)
+
+2 deltas between the plan text and the live Ed25519 / Anza `solana-sdk 4.1.0` API surface, resolved as follows:
+
+1. **All-zero 32-byte buffer is ON the Ed25519 curve, not off.** Step 6 specified `reject off-curve bytes (e.g. all-zeros)` as the negative fixture for `parse_user_address`. `Pubkey::new_from_array([0u8; 32]).is_on_curve()` returns `true` because the Ed25519 identity point satisfies the curve equation. The naive `assert!(!zero.is_on_curve())` precondition failed both the inline unit test and the integration test. Replaced with a derived PDA from `find_pda(&[b"off-curve-fixture"], &program_id)` — `find_pda` is contractually guaranteed to return an off-curve address (Solana enforces this to prevent PDA-curve exploits), so the negative-fixture path is robust regardless of how the underlying curve library evolves.
+2. **`assert!(bump < 256)` is a useless comparison.** The `bump` field returned by `find_pda` is `u8`, so `< 256` is always true and trips `clippy::unused_comparisons`. Dropped the assertion in both `src/address.rs` inline test and `tests/address_derivation.rs`. The off-curve check + determinism check (same inputs → same PDA + bump byte) still prove the `find_pda` contract.
+
+### Phase 2 deliverable summary
+
+- PR #551 squash-merged into `rust-sol-core` as commit `3d5745bb` on 2026-09-10.
+- 6/6 CI green (`rust-lint` + `rust-test` + `rust-deps` + `rust-ffi-cdylib` + `rust-geiger` + `mobile-check`).
+- 33/33 tests pass: 5 lib unit (Phase 0 `facade_compiles` + 4 new `address::tests`) + 11 `address_derivation` (4 Phase 1.1 + 7 Phase 2) + 10 `bip39_mnemonic` + 4 `sign_only` + 3 `sign_tx`.
+- Issue #548 Phase 2 checkbox flipped to `[x]` per `update-issues-before-merge` rule (commit SHA `d431f111`, PR #551 referenced).
+- CHANGELOG.md Phase 2 entry (Added / Changed / Drift) per L24.
 
 ---
 
