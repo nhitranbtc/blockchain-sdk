@@ -68,3 +68,29 @@ Protection is live on `rust-sol-core`, mirroring `main`'s policy: six required s
 
 Ordering note: protection could not be applied until after the first green run — a required status check that has never produced a run can never be satisfied, so configuring it earlier would have blocked the very push that delivered the workflow. Sequence used: push → run `34433375026` green → protect.
 
+---
+
+## Phase 0 — 2026-09-10 — crate scaffold (no behaviour)
+
+Repo plumbing landed in Phase Set Up; this phase turns the empty `crates/sol-wallet-core/` directory into a compiling library + CLI binary, with the full dep graph declared but most of it deliberately unwired from the crate until Phase 1 has picked a compatible exact-pin set.
+
+### Added
+
+- `rust-wallet-app/crates/sol-wallet-core/Cargo.toml` — package metadata, `[lib] crate-type = ["rlib"]` (cdylib lands in Phase 8; the `rust-sol-core-ci.yml` `rust-ffi-cdylib` job is explicitly guarded on the `cdylib` literal appearing here), and a minimal `[dependencies]` block containing only `thiserror` (needed by the `error.rs` stub). The plan's full Anza/SPL/crypto dep list is annotated as future blocks above the `[dependencies]` header; each lands in its owning phase.
+- `rust-wallet-app/crates/sol-wallet-core/src/lib.rs` — three empty module declarations (`pub mod address; pub mod error; pub mod wallet;`), `pub use error::{Error, Result}`, `#![deny(unsafe_code)]` + `#![warn(missing_docs)]`, one compile-only smoke test (`facade_compiles`). No `pub use solana_sdk::*` re-exports yet — those land in Phase 1 alongside the Wallet keypair.
+- `rust-wallet-app/crates/sol-wallet-core/src/error.rs` — placeholder `Error::Placeholder` enum + `Result<T>` alias. Full 21-variant enum lands in Phase 5/6/7 per plan §Phase 6 Task 6.3.
+- `rust-wallet-app/crates/sol-wallet-core/src/address.rs` + `src/wallet.rs` — empty doc-only modules. Phase 2 (address) and Phase 1 (wallet) fill them in.
+- `rust-wallet-app/crates/sol/Cargo.toml` + `src/main.rs` — `sol` CLI binary skeleton, clap-driven `--help` only. Hidden `placeholder` subcommand prints a Phase 0 notice. The 22 subcommands land in Phase 7 per plan §Phase 7 Task 7.1.
+- `rust-wallet-app/Cargo.toml` `members` — added `crates/sol-wallet-core` and `crates/sol`. `crates/sol-wallet-core/` already existed (held the Phase Set Up CHANGELOG); the manifest makes it a real workspace member.
+- `rust-wallet-app/Cargo.toml` `[workspace.dependencies]` — added Anza stack (`solana-sdk/program/keypair/signer/message/transaction/instruction/client/rpc-client/compute-budget-program`), SPL (`spl-token/2022/associated-token-account/memo`), crypto (`ed25519-dalek`, `ed25519-bip32`), and Solana-only helpers (`sha3`, `hmac`, `chrono`, `once_cell`, `regex`). `sol-wallet-core` + `sol` workspace deps added so `crates/sol`'s `sol-wallet-core = { workspace = true }` resolves.
+
+### Changed
+
+- Workspace `Cargo.toml` is now wider by 9 dep lines that exist in `[workspace.dependencies]` but are not yet consumed by `sol-wallet-core` or `sol`. The Anza pins will start resolving only when Phase 1 uncomments the relevant block in `sol-wallet-core/Cargo.toml`. Until then `cargo tree -p sol-wallet-core` shows the bare lib only.
+
+### Drift recorded at execution time
+
+- **Anza exact-pin drift (Step 6 deferred to Phase 1).** Plan §Task 0.1 Step 2 specified exact pins for nine Anza crates — including `solana-rpc-client = "=4.2.2"` and `solana-instruction = "=3.5.0"`. On crates.io today, `solana-rpc-client` has no `4.2.2` (only `4.4.0-alpha.3` is published), and the `4.x` line's manifest pins `solana-instruction >=3.4.0, <3.5.0` — incompatible with `=3.5.0`. Following the plan literally produces a workspace that does not resolve. Phase 0 keeps the Anza pins declared in `[workspace.dependencies]` so Phase 1 can pick a compatible set after `cargo tree` shows the constraint graph; the crate itself does not depend on them yet, so the build is green. Phase 1 re-runs plan §Task 0.1 Step 6 (Anza exact-pin verification) on its own build before claiming done.
+- **Module placeholder count.** Plan §Task 0.1 Step 3 said `pub mod address; pub mod wallet; pub mod error;`. Delivered exactly. The plan did not ask for `src/{address,wallet,error}.rs` to exist — but the Rust 2021 module resolver requires them once the `pub mod` declaration is present, otherwise `cargo build` errors with `file not found for module`. Three empty doc-only files were added to satisfy the resolver. Each file carries a doc comment naming the phase that fills it in.
+- **`crates/sol-wallet-core/` already existed.** Phase Set Up created this directory for `CHANGELOG.md`; Phase 0 turns it into a workspace member. No `mkdir` or `git mv` needed.
+

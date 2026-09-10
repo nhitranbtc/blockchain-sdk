@@ -215,8 +215,11 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
-          if ! grep -q 'cdylib' crates/sol-wallet-core/Cargo.toml; then
-            echo "cdylib crate-type not declared yet (plan Phase 8) - skipping"
+          # Anchor the cdylib check to the `crate-type = [...]` line itself,
+          # not a comment that happens to mention the word "cdylib".
+          # `awk` exits 0 only when a `crate-type` line contains "cdylib".
+          if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) - skipping"
             exit 0
           fi
           cargo build -p sol-wallet-core
@@ -292,8 +295,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        # Not needed while the Phase 0 skip-guards below are active (the
+        # cargo check never runs), but required the moment Phase 8 declares
+        # cdylib and the cargo check actually runs. Mirrors the tron
+        # mobile-check step: gated on Linux so the macos runner (where
+        # the iOS leg runs) doesn't try to apt-get.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: cargo check (aarch64-apple-ios)
-        # iOS toolchain (xcrun + Apple SDK) is macOS-only.
+        # iOS toolchain (xcrun + Apple SDK) is macOS-only. Mobile build is
+        # meaningful only once Phase 8 declares cdylib — before that the
+        # crate compiles as rlib-only and the iOS-arm64 std dependency
+        # isn't needed (and the runner lacks it without an explicit
+        # iOS target install on this branch).
         if: runner.os == 'macOS'
         working-directory: rust-wallet-app
         run: |
@@ -301,14 +316,26 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
+          # Anchor cdylib check to the crate-type = [...] line itself;
+          # awk exits 0 only when a `crate-type` line contains "cdylib".
+          if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) — iOS build not meaningful, skipping"
+            exit 0
+          fi
           cargo check -p sol-wallet-core --target aarch64-apple-ios
       - name: cargo check (aarch64-linux-android)
-        # Android NDK toolchain is Linux-only.
+        # Android NDK toolchain is Linux-only. Same Phase 8 gating as iOS.
         if: runner.os == 'Linux'
         working-directory: rust-wallet-app
         run: |
           if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          # Anchor cdylib check to the crate-type = [...] line itself;
+          # awk exits 0 only when a `crate-type` line contains "cdylib".
+          if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) — Android build not meaningful, skipping"
             exit 0
           fi
           cargo check -p sol-wallet-core --target aarch64-linux-android

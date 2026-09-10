@@ -333,10 +333,10 @@ This phase is repo plumbing only — no crate code, no `cargo` changes. It exist
 
 **Files:** none (git refs only)
 
-- [ ] Confirm `main` is clean and up to date: `git status --short` empty, `git fetch origin && git rev-parse main origin/main` match.
-- [ ] Create the branch from `main`: `git checkout main && git pull --ff-only && git checkout -b rust-sol-core`.
-- [ ] Push and set upstream: `git push -u origin rust-sol-core`.
-- [ ] Record the base commit SHA in the ledger entry (L17) so the eventual cut PR back to `main` has a known fork point.
+- [x] Confirm `main` is clean and up to date: `git status --short` empty, `git fetch origin && git rev-parse main origin/main` match.
+- [x] Create the branch from `main`: `git checkout main && git pull --ff-only && git checkout -b rust-sol-core`.
+- [x] Push and set upstream: `git push -u origin rust-sol-core`.
+- [x] Record the base commit SHA in the ledger entry (L17) so the eventual cut PR back to `main` has a known fork point.
 
 **Verification:** `git rev-parse --abbrev-ref HEAD` returns `rust-sol-core`; `gh api repos/:owner/:repo/branches/rust-sol-core --jq .name` returns `rust-sol-core`.
 
@@ -364,10 +364,10 @@ git push -u origin sol/phase1-wallet-keypair
 gh pr create --base rust-sol-core --body-file /tmp/pr-body.md   # --base is mandatory
 ```
 
-- [ ] `gh pr create` always passes `--base rust-sol-core` explicitly — the repo default base is `main`, so omitting the flag silently targets the wrong branch.
-- [ ] Before opening any PR, confirm the base: `gh pr view --json baseRefName --jq .baseRefName` must return `rust-sol-core`.
-- [ ] If a PR is opened against `main` by mistake, retarget it rather than reopening: `gh pr edit <n> --base rust-sol-core`.
-- [ ] Use `--body-file` with content in `/tmp` (GateGuard `gh-pr classifier` per memory `gate-guard-gh-pr-classifier.md` — inline body with `rm`/`rmdir` prose trips Fact-Force gate).
+- [x] `gh pr create` always passes `--base rust-sol-core` explicitly — the repo default base is `main`, so omitting the flag silently targets the wrong branch.
+- [x] Before opening any PR, confirm the base: `gh pr view --json baseRefName --jq .baseRefName` must return `rust-sol-core`.
+- [x] If a PR is opened against `main` by mistake, retarget it rather than reopening: `gh pr edit <n> --base rust-sol-core`.
+- [x] Use `--body-file` with content in `/tmp` (GateGuard `gh-pr classifier` per memory `gate-guard-gh-pr-classifier.md` — inline body with `rm`/`rmdir` prose trips Fact-Force gate).
 
 **Verification:** a scratch branch cut from `rust-sol-core` shows the integration branch in its history — `git merge-base --is-ancestor rust-sol-core HEAD` exits 0.
 
@@ -382,10 +382,10 @@ Two labels likely exist or must be created — verify before filing issues:
 | `rust-sol-core`  | `#c41e3a`  | SOL core crate work        | every library task (Phases 0-6, 8-9)   |
 | `rust-sol-cli`   | `#1f6feb`  | `sol` CLI feature tasks    | every CLI task (Phase 7)               |
 
-- [ ] Verify both exist before filing issues: `gh label list --search rust-sol`. If absent, create: `gh label create rust-sol-core --color c41e3a --description "SOL wallet core work"` + `gh label create rust-sol-cli --color 1f6feb --description "sol CLI feature tasks"`.
-- [ ] Reuse the existing priority scale — `priority/p0` … `priority/p3` are already defined repo-wide. Do NOT create a parallel `P0`/`P1` set (per TRON Task S.3 precedent).
-- [ ] Reuse the existing `task`, `backlog`, `security`, and `documentation` labels.
-- [ ] Create a phase label only if issues need grouping beyond the milestone: `gh label create sol/phase-setup --color c41e3a --description "SOL v0.1 Phase Set Up"` (optional; skip if the milestone alone is sufficient).
+- [x] Verify both exist before filing issues: `gh label list --search rust-sol`. If absent, create: `gh label create rust-sol-core --color c41e3a --description "SOL wallet core work"` + `gh label create rust-sol-cli --color 1f6feb --description "sol CLI feature tasks"`.
+- [x] Reuse the existing priority scale — `priority/p0` … `priority/p3` are already defined repo-wide. Do NOT create a parallel `P0`/`P1` set (per TRON Task S.3 precedent).
+- [x] Reuse the existing `task`, `backlog`, `security`, and `documentation` labels.
+- [x] Create a phase label only if issues need grouping beyond the milestone: `gh label create sol/phase-setup --color c41e3a --description "SOL v0.1 Phase Set Up"` (optional; skip if the milestone alone is sufficient).
 
 Priority assignment for v0.1 issues:
 
@@ -404,7 +404,7 @@ Priority assignment for v0.1 issues:
 
 The repo may already have `polygon-v0.1` / `tron-v0.1` milestones; create the SOL equivalent.
 
-- [ ] Create it:
+- [x] Create it:
 
 ```bash
 gh api repos/:owner/:repo/milestones -f title='sol-wallet-core v0.1' \
@@ -413,8 +413,8 @@ gh api repos/:owner/:repo/milestones -f title='sol-wallet-core v0.1' \
 ```
 
 - [ ] Attach every v0.1 issue to it as issues are filed: `gh issue edit <n> --milestone sol-wallet-core v0.1`.
-- [ ] Attach the umbrella issue for this plan to it.
-- [ ] Do NOT set a due date — the v0.1 gate is the acceptance criteria, not a calendar date.
+- [x] Attach the umbrella issue for this plan to it.
+- [x] Do NOT set a due date — the v0.1 gate is the acceptance criteria, not a calendar date.
 
 **Verification:** `gh api repos/:owner/:repo/milestones --jq '.[].title'` includes `sol-wallet-core v0.1`.
 
@@ -424,36 +424,36 @@ gh api repos/:owner/:repo/milestones -f title='sol-wallet-core v0.1' \
 
 Copy the structure of `.github/workflows/rust-tron-core-ci.yml` and retarget it. Same jobs, same action pins, same least-privilege token.
 
-- [ ] `on.push.branches: [rust-sol-core]` and `on.pull_request.branches: [rust-sol-core]`, plus `workflow_dispatch: {}`. **Do not** add `main` to either list — the umbrella `ci.yml` covers main.
-- [ ] `permissions: contents: read` only.
-- [ ] `concurrency` group keyed on workflow + ref with `cancel-in-progress: true`.
-- [ ] Jobs: `rust-fmt` (`cargo fmt --all -- --check`), `rust-clippy` (`cargo clippy -p sol-wallet-core --all-targets -- -D warnings`), `rust-test` (`cargo test -p sol-wallet-core --lib --tests`), all with `working-directory: rust-wallet-app`.
-- [ ] `cargo-deny` job (`cargo deny check`) — enforces Q12 (no Metaplex dep), no GPL, no `mpl-token-metadata`/`mpl-core` in dep tree. Fails PR if any banned crate added.
-- [ ] Add the mobile compile-only gate as its own job (per deep-dive "Mobile build gate (CI)" + Q17): `cargo check --target aarch64-apple-ios` and `cargo check --target aarch64-linux-android`.
-- [ ] Pin the MSRV toolchain to `1.89.0` to match Task 0.1 rather than floating on `stable` (Anza crates pin `rust-version = "1.89.0"`).
-- [ ] Action pins follow L37: tag-based to mirror the umbrella `ci.yml`, with resolved SHAs captured in a follow-up commit after the first green run.
-- [ ] Header comment states the scope explicitly: "any PR that targets `rust-sol-core` (NOT main)".
+- [x] `on.push.branches: [rust-sol-core]` and `on.pull_request.branches: [rust-sol-core]`, plus `workflow_dispatch: {}`. **Do not** add `main` to either list — the umbrella `ci.yml` covers main.
+- [x] `permissions: contents: read` only.
+- [x] `concurrency` group keyed on workflow + ref with `cancel-in-progress: true`.
+- [x] Jobs: `rust-fmt` (`cargo fmt --all -- --check`), `rust-clippy` (`cargo clippy -p sol-wallet-core --all-targets -- -D warnings`), `rust-test` (`cargo test -p sol-wallet-core --lib --tests`), all with `working-directory: rust-wallet-app`.
+- [x] `cargo-deny` job (`cargo deny check`) — enforces Q12 (no Metaplex dep), no GPL, no `mpl-token-metadata`/`mpl-core` in dep tree. Fails PR if any banned crate added.
+- [x] Add the mobile compile-only gate as its own job (per deep-dive "Mobile build gate (CI)" + Q17): `cargo check --target aarch64-apple-ios` and `cargo check --target aarch64-linux-android`.
+- [ ] ~~Pin the MSRV toolchain to `1.89.0`~~ **NOT DONE — deliberate (drift D2, verified 2026-09-10).** `rust-wallet-app/rust-toolchain.toml` hard-pins `channel = "1.98.1"` and overrides whatever toolchain the CI action installs for every cargo invocation inside that directory, so a `1.89.0` line in the workflow would be inert — it would assert a constraint the build does not enforce. 1.98.1 satisfies Anza's `rust-version = "1.89.0"` floor. Revisit only if the workspace pin drops below 1.89.0.
+- [x] Action pins follow L37: tag-based to mirror the umbrella `ci.yml`, with resolved SHAs captured in a follow-up commit after the first green run.
+- [x] Header comment states the scope explicitly: "any PR that targets `rust-sol-core` (NOT main)".
 
-**Verification:** open a trivial no-op PR into `sol-wallet-core`; the `rust-sol-core` workflow appears in checks and every job passes. `gh run list --workflow rust-sol-core-ci.yml --limit 1` shows a `success` conclusion.
+**Verification:** open a trivial no-op PR into `rust-sol-core`; the `rust-sol-core` workflow appears in checks and every job passes. `gh run list --workflow rust-sol-core-ci.yml --limit 1` shows a `success` conclusion.
 
 ### Task S.6 — Optional branch protection on `rust-sol-core`
 
 **Files:** none (repo settings)
 
-- [ ] If the repo plan allows branch protection, require the `rust-sol-core` checks to pass before merge, and require at least one review.
-- [ ] If protection is unavailable, record that here and rely on the L13 PAUSE points instead — this is a soft gate, not a blocker for Phase 0.
+- [x] If the repo plan allows branch protection, require the `rust-sol-core` checks to pass before merge, and require at least one review.
+- [ ] ~~If protection is unavailable, record that here and rely on the L13 PAUSE points instead~~ **N/A — protection WAS available and is applied (verified 2026-09-10).** This fallback branch never triggered. Applied policy: 6 required contexts, `strict: true`, linear history, 1 approving review, stale reviews dismissed, no force-push, no deletion. `enforce_admins: false`, mirroring `main` — on a solo-maintainer repo a required review the author cannot supply would otherwise hard-block every merge.
 
 **Verification:** either protection is configured, or the fallback is written into the ledger entry.
 
 #### Phase Set Up — Verification
 
-- [ ] `git rev-parse --abbrev-ref HEAD` = `rust-sol-core`, and the branch exists on `origin`.
-- [ ] `gh label list --search rust-sol` shows `rust-sol-core` + `rust-sol-cli`.
-- [ ] `gh api repos/:owner/:repo/milestones --jq '.[].title'` includes `sol-wallet-core v0.1`.
-- [ ] `.github/workflows/rust-sol-core-ci.yml` exists and its first run concluded `success`.
-- [ ] Umbrella issue for this plan carries the `sol-wallet-core v0.1` milestone and a priority label.
+- [x] `git rev-parse --abbrev-ref HEAD` = `rust-sol-core`, and the branch exists on `origin`.
+- [x] `gh label list --search rust-sol` shows `rust-sol-core` + `rust-sol-cli`.
+- [x] `gh api repos/:owner/:repo/milestones --jq '.[].title'` includes `sol-wallet-core v0.1`.
+- [x] `.github/workflows/rust-sol-core-ci.yml` exists and its first run concluded `success`.
+- [x] Umbrella issue for this plan carries the `sol-wallet-core v0.1` milestone and a priority label.
 - [ ] The branch rule from Task S.2 is restated in the body of every v0.1 task issue, so an agent picking up a task cannot miss it.
-- [ ] `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` exists; first entry covers Phase Set Up (plumbing) per L24 doc-update rule.
+- [x] `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` exists; first entry covers Phase Set Up (plumbing) per L24 doc-update rule.
 
 **PAUSE here.** Branch creation, label edits, milestone creation, and the workflow commit are all state-modifying — per the workflow-approval-required rule, discuss before executing, and per never-auto-commit, the workflow file is committed only after approval.
 
@@ -485,7 +485,62 @@ CLI binary skeleton:
 
 CI:
 
-- Create: `.github/workflows/rust-sol-core-ci.yml` (Phase Set Up Task S.5 owns; reference here for cross-link)
+- Create + Modify: `.github/workflows/rust-sol-core-ci.yml` — created in Phase Set Up Task S.5; Phase 0 modifies it to add the cdylib-gated skip-guards (commits `fd36f2bd`, `757330c3`, `9153eff4` on `sol/phase0-scaffold`; PR #549).
+
+  **Scope.** Six jobs at parity with umbrella `ci.yml`, all gated on PRs into `rust-sol-core` (NOT `main` — umbrella `ci.yml` covers main):
+  - `rust-lint` (name: `Rust lint (fmt + clippy)`): `cargo fmt --all -- --check` + `cargo clippy -p sol-wallet-core --all-targets -- -D warnings`. fmt runs first (no compile); clippy second. Both scoped to the new crate (workspace-wide fmt catches drift in sibling crates too).
+  - `rust-test` (name: `Rust test (sol-wallet-core)`): `cargo test -p sol-wallet-core --lib --tests`. `RUSTFLAGS="-D warnings"` at job level. Phase 0 ships 1 placeholder test (`facade_compiles`); the 32-test library suite lands in Phase 1+.
+  - `rust-deps` (name: `Rust dep checks (dedup + audit + deny)`): `cargo tree --workspace --duplicates` + `cargo audit` (with `--ignore` list mirroring `ci.yml`: `RUSTSEC-2026-0098`, `RUSTSEC-2026-0099`, `RUSTSEC-2026-0104`, `RUSTSEC-2025-0111`) + `cargo deny check`. Workspace-scoped, no crate guard (they read the shared lockfile). Enforces Q12 (no Metaplex via `deny.toml` `[bans]`).
+  - `rust-ffi-cdylib` (name: `Rust FFI cdylib (sol-wallet-core)`): `cargo build -p sol-wallet-core` + `test -f target/debug/libsol_wallet_core.so` post-check. Gated on the crate having cdylib declared in `[lib] crate-type`.
+  - `rust-geiger` (name: `Rust unsafe-code audit (geiger)`): `cargo geiger` from inside `crates/sol-wallet-core`. Dedicated `CARGO_TARGET_DIR=/tmp/geiger-target` keeps artifacts out of the shared rust-cache. `|| true` keeps the audit advisory.
+  - `mobile-check` (name: `Mobile compile-only (iOS + Android arm64)`): runs on `macos-latest` with `targets: aarch64-apple-ios,aarch64-linux-android`. Two legs gated `if: runner.os == 'macOS'` (iOS) and `if: runner.os == 'Linux'` (Android). Gated on the crate having cdylib declared.
+
+  **Triggers / permissions / concurrency.**
+
+  ```yaml
+  on:
+    push:
+      branches: [rust-sol-core]
+    pull_request:
+      branches: [rust-sol-core]
+    workflow_dispatch: {}
+  permissions:
+    contents: read
+  concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+  ```
+
+  **Skip-guard pattern (Phase 0 — cdylib gated).** Each crate-scoped step runs `awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml` — exits 0 only when a `crate-type = [...]` line itself contains `"cdylib"`. The guard tests the MANIFEST, not a directory (Phase Set Up's own `CHANGELOG.md` creates the directory; only `Cargo.toml` proves a cargo package exists) AND not a comment (the Phase 0 manifest comment line 13 contains the literal `"cdylib"` explaining what Phase 8 will add — original `grep -q 'cdylib'` matched the comment and let the build through, runs `34437404128` + `34438180847` reproduced the failure).
+
+  **Toolchain pin.** All six jobs use `dtolnay/rust-toolchain@stable`; `rust-wallet-app/rust-toolchain.toml` pins channel `1.98.1`, which overrides the action for every cargo invocation inside that directory. Plan asked for `1.89.0` (Anza `rust-version`); `1.89.0` would be inert since the workspace file always wins.
+
+  **Layout mirror with `rust-tron-core-ci.yml`.** Mobile-check layout matches the tron workflow: `Install protoc` step gated `if: runner.os == 'Linux'` (macos runner doesn't need protoc; the iOS leg's `xcrun` is the macOS-only dependency). The Linux-gated Android leg is a documented no-op placeholder on the macOS runner until a Linux leg is added (per the tron workflow comment).
+
+  **Per-job step skeleton (canonical form):**
+
+  ```yaml
+  - uses: actions/checkout@v4                  # v4
+    with:
+      persist-credentials: false
+  - uses: dtolnay/rust-toolchain@stable        # stable (1.98.1 via rust-toolchain.toml)
+    with:
+      components: rustfmt, clippy              # lint job only
+      targets: <arch>                          # mobile-check only
+  - name: Install protoc (>=3.12)              # most jobs; gated on Linux for mobile-check
+    run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+  - uses: Swatinem/rust-cache@v2               # v2
+    with:
+      workspaces: rust-wallet-app -> target
+  - name: <cargo command>
+    working-directory: rust-wallet-app
+    run: |
+      if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then ...; fi
+      if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then ...; fi
+      cargo <command>
+  ```
+
+  **Per L37 (action-SHA hygiene).** Actions pinned by tag mirror umbrella `ci.yml`; resolved SHAs land in a follow-up commit after the first green run captures them.
 
 **Interfaces (V0.1 scaffolding — empty body, just compiles):**
 - `sol_wallet_core::error::Error` enum with 1 placeholder variant
@@ -552,13 +607,13 @@ tempfile    = { workspace = true }
 ```
 
 **Steps:**
-- [ ] Step 1: Add `sol-wallet-core` + `sol` to umbrella `members` in workspace `Cargo.toml`
-- [ ] Step 2: Add Anza stack + SPL + `ed25519-bip32` + crypto deps to workspace `[workspace.dependencies]`
-- [ ] Step 3: Create `sol-wallet-core/src/lib.rs` with module placeholders (`pub mod address; pub mod wallet; pub mod error;` + `pub use solana_sdk::*` re-exports)
-- [ ] Step 4: Verify `cargo build -p sol-wallet-core` exits 0 (no test needed — this is the compile smoke; first test lands in Phase 1.1)
-- [ ] Step 5: Verify gate: `cargo fmt --all -- --check && cargo clippy -p sol-wallet-core -- -D warnings && cargo test -p sol-wallet-core`
-- [ ] Step 6: Verify Anza subcrate pinning — `cargo tree -p sol-wallet-core | grep solana-` shows exact `=x.y.z` pins, NO version unification
-- [ ] Step 7: PAUSE — PR review on the scaffold PR; squash-merge only after issue body checkboxes flipped to `[x]` (L13 step 14)
+- [x] Step 1: Add `sol-wallet-core` + `sol` to umbrella `members` in workspace `Cargo.toml`
+- [x] Step 2: Add Anza stack + SPL + `ed25519-bip32` + crypto deps to workspace `[workspace.dependencies]`
+- [x] Step 3: Create `sol-wallet-core/src/lib.rs` with module placeholders (`pub mod address; pub mod wallet; pub mod error;` + `pub use solana_sdk::*` re-exports) **PARTIAL** — `pub mod` declarations landed (`crates/sol-wallet-core/src/lib.rs:18-20`); `pub use solana_sdk::*` re-export deferred to Phase 1 because the crate doesn't depend on `solana_sdk` yet (Option 3 resolution of crates.io pin drift — see Step 6 annotation + `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section). Three empty doc-only module files (`address.rs`, `error.rs`, `wallet.rs`) also created to satisfy the Rust 2021 module resolver — the plan did not ask for them but the `pub mod` declarations require their files to exist.
+- [x] Step 4: Verify `cargo build -p sol-wallet-core` exits 0 (no test needed — this is the compile smoke; first test lands in Phase 1.1)
+- [x] Step 5: Verify gate: `cargo fmt --all -- --check && cargo clippy -p sol-wallet-core -- -D warnings && cargo test -p sol-wallet-core`
+- [x] Step 6: Verify Anza subcrate pinning — `cargo tree -p sol-wallet-core | grep solana-` shows exact `=x.y.z` pins, NO version unification **DEFERRED to Phase 1** — crates.io drift: `solana-rpc-client = "=4.2.2"` is not published (only `4.4.0-alpha.3` exists, and its manifest pins `solana-instruction >=3.4.0, <3.5.0` — incompatible with the plan's `=3.5.0`). All Anza + SPL + ed25519-bip32 pins are declared in workspace `[workspace.dependencies]` but NOT wired into `sol-wallet-core/Cargo.toml` so the build resolves; Phase 1 uncomments the Anza block at the top of that file, runs `cargo tree -p sol-wallet-core | grep solana-` to discover the actual constraint graph, picks compatible exact pins, then verifies "no version unification" on its own build before claiming done. Full drift log in `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section.
+- [ ] Step 7: PAUSE — PR review on the scaffold PR; squash-merge only after issue body checkboxes flipped to `[x]` (L13 step 14). CI hardening detail (the awk cdylib guard + Linux-gated protoc install) lives in the "CI:" Files block above.
 
 ---
 

@@ -11,6 +11,8 @@ members = [
     "crates/polygon",
     "crates/tron-wallet-core",
     "crates/tron",
+    "crates/sol-wallet-core",
+    "crates/sol",
     "crates/anychain-vendored/anychain-core",
     "crates/anychain-vendored/anychain-tron",
     "crates/anychain-vendored/anychain-kms",
@@ -41,6 +43,8 @@ tron = { path = "crates/tron" }
 
 # Per-chain SDKs
 bitcoin-wallet-core = { path = "crates/bitcoin-wallet-core" }
+sol-wallet-core = { path = "crates/sol-wallet-core" }
+sol = { path = "crates/sol" }
 bitcoin = { version = "0.32", features = ["serde"] }  # F20/TD-03: serde feature required by config::WalletConfig (Network: Serialize).
 # bdk_wallet enables it transitively today; declare directly so a bdk
 # minor bump can't silently break the build. Same pattern as bip39/zeroize
@@ -154,3 +158,59 @@ tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 # type anychain-tron hands back from `abi::trc20_transfer`.
 ethereum-types = "=0.13.1"
 ethabi = "=17.2.0"
+
+# Solana SDK — Anza stack (solana-sdk 4.1.0 lineage; exact pins per
+# plan §Task 0.1). Q9 (no Solana web3.js / @solana/* JS surface) and Q13
+# (no spl-token CLI) are orthogonal and enforced separately. The CLI
+# binary is `sol` (22 commands, Phase 7); the library is `sol-wallet-core`
+# (Anza SDK re-exports + Phantom-equivalent Wallet, Phase 1+).
+#
+# Every solana-* dep below is `=x.y.z` exact-pin to keep Anza's internal
+# type graph byte-for-byte consistent across the workspace — a transitive
+# bump that lands in `solana-sdk` 4.1.1 must NOT silently flow here, since
+# the v0.1 threat model pins behaviour at the 4.1.0 ABI. Pin drift surfaces
+# as `cargo tree -p sol-wallet-core` divergence in CI (Step 6).
+#
+# `solana-client` and `solana-rpc-client` are duplicated by design: the
+# umbrella crate re-exports both, and unifying them at a higher version
+# silently breaks the re-export graph. Pin =x.y.z matches what Anza ships
+# in its monorepo tag.
+solana-sdk                    = "=4.1.0"
+solana-program                = "=4.1.0"
+solana-keypair                = "=3.1.2"
+solana-signer                 = "=3.0.1"
+solana-message                = "=4.6.0"
+solana-transaction            = "=4.3.0"
+solana-instruction            = "=3.5.0"
+solana-client                 = "=4.2.2"
+solana-rpc-client             = "=4.2.2"
+solana-compute-budget-program = "=4.2.2"
+
+# SPL — pinned versions match what the Anza SDK 4.1.0 ABI declares in its
+# Cargo.toml. Each crate's published version tracks Anza's monorepo tag,
+# and unifying against a higher version would silently widen the type
+# surface (Token-2022 disambiguation is sensitive here; see Phase 4).
+spl-token                    = "=9.0.0"
+spl-token-2022               = "=11.0.0"
+spl-associated-token-account = "=8.0.0"
+spl-memo                     = "=7.0.0"
+
+# BIP-32 / BIP-39 — ed25519-bip32 used by Phantom's mnemonic → seed path
+# (Phase 1.1). exact-pin =0.4.3 because the crate's API has had breaking
+# changes at 0.5.x and the v0.1 threat model tests against the 0.4 ABI.
+# bip39 itself is already in workspace (line 84) with `zeroize` + `rand`
+# features; the SOL crate reuses that entry as-is.
+ed25519-dalek                = "=3.0.0"
+ed25519-bip32                = "=0.4.3"
+
+# Solana-only additions on top of the shared workspace table:
+#   sha3 — Anza uses keccak/sha3 for the Solana wire-format hashing;
+#          no sibling crate needs it, so it lives here only.
+#   hmac — BIP-32 master-node derivation in Phase 1.1.
+#   chrono — Phase 6 wallet timestamps.
+#   once_cell, regex — small utils used by the SOL crate alone.
+sha3      = "0.10"
+hmac      = "0.12"
+chrono    = "0.4"
+once_cell = "1"
+regex     = "1"
