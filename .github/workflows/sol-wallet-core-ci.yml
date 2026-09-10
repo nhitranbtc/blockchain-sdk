@@ -4,10 +4,21 @@ name: sol-wallet-core
 #
 # Scope: any PR that targets `sol-wallet-core` (NOT main). The umbrella
 # `ci.yml` triggers on `main` only, so a PR into this integration branch
-# receives no gate from it — this file therefore carries the full
-# fmt/clippy/test set rather than only the chain-unique jobs. That is the
-# opposite of `evm-polygon-ci.yml`, which may lean on the umbrella
-# precisely because its triggers are `main`-scoped.
+# receives no gate from it — this file therefore mirrors the umbrella's full
+# job set rather than carrying only chain-unique jobs. That is the opposite
+# of `evm-polygon-ci.yml`, which may lean on the umbrella precisely because
+# its triggers are `main`-scoped.
+#
+# Job parity with `ci.yml` (checked 2026-09-10):
+#   rust-lint        — fmt + clippy          (ci.yml: same, workspace-scoped)
+#   rust-test        — build + test          (ci.yml: same, workspace-scoped)
+#   rust-deps        — dedup + audit + deny  (ci.yml: same)
+#   rust-ffi-cdylib  — cdylib links          (ci.yml: guards bitcoin-wallet-core)
+#   rust-geiger      — unsafe audit          (ci.yml: same, loops all crates)
+#   mobile-check     — iOS + Android arm64   (NOT in ci.yml; sol/tron-specific)
+# Crate-scoped jobs target `-p sol-wallet-core` rather than `--workspace`:
+# sibling crates are already gated on main, and this branch owns one crate.
+# Dep-tree jobs stay workspace-wide because they read one shared lockfile.
 #
 # Branch rule (plan Phase Set Up, Task S.2): task branches are cut from
 # `sol-wallet-core`, never from `main`, and PR back into `sol-wallet-core`,
@@ -116,18 +127,22 @@ jobs:
           fi
           cargo test -p sol-wallet-core --lib --tests
 
-  # Dependency policy gate. Enforces Q12 (no Metaplex): `deny.toml` `[bans]`
-  # denies `mpl-token-metadata` + `mpl-core`, so a future `cargo add` that
-  # pulls either in fails this job instead of landing unnoticed. Copyleft is
-  # excluded by omission from the `[licenses] allow` list.
+  # L13 step 11 gates 2-4 (dedup / audit / deny) merged into one job to share
+  # the checkout + toolchain install across all three, mirroring umbrella
+  # `ci.yml`'s `rust-deps`. Each gate fails the job independently.
   #
-  # No crate guard: `cargo deny check` operates on the whole workspace and is
-  # meaningful before sol-wallet-core exists — it is also the job that will
-  # catch a banned crate arriving with the very first Phase 0 commit.
-  rust-deny:
-    name: Rust dep policy (cargo-deny)
+  # No crate guard on any of the three: they all read the workspace lockfile,
+  # so scoping them to `-p sol-wallet-core` would be meaningless. They are
+  # therefore useful before sol-wallet-core exists, and they are what catches
+  # a banned or vulnerable dep arriving with the very first Phase 0 commit.
+  #
+  # `cargo deny` enforces Q12 (no Metaplex): `deny.toml` `[bans]` denies
+  # `mpl-token-metadata` + `mpl-core`. Copyleft is excluded by omission from
+  # the `[licenses] allow` list.
+  rust-deps:
+    name: Rust dep checks (dedup + audit + deny)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -136,6 +151,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: cargo tree --duplicates
+        # L13 step 11 gate 2 — workspace-wide dup-deps walk. Slow on cold
+        # cache, runs at CI cadence rather than locally.
+        working-directory: rust-wallet-app
+        run: cargo tree --workspace --duplicates
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        # `--ignore` list mirrors umbrella `ci.yml` — transitive dev-deps
+        # without upstream fixes yet. Canonical rationale lives in
+        # `rust-wallet-app/deny.toml`. Keep this list in sync with ci.yml:
+        # a divergence means main and this branch disagree on what is
+        # acceptable, and the disagreement surfaces only at the Phase 9 cut.
+        working-directory: rust-wallet-app
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: cargo deny
@@ -143,6 +178,85 @@ jobs:
         # `rust-wallet-app/deny.toml` — that file is the canonical list.
         working-directory: rust-wallet-app
         run: cargo deny check
+
+  # FFI cdylib gate, mirroring umbrella `ci.yml`'s `rust-ffi-cdylib` (which
+  # guards bitcoin-wallet-core). Phase 8 ships sol-wallet-core as a cdylib
+  # with 12 C functions; this verifies the shared object still links, since
+  # a cdylib that compiles as an rlib but fails to link is invisible to
+  # `cargo test`.
+  #
+  # Guarded: skips until Phase 0 lands the manifest, and the `crate-type`
+  # check below skips until Phase 8 declares `cdylib` — before that a
+  # missing .so is correct, not a failure.
+  rust-ffi-cdylib:
+    name: Rust FFI cdylib (sol-wallet-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Build sol-wallet-core as cdylib
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          if ! grep -q 'cdylib' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared yet (plan Phase 8) - skipping"
+            exit 0
+          fi
+          cargo build -p sol-wallet-core
+          test -f target/debug/libsol_wallet_core.so \
+            && echo "cdylib ok: $(file target/debug/libsol_wallet_core.so)" \
+            || (echo "ERROR: cdylib not produced" && exit 1)
+
+  # Unsafe-code audit per CLAUDE.md conventions, mirroring umbrella
+  # `ci.yml`'s `rust-geiger`. Advisory: transitive `unsafe` counts from
+  # ring/aws-lc-rs drown the first-party signal, so the trend over time is
+  # what matters, not any single number.
+  #
+  # Scoped to `crates/sol-wallet-core` rather than looping every crate as
+  # ci.yml does — this workflow gates one crate, and the sibling crates are
+  # already covered on main. `cargo geiger` rejects virtual manifests, so it
+  # must run from the crate dir, not the workspace root.
+  rust-geiger:
+    name: Rust unsafe-code audit (geiger)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install cargo-geiger
+        run: cargo install cargo-geiger --locked
+      - name: cargo geiger (sol-wallet-core)
+        working-directory: rust-wallet-app
+        # Dedicated CARGO_TARGET_DIR keeps this job's artifacts out of the
+        # shared rust-cache target that parallel jobs rely on. `|| true`
+        # keeps the audit advisory, matching ci.yml.
+        run: |
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          echo "::group::crates/sol-wallet-core"
+          (cd crates/sol-wallet-core && CARGO_TARGET_DIR=/tmp/geiger-target cargo geiger) || true
+          echo "::endgroup::"
+
 
   # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)" + Q17.
   # `sol-wallet-core` MUST compile for iOS + Android arm64 with no source
