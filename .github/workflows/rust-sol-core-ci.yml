@@ -215,8 +215,10 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
-          if ! grep -E -q '^[[:space:]]*crate-type[[:space:]]*=' crates/sol-wallet-core/Cargo.toml \
-             || ! grep -E -q '"cdylib"' crates/sol-wallet-core/Cargo.toml; then
+          # Anchor the cdylib check to the `crate-type = [...]` line itself,
+          # not a comment that happens to mention the word "cdylib".
+          # `awk` exits 0 only when a `crate-type` line contains "cdylib".
+          if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then
             echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) - skipping"
             exit 0
           fi
@@ -306,8 +308,9 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
-          if ! grep -E -q '^[[:space:]]*crate-type[[:space:]]*=' crates/sol-wallet-core/Cargo.toml \
-             || ! grep -E -q '"cdylib"' crates/sol-wallet-core/Cargo.toml; then
+          # Anchor cdylib check to the crate-type = [...] line itself;
+          # awk exits 0 only when a `crate-type` line contains "cdylib".
+          if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then
             echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) — iOS build not meaningful, skipping"
             exit 0
           fi
@@ -321,8 +324,9 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
-          if ! grep -E -q '^[[:space:]]*crate-type[[:space:]]*=' crates/sol-wallet-core/Cargo.toml \
-             || ! grep -E -q '"cdylib"' crates/sol-wallet-core/Cargo.toml; then
+          # Anchor cdylib check to the crate-type = [...] line itself;
+          # awk exits 0 only when a `crate-type` line contains "cdylib".
+          if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then
             echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) — Android build not meaningful, skipping"
             exit 0
           fi
