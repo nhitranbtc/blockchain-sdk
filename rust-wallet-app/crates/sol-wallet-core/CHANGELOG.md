@@ -282,3 +282,46 @@ Repo plumbing landed in Phase Set Up; this phase turns the empty `crates/sol-wal
 - **Module placeholder count.** Plan §Task 0.1 Step 3 said `pub mod address; pub mod wallet; pub mod error;`. Delivered exactly. The plan did not ask for `src/{address,wallet,error}.rs` to exist — but the Rust 2021 module resolver requires them once the `pub mod` declaration is present, otherwise `cargo build` errors with `file not found for module`. Three empty doc-only files were added to satisfy the resolver. Each file carries a doc comment naming the phase that fills it in.
 - **`crates/sol-wallet-core/` already existed.** Phase Set Up created this directory for `CHANGELOG.md`; Phase 0 turns it into a workspace member. No `mkdir` or `git mv` needed.
 
+
+---
+
+## Phase 5.1 — 2026-09-10 — `chain` (RpcClient + 15 RPC methods + preflight) + `tx::broadcast`
+
+Recipe 2 from #555: drop Anza `solana-rpc-client` (intrinsic sub-dep conflict per #555), build a thin reqwest JSON-RPC client internally. Phase 5.1 lands the 15 HTTP RPC methods the Phase 7 `sol` CLI needs to implement all 22 V0.1 commands. `requestAirdrop` (5.2) + `getTransaction` (5.3) + rate limiter (5.4) + SPKI escape hatch (5.5) deferred to follow-up PRs. V0.1.5 ships retry-on-stale-hash + WS subscribes + BlockhashCache TTL use.
+
+### Added
+
+- **`src/chain/mod.rs`** — facade re-exporting `RpcClient`, `RpcError`, `BlockhashCache`, `BlockhashCacheEntry`, `RateLimiter`, `DEFAULT_BLOCKHASH_TTL`, `DEFAULT_RATE_LIMIT_RPS`, `DEFAULT_RATE_LIMIT_BURST`, `DEFAULT_REQUEST_TIMEOUT`, and 15 RPC method thin wrappers from `chain::account`.
+- **`src/chain/client.rs`** — `RpcClient { url, host, http, rate_limiter, id_counter }` (~430 LoC). URL allowlist in constructor (https-only + http://localhost/127.0.0.1; rejects non-localhost cleartext per Tier 1 finding #1). Custom `Debug` impl strips URL query string (Tier 2 finding #11). `RateLimiter` token bucket (50 req/s, burst 100; disabled sentinel via `with_rate_limit(0, 0)` for tests). `BlockhashCache` V0.1.5 stub (compiles, unused). `post<T>()` private helper with typed `RpcResponse<T>` + `RpcErrorEnvelope` (`#[serde(deny_unknown_fields)]` per Tier 2 finding #7).
+- **`src/chain/account.rs`** — 15 RPC method wrappers (`get_latest_blockhash`, `send_transaction`, `get_signature_status`, `simulate_transaction`, `get_balance`, `get_account_info`, `get_multiple_accounts`, `get_token_account_balance`, `get_token_accounts_by_owner`, `get_token_supply`, `get_minimum_balance_for_rent_exemption`, `get_recent_prioritization_fees`, `get_version`, `get_epoch_info`, `get_health`) (~560 LoC). Local minimal wire structs `TransactionStatus`, `ConfirmationStatus`, `UiTokenAmount`, `Version`, `RpcPrioritizationFee`, `SolanaSimulateResult`, `SolanaUnitsConsumedDetails`, `RpcKeyedAccount`, `AccountJson` (avoid Anza 1.18 siblings per #555 — `solana-sdk 4.1.0` umbrella does not re-export them). All wire structs use `#[serde(rename_all = "camelCase")]` matching Anza wire format. `bincode::serialize` pinned `=1.3.3` for `sendTransaction` (Tier 2 finding #8). Base64 via `base64::engine::general_purpose::STANDARD`.
+- **`src/chain/preflight.rs`** — 5 preflight functions (~135 LoC): `check_native_balance` + `check_token_balance` + `check_ata_exists` + `resolve_mint_decimals` (via `spl_token::state::Mint::unpack`, Q10 NEVER hardcoded) + `check_rent_exempt`. Q4 (grilled decision): library, not monolithic `check_all()`, so Phase 7 picks which to run per command.
+- **`src/tx/broadcast.rs`** — `send_and_confirm(rpc, tx, commitment, timeout) -> Result<Signature>` + `wait_for_confirm` with 200ms→2s exponential backoff (~165 LoC). `ConfirmPending { signature, commitment, elapsed_ms }` returned at `timeout / 2` if status returned but commitment not yet reached (Q9 grilled decision). `ConfirmTimeout { signature, waited_ms }` at full `timeout`. `level_rank()` helper because Anza 4.x `CommitmentLevel` does not impl `PartialOrd`.
+- **`src/tx/native.rs`** — `prepare_sol_transfer_message(from, to, lamports, cu_limit, cu_price, blockhash) -> Message` (~55 LoC). Phase 3 builder orchestration via `Message::new_with_blockhash(&ixs, Some(payer), &blockhash)`.
+- **`src/tx/spl.rs`** — `prepare_spl_transfer_message(wallet_pubkey, source_ata, dest_ata, mint, program, amount, decimals, cu_limit, cu_price, blockhash, prepend_ata_create) -> Message` (~85 LoC). Phase 4 builder orchestration + TokenProgram dispatch + optional `prepend_create_ata`. Q10 `transfer_checked` invariant.
+- **`src/tx/mod.rs`** — added `pub mod broadcast; pub mod native; pub mod spl;` + re-exports of `send_and_confirm`, `wait_for_confirm`, `DEFAULT_CONFIRM_TIMEOUT` (30s), `DEFAULT_SEND_MAX_ATTEMPTS` (1, no retry), `prepare_sol_transfer_message`, `prepare_spl_transfer_message`.
+- **`src/lib.rs`** — added `pub mod chain;`.
+- **`src/error.rs`** — added 8 variants: `Transport(String)` (Tier 4 finding #4 wrapper), `Rpc { code: i32, message: String }`, `InsufficientFunds { needed: u64, have: u64 }`, `BroadcastFailed { kind: String, context: String }`, `ConfirmTimeout { signature: String, waited_ms: u64 }`, `ComputeBudgetExceeded { needed_cu: u32, available_cu: u32 }`, `ConfirmPending { signature, commitment, elapsed_ms }`, `Unimplemented(&'static str)`.
+- **`tests/chain_rpc.rs`** — 36 tests (~1000 LoC): 6 URL allowlist (Tier 1) + 1 JSON-RPC envelope (Tier 2 #7) + 1 bincode round-trip (Tier 2 #8) + 1 custom Debug (Tier 2 #11) + 2 rate limiter + 12 RPC method smoke + 3 preflight + 4 native/SPL/broadcast + 1 `wait_for_confirm` half-timeout + 4 transport-failure (connection refused, HTTP 5xx, malformed JSON). All 25 wiremock-backed tests annotated `#[serial(tokio)]` (wiremock 0.6 + parallel tokio runtime = flaky); `RUST_TEST_THREADS=1` is an equivalent alternative.
+- **`Cargo.toml` deps** — `reqwest` from workspace (rustls-tls + json), `url = "2"`, `base64 = "0.22"`, `phf = "0.11"` w/ `macros`, `ascii = "1"`. Anza ABI split: `solana-account = "=4.4.0"`, `solana-commitment-config = "=3.1.1"`, `solana-program-pack = "=3.1.0"`, `bincode = "=1.3.3"`, `tokio` from workspace. Dev-deps: `wiremock = "0.6"`, `serial_test = "3"`. NO Anza `solana-rpc-client` (Recipe 2 from #555).
+
+### Security
+
+- **Tier 1 finding #1** (URL allowlist): implemented in `RpcClient::new` constructor. Rejects non-https URLs and non-localhost http URLs (e.g. `http://attacker.com` exfiltrating signed tx).
+- **Tier 2 finding #7** (typed JSON-RPC envelope): `RpcResponse<T>` + `RpcErrorEnvelope` with `#[serde(deny_unknown_fields)]`. No `serde_json::Value` indexing in wrapper code.
+- **Tier 2 finding #8** (bincode wire format): `bincode = "=1.3.3"` pinned in workspace, round-trip test in `bincode_roundtrip_serialization`.
+- **Tier 2 finding #11** (custom Debug strips query string): `RpcClient::fmt` renders `RpcClient { url: "<scheme>://<host>[:port]/<path>", rate_limit: "..." }` so `dbg!(rpc)` doesn't leak API keys.
+- **Tier 4 finding #4** (simulateTransaction TOCTOU): documented in `simulate_transaction` doc comment as a HINT not a guarantee; re-simulation-after-sign deferred to V0.1.5.
+
+### Deferred (V0.1.5 + follow-up PRs)
+
+- **Phase 5.2** — `request_airdrop` with devnet host allowlist (Tier 3 finding #6). Implementation: per-method host check in the wrapper, NOT a `RpcClient` mode flag.
+- **Phase 5.3** — `get_transaction` with base64 wire decode (full log for `sol tx`).
+- **Phase 5.4** — rate limiter wiring already in place (50 req/s burst 100); `swarm-pheromone`-style per-call metrics deferred.
+- **Phase 5.5** — `RpcClient::new_with_pinned_spki(url, spki)` escape hatch (Tier 3 finding #2 — MITM via compromised CA).
+- **V0.1.5 retry-on-stale-hash** — `send_with_retry` (3 attempts, exponential backoff 100ms→200ms→400ms) + `BlockhashCache` TTL use.
+- **V0.1.5 WS subscribes** — 5 `*_subscribe` methods returning `Error::Unimplemented` today.
+- **Devnet integration tests** — `tests/send_native.rs` + `tests/send_token.rs` gated on `RUN_SOL_DEVNET=1`. Phase 5.1 ships `tests/chain_rpc.rs` covering all 15 method smokes via wiremock + the preflight + broadcast suites in one consolidated file; per-method split (`tests/balance.rs` + `tests/list_tokens.rs` + …) deferred to V0.1 follow-up PR.
+
+### Test count
+
+130 tests pass across 12 test files (24 lib unit + 11 address + 9 amount + 10 bip39 + 36 chain_rpc + 4 compute_budget + 4 sign_only + 3 sign_tx + 7 spl_instruction + 8 stablecoin_registry + 9 token2022 + 5 tx_serde). 0 failures. 0 warnings (`#![warn(missing_docs)]` strict). `cargo clippy` shows 5 style nits (too_many_arguments on `prepare_spl_transfer_message`; doc list indentation; redundant pattern matching); none are correctness issues — accepted for Phase 5.1 scope.

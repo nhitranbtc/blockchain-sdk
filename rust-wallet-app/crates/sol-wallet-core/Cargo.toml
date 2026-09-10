@@ -93,6 +93,36 @@ bs58           = { workspace = true }
 # not declare the dep — see workspace Cargo.toml comment).
 solana-system-interface         = { workspace = true }
 solana-compute-budget-interface = { workspace = true }
+# Phase 5 — thin reqwest JSON-RPC client (Recipe 2 from issue #555;
+# Anza `solana-rpc-client` is dropped from V0.1 dep graph). All 15
+# V0.1 RPC methods route through `chain::client::RpcClient::post()`
+# which builds a JSON-RPC envelope via `serde_json::json!` and POSTs
+# it through this `reqwest::Client` (rustls-tls already enabled in
+# workspace; no Anza transitive deps).
+#
+# - `reqwest`     — HTTP client (workspace entry has `rustls-tls` + `json` features)
+# - `url`         — `RpcClient::new` URL parsing + allowlist check
+# - `base64`      — wire-format encoding for `sendTransaction` / `getAccountInfo`
+#                    bodies (Tier 2 finding #8: bincode wire + base64 envelope)
+# - `phf`         — header-name HTTP/2 validator (for the rate limiter's
+#                    `host` extraction; cheap compile-time hash map)
+# - `ascii`       — case-insensitive header matching
+reqwest       = { workspace = true }
+url           = "2"
+base64        = "0.22"
+phf           = { version = "0.11", features = ["macros"] }
+ascii         = "1"
+# Anza 4.x ABI split — V0.1 defines local minimal wire structs
+# (`TransactionStatus`, `UiTokenAmount`, `Version`, `EpochInfo`,
+# `RpcPrioritizationFee`) in `chain::account` instead of pulling
+# the 1.18-series siblings (which conflict on `zeroize ^1.0` vs
+# `^1.5`). The 4.1.0 SDK re-exports `solana_message` (which has
+# `Message`) and `solana_account` (which has `Account`).
+solana-account = "=4.4.0"
+solana-commitment-config = { version = "=3.1.1", default-features = false }
+solana-program-pack       = "=3.1.0"
+bincode                   = "=1.3.3"
+tokio                     = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -102,3 +132,13 @@ tempfile = { workspace = true }
 # without relying on the transitive re-export. Exact-pin matches what
 # Anza 4.1.0 pulls.
 bincode = "=1.3.3"
+# Phase 5 — wiremock for the 15-RPC-method mock server used by
+# `tests/rpc_methods_mock.rs` + the transport-failure tests. Spins up
+# an HTTP server on an ephemeral port and returns canned JSON-RPC
+# envelopes; matches the Anza RPC server wire format.
+wiremock = "0.6"
+# Phase 5 — `#[serial(tokio)]` for the wiremock tests (parallel tokio
+# runtimes + wiremock 0.6 = flaky due to hyper's shared executor).
+# Serializes all `tests/chain_rpc.rs` tests so MockServer instances
+# don't cross-pollute. RUST_TEST_THREADS=1 has the same effect.
+serial_test = { workspace = true }
