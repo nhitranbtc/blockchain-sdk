@@ -199,6 +199,65 @@ The transaction construction surface that Phase 7's `wallet send` handler consum
 
 ---
 
+## Phase 4 — 2026-09-10 — SPL transfer_checked + ATA lifecycle + Token-2022 disambig
+
+The SPL token + Associated Token Account (ATA) construction surface. Phase 7's `spl send` / `spl approve` / `spl close` handlers consume these builders. Q6 footgun guard rejects mismatched program IDs at the parser boundary; Q10 decimals-never-hardcoded invariant reads on-chain from `Mint::unpack` (classic + Token-2022); ATA derivation uses the program-ID-aware `get_associated_token_address_with_program_id`. No signing, no broadcast, no RPC — Phase 5 wires the unpack helper to `RpcClient`; Phase 5 also wires the `mint.owner` fetch into the Q6 guard.
+
+### Added
+
+- `crates/sol-wallet-core/src/disambig.rs` — Q6 footgun guard:
+  - `pub fn classic_token_program_id() -> Pubkey` and `pub fn token_2022_program_id() -> Pubkey` — hard-coded canonical program IDs (`TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA` for classic, `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` for Token-2022). Constructed via `Pubkey::from_str(...).expect(...)` because Anza SDK 4.1.0 dropped the `pubkey_const!` macro re-export from `solana_sdk::pubkey`. The `.expect` is bug-safe: any future literal edit that produces a wrong-byte base58 fires a unit-test panic rather than a silent wrong-network dispatch.
+  - `pub enum TokenProgram { Classic, Token2022 }` with `serde(rename_all = "snake_case")` for JSON registry parsing + `from_program_id(&Pubkey) -> Result<Self>` for mint.owner resolution + `program_id(&self) -> Pubkey` for builder dispatch.
+  - `pub fn reject_wrong_token_program(claimed_program: &Pubkey, attempted_program: &Pubkey) -> Result<()>` — returns `Error::InvalidTokenProgram` with both program IDs in the message when they disagree. Pure-Rust, no RPC.
+  - 2 inline unit tests — `program_id_constants_match_spl_crate_constants` (smoke against `spl_token::id()` + `spl_token_2022::id()`) + `token_program_program_id_round_trips`.
+- `crates/sol-wallet-core/src/tokens.rs` — bundled mint registry:
+  - `MintEntry { symbol: String, program: TokenProgram, mint: String, decimals: u8 }` serde-derived struct. `mint` kept as base58 string (not `Pubkey`) so the JSON matches what humans see on Solana Explorer.
+  - `tokens/mainnet.json` + `tokens/devnet.json` bundled via `include_str!`. Mainnet ships USDC + USDT + USDS (3 entries); devnet ships Circle's devnet USDC. JSON parse failure is a compile-time artifact bug, not a runtime error — the `expect` keeps the lib's error surface small.
+  - `pub fn load_mainnet() -> Vec<MintEntry>` + `pub fn load_devnet() -> Vec<MintEntry>` — small JSON, parse-on-each-call. Switch to `OnceCell` if Phase 9 mainnet smoke shows measurable overhead.
+  - `pub fn by_symbol(symbol: &str) -> Option<MintEntry>` + `pub fn decimals_for_mint(mint: &Pubkey) -> Option<u8>` — fast-path for the 3 stablecoins the wallet CLI ships by default; Phase 5 `chain::account::fetch_decimals` is the universal RPC fallback.
+  - `pub fn decimals_from_state_bytes(data: &[u8], program: TokenProgram) -> Result<u8>` — Q10 unpack helper. Reads `data[44]` from the 82-byte Mint state via `spl_token::state::Mint::unpack` (classic) or `spl_token_2022::state::Mint::unpack` (Token-2022). Pre-flight check rejects truncated data (< 82 bytes) with a friendlier error message before calling `Pack::unpack`. The literal `MINT_STATE_SIZE = 82` matches the on-chain wire layout documented at `solana-program/token/program/src/state.rs`; `Mint::SIZE` would be cleaner but `spl-token` 9.0.0 hides it behind `SizedTypeProperties` which the crate does not re-export.
+  - 2 inline unit tests — mainnet + devnet registry parse without panic.
+- `crates/sol-wallet-core/src/tx/builder.rs` — SPL builders (appended after Phase 3's SOL section):
+  - `pub fn derive_ata_with_program_id(owner, mint, token_program_id) -> Pubkey` — wraps `spl_associated_token_account::get_associated_token_address_with_program_id`. The `token_program_id` arg is the Q6 invariant: classic and Token-2022 derive different ATAs for the same `(owner, mint)`.
+  - `pub fn prepend_create_ata(payer, owner, mint, token_program_id) -> Instruction` — wraps `spl_associated_token_account::instruction::create_associated_token_account_idempotent`. Idempotent variant (no-op if ATA already exists) suits the Phantom-equivalent wallet UX.
+  - `pub fn build_spl_transfer_checked(source, mint, destination, authority, token_program, amount, decimals) -> Vec<Instruction>` — Q10 mandates `transfer_checked` (NOT `transfer`) because the validator cross-checks the `decimals` byte against the on-chain mint; a 6/9 mismatch would silently truncate. Dispatches to `spl_token::instruction::transfer_checked` (Classic) or `spl_token_2022::instruction::transfer_checked` (Token-2022) by `TokenProgram`. A wrong-route call would fail at builder time with `IncorrectProgramId` (caught by `spl_instruction.rs` test #2).
+  - `pub fn build_spl_approve(source, delegate, owner, token_program, amount) -> Vec<Instruction>` — same dispatch for `spl_token::instruction::approve`.
+  - `pub fn build_spl_close_account(account, destination, owner, token_program) -> Vec<Instruction>` — same dispatch for `spl_token::instruction::close_account` (reclaim rent).
+  - 6 inline unit tests — `derive_ata_with_program_id` returns distinct addrs per program; each builder emits exactly 1 ix under the correct program; `prepend_create_ata` targets the ATA program (not the token program); Token-2022 route emits the Token-2022 program ID.
+- `crates/sol-wallet-core/src/lib.rs` — `pub mod disambig; pub mod tokens;` added. Phase 4 row added to the doc table.
+- `crates/sol-wallet-core/src/error.rs` — `Error::InvalidTokenProgram(String)` + `Error::InvalidTokenState(String)` variants added. `InvalidTokenProgram` carries both program IDs in the message for forensic tracing. `InvalidTokenState` wraps `spl_token::state::Mint::unpack` (and token-2022 sibling) `ProgramError` so callers see one crate-wide error rather than three crate-private ones.
+- `crates/sol-wallet-core/tests/token2022_disambig.rs` (new) — 9 tests covering row 13 (Token-2022 vs classic disambig) + row 14 part (decimals via `Mint::unpack`). Confirms: distinct program IDs, `TokenProgram::from_program_id` round-trips both variants + rejects unknown, `reject_wrong_token_program` matches pass / mismatches error, `derive_ata_with_program_id` returns different ATAs per program, classic + Token-2022 `Mint::unpack` reads `decimals` at offset 44, truncated state rejected with `Error::InvalidTokenState`.
+- `crates/sol-wallet-core/tests/stablecoin_registry.rs` (new) — 8 tests covering row 14 part (USDC/USDT/USDS mainnet registry). Confirms: mainnet parses ≥3 entries, `by_symbol` returns canonical mint + decimals for USDC/USDT/USDS, USDS resolves to Token-2022 program, unknown symbols return `None`, `decimals_for_mint(USDC) == Some(6)`, unknown mints return `None`, devnet USDC loads.
+- `crates/sol-wallet-core/tests/spl_instruction.rs` (new) — 7 tests covering row 15 SPL + row 18 (auto-ATA-create). Confirms: each SPL builder emits exactly 1 ix under the correct program, Token-2022 ix targets Token-2022 program ID, bincode round-trip byte-identical, `prepend_create_ata` + `transfer_checked` lands in correct 2-ix order (ATA-create first).
+- Workspace deps added in `rust-wallet-app/Cargo.toml`: `spl-token = "=9.0.0"`, `spl-token-2022 = "=11.0.0"`, `spl-associated-token-account = "=8.0.0"` (all already declared from Phase 0; wired into `sol-wallet-core/Cargo.toml` this phase).
+- Dev-deps added in `sol-wallet-core/Cargo.toml`: `serde = { workspace = true }` + `serde_json = { workspace = true }` for the bundled JSON registry.
+
+### Changed
+
+- `crates/sol-wallet-core/CHANGELOG.md` — Phase 4 line removed from `[Unreleased]` "Planned" list (now delivered).
+
+### Drift recorded at execution time
+
+1. **Plan §Phase 4 Task 4.1 Step 7 (`fetch_decimals(mint, rpc_client) -> u8`) is deferred to Phase 5.** Phase 4 ships the pure-Rust unpack helper (`decimals_from_state_bytes(data, program)`); Phase 5 wraps it with `RpcClient::get_account_info(mint)`. The plan's `chain::account.rs` Modify is out of scope for Phase 4 — the `chain` module is Phase 5's. Test #7 (`mint_unpack_reads_decimals_for_classic_state`) + test #8 (`mint_unpack_reads_decimals_for_token2022_state`) exercise the unpack helper on synthetic 82-byte state directly, proving Q10 without an RPC dependency.
+2. **No `instruction` / `bincode` / `serde` cargo features on `spl-token` 9.0.0 / `spl-token-2022` 11.0.0.** Initial Cargo.toml pass added these features per a misread of the SPL crate surface (`spl-token` features list: `no-entrypoint`, `test-sbf` — nothing else). All three SPL crates are Pod-based and ship every public module under default features. Removed the bogus feature flags; the workspace dep entries are now `spl-token = { workspace = true }` with no feature string.
+3. **`spl_token::instruction::transfer_checked` rejects Token-2022 program IDs.** Initial builder dispatched `spl_token::instruction::transfer_checked` unconditionally — the call failed with `IncorrectProgramId` whenever `TokenProgram::Token2022` was passed (because `spl_token` validates `program_id == spl_token::ID`). Fixed by matching `token_program` and routing Classic → `spl_token::instruction::*`, Token-2022 → `spl_token_2022::instruction::*`. The latter is `#[deprecated]` since spl-token-2022 9.1.0 (the SPL team points users at `spl-token-2022-interface`), but it remains functional + uses `Pubkey` (matching Anza SDK 4.1.0). The interface crate uses the Anza `Address` type which would force a wider refactor. Deprecation warnings are acceptable for Phase 4 scope; Phase 7 may revisit.
+4. **Both `spl-token` and `spl-token-2022` ship a default `entrypoint()` symbol — linker fails with "duplicate symbol: entrypoint" when both are linked into a single binary (the test harness).** Fixed by enabling the `no-entrypoint` feature on both crates in `sol-wallet-core/Cargo.toml`. The feature removes the on-chain entry function; wallet lib code never calls `entrypoint` (it only consumes `instruction::*` + `state::*`), so the disable is safe.
+5. **`Mint::SIZE` is not exposed without the `SizedTypeProperties` trait** which `spl-token` 9.0.0 does not re-export. Replaced `spl_token::state::Mint::SIZE` with the literal `const MINT_STATE_SIZE: usize = 82` in `tokens.rs`. The constant matches the on-chain wire layout documented at `solana-program/token/program/src/state.rs`. Same for the test fixtures.
+6. **`is_initialized = 0` in the synthetic 82-byte Mint state triggers `Mint::unpack` to return `UninitializedAccount`.** The `Pack::unpack` impl requires `is_initialized = 1` at offset 45; a zero-state fixture errors with `ProgramError::UninitializedAccount`. Fixed the test fixture by patching `data[45] = 1` (initialized=true) alongside the `decimals` patch.
+7. **Test #3 (`prepend_create_ata_plus_transfer_emits_two_ixs_in_order`) originally passed `dest_ata` (the `Instruction` returned by `prepend_create_ata`) as the source/destination pubkey argument to `build_spl_transfer_checked`.** That conflated two distinct values: the **derived ATA address** (a `Pubkey`) and the **ATA-create instruction** (an `Instruction`). Refactored to call `derive_ata_with_program_id` separately to get the `Pubkey`, then `prepend_create_ata` for the ix, then `build_spl_transfer_checked(..., &dest_ata_pubkey, ...)` for the transfer. The 2-ix assertion still passes — the wire-format invariant is order-only, not identity-of-operand.
+
+### Test coverage
+
+- New: 24 integration tests across 3 new files (`token2022_disambig` 9 + `stablecoin_registry` 8 + `spl_instruction` 7) + 10 new inline unit tests (`disambig::tests` 2 + `tokens::tests` 2 + `tx::builder::spl_tests` 6).
+- Total `sol-wallet-core` suite: 94 tests pass (was 60 after Phase 3; +34 from Phase 4).
+- Verify gate: `cargo fmt --all -- --check` + `cargo clippy -p sol-wallet-core --all-targets -- -D warnings` + scoped `cargo test -p sol-wallet-core --test token2022_disambig --test stablecoin_registry --test spl_instruction` (L55 scope discipline) all clean.
+
+### Notes — `pubkey_const!` macro migration
+
+Anza SDK 4.1.0 dropped the `pubkey_const!` macro re-export from `solana_sdk::pubkey`. Any future const-context `Pubkey` declaration must either use `LazyLock<Pubkey>` + `Pubkey::from_str`, or a plain `pub fn` returning a fresh `Pubkey` (the latter is what Phase 4 adopted — see `classic_token_program_id` / `token_2022_program_id`). The previous-phase `pub const CLASSIC_TOKEN_PROGRAM_ID` pattern from the deep-dive example code is no longer 1:1 portable to the 4.1.0 ABI.
+
+---
+
 ## Phase 0 — 2026-09-10 — crate scaffold (no behaviour)
 
 Repo plumbing landed in Phase Set Up; this phase turns the empty `crates/sol-wallet-core/` directory into a compiling library + CLI binary, with the full dep graph declared but most of it deliberately unwired from the crate until Phase 1 has picked a compatible exact-pin set.

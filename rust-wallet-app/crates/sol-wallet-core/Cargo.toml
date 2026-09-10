@@ -32,6 +32,40 @@ crate-type = ["rlib"]
 # Phase 6 — argon2 / aes-gcm / chrono / uuid / serde_json.
 [dependencies]
 thiserror = { workspace = true }
+# Phase 4 — SPL token program crates.
+#   spl-token                  — classic SPL (`TokenkegQ...`) `instruction::*` builders
+#                                + `state::Mint::unpack` (Q10 — decimals NEVER hardcoded).
+#   spl-token-2022             — Token-2022 (`TokenzQdB...`) extension-aware builders + unpack.
+#                                Same wire layout for the base Mint state (82 bytes); TLV
+#                                extensions follow but Phase 4 only reads the base fields.
+#   spl-associated-token-account — ATA program; `get_associated_token_address_with_program_id`
+#                                   seeds with `[owner, token_program_id, mint]` (Q6).
+#
+# All three SPL crates are Pod-based and ship every public module (instruction,
+# state) under default features — no `instruction` / `bincode` / `serde` feature
+# gates. `serde` + `serde_json` are needed only for the bundled JSON registry
+# (tokens/mainnet.json + tokens/devnet.json via include_str!).
+#
+# `no-entrypoint` disables the SPL crates' default `entrypoint()` symbol
+# (the on-chain program entry fn). `spl-token` + `spl-token-2022` both
+# ship the same symbol under default features, which causes a linker
+# "duplicate symbol" error when both are linked into a single binary
+# (the test harness). Wallet lib code never calls `entrypoint` — we
+# only consume `instruction::*` + `state::*` — so the disable is safe.
+#
+# Phase 4 dispatches `instruction::*` by program:
+#   `spl_token::instruction` validates program_id == classic → use for Classic.
+#   `spl_token_2022::instruction` validates program_id == Token-2022 →
+#     use for Token2022. The `instruction` module is `#[deprecated]` since
+#     spl-token-2022 9.1.0 (points at the `*-interface` split) but remains
+#     functional and uses `Pubkey` (matching Anza SDK 4.1.0); the interface
+#     crates use the Anza `Address` type and would force a wider refactor.
+#     Deprecation warnings are acceptable for Phase 4 scope.
+spl-token                    = { workspace = true, features = ["no-entrypoint"] }
+spl-token-2022               = { workspace = true, features = ["no-entrypoint"] }
+spl-associated-token-account = { workspace = true }
+serde                        = { workspace = true }
+serde_json                   = { workspace = true }
 # Phase 1.1 minimum set:
 #   solana-sdk    — umbrella crate; pulls keypair + signer + transaction +
 #                   instruction + message + program transitively at the
