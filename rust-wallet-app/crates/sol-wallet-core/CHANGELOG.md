@@ -12,7 +12,6 @@ Conventions: `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Securit
 
 - Phase 0 — crate scaffold + compile/`--help` check (no crate source exists yet)
 - Phase 1 — Phantom-equivalent `Wallet` keypair (`fromMnemonic`, `fromMnemonicAt`, `fromBase58`, `fromPublicKey`, sign APIs)
-- Phase 2 — address surface (base58, `is_on_curve`, PDA)
 - Phase 3 — `tx::builder` native SOL transfer + Compute Budget prepend
 - Phase 4 — SPL `transfer_checked` + ATA lifecycle + Token-2022 disambiguation
 - Phase 5 — RPC client + `send_with_retry` + `wait_for_confirm`
@@ -117,6 +116,40 @@ Task 1.2 closes the Phantom-equivalent surface: base58 secret import, read-only 
 - **`system_instruction` not in `solana-sdk` 4.x root.** Plan §Task 1.2 Step 7 (test) referenced `solana-sdk::system_instruction::transfer`; in 4.x the system instruction module lives behind `solana-system-interface` (not a direct workspace dep). Tests use a hand-built `Instruction { program_id: Pubkey::new_unique(), accounts: vec![AccountMeta::new(payer, true)], data: vec![] }` — exercises the signing path without depending on the system program.
 - **Anza `Keypair::from_base58_string` is infallible (panicking); fallible sibling is `try_from_base58_string`.** Plan cited `solana_sdk::Keypair::from_base58_string`; the panic-on-error version is for the "I assert this is valid base58" hot path. The fallible `try_from_base58_string` returns `Result<Self, SignatureError>` and is the correct one for `Wallet::from_base58` (the wallet must surface the error, not panic). Used `try_from_base58_string` + mapped to `Error::InvalidBase58Secret`.
 - **`Wallet::from_public_key` constructs `ReadOnlyWallet(pubkey)` from outside its module.** The tuple-struct field was made `pub(crate)` (rather than `pub`) so external callers must go through the `pubkey()` getter — matches Phantom's watch-only API where the wallet address is observable but the inner tuple field is private.
+
+---
+
+## Phase 2 — 2026-09-10 — Address surface (base58, pd footgun, PDA)
+
+Five wrappers land around `solana_sdk::pubkey::Pubkey` so the wallet app, the CLI, and the FFI surface all route address parsing through one well-typed boundary. No new workspace deps (Phantom-equivalent address ops live entirely inside `solana-sdk 4.1.0`).
+
+### Added
+
+- `crates/sol-wallet-core/src/address.rs` — five thin wrappers over Anza types:
+  - `pubkey_from_bytes(bytes: [u8; 32]) -> Pubkey` → `Pubkey::new_from_array`. Caller is responsible for the curve check (`is_on_curve`) when the source is untrusted.
+  - `pubkey_to_base58(pk: &Pubkey) -> String` → `pk.to_string()`. 32-byte Ed25519 verification keys produce 32-44 char base58 strings with no `0x` / `solana:` prefix — matches the Phantom "Receive" panel.
+  - `is_on_curve(bytes: &[u8]) -> bool` → constructs a temporary `Pubkey` and checks `is_on_curve`. `debug_assert`s the input length is 32 (the only legal Solana pubkey size).
+  - `parse_user_address(s: &str) -> Result<Pubkey>` → `Pubkey::from_str(s)` + `is_on_curve` guard. Returns `Error::InvalidAddress(String)` with a human-readable reason on either failure (malformed base58 or PDA-shaped). Phantom-equivalent wallets refuse to send to off-curve addresses because no signer exists for a PDA — sending would burn funds.
+  - `find_pda(seeds: &[&[u8]], program_id: &Pubkey) -> (Pubkey, u8)` → `Pubkey::find_program_address`. Returns `(pda, bump)` where `pda` is guaranteed OFF-curve (Solana enforces this — a PDA that lands on the curve is an exploit vector). Used internally in V0.1.5 staking flows; V0.1 only needs the surface exposed.
+  - 4 unit tests inline (`#[cfg(test)] mod tests`) — `pubkey_from_bytes` round-trip through `to_base58`, `is_on_curve` wrapper agrees with the SDK on a random 32-byte buffer, `parse_user_address` distinguishes malformed base58 from off-curve inputs, and `find_pda` returns an off-curve tuple.
+- `crates/sol-wallet-core/src/error.rs` — added `Error::InvalidAddress(String)` variant. The `Display` impl surfaces the reason (either the base58 parse error or the PDA-footgun note); callers don't need to pattern-match `solana_sdk::PubkeyError`.
+- `crates/sol-wallet-core/tests/address_derivation.rs` — extended Phase 1.1 file with 7 new tests covering Phase 2.1 acceptance criteria:
+  - `pubkey_from_bytes_then_to_base58_round_trips` — derived wallet pubkey survives bytes→base58→bytes (no Anza wrapper drift).
+  - `pubkey_to_base58_format_matches_phantom_canonical` — wrapper output equals `Pubkey::to_string` (alphabet + length sanity).
+  - `parse_user_address_accepts_known_valid_devnet_address` — accepts `2mcFPzAo2kfHkNyNgAniGZvdPYn3kNeJjPV1rCAb5NAH` and confirms `is_on_curve`.
+  - `parse_user_address_rejects_invalid_base58` — rejects `"not-base58!!!"` with `Error::InvalidAddress`.
+  - `parse_user_address_rejects_off_curve_bytes` — derives a PDA via `find_pda` (guaranteed off-curve) and rejects it.
+  - `is_on_curve_wrapper_matches_sdk_for_derived_wallet` — wrapper agrees with `solana_sdk::Pubkey::is_on_curve` on a wallet-derived address.
+  - `find_pda_returns_off_curve_pubkey_and_bump_byte` — PDA is off-curve AND deterministic for fixed inputs.
+
+### Changed
+
+- `crates/sol-wallet-core/CHANGELOG.md` — Phase 2 line removed from the `[Unreleased]` "Planned" list (now delivered).
+
+### Drift recorded at execution time
+
+- **All-zero 32-byte buffer is ON the Ed25519 curve, not off.** Plan §Phase 2 Step 6 specified `reject off-curve bytes (e.g. all-zeros)` as a negative fixture. `Pubkey::new_from_array([0u8; 32]).is_on_curve()` returns `true` because the Ed25519 identity point satisfies the curve equation. A naive `assert!(!zero.is_on_curve())` precondition failed the integration test. Replaced with a derived PDA from `find_pda(&[b"off-curve-fixture"], &program_id)` — `find_pda` is contractually guaranteed to return an off-curve address (Solana enforces this to prevent PDA-curve exploits), so the negative-fixture path is robust regardless of how the underlying curve library evolves.
+- **`assert!(bump < 256)` is a useless comparison.** The `bump` field returned by `find_pda` is `u8`, so `< 256` is always true and trips `clippy::unused_comparisons`. Dropped the assertion; the off-curve check + determinism check (same inputs → same bump byte) still prove the contract.
 
 ---
 
