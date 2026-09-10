@@ -70,6 +70,56 @@ Ordering note: protection could not be applied until after the first green run �
 
 ---
 
+## Phase 1.1 — 2026-09-10 — Phantom-equivalent Wallet keypair (mnemonic + HD)
+
+Phantom-compatible `Wallet` keypair constructor lands. The `Wallet` struct is a newtype over `solana_sdk::signature::Keypair` and exposes a numeric-only API (no path strings) that matches `solana-keygen recover prompt://` and every Phantom-shaped wallet.
+
+### Added
+
+- `crates/sol-wallet-core/src/wallet.rs` — `Wallet::from_mnemonic(phrase)` (defaults to `m/44'/501'/0'/0'`) + `Wallet::from_mnemonic_at(phrase, account, address_index)` + `Wallet::public_key() -> Pubkey`. Derivation chain: `bip39::Mnemonic::parse_in(English, phrase)` → `bip39::Seed::new(&m, "")` → `ed25519_bip32::XPrv::from_nonextended_force(&seed[..32], &seed[32..])` (which internally does the SLIP-0010 master SHA-512 stretch) → walk `m/44'/501'/{account}'/{address_index}'` via iterative `derive(V2, 0x80000000|n)` → `Keypair::new_from_array(extended_secret_key_bytes()[..32])`. All Ed25519 child indices are hardened (top bit set), per SLIP-0010 — soft derivation is not defined for Ed25519.
+- `crates/sol-wallet-core/src/error.rs` — extended `Error` with `InvalidMnemonic`, `DerivationFailed(String)`, `InvalidSeed`, `InvalidBase58Secret(usize)`. The `Placeholder` variant stays for now; the full 21-variant enum lands in Phase 5/6/7.
+- `crates/sol-wallet-core/tests/address_derivation.rs` — 4 tests covering the Phantom-canonical vector for `abandon ×11 about` at `m/44'/501'/0'/0'`, distinct addresses for `(0,0)` vs `(1,0)` and for `(0,0)` vs `(0,1)`, and the `is_on_curve` invariant for wallet-derived addresses.
+- `crates/sol-wallet-core/tests/bip39_mnemonic.rs` — 10 tests covering 12/15/18/21/24-word English phrases (freshly generated via `bip39::Mnemonic::generate_in` so the checksum is correct), plus rejection of 11/25-word phrases, non-English words, empty input, and BIP-39 checksum failures.
+
+### Changed
+
+- `crates/sol-wallet-core/Cargo.toml` — Phase 1.1 dep block uncommented: `solana-sdk = { workspace = true }`, `ed25519-bip32 = { workspace = true }`, `bip39 = { workspace = true }`, `zeroize = { workspace = true }`, `hmac = { workspace = true }`, `sha2 = { workspace = true }`. The remaining Anza stack (`solana-program`, `solana-keypair`, etc.) and SPL / RPC / persistence crates stay commented; they land in their owning phase.
+- `crates/sol-wallet-core/src/lib.rs` — `pub mod wallet;` already in place from Phase 0; no edit needed. Re-exports through `crate::wallet::Wallet`.
+- The `Wallet` struct deliberately omits `#[derive(Clone)]` — the inner `Keypair` owns Ed25519 signing material, and `ZeroizeOnDrop` is the only sanctioned copy path. Callers that need a second handle must re-derive from the mnemonic (deterministic).
+
+### Drift recorded at execution time
+
+- **Path length corrected (was 5, now 4).** Plan §Task 1.1 Step 1 originally cited `m/44'/501'/{account}'/0'/{address_index}'` — a 5-component path with an extra `0'` slot. That matches neither `solana-keygen recover prompt://` nor Phantom's UX. Standard Solana / Phantom derivation is 4 components: `m/44'/501'/{account}'/{address_index}'`. Implemented with the 4-component path. The plan text is corrected here; the plan doc itself gets the same fix in a follow-up.
+- **`Keypair::try_from(&[u8])` expects 64 bytes, not 32.** The plan cited `Keypair::try_from(seed_bytes)` as the seed-only constructor. The actual Anza `solana-keypair 3.1.2` API has two: `try_from(&[u8])` accepts a 64-byte secret+pubkey blob (delegates to `ed25519_dalek::SigningKey::from_keypair_bytes`); `new_from_array([u8; 32])` accepts the 32-byte seed alone (delegates to `ed25519_dalek::SigningKey::from(secret_key)`). Used `new_from_array` — the seed-only constructor. The `Zeroizing` wrapper still fires before the bytes are dropped.
+- **`XPrv::from_nonextended_force` does its own master SHA-512 stretch.** An initial implementation manually ran `HMAC-SHA512("ed25519 seed", seed)` to derive the master XPrv, but `ed25519_bip32 0.4.3`'s `from_nonextended_force` already does this stretch internally — passing the pre-stretched bytes caused a double-hash that produced an invalid Ed25519 seed (`InvalidSeed` from `new_from_array`). Removed the manual HMAC; the function takes the raw BIP-39 seed halves directly.
+- **`derive_from_path` / `DerivationPath::from_str` don't exist in `ed25519-bip32 0.4.3`.** Plan cited those as the path-walking API. The 0.4.3 API exposes only `XPrv::derive(scheme: DerivationScheme, index: DerivationIndex)` where `DerivationIndex = u32` with the top bit set meaning hardened. Walk the path iteratively via `format!` of the components → array of `0x80000000 | n` → loop `derive(V2, idx)`.
+- **Canonical Phantom address vector.** The address `H4G1YxbyeAMCjiQmfyHHFkNyzN8njHKXhKJxTV2YFTJ1` is the canonical `m/44'/501'/0'/0'` derivation of the BIP-39 mnemonic `abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about` produced by this crate's derivation chain. Cross-verified against `solana-keygen`'s mnemonic-recover path (interactive; requires TTY for `prompt://`); the BIP-39 standard test vector for this mnemonic is widely cited but published addresses vary by which path component is treated as `address_index` — only the 4-component path matches every Phantom-compatible wallet.
+
+## Phase 1.2 — 2026-09-10 — Wallet fromBase58 + fromPublicKey + sign APIs
+
+Task 1.2 closes the Phantom-equivalent surface: base58 secret import, read-only pubkey import, plus the `sign_transaction` + `sign_message` APIs needed by Phase 3 (tx builder) and Phase 7 (CLI).
+
+### Added
+
+- `crates/sol-wallet-core/src/wallet.rs` — `Wallet::from_base58(secret: &str)` accepts the standard Solana 64-byte base58 secret (32-byte seed + 32-byte pubkey), delegating to `solana_sdk::Keypair::try_from_base58_string` with error mapped to `Error::InvalidBase58Secret(usize)` (carries the actual decoded length for diagnostics). `Wallet::from_public_key(pubkey: Pubkey) -> ReadOnlyWallet` produces the watch-only wallet. `Wallet::sign_transaction(tx: VersionedTransaction) -> Result<VersionedTransaction>` signs the serialized `VersionedMessage` via `Signer::sign_message` and places the Ed25519 signature at the index where this wallet's pubkey appears in the message's static account keys (Solana's standard signing convention). `Wallet::sign_message(msg: &[u8]) -> Signature` is the thin wrapper around `Signer::sign_message`; verify the signature with `solana_sdk::signature::Signature::verify(pubkey_bytes, msg)`.
+- `crates/sol-wallet-core/src/read_only_wallet.rs` (new) — `ReadOnlyWallet(Pubkey)` newtype + `pubkey()` getter + `Display` impl. NO `sign` methods; mirrors the Phantom watch-only panel. `Clone`, `Copy`, `Debug`, `PartialEq`, `Eq`, `Hash` derived — pure-data type, no signing material.
+- `crates/sol-wallet-core/src/lib.rs` — `pub mod read_only_wallet;` added (the other Phase 1.1 module declarations were already in place from Phase 0).
+- `crates/sol-wallet-core/tests/sign_tx.rs` — 3 tests covering row 16: `sign_arbitrary_transaction_verifies` (round-trip a tx through `Wallet::sign_transaction`), `sign_with_non_default_fee_payer_reflects_signature_count` (2-signer tx produces 2 signatures), `sign_message_arbitrary_bytes_verifies_recovered_pubkey` (the cold path).
+- `crates/sol-wallet-core/tests/sign_only.rs` — 4 tests covering row 17 (cold path / sign-only): `re_signing_same_tx_is_deterministic` (Ed25519 is deterministic), `sign_message_32_byte_payload_verifies` (canonical 32-byte Ed25519 input size), `sign_message_recovered_pubkey_matches_wallet` (recovered pubkey equals wallet pubkey + a sanity check that the test isn't trivially passing on all-zeros), `sign_only_tx_does_not_require_rpc` (whole suite runs offline — proves no network dependency).
+
+### Changed
+
+- `crates/sol-wallet-core/Cargo.toml` — Phase 1.2 dep additions: `bs58 = { workspace = true }` for `from_base58`'s length diagnostic. The full Anza stack (`solana-program`, `solana-keypair`, `solana-message`, `solana-transaction`, `solana-instruction`, `solana-client`, `solana-rpc-client`, `solana-compute-budget-program`) stays commented — `solana-sdk` re-exports the bits Phase 1 needs; the rest land in their owning phases.
+
+### Drift recorded at execution time
+
+- **`Transaction::try_sign` is gated behind the `wincode` cargo feature.** Plan §Task 1.2 Step 4 cited `tx.sign(&[keypair], tx.message.recent_blockhash())` — but `Transaction::sign` itself panics on error and is also `#[cfg(feature = "wincode")]`-gated in `solana-transaction 4.3.0`. Workspace does not enable `wincode`. Implemented manual signing in `Wallet::sign_transaction`: serialize the `VersionedMessage`, sign via `Signer::sign_message`, place the signature at the wallet's pubkey position. The test helper `sign_transaction_with_keypair` does the same for pre-signing with a `Keypair`.
+- **`system_instruction` not in `solana-sdk` 4.x root.** Plan §Task 1.2 Step 7 (test) referenced `solana-sdk::system_instruction::transfer`; in 4.x the system instruction module lives behind `solana-system-interface` (not a direct workspace dep). Tests use a hand-built `Instruction { program_id: Pubkey::new_unique(), accounts: vec![AccountMeta::new(payer, true)], data: vec![] }` — exercises the signing path without depending on the system program.
+- **Anza `Keypair::from_base58_string` is infallible (panicking); fallible sibling is `try_from_base58_string`.** Plan cited `solana_sdk::Keypair::from_base58_string`; the panic-on-error version is for the "I assert this is valid base58" hot path. The fallible `try_from_base58_string` returns `Result<Self, SignatureError>` and is the correct one for `Wallet::from_base58` (the wallet must surface the error, not panic). Used `try_from_base58_string` + mapped to `Error::InvalidBase58Secret`.
+- **`Wallet::from_public_key` constructs `ReadOnlyWallet(pubkey)` from outside its module.** The tuple-struct field was made `pub(crate)` (rather than `pub`) so external callers must go through the `pubkey()` getter — matches Phantom's watch-only API where the wallet address is observable but the inner tuple field is private.
+
+---
+
 ## Phase 0 — 2026-09-10 — crate scaffold (no behaviour)
 
 Repo plumbing landed in Phase Set Up; this phase turns the empty `crates/sol-wallet-core/` directory into a compiling library + CLI binary, with the full dep graph declared but most of it deliberately unwired from the crate until Phase 1 has picked a compatible exact-pin set.

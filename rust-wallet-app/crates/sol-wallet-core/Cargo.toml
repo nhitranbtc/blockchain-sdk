@@ -24,16 +24,32 @@ crate-type = ["rlib"]
 # Step 6 deferred to Phase 1 — see CHANGELOG.md entry "Phase 0 — 2026-09-10"
 # for the pin-drift rationale).
 #
-# Phase 1+ uncomments one block at a time as it lands:
-#   * Phase 1 — Anza SDK + ed25519 + bip39 (Wallet keypair)
-#   * Phase 2 — base58 / curve helpers (no new workspace deps)
-#   * Phase 4 — SPL crates
-#   * Phase 5 — tokio / reqwest / rustls / webpki / x509-parser
-#   * Phase 6 — argon2 / aes-gcm / zeroize / chrono / uuid / serde_json
+# Phase 1 — Anza SDK + ed25519-bip32 + bip39 (Wallet keypair, HD via SLIP-0010).
+# Phase 2 — base58 / curve helpers (no new workspace deps).
+# Phase 4 — SPL crates.
+# Phase 5 — tokio / reqwest / rustls / webpki / x509-parser.
+# Phase 6 — argon2 / aes-gcm / chrono / uuid / serde_json.
 [dependencies]
-# thiserror alone — the Phase 0 `error.rs` stub needs it. Anza/SPL/crypto
-# follow in Phase 1+ (see above).
 thiserror = { workspace = true }
+# Phase 1.1 minimum set:
+#   solana-sdk    — umbrella crate; pulls keypair + signer + transaction +
+#                   instruction + message + program transitively at the
+#                   exact-pinned 4.1.0 ABI the v0.1 threat model tests against.
+#   ed25519-bip32 — SLIP-0010 Ed25519 HD derivation (Phantom-compatible path).
+#   bip39         — English wordlist + PBKDF2-HMAC-SHA512 master seed; reused
+#                   from the workspace entry (already has `zeroize` + `rand`).
+#   zeroize       — wraps seed + xprv bytes during derivation so ZeroizeOnDrop
+#                   fires before the Keypair consumes them (F53, U3).
+#   hmac, sha2    — BIP-32 master-node + seed-stretch primitives that
+#                   ed25519-bip32 exposes indirectly; declared so the feature
+#                   flags line up with the Anza SDK's expectations.
+solana-sdk     = { workspace = true }
+ed25519-bip32  = { workspace = true }
+bip39          = { workspace = true }
+zeroize        = { workspace = true }
+hmac           = { workspace = true }
+sha2           = { workspace = true }
+bs58           = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
