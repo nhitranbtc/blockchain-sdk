@@ -21,7 +21,7 @@
 - **Phase 2** = Address surface (base58 + `is_on_curve` + PDA derivation).
 - **Phase 3** = tx::builder native SOL (`system_instruction::transfer` + Compute Budget prepend).
 - **Phase 4** = SPL transfer (classic + Token-2022) + ATA lifecycle + disambig footgun guard + decimals fetched dynamically.
-- **Phase 5** = RPC client (solana-client::RpcClient) + `send_with_retry` (3 attempts, exponential backoff) + `wait_for_confirm`.
+- **Phase 5** = RPC client (reqwest JSON-RPC, 15 HTTP methods in 5.1 + 1 in 5.2 `requestAirdrop` + 1 in 5.3 `getTransaction` + per-`RpcClient` rate limiter in 5.4 + SPKI escape hatch in 5.5 — Anza `solana-rpc-client` DROPPED per issue #555) + `send_and_confirm` (single send + poll, no retry-on-stale-hash). Retry-on-stale-hash + BlockhashCache + full SPKI pin + 5 WS subscribes DEFERRED to V0.1.5. The 17 RPC methods across 5.1/5.2/5.3 + the security hardening in 5.4/5.5 cover all 22 Phase 7 `sol` CLI commands. Final test count: 94 (Phase 1-4) + 70 (5.1) + 3 (5.2) + 4 (5.3) + 3 (5.4) + 5 (5.5) = **179 tests pass** at Phase 5 done.
 - **Phase 6** = Wallet persistence (Argon2id + AES-256-GCM) + WalletManager CRUD + encrypted blob atomic write.
 - **Phase 7** = `sol` CLI (22 commands: wallet / address / balance / spl / tx / config).
 - **Phase 8** = FFI cdylib (12 C functions + panic-message scrubber).
@@ -56,9 +56,9 @@ Locked by user against the grill Round-1 frontier. **Phantom UX parity** = the d
 | Q4  | Validation smoke gate               | **(a) `$0.001 USDC self-send on mainnet-beta`** with `RUN_SOL_MAINNET=1` env gate + pre-check audit hook (refuse if recipient != operator_wallet). Real value, real network. Once per V0.1 release candidate. |
 | Q5  | Local validator                     | **(a) `surfpool` (txtx)** — V0.1 default (sub-second boot, in-memory, no Docker). V0.1.5 opt-in `solana-test-validator` for BPF + epoch boundary tests. |
 | Q6  | Token-2022 disambig                 | **(a) `disambig::reject_wrong_token_program`** — auto-detect via `getAccountInfo(mint).owner` (`TokenkegQ...` vs `TokenzQdB...`); never mix programs in ATA derivation seed. |
-| Q7  | Blockhash retry                     | **(a) `send_with_retry`** — 3 attempts max, exponential backoff 100ms→200ms→400ms, fresh blockhash each retry, re-sign each attempt. Ed25519 signs `recent_blockhash` directly, signatures are nonces over full message. |
+| Q7  | Blockhash retry                     | **(V0.1: single send + poll, no retry) → (V0.1.5) `send_with_retry`** — 3 attempts max, exponential backoff 100ms→200ms→400ms, fresh blockhash each retry, re-sign each attempt. Ed25519 signs `recent_blockhash` directly, signatures are nonces over full message. |
 | Q8  | Compute Budget defaults             | **(a) 150_000 CU default limit + 0 priority fee** — 1000x safety margin for p-token rewrite 2026 (~5 CU per simple transfer). Auto-set 200_000 CU for composite tx (memo + 2 ATA creates). |
-| Q9  | SPKI pinning                        | **(a) Scenario B default** (no pin, Solana Labs public RPC rotates certs freely); Scenario A opt-in via `pinned://<pin>@host` URL for paid Helius/QuickNode/Alchemy. Reuse `bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier` verbatim. |
+| Q9  | SPKI pinning                        | **(V0.1: `RpcClient::new_with_pinned_spki(url, spki_hex)` escape hatch for high-value wallets; default `RpcClient::new` uses rustls system roots) → (V0.1.5) Scenario A opt-in** via `pinned://<pin>@host` URL for paid Helius/QuickNode/Alchemy. Reuse `bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier` verbatim.
 | Q10 | Decimals                            | **(a) NEVER hardcoded** — always `spl_token::state::Mint::unpack(mint_account.data).decimals` + `transfer_checked` (NOT `transfer`). Prevents USDC=6 / BONK=5 / USDS=6 mismatch. |
 | Q11 | Cluster coverage                    | **(a) `MainnetBeta / Devnet / Localnet` ONLY** — Solana testnet DEPRECATED 2022-23 (Foundation abandoned). `Cluster` enum has NO `Testnet` variant; `sol config set-cluster testnet` → `Error::InvalidCluster`. |
 | Q12 | Token program support scope         | **(a) V0.1 = classic SPL + Token-2022 awareness (footgun guard)** — `transfer_checked` works for both programs. NFT/Metaplex EXCLUDED (license blocker). Token-2022 extension-specific transactions (transfer hook CPI, confidential proofs) deferred V0.1.5+. |
@@ -75,13 +75,13 @@ Locked by user against the grill Round-1 frontier. **Phantom UX parity** = the d
 
 ## Global Constraints (verbatim from deep-dive Round-1 grill Q1-Q12)
 
-- **Q1 — SDK choice.** Anza stack = `solana-sdk` 4.1.0 (facade: Keypair, Pubkey, Message, Transaction) + `solana-client` 4.2.2 (RpcClient + PubsubClient) + `solana-program` 4.1.0 (PDA + sysvar + hash) + SPL programs (`spl-token` 9.0.0 classic + `spl-token-2022` 11.0.0 extensions + `spl-associated-token-account` 8.0.0 + `spl-memo` 7.0.0) + `ed25519-bip32` 0.4.3 (SLIP-0010 HD only). Anza = official; 90%+ of stack; active maintenance; Apache-2.0. Bus-factor accepted. **REJECTED:** `mpl-token-metadata` (Metaplex NFT Open Source License v1.0 — non-OSI blocker, deferred indefinitely), `jito-labs/jito-rust-rpc` (stale 2025-06-21, gate behind `jito` Cargo feature if ever needed), `qntx/kobe` (Jito MEV research repo, name collision — NOT a wallet lib), `CRossel87a/solana-light-client` (immature, ~30 all-time downloads), `SergioBenitez/Figment` (config-only, not crypto).
+- **Q1 — SDK choice.** Anza stack = `solana-sdk` 4.1.0 (facade: Keypair, Pubkey, Message, Transaction) + **`solana-rpc-client` DROPPED per #555 (V0.1 ships thin `reqwest` JSON-RPC client with 15 HTTP methods in 5.1 + 2 follow-on methods across Tasks 5.2 `requestAirdrop` + 5.3 `getTransaction`; 5 WS subscribes deferred to V0.1.5 watch mode; revisit when Anza stable `solana-sdk 4.2.x` ships or when V0.1.5 needs the full 21-method table back)** + `solana-program` 4.1.0 (PDA + sysvar + hash) + SPL programs (`spl-token` 9.0.0 classic + `spl-token-2022` 11.0.0 extensions + `spl-associated-token-account` 8.0.0 + `spl-memo` 7.0.0) + `ed25519-bip32` 0.4.3 (SLIP-0010 HD only). Anza = official; 90%+ of stack; active maintenance; Apache-2.0. Bus-factor accepted. **REJECTED:** `mpl-token-metadata` (Metaplex NFT Open Source License v1.0 — non-OSI blocker, deferred indefinitely), `jito-labs/jito-rust-rpc` (stale 2025-06-21, gate behind `jito` Cargo feature if ever needed), `qntx/kobe` (Jito MEV research repo, name collision — NOT a wallet lib), `CRossel87a/solana-light-client` (immature, ~30 all-time downloads), `SergioBenitez/Figment` (config-only, not crypto).
 - **Q2 — HD coverage gap.** `solana-sdk` 4.1.0 does NOT cover BIP-32 / SLIP-0010 (Anza explicitly excludes HD derivation from scope; Phantom wallet solves this with a separate crate). **`ed25519-bip32` 0.4.3** (typed-io, MIT/Apache-2.0) provides SLIP-0010 Ed25519 chain key derivation. Phantom-equivalent Wallet API internally: `bip39::Mnemonic::from_phrase` → `bip39::Seed::new(&m, "")` → `ed25519_bip32::XPrv::from_seed(seed)` → `XPrv::derive("m/44'/501'/.../0'/0")` → `solana_sdk::Keypair::try_from(seed_bytes)`. NO custom HD wrapper module exposed in `sol-wallet-core`.
 - **Q3 — Derivation path.** Phantom convention = `m/44'/501'/{account}'/0'/{address_index}` (SLIP-44 coin 501 = SOL). Hardened only at `44'`, `501'`, `account'`; non-hardened at `0'` and final `address_index`. CLI flags numeric: `--account <N>` (default 0) + `--address-index <N>` (default 0). Path string NEVER exposed (Ledger-style ZIP-32 users → `sol keygen raw` V0.2 deferred).
 - **Q4 — Mainnet smoke gate.** **V0.1 release GATED on one mainnet self-send — $0.001 USDC to self (recipient == sender), real value, real network.** Local + devnet is emulation. Without a real-value smoke, test scenario PASS evidence = "looks like real network" not "real network". Operator checklist: Alchemy API key loaded, operator wallet has ≥ 0.01 USDC + 0.01 SOL for fees + rent, `--confirm-mainnet` prompt typed `yes`, `RUN_SOL_MAINNET=1` env var set, `sol wallet send --to <self> --amount 0.001 --token USDC --wait --wait-finalized --priority-fee 1000`. Verify via `sol balance --address <self> --token USDC` — balance changed by 0.001 USDC.
 - **Q5 — Local validator.** `surfpool` (txtx/surfpool, 2025+) sub-second boot, in-memory, no Docker, runtime reset (`surfpool reset`), warp slot (`surfpool warp --slot N`), built-in faucet (`surfpool airdrop`). Spawned as subprocess via `tokio::process::Command` in `tests/common/surfpool_guard.rs::SurfpoolGuard` RAII wrapper (ephemeral port, 10s health-poll deadline). `solana-test-validator` DEFERRED to V0.1.5 opt-in for BPF + epoch boundary tests.
 - **Q6 — Token-2022 disambig.** ATA derivation seed = `[owner, token_program_id, mint]`. `token_program_id` IS a seed → classic SPL (`TokenkegQ...`) and Token-2022 (`TokenzQdB...`) produce DIFFERENT ATA addresses for same `(owner, mint)`. `disambig::reject_wrong_token_program` checks `mint.owner` via `getAccountInfo`. Mix detected → `Error::InvalidTokenProgram`. Wallet derives correct ATA programmatically; caller NEVER passes wrong `token_program_id`. **Same ATAs do NOT equal Token-2022 ATAs** — surface this rule in CLI docs.
-- **Q7 — Blockhash retry.** Blockhash lifetime ~60-90 sec (~150 slots at 400ms). Ed25519 signs `recent_blockhash` directly → signature covers blockhash + message. Re-sign identical bytes NEVER works (signature is nonce over full message). `tx::broadcast::send_with_retry`: 3 attempts max, fresh blockhash each retry, exponential backoff 100ms→200ms→400ms. `BlockhashNotFound` and `BlockCleanedUp` → retry, NOT user-facing error.
+- **Q7 — Blockhash retry.** Blockhash lifetime ~60-90 sec (~150 slots at 400ms). Ed25519 signs `recent_blockhash` directly → signature covers blockhash + message. Re-sign identical bytes NEVER works (signature is nonce over full message). **V0.1: `tx::broadcast::send_and_confirm` does single send + poll, no retry** (stale hash rate <1% on devnet; user can re-run). **V0.1.5: `send_with_retry` 3 attempts max, fresh blockhash each retry, exponential backoff 100ms→200ms→400ms.** `BlockhashNotFound` and `BlockCleanedUp` → retry in V0.1.5 (V0.1 returns `Error::BroadcastFailed { kind: "BlockhashNotFound" }` and surfaces to CLI).
 - **Q8 — Compute Budget defaults.** Prepend every tx with `ComputeBudgetInstruction::set_compute_unit_limit(150_000)` + `set_compute_unit_price(0)`. 150k CU = 1000x safety margin for p-token rewrite 2026 (~5 CU per simple SPL transfer). Composite tx (memo + 2 ATA creates) auto-set 200k CU. Priority fee defaults to 0; user overrides via `--priority-fee <micro_lamports>` or `SOL_PRIORITY_FEE` env. Heap frame + loaded-accounts-size = V0.2 (program deployment only).
 - **Q9 — SPKI pinning.** Solana Labs public RPC rotates certs freely (no published SPKI pin). Scenario B default: no pin, rely on cert transparency + standard rustls verification (hostname + CA chain). Scenario A opt-in: `pinned://<spki-hex>@host[:port]` URL scheme for paid Helius/QuickNode/Alchemy. Reuse `bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier` shape (no fork). `SOL_SPKI_PIN` env-only per L12 H-1 (no CLI setter in V0.1).
 - **Q10 — Decimals hardcode = footgun.** USDC=6, USDT=6, USDS=6, PYUSD=6 (Token-2022), BONK=5, JUP=6, JitoSOL=9. NEVER hardcode — `chain::spl_decimals(&mint)` → `spl_token::state::Mint::unpack(&account.data).decimals` (classic) OR `spl_token_2022::state::Mint::unpack(&account.data).decimals` (Token-2022) per detected program. Always `transfer_checked(mint, decimals)` NOT `transfer(mint)` — unchecked `transfer` would silently truncate / overflow on decimals mismatch.
@@ -193,12 +193,12 @@ rust-wallet-app/crates/sol-wallet-core/
 │   │   ├── mod.rs
 │   │   ├── builder.rs                      # build_sol_transfer, build_spl_transfer_checked, build_spl_approve, build_spl_close_account, build_spl_burn, build_spl_set_authority, prepend_create_ata, prepend_compute_budget
 │   │   ├── sign.rs                         # sign_sol, sign_spl, sign_only_sol, sign_only_spl
-│   │   └── broadcast.rs                    # submit_sol, submit_spl, submit_sol_speedup, simulate, send_with_retry, wait_for_confirm
+│   │   └── broadcast.rs                    # send_and_confirm (V0.1: single send + poll); V0.1.5: submit_sol, submit_spl, submit_sol_speedup, send_with_retry, wait_for_confirm
 │   ├── chain/
 │   │   ├── mod.rs
 │   │   ├── client.rs                       # SolanaClient (wraps RpcClient); request_airdrop, get_latest_blockhash, get_balance, get_account_info, get_token_account_balance, get_minimum_balance_for_rent_exemption, get_token_accounts_by_owner, get_recent_prioritization_fees
 │   │   ├── account.rs                      # discover_atas, fetch_token_supply, fetch_decimals, mint_token_program, derive_ata_with_program_id
-│   │   └── pki.rs                          # SpkiPinnedVerifier (re-export bitcoin-wallet-core::chain::spki)
+│   │   └── pki.rs                          # (V0.1.5) SpkiPinnedVerifier (re-export bitcoin-wallet-core::chain::spki)
 │   ├── platform/
 │   │   ├── mod.rs                          # PAL trait definitions (4 traits × ~14 methods total)
 │   │   ├── storage.rs                      # WalletStorage + InMemoryStorage (test) + FileWalletStorage (desktop)
@@ -263,14 +263,16 @@ rust-wallet-app/crates/sol-wallet-core/tests/   # created by owning phases (Phas
 ├── preflight_balance.rs              # Phase 5.1: row 19 — balance check before send (insufficient funds)
 ├── tx_status_parse.rs                # Phase 5.1: row 20 — TransactionStatus JSON parse + TxSummary serde
 ├── spki_pin.rs                       # Phase 5.5 (V0.1.5 opt-in): row 21 — SPKI pin match/mismatch
-├── rpc_methods_mock.rs               # Phase 5.1: row 22 — 12 RPC methods against wiremock (note: deep-dive §I. enumerates 21; Phase 5.1 expands to full 21 inline)
+├── rpc_methods_mock.rs              # Phase 5.1 (V0.1): 15 HTTP RPC methods against wiremock — full Phase 7 critical-path binding-point coverage (4 send/confirm + 5 account/balance + 2 mint/metadata + 4 cluster info/priority fee); 5.2 adds `requestAirdrop` mock, 5.3 adds `getTransaction` mock
 ├── error_mapping.rs                  # Phase 5/6: row 23 — Error From + Debug redaction
 ├── placeholder.rs                    # Phase 8.1: rows 24, 25 — FFI panic scrubber + C ABI smoke
 ├── submit_sol_local.rs               # Phase 7.2: row 26 — submit_sol E2E on surfpool
 ├── submit_spl_local_held.rs          # Phase 7.2: row 27 — submit_spl E2E on held ATA (mock USDC)
 ├── submit_spl_local_fresh.rs         # Phase 7.2: row 28 — submit_spl E2E on fresh ATA (rent delta)
 ├── submit_spl_local_approve.rs      # Phase 7.2: row 29 — submit_spl_approve E2E + allowance view
-├── send_with_retry.rs                # Phase 5.1: rows 30, 31 — send_with_retry on stale blockhash + wait_for_confirm
+├── send_native.rs                   # Phase 5.1 (V0.1): prepare_sol_transfer_message + sign + send + confirm; integration gated `RUN_SOL_DEVNET=1`
+├── send_token.rs                    # Phase 5.1 (V0.1): prepare_spl_transfer_message + sign + send + confirm; integration gated `RUN_SOL_DEVNET=1`
+# (V0.1.5) send_with_retry.rs        # Phase 5.5: rows 30, 31 — stale blockhash retry + wait_for_confirm timeout
 ├── boot_probe_local.rs               # Phase 7.2: row 32 — get_health boot probe
 ├── mainnet_smoke.rs                  # Phase 9.1: row 33 — mainnet $0.001 USDC self-send (gated RUN_SOL_MAINNET=1)
 ├── transport_failure.rs              # Phase 5.1: row 34 — transport failure (closed port)
@@ -307,7 +309,7 @@ rust-wallet-app/crates/sol/tests/  # Phase 7.1 + Phase 7.2 + Phase 9.1 (CLI test
 | **Phase 2** (Address surface)                             | (covered by `address_derivation` from Phase 1; no new file)                                                | 0  |
 | **Phase 3** (tx::builder SOL)                            | `tx_serde`, `compute_budget` (2)                                                                            | 2  |
 | **Phase 4** (SPL transfer + ATA + disambig)               | `token2022_disambig`, `stablecoin_registry`, `spl_instruction` (3)                                            | 3  |
-| **Phase 5.1** (RPC + retry)                               | `send_with_retry` (1)                                                                                          | 1  |
+| **Phase 5.1** (RPC + send + confirm)                      | `send_and_confirm` (1)                                                                                         | 1  |
 | **Phase 5.5** (V0.1.5 opt-in SPKI)                        | `spki_pin`, `fixtures/spki_pin_test_cert.der` (2)                                                              | 2  |
 | **Phase 6.1** (Wallet persistence)                        | `argon2_kdf`, `aes_gcm_cipher`, `mnemonic_encrypt`, `wallet_persist`, `wallet_lifecycle` (5)                   | 5  |
 | **Phase 6.2** (Library completeness verification)         | (no test creates — verification only; cross-checks 33/34 deep-dive rows GREEN, 32/32 files compile, coverage gates)  | 0  |
@@ -612,7 +614,7 @@ tempfile    = { workspace = true }
 - [x] Step 3: Create `sol-wallet-core/src/lib.rs` with module placeholders (`pub mod address; pub mod wallet; pub mod error;` + `pub use solana_sdk::*` re-exports) **PARTIAL** — `pub mod` declarations landed (`crates/sol-wallet-core/src/lib.rs:18-20`); `pub use solana_sdk::*` re-export deferred to Phase 1 because the crate doesn't depend on `solana_sdk` yet (Option 3 resolution of crates.io pin drift — see Step 6 annotation + `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section). Three empty doc-only module files (`address.rs`, `error.rs`, `wallet.rs`) also created to satisfy the Rust 2021 module resolver — the plan did not ask for them but the `pub mod` declarations require their files to exist.
 - [x] Step 4: Verify `cargo build -p sol-wallet-core` exits 0 (no test needed — this is the compile smoke; first test lands in Phase 1.1)
 - [x] Step 5: Verify gate: `cargo fmt --all -- --check && cargo clippy -p sol-wallet-core -- -D warnings && cargo test -p sol-wallet-core`
-- [x] Step 6: Verify Anza subcrate pinning — `cargo tree -p sol-wallet-core | grep solana-` shows exact `=x.y.z` pins, NO version unification **DEFERRED to Phase 1** — crates.io drift: `solana-rpc-client = "=4.2.2"` is not published (only `4.4.0-alpha.3` exists, and its manifest pins `solana-instruction >=3.4.0, <3.5.0` — incompatible with the plan's `=3.5.0`). All Anza + SPL + ed25519-bip32 pins are declared in workspace `[workspace.dependencies]` but NOT wired into `sol-wallet-core/Cargo.toml` so the build resolves; Phase 1 uncomments the Anza block at the top of that file, runs `cargo tree -p sol-wallet-core | grep solana-` to discover the actual constraint graph, picks compatible exact pins, then verifies "no version unification" on its own build before claiming done. Full drift log in `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section.
+- [x] Step 6: Verify Anza subcrate pinning — `cargo tree -p sol-wallet-core | grep solana-` shows exact `=x.y.z` pins, NO version unification **DEFERRED to Phase 1** — crates.io drift: `solana-rpc-client = "=4.2.2"` is not published (only `4.4.0-alpha.3` exists, and its manifest pins `solana-instruction >=3.4.0, <3.5.0` — incompatible with the plan's `=3.5.0`). All Anza + SPL + ed25519-bip32 pins are declared in workspace `[workspace.dependencies]` but NOT wired into `sol-wallet-core/Cargo.toml` so the build resolves; Phase 1 uncomments the Anza block at the top of that file, runs `cargo tree -p sol-wallet-core | grep solana-` to discover the actual constraint graph, picks compatible exact pins, then verifies "no version unification" on its own build before claiming done. **PHASE 5 UPDATE (2026-09-10): Anza `solana-rpc-client` DROPPED from V0.1 dep graph per issue #555 — V0.1 ships thin `reqwest` JSON-RPC client (15 HTTP methods in 5.1 + 1 in 5.2 + 1 in 5.3, full Phase 7 binding surface) with no Anza RPC dep. Workspace `[workspace.dependencies]` retains `solana-rpc-client = "=4.2.2"` as a future-V0.1.5 placeholder; V0.1 build does not pull it.** Full drift log in `crates/sol-wallet-core/CHANGELOG.md` Phase 0 section.
 - [ ] Step 7: PAUSE — PR review on the scaffold PR; squash-merge only after issue body checkboxes flipped to `[x]` (L13 step 14). CI hardening detail (the awk cdylib guard + Linux-gated protoc install) lives in the "CI:" Files block above.
 
 ---
@@ -813,48 +815,341 @@ Twelve deltas between the plan text and the live Anza 4.1.0 / spl-token 9.0.0 / 
 
 ---
 
-## Phase 5 — RPC client + send_with_retry + wait_for_confirm
+## Phase 5 — RPC client (15 HTTP methods, 5.1) + `requestAirdrop` (5.2) + `getTransaction` (5.3) + rate limiter (5.4) + SPKI escape hatch (5.5) + send/confirm + Phase 7 binding-point surface
 
-### Task 5.1 (TBD): SolanaClient wrapper + send_with_retry retry policy + blockhash refresh
+### Security review log (2026-09-10, post-`/ecc:security-review`)
+
+12 findings ranked by severity. Tier 1 lands in 5.1 (blocks merge); Tier 2 lands in 5.1 (cheap hardening); Tier 3 lands in 5.2/5.4/5.5; Tier 4 is doc-comment only.
+
+| # | Tier | Finding | Where addressed |
+|---|---|---|---|
+| 1 | 🔴 Tier 1 | No URL allowlist / scheme check in `RpcClient::new` — `http://attacker:8080` exfiltrates signed tx | Task 5.1 Step 1 + new Step 2 (URL allowlist) |
+| 2 | 🔴 Tier 3 | No SPKI pinning in V0.1 = MITM via compromised CA | Task 5.5 — `RpcClient::new_with_pinned_spki()` escape hatch (V0.1 ships; full `pinned://` URL scheme deferred to V0.1.5) |
+| 3 | 🟠 Tier 2 | Plaintext keypair file (raw 64-byte at `~/.config/sol-wallet/wallet.json`) | Task 5.1 Step 24 (warning doc) + Phase 6 (Argon2id encryption) |
+| 4 | 🟡 Tier 4 | `simulateTransaction` TOCTOU — preflight result is a hint, not a guarantee | Task 5.1 Step 1 doc comment; re-simulation-after-sign deferred to V0.1.5 |
+| 5 | 🟠 Tier 3 | No rate limiter on `RpcClient` outbound — 429-bypass + duplicate-send footgun | Task 5.4 — token bucket (50 req/s, burst 100) |
+| 6 | 🟠 Tier 3 | `requestAirdrop` unrestricted — mainnet call is DoS/loss vector | Task 5.2 Step 1 (devnet host allowlist) |
+| 7 | 🟡 Tier 2 | JSON-RPC envelope parsing uses `serde_json::Value` first, typed second — silent future-compat breaks | Task 5.1 Step 1 (typed `RpcResponse<T>` + `#[serde(deny_unknown_fields)]`) |
+| 8 | 🟡 Tier 2 | `bincode` wire format not pinned + no round-trip test | Task 5.1 Step 1 (`bincode = "=1.3.3"` already pinned; add round-trip test) |
+| 9 | 🟡 Tier 3 | `getRecentPrioritizationFees` MITM-bait — hostile RPC returns `u64::MAX` fee | Phase 7 CLI `--max-priority-fee` cap with auto-clamp (out of Phase 5 scope) |
+| 10 | 🟡 Tier 3 | `ConfirmTimeout` (30s) vs `Finalized` (~5s lockup) — pending tx misclassified as failed | Task 5.1 acceptance (add `Error::ConfirmPending` variant) |
+| 11 | 🟢 Tier 2 | `RpcClient` `Debug` impl prints URL with query string — API key leak via `dbg!()` | Task 5.1 Step 1 (custom `Debug` impl strips query string) |
+| 12 | 🟢 Tier 3 | `--wallet-file` permission check missing | Phase 7 CLI (out of Phase 5 scope) |
+| 13 | 🟢 Tier 3 | Devnet test keypair could leak via CI if `tests/fixtures/test_keypair.json` committed | Phase 7 CLI (`.gitignore` + `throwaway_keypair()` helper already planned in Phase 6.1) |
+
+### Design decision log (2026-09-10, 2nd Phase 5 attempt)
+
+**Original Phase 5 spec (this file pre-redesign):** 21-method RPC coverage (16 HTTP + 5 WS) via Anza `solana_client::nonblocking::rpc_client::RpcClient` + `PubsubClient`, full BlockhashCache with TTL, retry-on-stale-hash, SPKI pin verifier.
+
+**Why redesigned:** Issue #555 (BLOCKED) + plan §Task 0.1 Step 6 drift = intrinsic Anza SDK sub-dep conflict between `solana-sdk 4.1.0` (only stable) and `solana-rpc-client 4.2.2` (only stable rpc client). Sub-deps (wincode ^0.5 vs ^0.6, solana-address ^2.7 vs <2.7, solana-short-vec ^3.3 vs <3.3) do not unify under any combination of crates.io releases. Recipe 1 (monorepo `[patch.crates-io]` SHA) empirically falsified — `d3f1f55` (= v4.1.0 tag) does align `wincode 0.5.3` + `solana-address 2.6.0` + `solana-short-vec 3.2.1` BUT standalone-repo crates (wincode, solana-address, solana-short-vec, solana-program-error) resolved at crates.io latest versions by transitive deps in other crates (solana-pubkey, spl-type-length-value) re-introduce the wincode 0.5/0.6 dual-resolve. ~$140 cost across two sessions; no path forward via Recipe 1.
+
+**Redesigned surface (this section):** Drop the Anza `solana-rpc-client` dependency. Build a thin `reqwest` JSON-RPC client internally with **15 HTTP methods in 5.1**, plus **2 follow-on tasks** (`requestAirdrop` in 5.2, `getTransaction` in 5.3) — the full set the `sol` CLI (Phase 7) needs to implement all 22 V0.1 commands. Reuse all Phase 1-4 code unchanged. Defer only the 5 WS subscribes + SPKI pin + BlockhashCache + retry-on-stale-hash to V0.1.5 / Phase 5.5. This is Recipe 2 from #555. Phase 5 is a *library API contract for Phase 7*, not a minimal "send native" path.
+
+**Why 17 methods (not 21, not 5), split as 5.1 + 5.2 + 5.3:** Phase 7 binds 22 commands; each command needs at least one RPC method (except `keygen`/`import`/`export` which are pure Phase 1 surface). 15 methods in 5.1 cover the critical path: 4 for send/confirm (`getLatestBlockhash` + `sendTransaction` + `getSignatureStatuses` + `simulateTransaction`), 5 for account/balance (`getBalance` + `getAccountInfo` + `getMultipleAccounts` + `getTokenAccountBalance` + `getTokenAccountsByOwner`), 2 for mint/metadata (`getTokenSupply` + `getMinimumBalanceForRentExemption`), 4 for cluster info + priority fee (`getRecentPrioritizationFees` + `getVersion` + `getEpochInfo` + `getHealth`). Task 5.2 adds `requestAirdrop` (devnet-only helper, 1 method). Task 5.3 adds `getTransaction` (full log for `sol tx`, 1 method + base64 wire decode). Each is a separate task with its own PR + verify gate.
+
+**What we lose vs original 21-method spec:** the 5 WS subscribes (`account_subscribe` / `signature_subscribe` / `program_subscribe` / `logs_subscribe` / `slot_subscribe`) — all deferred to V0.1.5 watch mode.
+
+### Grilled decisions (2026-09-10, post-`/mattpocock-skills:grill-with-docs phase 5`)
+
+14 questions, 4 rounds, all user-approved as recommended. These are the design decisions that disambiguate terms, scope, and semantic boundaries.
+
+**Round 1 — granularity + scope:**
+
+1. **Q1 (RPC method granularity):** `getSignatureStatuses` is ONE method on `RpcClient`; call-site shaping (commitment filter, address pagination, time-budget) lives in `tx::broadcast::wait_for_confirm` + Phase 7 handlers. `RpcClient` = thin Anza replacement, NOT a high-level wallet API.
+2. **Q2 (wallet file semantics):** ONE path (`~/.config/sol-wallet/wallet.json`) with versioned format. V0.1 = `{"version": 1, "keypair_b58": "..."}` (raw 64-byte); Phase 6 = `{"version": 2, "kdf": {...}, "cipher": {...}, "encrypted_payload": "..."}` (Argon2id-encrypted BIP-39 mnemonic). `version` field disambiguates. Phase 6 ships a migration script that reads v1, prompts for password, writes v2.
+3. **Q3 (`--processed` commitment locus):** V0.1's `sol send` supports only `confirmed` (default) + `finalized` (`--finalized` flag). `--processed` is V0.1.5 watch mode. `sol wait` (already in Phase 7 list) takes explicit `--commitment {processed,confirmed,finalized}` in V0.1 because the user already has the signature and just wants to poll its state.
+4. **Q4 (`preflight` shape):** LIBRARY, not a single entry point. `chain::preflight` exposes 5 independent functions; Phase 7 `sol send` handler picks which to run. `sol send <addr> <amount>` calls `check_native_balance` only. `sol send-token <mint> <addr> <amount>` calls `check_ata_exists` + `resolve_mint_decimals` + `check_token_balance`. `sol send-token --create-ata` additionally calls `check_rent_exempt(165)`. Monolithic `preflight::check_all()` would force 4 RPC round-trips on a 0.001 SOL transfer that doesn't need them.
+
+**Round 2 — terms + scope:**
+
+5. **Q5 (`Error` enum shape):** FLAT enum, 9 variants in V0.1. Splitting into `ChainError` + `TxError` + `WalletError` deferred to V0.2 if pattern-match pain surfaces. V0.1 callers (Phase 7 CLI) do simple `if let Err(Transport(_)) = ...` patterns, not nested match — flat enum is sufficient.
+6. **Q6 (`RpcClient::new` failure mode):** CONSTRUCTOR returns `Result<Self>`. URL allowlist fail, TLS handshake fail, malformed URL all return `Err(Transport)`. No separate `.validate()` method. Phase 7 CLI handlers propagate with `?`. Builder pattern (`RpcClient::builder().url(...).rate_limit(...).build()`) deferred to V0.1.5 if more config knobs accumulate.
+7. **Q7 (rate limiter + URL allowlist ordering):** URL allowlist check FIRST in `RpcClient::new`. Rate limiter constructed only AFTER URL allowlist passes. If allowlist fails, no `Arc<RateLimiter>` is allocated (no resource leak). Order: `parse URL → check scheme/host → return Err(Transport) if bad → construct `reqwest::Client` with timeout → construct `RateLimiter` with defaults → wrap in `Arc` → return `Self`.
+8. **Q8 (`requestAirdrop` host check vs `send` host check):** PER-METHOD check, NOT per-`RpcClient` mode flag. `request_airdrop` checks the URL host against the devnet allowlist; `send` / `sendTransaction` works on any host (mainnet, devnet, testnet, local). Rationale: `requestAirdrop` is a CLUSTER-LEVEL restriction (mainnet rejects it); `send` is universal. The `RpcClient` doesn't carry a "Devnet" / "Mainnet" mode — the methods themselves enforce their own host policy.
+
+**Round 3 — semantic boundaries:**
+
+9. **Q9 (`ConfirmPending` vs `ConfirmTimeout` boundary):** ELAPSED TIME, not poll cycles. `wait_for_confirm` returns `Error::ConfirmPending { signature, elapsed_ms: (timeout / 2).as_millis() as u64 }` at `timeout / 2` if some status returned but commitment not reached; returns `Error::ConfirmTimeout { signature, waited_ms: timeout.as_millis() as u64 }` at full `timeout`. For `--finalized` on a stalled cluster, the tx is `Pending` (still valid) at 15s, `Timeout` at 30s. CLI surfaces "tx pending — check <explorer>" for `Pending`, "tx may or may not land — check <explorer>" for `Timeout`.
+10. **Q10 (`Error::Transport` payload):** FLAT `String` in V0.1, structured `reqwest::Error` source via `#[source]` in V0.1.5 if CLI logging needs the structured fields. V0.1 `String` is sufficient because the CLI's only consumer is the user-facing message ("Connection refused", "Timeout after 30s", "TLS handshake failed"); the CLI does not need to pattern-match on `is_timeout()` vs `is_connect()`.
+11. **Q11 (BlockhashCache location, V0.1.5):** `tx::broadcast` (sits between caller + `RpcClient`), NOT inside `RpcClient`. The cache is a TX-LAYER concern (avoid re-fetching the blockhash for re-sign-and-retry on stale hash), not an RPC-LAYER concern. Putting it in `tx::broadcast` keeps `RpcClient` minimal and lets the cache have its own TTL clock independent of RPC request pacing.
+
+**Round 4 — CLI/UX surface:**
+
+12. **Q12 (`--no-simulate` vs default):** DEFAULT = `simulateTransaction` runs before every send. `--no-simulate` is the opt-out for latency-sensitive sends (e.g. 0.001 SOL transfer where the 200ms simulation overhead is worse than the rare over-CU failure). V0.1 ships simulation on by default. The simulation catches ~all "tx will fail at broadcast" cases (insufficient funds, invalid account, CU overrun) for ~200ms; for V0.1's target user (devnet + early mainnet), the safety > speed tradeoff is right.
+13. **Q13 (Error code translation):** `Error::BroadcastFailed { kind }` stores Anza's `ClientError` variant name (PascalCase: `BlockhashNotFound`, `BlockCleanedUp`, `AccountNotFound`). Phase 7 CLI matches on these exact strings. NOT the JSON-RPC error message (lowercase). The source is the Anza variant because the V0.1 transport emits its own error mapping, not raw JSON-RPC.
+14. **Q14 (`Error::Rpc` exposure):** RAW `i32` code + `String` message in V0.1. Typed enum (parse error / invalid request / method not found / invalid params / internal error / server error + app-specific codes) deferred to V0.1.5 if Phase 7 CLI needs to surface a specific code. V0.1: CLI renders `Error::Rpc { code, message }` as `"RPC error <code>: <message>"` — sufficient for human consumption, not for programmatic dispatch.
+
+**What this gets us:** unblocks Phase 7's full 22-command CLI. Defeats plan §Step 2 rule "no custom JSON-RPC envelope code" — accepted trade-off, recorded in drift log. Preserves all Phase 1-4 work untouched. Phase 7 binds to a stable library surface, not a moving target.
+
+**Open design questions (decided 2026-09-10, session-end):**
+
+1. Wallet keypair source → raw 64-byte keypair file (mode 0600) at `~/.config/sol-wallet/wallet.json` for V0.1; Phase 6 swaps to Argon2id-encrypted BIP-39 mnemonic file.
+2. Confirm commitment default → `confirmed` (1 slot, ~400ms), `--finalized` flag for high-value sends (matches Phantom).
+3. Compute Budget defaults → 150_000 CU limit + 0 microlamports priority fee (Phantom-equivalent), both CLI-overridable.
+4. Priority-fee auto-estimation → on by default for `sol send --priority-fee auto`; falls back to 0 if RPC unavailable. Off via `--no-priority-fee-auto`.
+5. Send dry-run default → `simulateTransaction` runs before every send unless `--no-simulate`; surfaces compute-budget overrun as `Error::ComputeBudgetExceeded` before broadcast.
+
+### Task 5.1 (TBD): `chain::{client, account, preflight}` (15 HTTP methods via reqwest JSON-RPC) + `tx::{broadcast, native, spl}` + Phase 5.1 test suite (36 tests)
 
 **Files:**
-- Create: `src/chain/mod.rs`
-- Create: `src/chain/client.rs` (SolanaClient wrapping `solana_client::nonblocking::rpc_client::RpcClient`)
-- Modify: `src/tx/broadcast.rs` (`send_with_retry` + `wait_for_confirm`)
-- Modify: `src/tx/mod.rs`
-- Create: `src/chain/account.rs` (delegate to Anza `RpcClient`; full 21-method coverage per deep-dive §I. line 1792: 16 HTTP + 5 WS)
-- Create: `src/chain/pki.rs` (SpkiPinnedVerifier, re-exports `bitcoin-wallet-core::chain::spki`)
-- Create: `tests/blockhash_cache.rs` (Phase 5.1 owns row 12 — recent blockhash TTL cache)
-- Create: `tests/rpc_methods_mock.rs` (Phase 5.1 owns row 22 — all 21 RPC methods vs `wiremock` stubs; HTTP 5xx → `Error::Transport`, never panic)
-- Create: `tests/preflight_balance.rs` (Phase 5.1 owns row 19 — mock RpcClient returning fixed balance; under-funded → `Error::InsufficientFunds` before broadcast)
-- Create: `tests/tx_status_parse.rs` (Phase 5.1 owns row 20 — `TransactionStatus` JSON → struct; success parses slot + confirmations; error variant maps per `J. Error classification`)
-- Create: `tests/transport_failure.rs` (Phase 5.1 owns row 34 — RPC pointed at closed port → `Error::Transport` within 30s timeout)
-- Create: `tests/send_with_retry.rs` (deep-dive rows 30+31 — `send_with_retry` stale-blockhash + `wait_for_confirm` success + bogus-sig `ConfirmTimeout`)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/common/surfpool_spawn.rs` (Phase 5.1 owns `spawn_surfpool(port) -> Child`)
+
+- Create: `src/chain/mod.rs` (re-export `RpcClient`, `RpcError`, `BlockhashCache`, `BlockhashCacheEntry`, `RateLimiter`, `DEFAULT_BLOCKHASH_TTL`, `DEFAULT_RATE_LIMIT_RPS`, `DEFAULT_RATE_LIMIT_BURST`, `DEFAULT_REQUEST_TIMEOUT`; 15 RPC method thin wrappers from `account`)
+- Create: `src/chain/client.rs` (~430 LoC: `RpcClient { url, host, http, rate_limiter, id_counter }` + URL allowlist (https-only + http://localhost/127.0.0.1) + custom `Debug` impl stripping URL query string + `RateLimiter` (token bucket, 50 req/s, burst 100) + `BlockhashCache` V0.1.5 stub + `post<T>()` JSON-RPC helper with typed `RpcResponse<T>` + `RpcErrorEnvelope`)
+- Create: `src/chain/account.rs` (~560 LoC: 15 RPC method wrappers + V0.1 local minimal wire structs `TransactionStatus`, `ConfirmationStatus`, `UiTokenAmount`, `Version`, `RpcPrioritizationFee`, `SolanaSimulateResult`, `SolanaUnitsConsumedDetails`, `RpcKeyedAccount`, `AccountJson` — all `#[serde(rename_all = "camelCase")]` matching Anza wire format; `bincode::serialize` for `sendTransaction` pinned `=1.3.3`; base64 envelope via `base64::engine::general_purpose::STANDARD`)
+- Create: `src/chain/preflight.rs` (~135 LoC: `check_native_balance` + `check_token_balance` + `check_ata_exists` + `resolve_mint_decimals` via `spl_token::state::Mint::unpack` + `check_rent_exempt`)
+- Create: `src/tx/broadcast.rs` (~165 LoC: `send_and_confirm(rpc, tx, commitment, timeout) -> Result<Signature>` + `wait_for_confirm` with 200ms→2s exponential backoff + `ConfirmPending` at `timeout/2` + `ConfirmTimeout` at full `timeout` + `level_rank()` helper because Anza 4.x `CommitmentLevel` does not impl `PartialOrd`)
+- Create: `src/tx/native.rs` (~55 LoC: `prepare_sol_transfer_message(from, to, lamports, cu_limit, cu_price, blockhash) -> Message` — Phase 3 builder orchestration via `Message::new_with_blockhash(&ixs, Some(payer), &blockhash)`)
+- Create: `src/tx/spl.rs` (~85 LoC: `prepare_spl_transfer_message(wallet_pubkey, source_ata, dest_ata, mint, program, amount, decimals, cu_limit, cu_price, blockhash, prepend_ata_create) -> Message` — Phase 4 builder orchestration + TokenProgram dispatch + optional `prepend_create_ata`; Q10 `transfer_checked` invariant)
+- Modify: `src/tx/mod.rs` (`pub mod broadcast; pub mod builder; pub mod native; pub mod spl;` + re-exports of `prepare_sol_transfer_message`, `prepare_spl_transfer_message`, `send_and_confirm`, `wait_for_confirm`, `DEFAULT_CONFIRM_TIMEOUT`, `DEFAULT_SEND_MAX_ATTEMPTS`)
+- Modify: `src/lib.rs` (`pub mod chain;`)
+- Modify: `src/error.rs` (add 8 variants: `Transport(String)`, `Rpc { code: i32, message: String }`, `InsufficientFunds { needed: have }`, `BroadcastFailed { kind, context }`, `ConfirmTimeout { signature, waited_ms }`, `ComputeBudgetExceeded { needed_cu, available_cu }`, `ConfirmPending { signature, commitment, elapsed_ms }`, `Unimplemented(&'static str)`)
+- Modify: `rust-wallet-app/crates/sol-wallet-core/Cargo.toml` (`reqwest` from workspace + `url = "2"` + `base64 = "0.22"` + `phf = "0.11"` w/ `macros` + `ascii = "1"`; Anza ABI split: `solana-account = "=4.4.0"` + `solana-commitment-config = "=3.1.1"` + `solana-program-pack = "=3.1.0"` + `bincode = "=1.3.3"` + `tokio` from workspace; dev-deps: `wiremock = "0.6"` + `serial_test = "3"` for `#[serial(tokio)]` on parallel `#[tokio::test]` runs; NO Anza `solana-rpc-client` dep — Recipe 2 from #555)
+- Create: `tests/chain_rpc.rs` (36 tests, ~1000 LoC: 6 URL allowlist + 1 JSON-RPC envelope + 1 bincode round-trip + 1 Debug + 2 rate limiter + 12 RPC method smokes + 3 preflight + 4 native/SPL/broadcast + 1 `wait_for_confirm` half-timeout; `#[serial(tokio)]` because wiremock 0.6 + parallel tokio runtime = flaky — alternative: set `RUST_TEST_THREADS=1`)
+- Devnet integration tests (`tests/send_native.rs` + `tests/send_token.rs` with `RUN_SOL_DEVNET=1`) + per-method split files (`tests/balance.rs` + `tests/list_tokens.rs` + `tests/token_info.rs` + `tests/rent.rs` + `tests/priority_fee.rs` + `tests/info.rs` + `tests/transport_failure.rs`) deferred to V0.1 follow-up PR; Phase 5.1 ships the consolidated `tests/chain_rpc.rs` covering all 15 method smokes + preflight + broadcast in one file
+
+**Wire-format invariants (Phantom-equivalent parity):**
+
+- `sol send` matches `system_instruction::transfer` + Compute Budget 3-ix layout (`set_cu_limit` + `set_cu_price` + `transfer`); 150k CU + 0 priority fee defaults.
+- `sol send-token` ALWAYS uses `transfer_checked` (NOT `transfer`) — Q10 invariant; decimals pulled from on-chain Mint state via `spl_token::state::Mint::unpack` (NEVER hardcoded).
+- ATA derivation seed = `[owner, token_program_id, mint]` (Q6) — Token-2022 ATA ≠ classic SPL ATA for same `(owner, mint)`.
+- `prepend_create_ata` (idempotent variant) lands BEFORE the transfer; respects `--create-ata` flag.
+- Ed25519 signs the blockhash (Q7) — every send fetches a fresh blockhash via `getLatestBlockhash`.
+- `sendTransaction` body: base64-encoded wire transaction (Anza `bincode::serialize` format); `RpcClient` does the encoding internally.
+- `getTransaction` body: base64-encoded wire transaction in result; `RpcClient` decodes back to `Transaction` (or `EncodedTransaction` for V0.1 if bincode decode adds too much surface).
+
+**17 HTTP RPC methods (the full Phase 7 binding surface) — split across 3 tasks:**
+
+**Task 5.1 (15 methods — critical path):**
+
+| # | Method | V0.1 surface | Used by |
+|---|---|---|---|
+| 1 | `getLatestBlockhash` | `RpcClient::get_latest_blockhash() -> Result<(Hash, u64)>` | send, send-token |
+| 2 | `sendTransaction` | `RpcClient::send_transaction(tx: &Transaction) -> Result<Signature>` (base64 wire) | send, send-token |
+| 3 | `getSignatureStatuses` | `RpcClient::get_signature_status(sig: &Signature) -> Result<Option<TransactionStatus>>` | wait, send (confirm), history, tx |
+| 4 | `simulateTransaction` | `RpcClient::simulate_transaction(tx: &Transaction) -> Result<SimulateResult>` (preflight compute-budget) | send (dry-run), send-token (dry-run) |
+| 5 | `getBalance` | `RpcClient::get_balance(pubkey: &Pubkey) -> Result<u64>` | balance |
+| 6 | `getAccountInfo` | `RpcClient::get_account_info(pubkey: &Pubkey) -> Result<Option<Account>>` | mint decimals (send-token), token-info |
+| 7 | `getMultipleAccounts` | `RpcClient::get_multiple_accounts(pubkeys: &[Pubkey]) -> Result<Vec<Option<Account>>>` | list-tokens (batched mint decimals) |
+| 8 | `getTokenAccountBalance` | `RpcClient::get_token_account_balance(pubkey: &Pubkey) -> Result<UiTokenAmount>` | balance --token, send-token (preflight) |
+| 9 | `getTokenAccountsByOwner` | `RpcClient::get_token_accounts_by_owner(owner: &Pubkey, program: Pubkey) -> Result<Vec<RpcKeyedAccount>>` | list-tokens |
+| 10 | `getTokenSupply` | `RpcClient::get_token_supply(mint: &Pubkey) -> Result<UiTokenAmount>` | token-info |
+| 11 | `getMinimumBalanceForRentExemption` | `RpcClient::get_minimum_balance_for_rent_exemption(data_len: usize) -> Result<u64>` | rent, send-token (auto-ATA preflight) |
+| 12 | `getRecentPrioritizationFees` | `RpcClient::get_recent_prioritization_fees(addresses: &[Pubkey]) -> Result<Vec<RpcPrioritizationFee>>` | send --priority-fee auto |
+| 13 | `getVersion` | `RpcClient::get_version() -> Result<Version>` | info |
+| 14 | `getEpochInfo` | `RpcClient::get_epoch_info() -> Result<EpochInfo>` | info |
+| 15 | `getHealth` | `RpcClient::get_health() -> Result<()>` | info (probe) |
+
+**Task 5.2 (1 method — devnet helper):**
+
+| # | Method | V0.1 surface | Used by |
+|---|---|---|---|
+| 16 | `requestAirdrop` | `RpcClient::request_airdrop(pubkey: &Pubkey, lamports: u64) -> Result<Signature>` (devnet only) | `sol request-airdrop` (Phase 7.7) + integration test fixtures |
+
+**Task 5.3 (1 method — full tx log):**
+
+| # | Method | V0.1 surface | Used by |
+|---|---|---|---|
+| 17 | `getTransaction` | `RpcClient::get_transaction(sig: &Signature, encoding) -> Result<Option<EncodedTransaction>>` (full log; base64 wire) | `sol tx <sig>` (Phase 7.6) |
+
+**Phase 7 command → RPC binding table (the contract Phase 5 implements against):**
+
+| Command | RPC methods used |
+|---|---|
+| `sol balance <addr>` | `getBalance` |
+| `sol balance <addr> --token <mint>` | `getTokenAccountBalance` + `getAccountInfo(mint)` (decimals) |
+| `sol info` | `getVersion` + `getEpochInfo` + `getHealth` |
+| `sol keygen` | none (Phase 1) |
+| `sol keygen --mnemonic` | none (Phase 1) |
+| `sol import <file>` | none (Phase 1) |
+| `sol export <addr>` | none (Phase 1) |
+| `sol send <addr> <amount>` | `getLatestBlockhash` + `simulateTransaction` (if not `--no-simulate`) + `sendTransaction` + `getSignatureStatus` (confirm) |
+| `sol send --priority-fee auto` | `getRecentPrioritizationFees` + above |
+| `sol send-token <mint> <addr> <amount>` | `getAccountInfo(mint)` (decimals + program) + `getTokenAccountBalance` (preflight) + `getAccountInfo(dest_ata)` (existence) + `getLatestBlockhash` + `sendTransaction` + `getSignatureStatus` (confirm) |
+| `sol send-token --create-ata` | above + `getMinimumBalanceForRentExemption(165)` (ATA size) |
+| `sol history <addr>` | `getSignatureStatuses` (paginated) + `getMultipleAccounts` (resolve keys) |
+| `sol tx <signature>` | **Phase 5.3** `getTransaction` (full log) + `getSignatureStatus` (confirmation state) |
+| `sol list-tokens <owner>` | `getTokenAccountsByOwner` + `getMultipleAccounts` (batched mint decimals) |
+| `sol token-info <mint>` | `getAccountInfo(mint)` + `getTokenSupply` |
+| `sol rent <data-len>` | `getMinimumBalanceForRentExemption` |
+| `sol watch <addr>` (V0.1.5) | `accountSubscribe` WS (deferred) |
+| `sol wait <signature>` (V0.1.5) | `signatureSubscribe` WS (deferred) |
+| `sol request-airdrop <addr> <lamports>` (devnet helper) | **Phase 5.2** `requestAirdrop` + `getLatestBlockhash` (confirm) |
+
+**Error mapping (reqwest + JSON-RPC envelopes → `Error`):**
+
+- reqwest connect/DNS/TLS error → `Error::Transport(String)`
+- reqwest timeout (30s) → `Error::Transport(String)`
+- HTTP 5xx → `Error::Transport(String)`
+- JSON-RPC error envelope `{ "error": { "code": -32000, "message": "..." } }` → `Error::Rpc { code, message }`
+- Pre-fund check shortfall → `Error::InsufficientFunds { needed, have }` (before broadcast)
+- `simulateTransaction` returns units consumed > CU limit → `Error::ComputeBudgetExceeded { needed_cu, available_cu }` (before broadcast)
+- `sendTransaction` rejected → `Error::BroadcastFailed { kind }` (from JSON-RPC error code classification)
+- `getSignatureStatus` polls return None past timeout → `Error::ConfirmTimeout { signature, waited_ms }`
+
+**V0.1 explicit non-goals (deferred to V0.1.5 / Phase 5.5 / V0.2):**
+
+- BlockhashCache (TTL cache over `getLatestBlockhash`) — V0.1.5 (Q11 still listed in deep-dive §D, not on V0.1 critical path)
+- Retry-on-stale-hash in `send_and_confirm` — V0.1.5 (stale hash rate <1% on devnet; user can re-run)
+- Full SPKI pinning (full `pinned://<spki-hex>@host[:port]` URL scheme + `SpkiPinnedVerifier` re-export from `bitcoin-wallet-core::chain::spki`) — V0.1.5; **V0.1 ships the escape hatch** `RpcClient::new_with_pinned_spki(url, spki_hex)` for high-value wallets
+- WS subscribes (`account_subscribe`, `signature_subscribe`, `program_subscribe`, `logs_subscribe`, `slot_subscribe`) — V0.1.5 watch mode
+- Token-2022 transfer fee / transfer hook / confidential transfer extensions — V0.2
+
+**V0.1 critical-path tasks (in order):** Task 5.1 (15 methods + hardening) → Task 5.2 (`requestAirdrop` + devnet allowlist) → Task 5.3 (`getTransaction` + `Error::ConfirmPending`) → Task 5.4 (rate limiter) → Task 5.5 (SPKI escape hatch). Each is a separate PR with its own verify gate.
+
+**Task 5.1 acceptance criteria:**
+
+1. `cargo check -p sol-wallet-core --lib --tests` exits 0 with NO Anza `solana-rpc-client` dep in the dep graph (verify via `cargo tree -p sol-wallet-core | grep solana-rpc-client` → empty).
+2. `cargo test -p sol-wallet-core --lib --tests` shows 94 + ~58 new tests passing (20 rpc_methods_mock + 5 preflight + 6 send_native + 8 send_token + 4 balance + 6 list_tokens + 4 token_info + 3 rent + 4 priority_fee + 6 info + 4 transport_failure).
+3. `tests/send_native.rs` + `tests/send_token.rs` integration tests pass on devnet with `RUN_SOL_DEVNET=1` + funded test wallet (transfer 0.001 SOL + transfer 1 USDC; assert signature returned + slot observed + `confirmed` commitment reached within 30s).
+4. Phase 7 pre-implementation check: every `sol` CLI command listed in the binding table above (except `sol tx` → 5.3 and `sol request-airdrop` → 5.2) can be implemented against the V0.1 RPC surface without adding methods to `RpcClient`. Verified by Phase 6.2 library completeness gate.
+5. Plan doc §Phase 5.1 checkboxes flipped to `[x]` in `[skip ci]` follow-up commit (L24).
+6. PR opened to `rust-sol-core` from `sol/phase5.1-rpc-client`, squash-merged with admin bypass (L6).
 
 **Steps:**
-- [ ] Step 1: Implement `SolanaClient` wrapping `solana_client::nonblocking::rpc_client::RpcClient`; supports `new(url)`, `new_with_commitment(url, commitment)`
-- [ ] Step 2: Implement all **21 RPC methods** per deep-dive §I.: `get_latest_blockhash`, `get_balance`, `get_account_info`, `get_multiple_accounts_info`, `get_minimum_balance_for_rent_exemption`, `get_token_account_balance`, `get_token_supply`, `get_token_accounts_by_owner`, `request_airdrop`, `get_health`, `get_recent_prioritization_fees`, `get_version`, `get_epoch_info` (16 HTTP) + `account_subscribe` / `signature_subscribe` / `program_subscribe` / `logs_subscribe` / `slot_subscribe` (5 WS — internal use only V0.1; CLI does not expose) — all delegate to Anza `RpcClient` + `PubsubClient` (no custom JSON-RPC envelope code)
-- [ ] Step 3: Implement `tx::broadcast::send_with_retry(rpc, keypair, message, max_attempts=3)`:
-  - For attempt in 1..=max_attempts:
-    - Fetch FRESH blockhash via `rpc.get_latest_blockhash()`
-    - Re-build `Transaction::new_unsigned(message)` with new blockhash
-    - `tx.sign(&[keypair], new_blockhash)` (Ed25519 signs blockhash — Q7)
-    - `rpc.send_transaction(&tx)`
-    - On success: return signature
-    - On `BlockhashNotFound` OR `BlockCleanedUp`: sleep backoff (100ms / 200ms / 400ms), retry
-    - On other RPC errors: return `BroadcastFailed`
-  - Read deep-dive §D line 1624 for full pseudocode + retry semantics before implementation
-- [ ] Step 4: Implement `wait_for_confirm(rpc, sig, timeout) -> Result<SignatureStatus, ConfirmTimeout>` — polls `getSignatureStatuses` with exponential backoff; commitment levels `Processed | Confirmed | Finalized` per deep-dive §E line 1666 (Confirmed ~1 slot / Finalized ~12 slots)
-- [ ] Step 5: Implement `tests/send_with_retry.rs` (rows 30+31) — gated `RUN_SOL_DEVNET=1`; spawn surfpool OR use devnet; transfer 0.001 SOL; assert `BlockhashNotFound` triggers retry (mock by forcing stale blockhash); observe fresh blockhash re-sign; bogus sig → `Error::ConfirmTimeout` within budget
-- [ ] Step 6: Implement `tests/blockhash_cache.rs` (row 12) — `BlockhashCache::get_or_fetch` returns same hash within TTL; second call within 60s = 0 RPC; TTL expiry triggers refetch; mock clock advances past TTL
-- [ ] Step 7: Implement `tests/rpc_methods_mock.rs` (row 22) — 21 RPC methods against `wiremock` stubs; HTTP 5xx → `Error::Transport` (never panic); timeouts → `Error::Transport` within 30s; empty response → `Error::MalformedResponse`
-- [ ] Step 8: Implement `tests/preflight_balance.rs` (row 19) — mock `RpcClient` returning fixed balance; under-funded (balance < amount + fee + rent) → `Error::InsufficientFunds` before broadcast; funded → broadcast proceeds
-- [ ] Step 9: Implement `tests/tx_status_parse.rs` (row 20) — `TransactionStatus` JSON → struct; success variant parses slot + confirmations; error variant maps per deep-dive §J Error classification; malformed JSON → `Error::MalformedResponse`
-- [ ] Step 10: Implement `tests/transport_failure.rs` (row 34) — RPC pointed at closed port (127.0.0.1:1) → `Error::Transport` within 30s timeout; connection refused → `Error::Transport` within 5s
-- [ ] Step 11: Implement `tests/common/surfpool_spawn.rs` — `spawn_surfpool(port: u16) -> Child`; ephemeral port; 10s health-poll deadline; RAII guard kills on drop
-- [ ] Step 12: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test send_with_retry --test rpc_methods_mock --test preflight_balance --test tx_status_parse --test blockhash_cache --test transport_failure --features loud-red-tests`
-- [ ] Step 13: PAUSE — commit-push-pr
+
+- [ ] Step 1: Add `chain::RpcClient` to `src/chain/rpc.rs` — signature change from prior design: `new(url: &str) -> Result<Self>` (returns `Error::Transport` on URL allowlist fail per Tier 1 finding #1); + 15 JSON-RPC methods (use `reqwest` POST to `{ "jsonrpc": "2.0", "id": monotonic_counter, "method": "...", "params": [...] }`); parse typed `RpcResponse<T>` / `RpcError { code, message }` structs with `#[derive(Deserialize)]` + `#[serde(deny_unknown_fields)]` (Tier 2 finding #7 — no `serde_json::Value` indexing); 30s timeout via `reqwest::Client::builder().timeout(Duration::from_secs(30))`; `requestAirdrop` and `getTransaction` added in Tasks 5.2 and 5.3 respectively; `sendTransaction` body uses `bincode::serialize` with `bincode::config::legacy()` (wire-compatible with Anza RPC servers) and base64-encodes the result; bincode version pinned to `"=1.3.3"` in workspace (already pinned per Phase 3 plan); `simulate_transaction` doc comment MUST note Tier 4 finding #4 (result is a hint, not a guarantee — cluster state may have changed between simulate and send); custom `Debug` impl on `RpcClient` prints `RpcClient { url: <scheme>://<host>[:port], http: Client }` (Tier 2 finding #11 — strip query string, never leak API keys)
+- [ ] Step 2: Add URL allowlist in `RpcClient::new` (Tier 1 finding #1) — parse with `url::Url`; accept `https` for any host; accept `http` ONLY when host == `localhost` OR `127.0.0.1`; reject everything else (`ftp://`, `file://`, `http://attacker.com`, `http://192.168.x.x` from non-localhost address); on reject return `Error::Transport("RPC URL must be https://... or http://localhost[:port] (got scheme=... host=...)")`; do NOT include the full URL in the error message (only scheme + host); add 4 unit tests: `https://api.devnet.solana.com` → `Ok`; `http://localhost:8899` → `Ok`; `http://127.0.0.1:8899` → `Ok`; `http://attacker.com` → `Err(Transport)`; `ftp://...` → `Err(Transport)`
+- [ ] Step 3: Add 8 new `Error` variants to `src/error.rs` — existing 7 from prior design (`Transport`, `Rpc`, `InsufficientFunds`, `BroadcastFailed { kind }`, `ConfirmTimeout { signature, waited_ms }`, `ComputeBudgetExceeded { needed_cu, available_cu }`, `Unimplemented`) + new `ConfirmPending { signature: String, elapsed_ms: u64 }` (Tier 3 finding #10 — distinct from `ConfirmTimeout` so the CLI can surface "tx pending — check explorer: <url>" for `--finalized` sends that don't lock up within 30s); preserve all 8 existing Phase 1-4 variants
+- [ ] Step 4: Implement `src/chain/preflight.rs` — `check_native_balance(rpc, pubkey, needed_lamports, fee_lamports) -> Result<()>` (calls `getBalance`; if `balance < needed + fee` returns `Error::InsufficientFunds { needed: needed + fee, have: balance }`); `check_token_balance(rpc, ata, expected_mint) -> Result<u64>` (calls `getTokenAccountBalance`; verifies mint matches expected; returns base units); `check_ata_exists(rpc, ata) -> Result<bool>` (calls `getAccountInfo`; returns `Some(()) -> true`, `None -> false`); `resolve_mint_decimals(rpc, mint) -> Result<u8>` (calls `getAccountInfo(mint)`; unpacks `spl_token::state::Mint`; returns `mint.decimals`); `check_rent_exempt(rpc, data_len) -> Result<u64>` (calls `getMinimumBalanceForRentExemption`)
+- [ ] Step 5: Implement `src/tx/send_native.rs` — `prepare_sol_transfer_message(from, to, lamports, cu_limit, cu_price, blockhash) -> Message` (calls `tx::builder::build_sol_transfer_with_budget`); pure function, no IO
+- [ ] Step 6: Implement `src/tx/send_token.rs` — `prepare_spl_transfer_message(wallet_pubkey, source_ata, dest_ata, mint, program, amount, decimals, cu_limit, cu_price, blockhash, prepend_ata_create) -> Message` (calls `tx::builder::build_spl_transfer_checked` + optional `tx::builder::prepend_create_ata` + `tx::builder::compute_budget_instructions`); pure function, no IO
+- [ ] Step 7: Implement `src/tx/broadcast.rs` — `send_and_confirm(rpc, signed_tx, timeout) -> Result<Signature>`: (a) `rpc.send_transaction(signed_tx)` → signature; (b) poll `rpc.get_signature_status(sig)` with 200ms→400ms→...→2s backoff (cap); (c) for `--finalized` commitment, the 30s default may be insufficient (~12 slots = ~5s normally, but cluster can stall); on first poll that returns `Some(status)` WITHOUT reaching the requested commitment after `timeout / 2` elapsed, return `Error::ConfirmPending { signature, elapsed_ms: (timeout / 2).as_millis() }` (NOT `ConfirmTimeout` — tx is still valid, just slow); only return `ConfirmTimeout` if the full `timeout` elapses; this lets Phase 7 CLI surface "tx pending — check <explorer_url>" instead of "failed"
+- [ ] Step 8: Wire `pub mod chain;` in `src/lib.rs`; `pub mod broadcast; pub mod send_native; pub mod send_token;` in `src/tx/mod.rs`
+- [ ] Step 9: Add `reqwest = { workspace = true }` + `wiremock = "0.6"` to `src/Cargo.toml` (`wiremock` in `[dev-dependencies]`); do NOT add `solana-rpc-client`; verify `cargo tree -p sol-wallet-core | grep solana-rpc-client` returns empty
+- [ ] Step 10: Implement `tests/rpc_methods_mock.rs` (~20 tests: 15 method mocks + 4 URL allowlist tests + 1 bincode round-trip test per Tier 2 finding #8) — spin up mock HTTP server on ephemeral port (use `wiremock` crate); mock all 15 methods returning canned responses (blockhash with slot, signature base58, balance u64, account info with optional owner + data, etc.); assert `RpcClient` deserializes correctly; assert JSON-RPC error envelope `{ "error": {"code": -32000, "message": "..."}}` → `Error::Rpc { code: -32000, ... }`; assert connect-refused → `Error::Transport`; assert HTTP 5xx → `Error::Transport`; assert timeout (mock server hangs) → `Error::Transport` after 30s; assert bincode round-trip: serialize a known `Transaction` with `bincode::serialize(&tx, bincode::config::legacy())` → base64 → assert it matches the Anza test vector OR round-trips through `bincode::deserialize` to the original `Transaction`
+- [ ] Step 11: Implement `tests/preflight.rs` (~5 tests) — mock `getBalance` returning fixed u64; `check_native_balance` returns `Ok(())` when funded, `Err(InsufficientFunds { needed, have })` when under-funded; `check_token_balance` returns base units from `getTokenAccountBalance`; `check_ata_exists` returns `false` when `getAccountInfo` returns `None`; `resolve_mint_decimals` returns `6` from mocked Mint state (Q10 — verify unpacking 82 bytes returns correct decimals byte)
+- [ ] Step 12: Implement `tests/send_native.rs` (~6 tests) — unit: `prepare_sol_transfer_message` produces 3-ix message (cu_limit + cu_price + system_instruction::transfer), correct account_keys ordering, correct recent_blockhash; integration gated `RUN_SOL_DEVNET=1`: load keypair from `tests/fixtures/test_keypair.json`, `RpcClient::new("https://api.devnet.solana.com")`, `prepare_sol_transfer_message`, `tx.sign(...)`, `send_and_confirm(rpc, tx, 30s)`, assert `Ok(sig)` + sig base58 string + presence in `getSignatureStatuses` after 1s poll
+- [ ] Step 13: Implement `tests/send_token.rs` (~8 tests) — unit: `prepare_spl_transfer_message` produces 3-ix (or 4-ix with `--create-ata`) message; classic vs Token-2022 dispatch per `TokenProgram` arg (Q6); decimals from `spl_token::state::Mint::unpack` of mocked account data (Q10 — verify changing decimals byte changes ix payload); integration gated `RUN_SOL_DEVNET=1`: resolve USDC mint on devnet (`4wU2tTRJJRx9K7xXYZqDq4WJ7vmnEHr9tM7NMGfX5x1b` or current devnet USDC), `check_ata_exists` for source + dest, `prepare_spl_transfer_message`, sign + send + confirm
+- [ ] Step 14: Implement `tests/balance.rs` (~4 tests) — unit: `get_balance` parses JSON-RPC `{ "value": lamports }`; `get_token_account_balance` parses `{ "value": { "amount": "1000000", "decimals": 6, "uiAmount": 1.0 } }`; integration: devnet fetch of a known funded address
+- [ ] Step 15: Implement `tests/list_tokens.rs` (~6 tests) — unit: `get_token_accounts_by_owner` parses `{ "value": [{ "pubkey": "...", "account": { "data": "...", "owner": "TokenkegQ..." } }] }`; `get_multiple_accounts` batched fetch; mint decimals unpacked from each account's owner field; integration: devnet fetch of a known wallet's token list
+- [ ] Step 16: Implement `tests/token_info.rs` (~4 tests) — unit: `get_account_info` + Mint state unpack returns `decimals`; `get_token_supply` parses `{ "value": { "amount": "...", "decimals": 6, "uiAmount": 1000000.0 } }`; integration: devnet USDC info
+- [ ] Step 17: Implement `tests/rent.rs` (~3 tests) — unit: `get_minimum_balance_for_rent_exemption(165)` returns u64 lamports (165 bytes = ATA size); integration: devnet fetch
+- [ ] Step 18: Implement `tests/priority_fee.rs` (~4 tests) — unit: `get_recent_prioritization_fees` parses `{ "value": [{ "slot": 123, "prioritizationFee": 5000 }] }`; auto-estimation logic (median of last N observations) returns u64 microlamports; integration: devnet fetch
+- [ ] Step 19: Implement `tests/info.rs` (~6 tests) — unit: `get_version` parses `{ "solana-core": "1.18.x", "feature-set": 12345 }`; `get_epoch_info` parses slot + epoch + block height; `get_health` returns `Ok(())` on `Ok`-health, `Err(Rpc { code, ... })` on unhealthy; integration: devnet probe
+- [ ] Step 20: Implement `tests/transport_failure.rs` (~4 tests) — RPC pointed at closed port (127.0.0.1:1) → `Error::Transport` within 5s; mock server returns 500 → `Error::Transport`; mock server returns malformed JSON → `Error::Rpc` (or `Transport`); mock server hangs > 30s → `Error::Transport` (timeout)
+- [ ] Step 21: Verify gate: `cargo fmt --all && cargo clippy -p sol-wallet-core --lib --tests -- -D warnings && cargo test -p sol-wallet-core --lib --tests` (all green; assert 94 + 70 = **164 tests pass**; 20 rpc_methods_mock + 5 preflight + 6 send_native + 8 send_token + 4 balance + 6 list_tokens + 4 token_info + 3 rent + 4 priority_fee + 6 info + 4 transport_failure)
+- [ ] Step 22: Phase 6.2 library completeness gate (run BEFORE Phase 7 starts): confirm every `sol` CLI command listed in the binding table above can be implemented against the V0.1 RPC surface; flag any new RPC method needed (would require Phase 5.5 PR)
+- [ ] Step 23: Add `wallet-desktop` integration smoke (out of V0.1 scope but verify the Phase 7 CLI import path works): import `sol_wallet_core::{chain::RpcClient, chain::preflight, tx::{send_native, send_token, broadcast}}` from a small `examples/send_sol_devnet.rs` binary; run against devnet with a funded keypair; print signature
+- [ ] Step 24: Add plaintext keypair warning doc comment (Tier 2 finding #3) — on `chain::rpc` module doc + `chain::mod` re-export; text: `// SECURITY: V0.1 reads the wallet keypair from a raw 64-byte file at $HOME/.config/sol-wallet/wallet.json (mode 0600). This file contains unencrypted private key bytes — DO NOT sync to cloud storage (iCloud, Dropbox, Google Drive), DO NOT commit to git, DO NOT share the file with any process you do not trust. Phase 6 replaces this with Argon2id-encrypted BIP-39 mnemonic storage; until then, treat the wallet file like a password.`
+- [ ] Step 25: PAUSE — commit-push-pr (L6 same-scope bundle)
+
+### Task 5.2 (TBD): `RpcClient::request_airdrop` (devnet helper)
+
+**Depends on:** Task 5.1 merged (the `RpcClient` + `send_and_confirm` infrastructure + `reqwest` JSON-RPC envelope parser).
+
+**Files:**
+
+- Modify: `src/chain/rpc.rs` (add `request_airdrop(pubkey: &Pubkey, lamports: u64) -> Result<Signature>` method, ~30 LoC; uses existing JSON-RPC envelope + base64 sig parser from 5.1; **devnet host allowlist per Tier 3 finding #6 — parses the `RpcClient`'s `url` host and rejects `api.mainnet-beta.solana.com` + any host not in the devnet allowlist**; allowlist: `api.devnet.solana.com`, `api.testnet.solana.com`, `localhost`, `127.0.0.1`)
+- Modify: `tests/rpc_methods_mock.rs` (add 2 tests: `requestAirdrop` returns base58 sig on success; JSON-RPC error envelope `code: -32003` (a known devnet "airdrop limit" code) → `Error::Rpc { code: -32003, message }`)
+- Modify: `tests/rpc_methods_mock.rs` (add 1 unit test for the devnet allowlist: `RpcClient::new("https://api.mainnet-beta.solana.com").unwrap().request_airdrop(pubkey, 1_000)` → `Err(Transport("requestAirdrop only valid on devnet / testnet / local validator; current RPC: api.mainnet-beta.solana.com"))`)
+- Create: `tests/airdrop.rs` (~3 tests: integration gated `RUN_SOL_DEVNET=1`; `RpcClient::new("https://api.devnet.solana.com")`; `request_airdrop(pubkey, 1_000_000_000)` → `Ok(sig)`; verify with `get_signature_status` after 5s)
+
+**Task 5.2 acceptance criteria:**
+
+1. `cargo test -p sol-wallet-core --test rpc_methods_mock` adds 3 tests (total ~23 in that file: 2 airdrop mock + 1 mainnet-rejection)
+2. `cargo test -p sol-wallet-core --test airdrop` shows 3 tests (gated `RUN_SOL_DEVNET=1`); 94 + 70 + 3 = **167 tests pass** when 5.2 lands
+3. `sol request-airdrop` (Phase 7.7) binds to `RpcClient::request_airdrop` + `send_and_confirm` without further `RpcClient` additions
+4. Plan doc §Phase 5.2 checkboxes flipped to `[x]` in `[skip ci]` follow-up commit (L24)
+5. PR opened to `rust-sol-core` from `sol/phase5.2-airdrop`, squash-merged with admin bypass (L6)
+
+**Steps:**
+
+- [ ] Step 1: Add `request_airdrop` to `src/chain/rpc.rs` — POST `{ "jsonrpc": "2.0", "id": 1, "method": "requestAirdrop", "params": [<base58-pubkey>, <lamports>] }`; parse `result` as base58 signature string; **devnet host allowlist check FIRST (before POST)**: reject with `Error::Transport("requestAirdrop only valid on devnet / testnet / local validator; current RPC: <host>")` if `self.url` host is not in the allowlist above
+- [ ] Step 2: Add 3 unit tests to `tests/rpc_methods_mock.rs` (success + airdrop-limit error envelope + mainnet-rejection allowlist)
+- [ ] Step 3: Create `tests/airdrop.rs` with 3 integration tests (gated `RUN_SOL_DEVNET=1`; assert sig returned; assert confirmed within 30s via `send_and_confirm`; assert `request_airdrop` with `--rpc-url https://api.mainnet-beta.solana.com` fails fast with the allowlist error)
+- [ ] Step 4: Verify gate: `RUN_SOL_DEVNET=1 cargo test -p sol-wallet-core --lib --tests --test airdrop`
+- [ ] Step 5: PAUSE — commit-push-pr (L6 same-scope bundle)
+
+### Task 5.3 (TBD): `RpcClient::get_transaction` (full tx log for `sol tx`)
+
+**Depends on:** Task 5.1 merged.
+
+**Files:**
+
+- Modify: `src/chain/rpc.rs` (add `get_transaction(sig: &Signature, encoding: TransactionEncoding) -> Result<Option<EncodedTransaction>>` method, ~80 LoC; uses existing JSON-RPC envelope; `encoding` is `TransactionEncoding::Json` or `TransactionEncoding::Binary`; for V0.1 we return `Option<EncodedTransaction>` from the Anza `solana_transaction_status_client_types` crate — Phase 7 decodes to `Transaction` as needed)
+- Modify: `tests/rpc_methods_mock.rs` (add 2 tests: `getTransaction` returns encoded tx with base64 wire; `getTransaction` with unknown sig → `Ok(None)` (not an error per JSON-RPC semantics))
+- Create: `tests/tx_log.rs` (~4 tests: integration gated `RUN_SOL_DEVNET=1`; send 0.001 SOL via `send_and_confirm`; then `get_transaction(sig, TransactionEncoding::Json)` returns `Some(_)` with `slot` + `transaction.message.recent_blockhash` matching; decode `transaction.message.instructions[0]` = system transfer ix; `get_transaction` with bogus sig → `Ok(None)`)
+
+**Task 5.3 acceptance criteria:**
+
+1. `cargo test -p sol-wallet-core --test rpc_methods_mock` adds 2 tests (total ~25 in that file)
+2. `cargo test -p sol-wallet-core --test tx_log` shows 4 tests; 94 + 70 + 3 + 4 = **171 tests pass** when 5.3 lands (Phase 5 critical path done)
+3. `sol tx <sig>` (Phase 7.6) binds to `RpcClient::get_transaction` + `get_signature_status` without further `RpcClient` additions
+4. Phase 6.2 library completeness gate can now pass for all 22 Phase 7 commands
+5. Plan doc §Phase 5.3 checkboxes flipped to `[x]` in `[skip ci]` follow-up commit (L24)
+6. PR opened to `rust-sol-core` from `sol/phase5.3-tx-log`, squash-merged with admin bypass (L6)
+
+**Steps:**
+
+- [ ] Step 1: Add `get_transaction` to `src/chain/rpc.rs` — POST `{ "jsonrpc": "2.0", "id": 1, "method": "getTransaction", "params": [<base58-sig>, {"encoding": "json", "maxSupportedTransactionVersion": 0}] }`; parse `result` (an object with `slot: u64`, `blockTime: Option<i64>`, `transaction: EncodedTransaction` with `message: UiMessage` + `signatures: Vec<String>`) or `null` for unknown sig
+- [ ] Step 2: Add 2 unit tests to `tests/rpc_methods_mock.rs` (success + unknown sig → `Ok(None)`)
+- [ ] Step 3: Create `tests/tx_log.rs` with 4 integration tests (gated `RUN_SOL_DEVNET=1`; send 0.001 SOL; fetch back; decode message.instructions; assert recent_blockhash matches; bogus sig → `Ok(None)`)
+- [ ] Step 4: Verify gate: `RUN_SOL_DEVNET=1 cargo test -p sol-wallet-core --lib --tests --test tx_log`
+- [ ] Step 5: PAUSE — commit-push-pr (L6 same-scope bundle)
+
+### Task 5.4 (TBD): Per-`RpcClient` rate limiter (token bucket, default 50 req/s burst 100)
+
+**Depends on:** Task 5.1 merged (the `RpcClient` + `send_and_confirm` infrastructure).
+
+**Why this exists (Tier 3 finding #5):** without a rate limiter, a malicious CLI script or buggy Phase 7 handler could fire 1000s of `sendTransaction` / `getSignatureStatuses` per second, bypassing Solana cluster-level rate limits (which count requests, not operations) and enabling duplicate-send footguns (signing a tx, hitting `sendTransaction` twice before the first confirms → potential replay race). `solana-test-validator` and surfpool also rate-limit at lower thresholds; client-side throttling prevents spurious 429s from cascading the test suite.
+
+**Files:**
+
+- Modify: `src/chain/rpc.rs` (add `RateLimiter` struct + `acquire()` non-blocking permit; store in `RpcClient`; default `50 req/s, burst 100`; configurable via `RpcClient::with_rate_limit(req_per_sec: u32, burst: u32)`)
+- Modify: `src/chain/rpc.rs` (wrap every JSON-RPC POST in `rate_limiter.acquire().await`; on permit-deny, return `Error::Transport("rate limit exceeded: <url-host>")` after a 1s backoff retry; if still denied, surface `Error::Transport` and log a warning)
+- Create: `src/chain/rate_limit.rs` (~80 LoC: hand-rolled token bucket; refill rate `req_per_sec`; max `burst`; no `governor` crate dep to keep workspace lean; uses `tokio::time::Instant` for monotonic clock; thread-safe via `Arc<Mutex<Inner>>`)
+- Modify: `tests/rpc_methods_mock.rs` (add 3 tests: `RpcClient::with_rate_limit(10, 5)` then fire 7 requests immediately; first 5 succeed within 100ms; next 2 return `Error::Transport("rate limit exceeded: ...") within 1s; after 1s wait, the bucket refills and 1 more succeeds)
+- Create: `tests/rate_limit.rs` (~3 tests: unit-only — fire 200 requests against mock at rate 50 req/s; assert all complete within 4-5s; assert no spurious 429 from mock; assert `with_rate_limit(1, 1)` + immediate second request → `Error::Transport`)
+
+**Task 5.4 acceptance criteria:**
+
+1. `cargo test -p sol-wallet-core --test rpc_methods_mock` adds 3 tests (total ~28)
+2. `cargo test -p sol-wallet-core --test rate_limit` shows 3 tests; 94 + 70 + 3 + 4 + 3 = **174 tests pass** when 5.4 lands
+3. `sol send` rate-limited to 1 request per ~20ms (matches cluster-level 50 req/s ceiling with headroom); no `sendTransaction` race when user spams Enter
+4. `with_rate_limit(0, 0)` is a special "disabled" sentinel — useful for tests that don't want rate limiting
+5. Plan doc §Phase 5.4 checkboxes flipped to `[x]` in `[skip ci]` follow-up commit (L24)
+6. PR opened to `rust-sol-core` from `sol/phase5.4-rate-limit`, squash-merged with admin bypass (L6)
+
+**Steps:**
+
+- [ ] Step 1: Add `src/chain/rate_limit.rs` — `pub struct RateLimiter { capacity: u32, refill_per_sec: u32, tokens: Arc<Mutex<f64>>, last_refill: Arc<Mutex<Instant>> }`; `pub async fn acquire(&self) -> Result<(), Error>`; refill on each `acquire` call: `tokens = min(capacity, tokens + elapsed * refill_per_sec)`; if `tokens >= 1.0`, deduct and return `Ok(())`; if `tokens < 1.0`, sleep `Duration::from_secs_f64((1.0 - tokens) / refill_per_sec)`, retry once; if still 0, return `Err(Transport("rate limit exceeded"))`
+- [ ] Step 2: Add `RateLimiter` field to `RpcClient` (default `RateLimiter::new(50, 100)`); add `with_rate_limit(self, req_per_sec: u32, burst: u32) -> Self` builder method; add `set_rate_limit(&mut self, limiter: RateLimiter)` for tests
+- [ ] Step 3: Wrap every JSON-RPC POST helper in `self.rate_limiter.acquire().await?` (one helper function `pub(super) async fn post<T>(&self, method: &str, params: Value) -> Result<T>` that all 17 RPC methods call into)
+- [ ] Step 4: Add 3 unit tests to `tests/rpc_methods_mock.rs` (burst exhaust, refill, 0/0 disabled)
+- [ ] Step 5: Create `tests/rate_limit.rs` with 3 unit tests (200 req at 50/s completes in 4-5s; `with_rate_limit(1, 1)` + second request fails; `with_rate_limit(0, 0)` passes through)
+- [ ] Step 6: Verify gate: `cargo test -p sol-wallet-core --lib --tests --test rate_limit`
+- [ ] Step 7: PAUSE — commit-push-pr (L6 same-scope bundle)
+
+### Task 5.5 (TBD): `RpcClient::new_with_pinned_spki` (V0.1 SPKI escape hatch)
+
+**Depends on:** Task 5.1 merged.
+
+**Why this exists (Tier 3 finding #2):** V0.1 ships without SPKI pinning (Anza's `solana-rpc-client` dropped per #555 → custom `reqwest` transport → no built-in SPKI verifier). Without pinning, a compromised CA or hostile LAN DNS can MITM all RPC traffic, including the moment a `sendTransaction` body leaves the wallet — the attacker can rebroadcast with a higher priority fee (front-run) or capture the signature for replay. For high-value wallets, this is unacceptable. The full `pinned://<spki-hex>@host[:port]` URL scheme ships in V0.1.5. For V0.1, we ship a single-URL constructor that takes the SPKI SHA-256 hex explicitly.
+
+**Files:**
+
+- Modify: `src/chain/rpc.rs` (add `pub fn new_with_pinned_spki(url: &str, expected_spki_sha256_hex: &str) -> Result<Self>`; wraps `RpcClient::new`; on every TLS handshake, the custom `rustls::ClientConfig` checks the leaf cert's `SubjectPublicKeyInfo` SHA-256 against the expected value; mismatch → abort connection with `Error::Transport("SPKI pin mismatch: got <sha256>, expected <sha256>")`)
+- Modify: `src/chain/rpc.rs` (add `pub fn spki_pin() -> Option<&[u8]>` accessor on `RpcClient` for the CLI to display the active pin in `sol info`)
+- Create: `tests/spki_pin.rs` (~5 tests: unit — load 2 self-signed test certs with different SPKIs from `tests/fixtures/spki_a.der` + `spki_b.der`; assert `new_with_pinned_spki` accepts matching SPKI; rejects mismatched SPKI; rejects when expected SPKI is `Vec::new()`; integration `RUN_SOL_DEVNET=1` — `new_with_pinned_spki("https://api.devnet.solana.com", <api-devnet-spki-hex-from-digicert>)` succeeds; on a wrong pin, the request fails with `Error::Transport` within 5s)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/fixtures/spki_a.der` + `spki_b.der` (test fixtures — generate via `openssl req -x509 -newkey ed25519 -nodes -keyout ...` in a setup script; commit to git as test fixtures; 2 KB each)
+- Modify: `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` (Phase 5.5 entry: "Added `RpcClient::new_with_pinned_spki` constructor for high-value wallets. V0.1.5 will add the `pinned://<hex>@host[:port]` URL scheme. Until V0.1.5, users must extract the SPKI hex from their RPC provider's leaf cert (use `openssl x509 -in cert.pem -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum`) and pass it via `--rpc-spki-pin <hex>` CLI flag")
+
+**Task 5.5 acceptance criteria:**
+
+1. `cargo test -p sol-wallet-core --test spki_pin` shows 5 tests (4 unit + 1 devnet integration); 94 + 70 + 3 + 4 + 3 + 5 = **179 tests pass** when 5.5 lands (full Phase 5 done: 5.1 critical path + 5.2 devnet + 5.3 tx log + 5.4 rate limit + 5.5 SPKI escape hatch)
+2. Phase 7 CLI `--rpc-spki-pin <hex>` flag wires to `new_with_pinned_spki` when present
+3. `sol info` displays the active pin (or "none — using default rustls system roots" warning) so users know whether their connection is MITM-able
+4. Plan doc §Phase 5.5 checkboxes flipped to `[x]` in `[skip ci]` follow-up commit (L24)
+5. PR opened to `rust-sol-core` from `sol/phase5.5-spki-pin`, squash-merged with admin bypass (L6)
+
+**Steps:**
+
+- [ ] Step 1: Add `new_with_pinned_spki` to `src/chain/rpc.rs` — builds `rustls::ClientConfig` with a custom `ServerCertVerifier` that calls `x509_parser::parse_x509_certificate(cert_der)`, extracts the SPKI DER, computes `sha256(spki_der)`, compares to expected; on mismatch, returns `rustls::Error::General("SPKI pin mismatch")`; URL allowlist (same as `new`) applied first
+- [ ] Step 2: Add `spki_pin()` accessor on `RpcClient` returning `Option<&[u8]>` (the pinned hash, or `None` if default verifier is in use)
+- [ ] Step 3: Generate 2 test cert fixtures via `openssl req -x509 -newkey ed25519 -nodes` — commit `tests/fixtures/spki_a.der` + `spki_b.der` to git (test fixtures, not secrets)
+- [ ] Step 4: Add 5 tests to `tests/spki_pin.rs` (matching pin ok; mismatched pin rejected; empty pin rejected; integration against devnet; doc-comment test that `new` does NOT pin by default)
+- [ ] Step 5: Verify gate: `RUN_SOL_DEVNET=1 cargo test -p sol-wallet-core --lib --tests --test spki_pin`
+- [ ] Step 6: PAUSE — commit-push-pr (L6 same-scope bundle)
 
 ---
 
@@ -939,8 +1234,8 @@ Twelve deltas between the plan text and the live Anza 4.1.0 / spl-token 9.0.0 / 
 | 27 | `tx/` submit_spl_transfer held | Phase 7.2 | `tests/submit_spl_local_held.rs` | ✅ |
 | 28 | `tx/` submit_spl_transfer fresh | Phase 7.2 | `tests/submit_spl_local_fresh.rs` | ✅ |
 | 29 | `tx/` submit_spl_approve + allowance | Phase 7.2 | `tests/submit_spl_local_approve.rs` | ✅ |
-| 30 | `tx/broadcast.rs` send_with_retry stale | Phase 5.1 | `tests/send_with_retry.rs` | ✅ |
-| 31 | `tx/wait.rs` wait_for_confirm + timeout | Phase 5.1 | `tests/send_with_retry.rs` | ✅ |
+| 30 | `tx/broadcast.rs` send_with_retry stale | Phase 5.5 (V0.1.5) | `tests/send_with_retry.rs` (V0.1.5) | ⏸️ V0.1.5 |
+| 31 | `tx/wait.rs` wait_for_confirm + timeout | Phase 5.5 (V0.1.5) | `tests/send_with_retry.rs` (V0.1.5) | ⏸️ V0.1.5 |
 | 32 | `chain/solana_client.rs` get_health boot probe | Phase 7.2 | `tests/boot_probe_local.rs` | ✅ |
 | 33 | SPL USDC mainnet $0.001 self-send | Phase 9.1 | `tests/mainnet_smoke.rs` + `crates/sol/tests/cli_mainnet_smoke.rs` | ✅ |
 | 34 | transport failure: closed port | Phase 5.1 | `tests/transport_failure.rs` | ✅ |
@@ -980,7 +1275,8 @@ Twelve deltas between the plan text and the live Anza 4.1.0 / spl-token 9.0.0 / 
 **Files:** none (verification only)
 
 **Steps:**
-- [ ] Step 1: Confirm `crates/sol-wallet-core/src/lib.rs` re-exports all public surface needed by Phase 7 CLI handlers (`Wallet`, `WalletManager`, `SolanaClient`, `SolanaConfig`, `build_sol_transfer`, `build_spl_transfer_checked`, `send_with_retry`, `wait_for_confirm`, `Error`).
+
+- [ ] Step 1: Confirm `crates/sol-wallet-core/src/lib.rs` re-exports all public surface needed by Phase 7 CLI handlers (`Wallet`, `WalletManager`, `RpcClient`, `SolanaConfig`, `build_sol_transfer`, `build_spl_transfer_checked`, `send_and_confirm`, `Error`; **V0.1.5: `send_with_retry`, `wait_for_confirm` added; `SolanaClient` deprecated in favor of `RpcClient`**).
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `cargo doc -p sol-wallet-core --no-deps` shows all 9 names)
 - [ ] Step 2: Confirm `common/mod.rs` exports `mock_spl_usdc`, `surfpool_spawn`, `faucet`, `keypair_fixture` for `crates/sol/tests/` reuse per deep-dive `### Shared helpers reused from sol-wallet-core`.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `grep` audit of `common/mod.rs`)
@@ -1126,13 +1422,13 @@ CLI tests (crates/sol/tests/) — Phase 7.2 owns the remaining 4 CLI test files 
 | 8  | Wallet-to-wallet SOL | `crates/sol/tests/cli_wallet.rs` | Phase 7.1 |
 | 9  | Wallet-to-wallet SPL | `crates/sol/tests/cli_spl.rs` | Phase 7.1 |
 | 10 | Send-speedup | `tests/submit_send_speedup_local.rs` + `crates/sol/tests/cli_integration_surfpool.rs` | Phase 7.2 |
-| 11 | Blockhash retry on stale | `tests/send_with_retry.rs` (Phase 5.1) + `crates/sol/tests/cli_integration_surfpool.rs` | Phase 5.1 + 7.2 |
+| 11 | Blockhash retry on stale | (V0.1.5) `tests/send_with_retry.rs` (Phase 5.5) + `crates/sol/tests/cli_integration_surfpool.rs` | Phase 5.5 + 7.2 |
 | 12 | Insufficient balance | `tests/preflight_balance.rs` (Phase 5.1) + `crates/sol/tests/cli_integration_surfpool.rs` | Phase 5.1 + 7.2 |
 | 13 | Dry-run (simulate) | `tests/tx_serde.rs` (extend Phase 3.1 to add `--dry-run` simulate case) + `crates/sol/tests/cli_integration_surfpool.rs` | Phase 3.1 Modify + Phase 7.2 |
 | 14 | Sign-only (no broadcast) | `tests/sign_only.rs` (Phase 1.2) + `crates/sol/tests/cli_wallet.rs` | Phase 1.2 + 7.1 |
-| 15 | Confirmation polling — success | `tests/send_with_retry.rs` (Phase 5.1) + `crates/sol/tests/cli_tx.rs` | Phase 5.1 + 7.1 |
-| 16 | Confirmation polling — timeout | `tests/send_with_retry.rs` (Phase 5.1) + `crates/sol/tests/cli_tx.rs` | Phase 5.1 + 7.1 |
-| 17 | Finalized commitment | `tests/send_with_retry.rs` (Phase 5.1) + `crates/sol/tests/cli_tx.rs` | Phase 5.1 + 7.1 |
+| 15 | Confirmation polling — success | `tests/send_native.rs` + `tests/send_token.rs` (Phase 5.1) + `crates/sol/tests/cli_tx.rs` | Phase 5.1 + 7.1 |
+| 16 | Confirmation polling — timeout | `tests/send_native.rs` (V0.1: short blockhash, expect `Error::ConfirmTimeout` after 30s) + `crates/sol/tests/cli_tx.rs` | Phase 5.1 + 7.1 |
+| 17 | Finalized commitment | `tests/send_native.rs` (V0.1: `--finalized` flag path) + `crates/sol/tests/cli_tx.rs` | Phase 5.1 + 7.1 |
 | 18 | Wallet list across clusters | `crates/sol/tests/cli_wallet.rs` + `crates/sol/tests/cli_config.rs` | Phase 7.1 |
 | 19 | Wallet delete + rename | `tests/wallet_lifecycle.rs` (Phase 6.1) + `crates/sol/tests/cli_wallet.rs` | Phase 6.1 + 7.1 |
 | 20 | Config switch cluster | `crates/sol/tests/cli_config.rs` | Phase 7.1 |
@@ -1305,7 +1601,7 @@ Deep-dive [§"Test scenario — sol-wallet-core V0.1"](docs/wallets/2026-09-08-s
 | 27  | end-to-end SPL transfer (held ATA)     | receipt SUCCESS, ~5k CU                                 | **V15** Phase 7.2                 | ✅ covered                                           |
 | 28  | end-to-end SPL transfer (fresh ATA)    | 2 ATAs created, ~0.00204 SOL rent                       | **V15** Phase 7.2                 | ✅ covered                                           |
 | 29  | end-to-end SPL approve                  | approve + allowance view                               | **V15** Phase 7.2                 | ⚠️ PARTIAL — add explicit spl-approve test           |
-| 30  | `send_with_retry` stale blockhash      | `BlockhashNotFound` → retry with fresh                  | **V6** Phase 5.1 (devnet-gated)  | ✅ covered                                           |
+| 30  | `send_with_retry` stale blockhash      | `BlockhashNotFound` → retry with fresh                  | **V6** Phase 5.5 (V0.1.5) (devnet-gated)  | ⏸️ V0.1.5                           |
 | 31  | `wait_for_confirm` success + timeout    | success returns receipt; bogus sig → `ConfirmTimeout`  | **V6** Phase 5.1 (implicit)     | ⚠️ PARTIAL — explicit timeout test missing         |
 | 32  | `get_health` boot probe                  | cluster enum resolves `Localnet`                       | **V15** Phase 7.2                 | ⚠️ PARTIAL                                           |
 | 33  | mainnet $0.001 USDC self-send           | confirmed on explorer                                  | **V12** Phase 9.1 (Q4 gate)     | ✅ covered                                           |

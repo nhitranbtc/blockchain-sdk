@@ -20,4 +20,13 @@
 //! there on purpose — the Phase 7 CLI pulls `tx::builder` and
 //! `tx::broadcast` separately to keep the dependency graph shallow.
 
+pub mod broadcast;
 pub mod builder;
+pub mod native;
+pub mod spl;
+
+pub use broadcast::{
+    send_and_confirm, wait_for_confirm, DEFAULT_CONFIRM_TIMEOUT, DEFAULT_SEND_MAX_ATTEMPTS,
+};
+pub use native::prepare_sol_transfer_message;
+pub use spl::prepare_spl_transfer_message;
