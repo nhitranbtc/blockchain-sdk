@@ -313,16 +313,11 @@ fn address_new_does_not_accept_inline_mnemonic_p7_16() {
 }
 
 #[test]
-#[ignore = "P7-7: requires wallet::send handler implementation (Phase 7.1c follow-up); current stub returns anyhow unclassified (exit 1), not exit 2 per P5-1 mapping. Un-ignore after handler lands."]
 fn wallet_send_confirm_mainnet_bare_flag_rejects_p7_7() {
     // P7-7: `wallet send` to mainnet requires `--confirm-mainnet yes`
     // (exact string match). Bare flag `--confirm-mainnet` (no arg) → exit 2.
-    // Per cli.rs: `default_missing_value = "yes"` means bare flag == "yes".
-    // The "no" / wrong-string cases are tested by the handler, but the
-    // bare-flag-without-arg path is gated by `default_missing_value = "yes"`
-    // + per-handler validation. Assert here: bare flag + non-mainnet cluster
-    // (default = MainnetBeta from cli.rs default_value_t) + missing wallet-id
-    // is a clap-level reject (exit 2, no panic).
+    // After PR #560 review fix: handler returns `Error::DerivationFailed`
+    // (exit 2 per P5-1 corrected mapping), not anyhow unclassified.
     let tmp = TempDir::new().expect("tempdir");
     sol_bin()
         .arg("--data-dir")

@@ -40,8 +40,8 @@ async fn new_address(
     ctx: &AppContext,
     wallet_id: Option<&str>,
     mnemonic_file: Option<&std::path::Path>,
-    account: u32,
-    address_index: u32,
+    #[allow(unused_variables)] account: u32,
+    #[allow(unused_variables)] address_index: u32,
 ) -> Result<()> {
     match (wallet_id, mnemonic_file) {
         (None, None) => {
@@ -58,31 +58,13 @@ async fn new_address(
     }
 
     let pubkey = if let Some(path) = mnemonic_file {
-        // P7-17: derive pubkey from mnemonic without unlocking.
-        // `sol_wallet_core::wallet::Wallet::from_mnemonic_at` derives keypair
-        // from BIP-39 phrase + Phantom SLIP-0010 path. The phrase read goes
-        // out of scope when this block exits; the `Wallet` (Keypair wrapper)
-        // is dropped immediately so the secret bytes are zeroized.
-        let phrase =
-            std::fs::read_to_string(path).map_err(|e| anyhow!("read mnemonic-file: {e}"))?;
-        let wallet = sol_wallet_core::wallet::Wallet::from_mnemonic_at(
-            phrase.trim(),
-            account,
-            address_index,
-        )
-        .map_err(|e| anyhow!("derive pubkey: {e}"))?;
-        // Drop wallet (Keypair drops → zeroize on Drop per Wallet's drop impl).
-        drop(wallet);
-        // Re-derive without keeping Wallet alive — this is awkward; for now
-        // we accept that Wallet held secret briefly. Full Zeroizing wrap lands
-        // when Wallet exposes its inner Keypair via a Zeroizing getter.
-        let _ = phrase;
-        // Re-derive pubkey-only path: Wallet::from_public_key returns
-        // ReadOnlyWallet. But we need a keypair-derived pubkey, which requires
-        // the secret. For V0.1 we accept the brief secret lifetime.
-        // The proper P7-17 fix is `Wallet::derive_pubkey(mnemonic, account,
-        // address_index) -> Pubkey` (lands in sol-wallet-core as a follow-up
-        // to Phase 7.1d per plan step 11).
+        // CRITICAL fix (PR #560 review): short-circuit BEFORE reading the
+        // mnemonic file. The V0.1 path is not implemented (P7-17 zeroize-safe
+        // derive_pubkey lands in sol-wallet-core as a follow-up to plan step
+        // 11); reading the file would load secret bytes into memory for no
+        // reason. Caller can re-invoke with --wallet-id (zeroize-safe path
+        // via WalletManager::summary) until the library method lands.
+        let _ = path;
         return Err(sol_wallet_core::Error::Unimplemented(
             "address new --mnemonic-file — full Zeroizing derive_pubkey lands in \
          sol-wallet-core (Phase 7.1d follow-up; see plan step 11). For now, \

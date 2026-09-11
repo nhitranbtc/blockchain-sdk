@@ -9,10 +9,10 @@
 //! Covers Phase 7 deep-dive row 14 (cross-cluster conformance).
 
 use assert_cmd::Command;
-use tempfile::TempDir;
 
+#[allow(dead_code)]
 fn sol_bin() -> Command {
-    let mut cmd =
+    let cmd =
         Command::cargo_bin("sol").expect("sol binary not built — run `cargo build -p sol` first");
     if std::env::var("RUN_SOL_DEVNET").ok().as_deref() != Some("1") {
         eprintln!("SKIPPED: cli_devnet_conformance requires RUN_SOL_DEVNET=1 env var");

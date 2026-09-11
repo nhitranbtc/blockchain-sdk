@@ -29,7 +29,7 @@ macro_rules! surfpool_row {
         fn $name() {
             let mut cmd = sol_bin();
             cmd.args([$($arg),*]);
-            cmd.arg("--data-dir").arg(tmp().path()).assert();
+            let _ = cmd.arg("--data-dir").arg(tmp().path()).assert();
         }
     };
 }

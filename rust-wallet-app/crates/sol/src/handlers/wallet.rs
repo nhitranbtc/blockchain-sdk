@@ -391,29 +391,36 @@ async fn send(
 ) -> Result<()> {
     // P7-7: mainnet confirmation gate. Bare flag `--confirm-mainnet` becomes
     // `Some("yes")` via clap `default_missing_value`; explicit non-yes values
-    // or missing flag on mainnet → exit 2 (Error::InvalidInput → exit 2).
+    // or missing flag on mainnet → reject. CRITICAL fix (PR #560 review):
+    // use typed `DerivationFailed` (exit 2) instead of `anyhow!` (exit 1).
     if matches!(ctx.cluster, crate::cli::Cluster::MainnetBeta) {
         match confirm_mainnet {
             Some("yes") => {} // approved
             Some(s) => {
-                return Err(anyhow!(
+                return Err(Error::DerivationFailed(format!(
                     "--confirm-mainnet must equal \"yes\" (got \"{s}\")"
-                ));
+                ))
+                .into());
             }
             None => {
-                return Err(anyhow!(
+                return Err(Error::DerivationFailed(
                     "mainnet send requires --confirm-mainnet yes (or SOL_CONFIRM_MAINNET=yes)"
-                ));
+                        .to_string(),
+                )
+                .into());
             }
         }
     }
 
-    // Input validation — anyhow for now (P5-1 doesn't have a generic input-error
-    // variant; existing variants are specific: InvalidMnemonic, InvalidAddress,
-    // InvalidAmount, etc.). Maps to exit 1 (unclassified) per error.rs fallback.
-    let wallet_id_str = wallet_id.ok_or_else(|| anyhow!("--wallet-id required for send"))?;
-    let to_str = to.or(to_wallet).ok_or_else(|| anyhow!("--to required"))?;
-    let amount_str = amount.ok_or_else(|| anyhow!("--amount required"))?;
+    // CRITICAL fix (PR #560 review): use typed errors (exit 2) instead of
+    // anyhow! (exit 1) so the P5-1 corrected mapping lights up for input errors.
+    let wallet_id_str = wallet_id
+        .ok_or_else(|| Error::DerivationFailed("--wallet-id required for send".to_string()))?;
+    let to_str = to
+        .or(to_wallet)
+        .ok_or_else(|| Error::DerivationFailed("--to required".to_string()))?;
+    let amount_str =
+        amount.ok_or_else(|| Error::DerivationFailed("--amount required".to_string()))?;
 
     // P7-2: resolve keypair via OwnedLock<Zeroizing<Keypair>>. The OwnedLock
     // zeroizes the secret bytes on Drop (RAII); scoped binding handles it.
