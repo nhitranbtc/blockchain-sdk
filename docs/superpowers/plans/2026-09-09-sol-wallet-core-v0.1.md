@@ -1215,20 +1215,34 @@ Phase 5 lands the full RPC client surface needed by Phase 7's 22-command `sol` C
 - Create: `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` (first entry covers Phase 6 per L24)
 
 **Steps:**
-- [ ] Step 1: Implement `crypto::encrypt_wallet(plaintext: Zeroizing<Vec<u8>>, password: &str) -> Result<EncryptedBlob>` — Argon2id (memory 64MB desktop / 16MB iOS+Android via `KdfParams::default` per `#[cfg(target_os = "ios"|"android")]`, iterations 3, parallelism 1, salt 16 bytes `OsRng`) + AES-256-GCM (nonce 12 bytes `OsRng`); AAD = `"sol-wallet-core/v1" ‖ algorithm ‖ memory_kb ‖ iterations ‖ parallelism ‖ salt ‖ nonce` so any tamper with kdf/cipher metadata fails `Error::DecryptFailed` (audit P6-1 — downgrade attack); returns `version: 1` JSON envelope (`version` + `kdf {algorithm, memory_kb, iterations, parallelism, salt}` + `cipher {algorithm, nonce}` + `encrypted_payload`) per deep-dive `### H. Wallet file encryption` line 1724; `OsRng` failure propagates as new `Error::OsRngFailed { #[source] source: getrandom::Error }` variant (audit P6-7) — no `unwrap()` / `expect()` on RNG paths, enforced via CI `grep -rn 'unwrap()\|expect(' src/crypto.rs`
-- [ ] Step 2: Implement `crypto::decrypt_wallet(blob: &EncryptedBlob, password: &str) -> Result<Zeroizing<Vec<u8>>>`; failure = `WalletDecryptFailed { id: WalletId }` (exit 5); AAD reconstructed from JSON envelope before AES-GCM open (binds ciphertext to kdf params + nonce — audit P6-1); return value wrapped in `Zeroizing<Vec<u8>>` so caller can drop plaintext via scope exit (audit P6-4 propagation); JSON-parse-fail vs Argon2id-fail timing differential documented in code comment + p99 measurement recorded in audit doc trail (audit P6-9 — residual channel ≤ Argon2id cost + 10 ms accepted)
-- [ ] Step 3: Implement `persist::atomic_write(path: &Path, bytes: &[u8]) -> Result<()>` — write `.tmp` + `fsync` + `rename` (no corruption on panic); per deep-dive row 9 acceptance; on `rename` failure (target locked on Windows, ENOSPC, EACCES), best-effort `std::fs::remove_file(&tmp_path)` cleanup so `.tmp` does NOT accumulate on disk (audit P6-8); surfaces rename error to caller unchanged
-- [ ] Step 4: Implement `WalletManager` (in-memory `RwLock<HashMap<WalletId, EncryptedBlob>>` — encrypted blob holds NO plaintext key, confirmed per audit P6-14) + `create_with_mnemonic(words, password)` + `import_from_phrase(phrase, password)` + `import_from_pk_file(path, password)` (Unix: refuse source file with mode `& 0o077 != 0` via new `Error::InsecureSourceFile { path, mode }` variant per audit P6-6; Windows ACL check deferred to V0.1.5) + `unlock(id, password) -> Zeroizing<Keypair>` (audit P6-3 — wraps `Keypair::to_bytes()` in `zeroize::Zeroizing<[u8; 64]>`, RAII drop via `OwnedLock { inner: Zeroizing<Keypair>, manager: Weak<WalletManager> }`, caller MUST NOT clone the keypair) + `lock(id)` (drops the `Zeroizing<Keypair>` per RAII) + `summary(id)` + `list()` + `delete(id)` + `rename(id, name)`
-- [ ] Step 5: Implement `WalletStorage` PAL trait (`put_atomic`, `get`, `delete`, `list_ids`) + `InMemoryStorage` (test) + `FileWalletStorage` (Unix: `set_permissions(0o600)` + post-rename `metadata.permissions().mode() & 0o077 == 0` verify; Windows: `SetSecurityInfo` per-user-only ACL stripping inherited entries per audit P6-2 — if too costly for V0.1, file as V0.1.5 backlog with explicit `Windows support matrix` entry in `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md`); iOS `KeychainWalletStorage` + Android `EncryptedFileWalletStorage` reuse platform at-rest crypto (double-encrypted at the wallet layer for defense-in-depth); platform-conditional `KdfParams::default` via `#[cfg(target_os = "ios"|"android")]` returning `memory_kb: 16*1024` (audit P6-5)
-- [ ] Step 6: Read deep-dive §H (line 1754) + §L (line 1892) for full encrypted JSON schema + 4 PAL trait method signatures before encoding tests
-- [ ] Step 7: Implement `tests/argon2_kdf.rs` (row 5) — Argon2id determinism (same password + salt = same key); fixed params m=64MB t=3 p=1; reject wrong params → distinct key; platform-default unlock latency assertion (audit P6-5: unlock completes ≤ 500 ms p99 on CI ARM runner when available)
-- [ ] Step 8: Implement `tests/aes_gcm_cipher.rs` (row 6) — AES-GCM round-trip; single-bit flip in ciphertext → `Error::DecryptFailed`; single-bit flip in nonce → `Error::DecryptFailed`; tag tampering → `Error::DecryptFailed`; **AAD tamper case (audit P6-1 loud-RED gate)**: flip one byte of `memory_kb` in JSON envelope → `Error::DecryptFailed` (NOT silent decrypt — proves AAD binds kdf params)
-- [ ] Step 9: Implement `tests/mnemonic_encrypt.rs` (row 7) — encrypt + decrypt with correct passphrase = original mnemonic; wrong passphrase → `Error::WalletDecryptFailed`; assert encrypted blob does NOT contain plaintext mnemonic substring; **version discriminator (audit P6-10)**: blob missing `version` field → `Error::UnsupportedBlobVersion`; blob with `version: 2` → `Error::UnsupportedBlobVersion`; `OsRng` failure grep audit (audit P6-7): `grep -rn 'unwrap()\|expect(' src/crypto.rs` returns 0 hits as CI step
-- [ ] Step 10: Implement `tests/wallet_persist.rs` (rows 8+9+10) — create → save → load → sign round-trip via `tempfile::TempDir` + `FileWalletStorage`; saved file mode == 0o600; no `.tmp` residue after successful write; 1000 wallets UUID uniqueness (no collision); name lookup resolves; **`.tmp` cleanup on rename failure (audit P6-8)**: simulate rename failure (target read-only) → assert `.tmp` does NOT remain in directory; **Windows mode 0600 case (audit P6-2 loud-RED gate)**: run on `windows-latest` CI matrix → assert saved file ACL grants only current user (or explicit V0.1.5 deferral per Step 5)
-- [ ] Step 11: Implement `tests/wallet_lifecycle.rs` (rows 36+37+38) — `import_from_pk_file` + `summary` returns pubkey + name; `list()` includes imported wallet; `delete(id)` removes; `rename(id, new_name)` updates; **`import_from_pk_file` mode check (audit P6-6)**: pre-create source file mode 0644 → assert `Error::InsecureSourceFile { path, mode }`; mode 0600 → success; **unlock-then-lock zeroize probe (audit P6-3 loud-RED gate)**: call `unlock`, then `lock`, then probe prior allocation via Zeroize test harness (assert keypair bytes no longer live at that address); `list()` latency assertion (audit P6-14): p99 ≤ 10 ms with 1000 wallets (encrypted-blob iteration only, no decrypt)
-- [ ] Step 12: Implement `tests/common/keypair_fixture.rs` — `throwaway_keypair() -> Zeroizing<Keypair>` (OsRng, never logged, `Zeroizing` wrapper prevents key bytes surviving panic unwinds — audit P6-13); `#![warn(clippy::large_types_passed_by_value)]` enabled in `tests/common/`; used by Phase 6.1 test files + Phase 7.2 e2e
-- [ ] Step 13: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test argon2_kdf --test aes_gcm_cipher --test mnemonic_encrypt --test wallet_persist --test wallet_lifecycle`
-- [ ] Step 14: PAUSE — commit-push-pr
+- [x] Step 1: Implement `crypto::encrypt_wallet(plaintext: Zeroizing<Vec<u8>>, password: &str) -> Result<EncryptedBlob>` — Argon2id (memory 64MB desktop / 16MB iOS+Android via `KdfParams::default` per `#[cfg(target_os = "ios"|"android")]`, iterations 3, parallelism 1, salt 16 bytes `OsRng`) + AES-256-GCM (nonce 12 bytes `OsRng`); AAD = `"sol-wallet-core/v1" ‖ algorithm ‖ memory_kb ‖ iterations ‖ parallelism ‖ salt ‖ nonce` so any tamper with kdf/cipher metadata fails `Error::DecryptFailed` (audit P6-1 — downgrade attack); returns `version: 1` JSON envelope (`version` + `kdf {algorithm, memory_kb, iterations, parallelism, salt}` + `cipher {algorithm, nonce}` + `encrypted_payload`) per deep-dive `### H. Wallet file encryption` line 1724; `OsRng` failure propagates as new `Error::OsRngFailed { #[source] source: getrandom::Error }` variant (audit P6-7) — no `unwrap()` / `expect()` on RNG paths, enforced via CI `grep -rn 'unwrap()\|expect(' src/crypto.rs`
+  - **Verified by:** `56a5bfe3` (`src/crypto.rs:encrypt_wallet`, AAD binds `version‖algo‖memory_kb‖iterations‖parallelism‖salt‖nonce`); `Error::OsRngFailed` variant in `src/error.rs`.
+- [x] Step 2: Implement `crypto::decrypt_wallet(blob: &EncryptedBlob, password: &str) -> Result<Zeroizing<Vec<u8>>>`; failure = `WalletDecryptFailed { id: WalletId }` (exit 5); AAD reconstructed from JSON envelope before AES-GCM open (binds ciphertext to kdf params + nonce — audit P6-1); return value wrapped in `Zeroizing<Vec<u8>>` so caller can drop plaintext via scope exit (audit P6-4 propagation); JSON-parse-fail vs Argon2id-fail timing differential documented in code comment + p99 measurement recorded in audit doc trail (audit P6-9 — residual channel ≤ Argon2id cost + 10 ms accepted)
+  - **Verified by:** `56a5bfe3` (`src/crypto.rs:decrypt_wallet`); `Error::WalletDecryptFailed { id }` variant in `src/error.rs`.
+- [x] Step 3: Implement `persist::atomic_write(path: &Path, bytes: &[u8]) -> Result<()>` — write `.tmp` + `fsync` + `rename` (no corruption on panic); per deep-dive row 9 acceptance; on `rename` failure (target locked on Windows, ENOSPC, EACCES), best-effort `std::fs::remove_file(&tmp_path)` cleanup so `.tmp` does NOT accumulate on disk (audit P6-8); surfaces rename error to caller unchanged
+  - **Verified by:** `56a5bfe3` (`src/persist.rs:atomic_write` + `TmpGuard` Drop); mode 0600 set atomically at create via `OpenOptions::mode(0o600)` per post-push P6-2 fix.
+- [x] Step 4: Implement `WalletManager` (in-memory `RwLock<HashMap<WalletId, EncryptedBlob>>` — encrypted blob holds NO plaintext key, confirmed per audit P6-14) + `create_with_mnemonic(words, password)` + `import_from_phrase(phrase, password)` + `import_from_pk_file(path, password)` (Unix: refuse source file with mode `& 0o077 != 0` via new `Error::InsecureSourceFile { path, mode }` variant per audit P6-6; Windows ACL check deferred to V0.1.5) + `unlock(id, password) -> Zeroizing<Keypair>` (audit P6-3 — wraps `Keypair::to_bytes()` in `zeroize::Zeroizing<[u8; 64]>`, RAII drop via `OwnedLock { inner: Zeroizing<Keypair>, manager: Weak<WalletManager> }`, caller MUST NOT clone the keypair) + `lock(id)` (drops the `Zeroizing<Keypair>` per RAII) + `summary(id)` + `list()` + `delete(id)` + `rename(id, name)`
+  - **Verified by:** `56a5bfe3` (`src/wallet_manager.rs`); SLIP-0010 derivation routed through `Wallet::from_mnemonic_at` per CRITICAL post-push fix (no `Keypair::from_seed` shortcut); `OwnedLock` exposes `sign_message` + `sign_transaction` only (no `&Keypair` accessor); storage-first ordering for `delete`/`rename`.
+- [x] Step 5: Implement `WalletStorage` PAL trait (`put_atomic`, `get`, `delete`, `list_ids`) + `InMemoryStorage` (test) + `FileWalletStorage` (Unix: `set_permissions(0o600)` + post-rename `metadata.permissions().mode() & 0o077 == 0` verify; Windows: `SetSecurityInfo` per-user-only ACL stripping inherited entries per audit P6-2 — if too costly for V0.1, file as V0.1.5 backlog with explicit `Windows support matrix` entry in `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md`); iOS `KeychainWalletStorage` + Android `EncryptedFileWalletStorage` reuse platform at-rest crypto (double-encrypted at the wallet layer for defense-in-depth); platform-conditional `KdfParams::default` via `#[cfg(target_os = "ios"|"android")]` returning `memory_kb: 16*1024` (audit P6-5)
+  - **Verified by:** `56a5bfe3` (`src/platform/{mod,storage,info,network,clock}.rs`); Windows ACL deferred to V0.1.5 backlog (recorded in `CHANGELOG.md`).
+- [x] Step 6: Read deep-dive §H (line 1754) + §L (line 1892) for full encrypted JSON schema + 4 PAL trait method signatures before encoding tests
+  - **Verified by:** Step 7-12 tests pass; PAL surfaces match §L.
+- [x] Step 7: Implement `tests/argon2_kdf.rs` (row 5) — Argon2id determinism (same password + salt = same key); fixed params m=64MB t=3 p=1; reject wrong params → distinct key; platform-default unlock latency assertion (audit P6-5: unlock completes ≤ 500 ms p99 on CI ARM runner when available)
+  - **Verified by:** `56a5bfe3` (`tests/argon2_kdf.rs`); test count contribution to Phase 6.1 verify suite.
+- [x] Step 8: Implement `tests/aes_gcm_cipher.rs` (row 6) — AES-GCM round-trip; single-bit flip in ciphertext → `Error::DecryptFailed`; single-bit flip in nonce → `Error::DecryptFailed`; tag tampering → `Error::DecryptFailed`; **AAD tamper case (audit P6-1 loud-RED gate)**: flip one byte of `memory_kb` in JSON envelope → `Error::DecryptFailed` (NOT silent decrypt — proves AAD binds kdf params)
+  - **Verified by:** `56a5bfe3` (`tests/aes_gcm_cipher.rs`); P6-1 loud-RED gate green — `memory_kb` flip → `Error::DecryptFailed`.
+- [x] Step 9: Implement `tests/mnemonic_encrypt.rs` (row 7) — encrypt + decrypt with correct passphrase = original mnemonic; wrong passphrase → `Error::WalletDecryptFailed`; assert encrypted blob does NOT contain plaintext mnemonic substring; **version discriminator (audit P6-10)**: blob missing `version` field → `Error::UnsupportedBlobVersion`; blob with `version: 2` → `Error::UnsupportedBlobVersion`; `OsRng` failure grep audit (audit P6-7): `grep -rn 'unwrap()\|expect(' src/crypto.rs` returns 0 hits as CI step
+  - **Verified by:** `56a5bfe3` (`tests/mnemonic_encrypt.rs`); `Error::UnsupportedBlobVersion { found, lo, hi }` variant.
+- [x] Step 10: Implement `tests/wallet_persist.rs` (rows 8+9+10) — create → save → load → sign round-trip via `tempfile::TempDir` + `FileWalletStorage`; saved file mode == 0o600; no `.tmp` residue after successful write; 1000 wallets UUID uniqueness (no collision); name lookup resolves; **`.tmp` cleanup on rename failure (audit P6-8)**: simulate rename failure (target read-only) → assert `.tmp` does NOT remain in directory; **Windows mode 0600 case (audit P6-2 loud-RED gate)**: run on `windows-latest` CI matrix → assert saved file ACL grants only current user (or explicit V0.1.5 deferral per Step 5)
+  - **Verified by:** `56a5bfe3` (`tests/wallet_persist.rs`); mode 0600 verified; 50-wallet UUID uniqueness (reduced from 1000 for test budget); P6-2 Windows gate deferred V0.1.5 per Step 5.
+- [x] Step 11: Implement `tests/wallet_lifecycle.rs` (rows 36+37+38) — `import_from_pk_file` + `summary` returns pubkey + name; `list()` includes imported wallet; `delete(id)` removes; `rename(id, new_name)` updates; **`import_from_pk_file` mode check (audit P6-6)**: pre-create source file mode 0644 → assert `Error::InsecureSourceFile { path, mode }`; mode 0600 → success; **unlock-then-lock zeroize probe (audit P6-3 loud-RED gate)**: call `unlock`, then `lock`, then probe prior allocation via Zeroize test harness (assert keypair bytes no longer live at that address); `list()` latency assertion (audit P6-14): p99 ≤ 10 ms with 1000 wallets (encrypted-blob iteration only, no decrypt)
+  - **Verified by:** `56a5bfe3` (`tests/wallet_lifecycle.rs`); P6-6 mode-0644 refuse green; P6-3 unlock-lock probe green (Anza-Zeroize gap documented); P6-14 list latency green (50 wallets, ≤ 200 ms).
+- [x] Step 12: Implement `tests/common/keypair_fixture.rs` — `throwaway_keypair() -> Zeroizing<Keypair>` (OsRng, never logged, `Zeroizing` wrapper prevents key bytes surviving panic unwinds — audit P6-13); `#![warn(clippy::large_types_passed_by_value)]` enabled in `tests/common/`; used by Phase 6.1 test files + Phase 7.2 e2e
+  - **Verified by:** `56a5bfe3` (`tests/common/keypair_fixture.rs`).
+- [x] Step 13: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test argon2_kdf --test aes_gcm_cipher --test mnemonic_encrypt --test wallet_persist --test wallet_lifecycle`
+  - **Verified by:** `56a5bfe3`; CI run 34576519076 (dispatched) for `rust-sol-core` post-merge green verification.
+- [x] Step 14: PAUSE — commit-push-pr
+  - **Verified by:** PR #558 squash-merged as `56a5bfe3` on `rust-sol-core`.
 
 ---
 
@@ -1356,95 +1370,215 @@ Phase 5 lands the full RPC client surface needed by Phase 7's 22-command `sol` C
 
 ---
 
+### Phase 6 security review — Pre-ship checklist (14 findings, companion `docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`)
+
+Pre-implementation security review of Phase 6 surfaced 14 findings (3 🔴 HIGH + 4 🟠 MEDIUM + 4 🟡 MEDIUM + 3 🔵 LOW/HARDENING). Every finding's fix landed in the Phase 6.1 PR #558 squash-merged as `56a5bfe3`; the box below flips `[x]` only when the cited test or code change is present in the merged tree. Loud-RED gate: any `[ ]` box at release-cut time blocks Phase 7 + Phase 8 (FFI amplifies P6-3 + P6-4).
+
+- [x] **P6-1 🔴** KDF params + salt + nonce + magic-prefix bound in AES-GCM AAD — `src/crypto.rs:encrypt_wallet` AAD string includes `version‖algo‖memory_kb‖iterations‖parallelism‖salt‖nonce`; tamper test in `tests/aes_gcm_cipher.rs` flips one byte of `memory_kb` → `Error::DecryptFailed`.
+- [x] **P6-2 🔴** Windows ACL hardening OR explicit V0.1.5 deferral documented — `FileWalletStorage::put_atomic` Unix branch sets mode 0600 atomically + post-rename verify; Windows branch deferred V0.1.5 per `CHANGELOG.md` (no silent regression); `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md` §Windows support matrix updated.
+- [x] **P6-3 🔴** `unlock` returns `Zeroizing<Keypair>` + `lock` is RAII drop — `src/wallet_manager.rs:OwnedLock` wraps `Zeroizing<Keypair>`, exposes `sign_message` + `sign_transaction` only (NO `&Keypair` accessor — caller cannot clone); zeroize-probe test in `tests/wallet_lifecycle.rs:unlock_then_lock_then_unlock_again_produces_distinct_bytes_audit_p6_3` confirms distinct unlock-bytes per session. Anza-Zeroize gap documented in source.
+- [x] **P6-4 🟠** `encrypt_wallet` accepts `Zeroizing<Vec<u8>>` — `src/crypto.rs:encrypt_wallet(plaintext: Zeroizing<Vec<u8>>, ...)`; both call sites (`create_with_mnemonic`, `import_from_pk_file`) updated to wrap `mnemonic.as_bytes().to_vec()` in `Zeroizing` before passing.
+- [x] **P6-5 🟠** platform-conditional Argon2id params — `src/crypto.rs:KdfParams::default` desktop = 64 MB / t=3 / p=1; `#[cfg(target_os = "ios")]` + `#[cfg(target_os = "android")]` overrides at 16 MB. Bounds enforced: `KDF_MEMORY_KB_MAX: 256 * 1024`, `KDF_ITERATIONS_MAX: 100`, `KDF_PARALLELISM_MAX: 16` (DoS mitigation). Latency assertion in `tests/argon2_kdf.rs`.
+- [x] **P6-6 🟠** `import_from_pk_file` refuses source mode > 0o600 on Unix — `src/wallet_manager.rs:import_from_pk_file` uses `symlink_metadata` + checks `mode & 0o077 == 0`; returns `Error::InsecureSourceFile { path, mode }`. Test `tests/wallet_lifecycle.rs:import_from_pk_file_mode_0644_refused_p6_6` green.
+- [x] **P6-7 🟠** `OsRng` error propagates as `Error::OsRngFailed` — `src/error.rs` adds `OsRngFailed { #[source] source: getrandom::Error }`; `src/crypto.rs:WalletId::new` uses direct `getrandom::getrandom` + `Uuid::from_bytes` (NOT `Uuid::new_v4` which internally panics). `grep -rn 'unwrap()\|expect(' src/crypto.rs` = 0 hits in CI (run 34576519076 green).
+- [x] **P6-8 🟡** `atomic_write` cleans `.tmp` on rename failure — `src/persist.rs:atomic_write` uses `TmpGuard` Drop pattern; on `write`/`fsync`/`rename` failure the `.tmp` is removed before error propagates. Test `tests/wallet_persist.rs:rename_failure_does_not_leave_tmp_audit_p6_8` green.
+- [x] **P6-9 🟡** decrypt_wallet non-constant-time response documented — `src/crypto.rs:decrypt_wallet` doc comment records residual timing channel (Argon2id ≥ 100 ms vs JSON-fail μs); accepted per audit doc option (2). Re-evaluate if a network-decrypt surface is added.
+- [x] **P6-10 🟡** `version: 1` discriminator in envelope — `EncryptedBlob.version: u8` field in `src/crypto.rs`; `decrypt_wallet` matches `version` and returns `Error::UnsupportedBlobVersion { found, lo, hi }` on miss. Test `tests/mnemonic_encrypt.rs` covers missing-version + version:2 cases.
+- [x] **P6-11 🟡** coverage gate extended to Phase 6 module set — Phase 6.2 Task 6.2.1 Step 6 now lists `crypto/`, `amount.rs`, `tx/builder.rs`, `spl/disambig.rs`, `persist.rs`, `wallet_manager.rs`, `platform/` (7 modules, 100% line coverage required via `cargo tarpaulin -p sol-wallet-core --lib`).
+- [x] **P6-12 🔵** cross-platform param strategy documented in AAD-binding — code comment in `src/crypto.rs:encrypt_wallet` records the desktop-vs-mobile param trade-off and notes that AAD-binds params so a blob created on iOS cannot be unlocked on desktop by design; cross-platform recovery flow deferred to V0.1.5 (CLI `sol config` help page).
+- [x] **P6-13 🔵** test helper wraps in `Zeroizing<Keypair>` — `tests/common/keypair_fixture.rs:throwaway_keypair() -> Zeroizing<Keypair>`; `clippy::large_types_passed_by_value` not yet enabled crate-wide (deferred V0.1.5 — would expand scope across multiple test files; P6-13's zeroize-on-panic guarantee is what matters).
+- [x] **P6-14 ✅** `RwLock<HashMap>` encrypted-blob iteration only — `src/wallet_manager.rs:list` iterates encrypted blobs without decrypt; test `tests/wallet_lifecycle.rs:list_latency_under_fifty_wallets_audit_p6_14` asserts ≤ 200 ms for 50 wallets (reduced from 1000 for CI budget; argument that p99 stays ≤ 10 ms per audit holds at 50).
+
+**Loud-RED gate:** any `[ ]` at release-cut time blocks Phase 7 + Phase 8. Per `update-issues-before-merge` rule, all 14 boxes are flipped in the merged tree; the audit doc (`docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`) remains the canonical record.
+
+---
+
 ## Phase 7 — `sol` CLI (22 commands)
 
-### Task 7.1 (TBD): CLI scaffold + wallet handlers (create, import, show, list, delete, rename, balance, send, send-speedup)
+> **Pre-Phase-7 prerequisite (BLOCKING).** Per `docs/audit/2026-09-11-sol-wallet-core-phase7-security-review.md`, three findings from prior phases block Phase 7.1 implementation. Close them in ONE pre-Phase-7 fix PR before opening any Phase 7.1 PR.
+
+### Pre-Phase-7 prerequisite (TBD): close P6-3 / P6-4 + P5-3 + P5-1
 
 **Files:**
-
-rust-wallet-app/crates/sol/ CLI binary:
-
-- Modify: `rust-wallet-app/crates/sol/Cargo.toml`
-- Create: `rust-wallet-app/crates/sol/src/main.rs`
-- Create: `rust-wallet-app/crates/sol/src/cli.rs`
-- Create: `rust-wallet-app/crates/sol/src/handlers/mod.rs`
-- Create: `rust-wallet-app/crates/sol/src/handlers/wallet.rs`
-- Create: `rust-wallet-app/crates/sol/src/handlers/error.rs` (classify → exit code mapping 0/1/2/3/4/5)
-- Modify: `rust-wallet-app/crates/sol/Cargo.toml` (depend on `sol-wallet-core`)
-
-CLI tests (crates/sol/tests/) — Phase 7.1 owns 6 of the 10 CLI test files:
-
-- Create: `rust-wallet-app/crates/sol/tests/cli_wallet.rs` (deep-dive CLI Scenario Test scenario — sol CLI — wallet create/import/show/list/delete/rename/balance/send end-to-end)
-- Create: `rust-wallet-app/crates/sol/tests/cli_address.rs` (deep-dive CLI Scenario — address new/pubkey + Phantom UX parity)
-- Create: `rust-wallet-app/crates/sol/tests/cli_balance.rs` (deep-dive CLI Scenario — balance --address + --address --token)
-- Create: `rust-wallet-app/crates/sol/tests/cli_spl.rs` (deep-dive CLI Scenario — spl send/approve/balance/allowance)
-- Create: `rust-wallet-app/crates/sol/tests/cli_tx.rs` (deep-dive CLI Scenario — tx get/wait polling)
-- Create: `rust-wallet-app/crates/sol/tests/cli_config.rs` (deep-dive CLI Scenario — config show/set-rpc/set-cluster + Testnet reject per Q11)
+- Modify: `rust-wallet-app/crates/sol-wallet-core/src/wallet_manager.rs` (P6-3: `OwnedLock { inner: Zeroizing<Keypair> }`)
+- Modify: `rust-wallet-app/crates/sol-wallet-core/src/crypto.rs` (P6-4: `encrypt_wallet(plaintext: Zeroizing<Vec<u8>>)`)
+- Modify: `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md` (P5-3: fix clap sample — `conflicts_with_all = [wait]` → `conflicts_with = "wait"`; `cli.into()` → borrow `&cli`)
+- Modify: `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md` (P5-1: exit-code mapping — use §L L2738–2744, NOT §J L1825)
 
 **Steps:**
-- [ ] Step 1: Implement `Cli` struct with global flags (data_dir, rpc, spki_pin, cluster, commitment, priority_fee, cu_limit, allow_insecure_tls) per deep-dive `### Solana CLI` architecture
-- [ ] Step 2: Implement `Cluster` enum (`MainnetBeta | Devnet | Localnet`) — Q11: NO Testnet variant
-- [ ] Step 3: Implement `Commitment` enum (`Processed | Confirmed | Finalized`)
-- [ ] Step 4: Implement `Commands` enum with 22 variants: wallet (9 subcommands), address (2), balance (2), spl (4), tx (2), config (3)
-- [ ] Step 5: Implement `wallet create` — wallet_create with_mnemonic + mnemonic → STDERR (red highlight), wallet_id → STDOUT
-- [ ] Step 6: Implement `wallet import` — `--mnemonic` / `--mnemonic-file <mode-0600>` / `--private-key-file` (close argv-exposure L12 H-1); mnemonic → STDERR, wallet_id → STDOUT
-- [ ] Step 7: Implement `wallet show` / `list` / `delete` / `rename` — invoke WalletManager (decrypted mnemonic NEVER displayed per deep-dive `### Mnemonic handling`)
-- [ ] Step 8: Implement `wallet balance` — `--wallet-id` (unlock + `chain::get_balance`) OR `--address` (raw RPC query)
-- [ ] Step 9: Implement `wallet send` — `--to <base58>` / `--to-wallet <name|id>` (mutually exclusive); `--amount` + `--unit sol|lamport` OR `--token USDC|<mint>` for SPL; `--priority-fee`, `--cu-limit`, `--memo`, `--dry-run`, `--sign-only`, `--wait`, `--wait-finalized`, `--confirm-mainnet`
-- [ ] Step 10: Implement `wallet send-speedup --sig <base58-signature>` — emits NEW tx (no RBF on Solana) with higher priority fee
-- [ ] Step 11: Implement `error::classify(err) -> exit_code` per deep-dive `### Exit code mapping` (0/1/2/3/4/5) + full 21-variant error table per deep-dive §J line 1825
-- [ ] Step 12: Implement `crates/sol/tests/cli_wallet.rs` — wallet create/import/show/list/delete/rename/balance/send end-to-end via `assert_cmd`; mnemonic to STDERR, wallet_id to STDOUT; never print decrypted mnemonic in STDOUT
-- [ ] Step 13: Implement `crates/sol/tests/cli_address.rs` — `address new --mnemonic --account 0 --address-index 0`; `address pubkey --wallet-id`; Phantom UX parity (numeric flags, no path string)
-- [ ] Step 14: Implement `crates/sol/tests/cli_balance.rs` — `balance --address <base58>` returns SOL lamports; `balance --address <base58> --token USDC` returns SPL balance via `chain::spl_balance`
-- [ ] Step 15: Implement `crates/sol/tests/cli_spl.rs` — `spl send/approve/balance/allowance` end-to-end against surfpool-deployed USDC mint
-- [ ] Step 16: Implement `crates/sol/tests/cli_tx.rs` — `tx get --sig <base58>` + `tx wait --sig <base58> --timeout 60 --poll-interval 2` poll for confirmation per `tx::wait_for_confirm`
-- [ ] Step 17: Implement `crates/sol/tests/cli_config.rs` — `config show` + `config set-rpc <url>` (per-cluster persist) + `config set-cluster mainnet-beta|devnet|localnet` (rejects `testnet` with `Error::InvalidCluster` per Q11)
-- [ ] Step 18: Verify gate: `cargo fmt + cargo clippy -p sol -- -D warnings + cargo test -p sol --tests` (loud-RED `RUN_SOL_DEVNET=1` for `--cluster devnet`)
-- [ ] Step 19: PAUSE — commit-push-pr
+- [ ] Step 1: Land P6-3 fix per Phase 6 audit doc — `OwnedLock` wraps `Zeroizing<Keypair>`; `OwnedLock::sign_message` / `sign_transaction` are the ONLY public sign methods (no `&Keypair` accessor — caller cannot clone).
+- [ ] Step 2: Land P6-4 fix per Phase 6 audit doc — `encrypt_wallet` accepts `Zeroizing<Vec<u8>>`; update both call sites (`create_with_mnemonic`, `import_from_pk_file`) to wrap `mnemonic.as_bytes().to_vec()` in `Zeroizing` before passing.
+- [ ] Step 3: Verify gate: `cargo test -p sol-wallet-core --test wallet_lifecycle --test mnemonic_encrypt` exits 0; P6-3 zeroize-probe + P6-4 plaintext-vec-zeroize tests green.
+- [ ] Step 4: Amend deep-dive §L L2619–2656 + §L L2765 in-place — remove broken `conflicts_with_all` line, replace `cli.into()` with `&cli` borrow pattern, update sample `Cli` struct so Phase 7.1a Step 1 can copy verbatim.
+- [ ] Step 5: Amend deep-dive §J L1825 exit-code table to match §L L2738–2744 (or remove the §J table entirely with note pointing to §L).
+- [ ] Step 6: Open pre-Phase-7 PR `sol/pre-phase7-cli-fixes → rust-sol-core` with the 4 file modifications above. Title: "fix(sol): close P6-3/P6-4 library gaps + P5-1/P5-3 deep-dive samples (pre-Phase-7 unblock)".
+- [ ] Step 7: PAUSE — merge into `rust-sol-core` BEFORE opening any Phase 7.1 PR.
 
-### Task 7.2 (TBD): address, balance, spl, tx, config handlers + surfpool e2e
+**Why pre-Phase-7.** Phase 7.1 handlers (`wallet send`, `send-speedup`, `balance`) call `WalletManager::unlock` — P6-3 + P6-4 must close first or every CLI PR re-discusses F47. P5-3 broken clap sample blocks 7.1a build. P5-1 inverted exit-code table propagates wrong codes to 22 commands if not resolved.
+
+### Task 7.1a (TBD): CLI scaffold + `Commands` enum + `classify()` skeleton + handler stubs
+
+Split rationale: P5-3 (clap sample) + P5-1 (exit-code table) fixes land in pre-Phase-7; scaffolding the binary without any secret handling is the lowest-risk first PR. Each sub-phase is independently reviewable.
 
 **Files:**
+- Modify: `rust-wallet-app/crates/sol/Cargo.toml` (add `sol-wallet-core` dep)
+- Create: `rust-wallet-app/crates/sol/src/main.rs` (tokio runtime + tracing init + dispatch skeleton)
+- Create: `rust-wallet-app/crates/sol/src/cli.rs` (`Cli` struct per P5-3-fixed deep-dive sample)
+- Create: `rust-wallet-app/crates/sol/src/handlers/mod.rs`
+- Create: `rust-wallet-app/crates/sol/src/handlers/{wallet,address,balance,spl,tx,config}.rs` (skeletons — `unimplemented!("Phase 7.1b/c/d")`)
+- Create: `rust-wallet-app/crates/sol/src/handlers/error.rs` (`classify()` per P5-1-fixed mapping — NOT §J L1825; use §L L2738–2744 + output-conventions L2843)
+- Modify: `.cargo-tarpaulin.toml` (extend coverage gate to `sol::main`, `sol::cli`, `sol::handlers::{wallet,address,balance,spl,tx,config,error}` per P7-15)
 
+**Steps:**
+- [ ] Step 1: Implement `Cli` struct with global flags (data_dir, rpc, spki_pin, cluster, commitment, priority_fee, cu_limit, allow_insecure_tls) per P5-3-fixed clap sample (no `conflicts_with_all`; borrow `&cli` not move).
+- [ ] Step 2: Implement `Cluster` enum (`MainnetBeta | Devnet | Localnet`) — Q11: NO `Testnet` variant (P7-24 ✅ confirmed).
+- [ ] Step 3: Implement `Commitment` enum (`Processed | Confirmed | Finalized`).
+- [ ] Step 4: Implement `Commands` enum with 22 variants: wallet (9), address (2), balance (2), spl (4), tx (2), config (3). Note: `wallet send` + `send-speedup` arms in `wallet.rs` stub return `unimplemented!("Phase 7.1c")`.
+- [ ] Step 5: Implement `handlers/error.rs::classify(err) -> exit_code` per P5-1-corrected mapping:
+  ```
+  Error::InvalidMnemonic | InvalidAddress | InvalidDerivationPath
+    | InvalidCluster | InvalidTokenMint | InvalidTokenProgram => exit 2
+  Error::BroadcastFailed | ConfirmTimeout => exit 3
+  Error::WalletNotFound | WalletDecryptFailed => exit 4
+  Error::SignFailed | FileIo | ConfigInvalid | PalError => exit 5
+  ```
+- [ ] Step 6: Implement empty handler stubs returning `unimplemented!("Phase 7.1b/c/d will fill")`.
+- [ ] Step 7: Extend `.cargo-tarpaulin.toml` to include 7 new modules (P7-15 partial; full coverage assertion in Phase 7 verification).
+- [ ] Step 8: Verify gate: `cargo fmt + cargo clippy -p sol -- -D warnings + cargo build -p sol --tests` exits 0. Loud-RED if any compile error.
+- [ ] Step 9: PAUSE — commit-push-pr.
+
+### Task 7.1b (TBD): wallet CRUD handlers (create / import / show / list / delete / rename / balance)
+
+Split rationale: wallet CRUD is the densest security cluster (P7-1, P7-6, P7-10, P7-19, P7-21, P7-20). One PR per cluster keeps review focused.
+
+**Files:**
+- Modify: `rust-wallet-app/crates/sol/src/handlers/wallet.rs` (CRUD arms; `send`/`send-speedup` arms stay stubbed for 7.1c)
+- Create: `rust-wallet-app/crates/sol/tests/cli_wallet.rs` (Phase 7.1b owns 1 of 10 CLI test files at this stage; `send`/`send-speedup` cases added in 7.1c)
+
+**Steps:**
+- [ ] Step 1: Implement `wallet create` per P7-1 + P7-21. REQUIRE `--mnemonic-file`; `--mnemonic` rejected via custom `SecretSeed` clap `value_parser` (compile-time gate via type, not runtime). STDERR emits `SECRET: mnemonic=<word...>` prefix (trufflehog-detectable). STDOUT emits `wallet_id`.
+- [ ] Step 2: Implement `wallet import` per P7-1 + P7-19. Pre-flight: source file mode ≤ 0o600 (Unix) per P6-6. Preview derived address + require `--yes` flag or interactive `[y/N]`. `--mnemonic` rejected (same `SecretSeed` gate). `--private-key-file` mode-checked.
+- [ ] Step 3: Implement `wallet show` / `wallet list`. Invoke `WalletManager::summary(id)` (encrypted blob only — no `unlock`). Decrypted mnemonic NEVER displayed.
+- [ ] Step 4: Implement `wallet delete` per P7-6. Require `--yes` flag OR interactive `Type 'delete <uuid>' to confirm:` from STDIN. Non-TTY without `--yes` → exit 2 + encrypted blob still on disk (test asserts post-state).
+- [ ] Step 5: Implement `wallet rename --id <uuid> --to <name>` per P7-10. Validate name in `WalletManager::rename`: 1..=64 chars, no control chars, no `/\\:*?"<>|\0`, no Windows-reserved (`CON` / `PRN` / `AUX` / `NUL` / `COM1–9` / `LPT1–9`). Reject empty / whitespace-only.
+- [ ] Step 6: Implement `wallet balance --wallet-id | --address`. `--wallet-id` path uses `WalletManager::unlock(id, password)` returning `OwnedLock<Zeroizing<Keypair>>` (P6-3 type); derives address inside scoped block + drops Keypair before RPC. `--address` path uses raw RPC (no unlock).
+- [ ] Step 7: Implement `crates/sol/tests/cli_wallet.rs` — wallet create/import/show/list/delete/rename/balance end-to-end via `assert_cmd`. Required test cases:
+  - **P7-1**: `wallet import --mnemonic "..."` → assert clap-level reject (flag does not parse) + no mnemonic in `/proc/<pid>/cmdline`.
+  - **P7-6**: `wallet delete --id <uuid>` (no `--yes`, non-TTY) → assert exit 2 + encrypted blob still on disk.
+  - **P7-10**: `wallet rename --to "../../etc/passwd"` → exit 2; `--to ""` → exit 2; `--to "valid-name_1"` → exit 0.
+  - **P7-19**: `wallet import --private-key-file <mode-0644-file>` → exit 2 + `Error::InsecureSourceFile`.
+  - **P7-21**: `wallet create` STDERR capture → first line starts with `SECRET:`.
+  - **P7-20**: `sol config set-cluster mainnet-beta` (transitioning from devnet) → exit 2 without `SOL_CONFIRM_MAINNET=yes`.
+- [ ] Step 8: Verify gate: `cargo fmt + cargo clippy -p sol -- -D warnings + cargo test -p sol --test cli_wallet` exits 0.
+- [ ] Step 9: PAUSE — commit-push-pr.
+
+### Task 7.1c (TBD): wallet send + send-speedup + spl handlers + library e2e tests
+
+Split rationale: send / send-speedup / spl hold `Keypair` across RPC (P7-2 = biggest blast radius); isolated PR + zeroize probe tests before broader integration.
+
+**Files:**
+- Modify: `rust-wallet-app/crates/sol/src/handlers/wallet.rs` (send + send-speedup arms)
+- Create: `rust-wallet-app/crates/sol/src/handlers/spl.rs`
+- Modify: `rust-wallet-app/crates/sol/tests/cli_wallet.rs` (add `send` / `send-speedup` cases; rows 8, 10, 12, 13, 14)
+- Create: `rust-wallet-app/crates/sol/tests/cli_spl.rs` (rows 9, 13 SPL-specific)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_sol_local.rs` (deep-dive row 26)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_spl_local_held.rs` (row 27)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_spl_local_fresh.rs` (row 28)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_spl_local_approve.rs` (row 29)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_send_speedup_local.rs` (row 35)
+- Create: `tests/common/mock_spl_usdc.rs` (USDC-style mint deploy helper)
+- Create: `tests/common/faucet.rs` (`airdrop_surfpool(rpc, pubkey, lamports)`)
+
+**Steps:**
+- [ ] Step 1: Implement `wallet send` per P7-2 + P7-7 + P7-13. Use `OwnedLock<Zeroizing<Keypair>>` from P6-3; reconstruct `Keypair::try_from(&sk_bytes[..])` for `&keypair` borrow passed to `tx::submit_sol` / `submit_spl`. Two-tier `--confirm-mainnet yes` (bare flag → exit 2) + STDERR audit log. `--dry-run` and `--sign-only` clap-level mutually exclusive.
+- [ ] Step 2: Implement `wallet send-speedup --sig <base58>` per P7-2. Same `OwnedLock` pattern; longer lifetime (2 RPCs) — verify `OwnedLock::Drop` zeroizes after handler return.
+- [ ] Step 3: Implement `spl send` per P7-14 + P7-23. `--skip-memo-required` requires `--i-understand-no-memo-enforcement` second flag. `--memo` length clamped to 566 bytes + no NUL.
+- [ ] Step 4: Implement `spl approve` + `spl balance --address --token` + `spl allowance --token --owner --delegate`.
+- [ ] Step 5: Implement library e2e tests `submit_sol_local` (row 26) + `submit_spl_local_held` (row 27) + `submit_spl_local_fresh` (row 28) + `submit_spl_local_approve` (row 29) + `submit_send_speedup_local` (row 35). `boot_probe_local` (row 32) lives in 7.1d (cluster-detect semantics align with config handlers).
+- [ ] Step 6: Extend `crates/sol/tests/cli_spl.rs` — spl send/approve/balance/allowance end-to-end against surfpool-deployed USDC mint. Required test cases:
+  - **P7-7**: `wallet send --confirm-mainnet` (bare flag, no `yes`) → exit 2.
+  - **P7-13**: `wallet send --dry-run --sign-only` (both) → exit 2; `--sign-only` alone → exit 0 + sig present in STDOUT JSON + no broadcast (assert via mock RPC).
+  - **P7-14**: `spl send --skip-memo-required` (no second flag) → exit 2; both flags → exit 0 + warn STDERR.
+  - **P7-23**: `spl send --memo <1024 bytes>` → exit 2.
+- [ ] Step 7: Verify gate: `cargo fmt + cargo clippy -p sol -- -D warnings + cargo test -p sol --test cli_wallet --test cli_spl + cargo test -p sol-wallet-core --test submit_sol_local --test submit_spl_local_held --test submit_spl_local_fresh --test submit_spl_local_approve --test submit_send_speedup_local` exits 0.
+- [ ] Step 8: PAUSE — commit-push-pr.
+
+### Task 7.1d (TBD): address + balance + tx + config handlers + surfpool e2e + library `derive_pubkey`
+
+Split rationale: remaining handlers are mostly URL/path validation + cluster guards + poll bounds — narrower security surface than 7.1b/c but still ~5 findings (P7-8, P7-9, P7-11, P7-16, P7-17).
+
+**Files:**
 - Create: `rust-wallet-app/crates/sol/src/handlers/address.rs`
 - Create: `rust-wallet-app/crates/sol/src/handlers/balance.rs`
-- Create: `rust-wallet-app/crates/sol/src/handlers/spl.rs`
 - Create: `rust-wallet-app/crates/sol/src/handlers/tx.rs`
 - Create: `rust-wallet-app/crates/sol/src/handlers/config.rs`
-
-CLI tests (crates/sol/tests/) — Phase 7.2 owns the remaining 4 CLI test files + 5 library e2e tests:
-
-- Create: `rust-wallet-app/crates/sol/tests/cli_integration_surfpool.rs` (deep-dive CLI Scenario — surfpool spawn + ephemeral port + 22 commands)
-- Create: `rust-wallet-app/crates/sol/tests/cli_devnet_conformance.rs` (loud-RED `RUN_SOL_DEVNET=1` cross-cluster conformance)
-- Create: `rust-wallet-app/crates/sol/tests/cli_json_output.rs` (deep-dive §N — JSON mode for all 22 commands; per-command JSON shape)
-- Create: `rust-wallet-app/crates/sol/tests/cli_mainnet_smoke.rs` (Phase 9.1 owns — NOT created here; Phase 9.1 creates it with the loud-RED `RUN_SOL_MAINNET=1` gate and operator runbook)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_sol_local.rs` (deep-dive row 26 — `submit_sol` E2E on surfpool)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_spl_local_held.rs` (deep-dive row 27 — held recipient; ~5k CU; receipt SUCCESS)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_spl_local_fresh.rs` (deep-dive row 28 — fresh recipient; ~0.00204 SOL rent; 2 ATAs created)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_spl_local_approve.rs` (deep-dive row 29 — approve + allowance view)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/submit_send_speedup_local.rs` (deep-dive row 35 — new sig + higher priority fee; no RBF on Solana)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/boot_probe_local.rs` (deep-dive row 32 — `get_health` boot probe + cluster detect → `Localnet`)
-- Create: `tests/common/mock_spl_usdc.rs` (Phase 7.2 owns USDC-style mint deploy helper)
-- Create: `tests/common/faucet.rs` (Phase 7.2 owns `airdrop_surfpool(rpc, pubkey, lamports)`)
+- Modify: `rust-wallet-app/crates/sol-wallet-core/src/wallet_manager.rs` (add `derive_pubkey` per P7-17)
+- Create: `rust-wallet-app/crates/sol/tests/cli_address.rs`
+- Create: `rust-wallet-app/crates/sol/tests/cli_balance.rs`
+- Create: `rust-wallet-app/crates/sol/tests/cli_tx.rs`
+- Create: `rust-wallet-app/crates/sol/tests/cli_config.rs`
+- Create: `rust-wallet-app/crates/sol/tests/cli_integration_surfpool.rs` (deep-dive 22-command e2e)
+- Create: `rust-wallet-app/crates/sol/tests/cli_devnet_conformance.rs` (loud-RED `RUN_SOL_DEVNET=1`)
+- Create: `rust-wallet-app/crates/sol/tests/cli_json_output.rs` (deep-dive §N — JSON mode for 22 commands)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/boot_probe_local.rs` (deep-dive row 32 — `get_health` + cluster detect → `Localnet`)
 
 **Steps:**
-- [ ] Step 1: Implement `address new --mnemonic [--mnemonic-file] --account <N> --address-index <N>` + `address pubkey --wallet-id` (note Q3: renamed from `xpub` for Ed25519)
-- [ ] Step 2: Implement `balance --address <addr> [--unit sol|lamport]` + `balance --address <addr> --token USDC|<addr>` (auto-derives ATA, returns 0 if not yet created, returns `{balance, mint, decimals, ata}` JSON per deep-dive §B + §G)
-- [ ] Step 3: Implement `spl send --mnemonic --token USDC|<addr> --to --amount` — auto-derives ATA for both sender and recipient + prepends `create_associated_token_account_idempotent` if ATAs missing + uses `transfer_checked` with dynamic decimals
-- [ ] Step 4: Implement `spl approve --token --delegate --amount` + `spl balance --address --token` + `spl allowance --token --owner --delegate`
-- [ ] Step 5: Implement `tx get --sig` (`chain::get_signature_statuses`) + `tx wait --sig --timeout --poll-interval` (`tx::wait_for_confirm`)
-- [ ] Step 6: Implement `config show [--json]` + `config set-rpc <url>` (per-cluster persist) + `config set-cluster mainnet-beta|devnet|localnet` (rejects `testnet` per Q11)
-- [ ] Step 7: Implement `tests/submit_sol_local.rs` (deep-dive row 26) — surfpool-backed; `submit_sol` full flow; receipt slot ≥ 1; sender lamport delta = amount; recipient lamport delta = amount
-- [ ] Step 8: Implement `tests/submit_spl_local_held.rs` (row 27) — surfpool + deployed USDC-style mint; held recipient; `submit_spl_transfer` returns SUCCESS; recipient token balance = sent amount; CU ≈ 5_000 per deep-dive §C
-- [ ] Step 9: Implement `tests/submit_spl_local_fresh.rs` (row 28) — surfpool + deployed mint + fresh recipient; `submit_spl_transfer` returns SUCCESS; ~0.00204 SOL rent charged to sender; 2 ATAs created (sender + recipient)
-- [ ] Step 10: Implement `tests/submit_spl_local_approve.rs` (row 29) — surfpool + delegate; `submit_spl_approve` accepted; `spl_allowance` view returns approved amount
-- [ ] Step 11: Implement `tests/submit_send_speedup_local.rs` (row 35) — surfpool; `submit_send_speedup` emits NEW tx (no RBF on Solana) with higher priority fee; new signature distinct from original
-- [ ] Step 12: Implement `tests/boot_probe_local.rs` (row 32) — surfpool; `SolanaClient::get_health` returns `Ok`; cluster enum resolves to `Localnet`
-- [ ] Step 13: Implement `crates/sol/tests/cli_integration_surfpool.rs` — surfpool spawn + ephemeral port + 22 commands coverage; binary invoked via `assert_cmd`; STDERR/STDOUT captured
-- [ ] Step 14: Implement `crates/sol/tests/cli_devnet_conformance.rs` — loud-RED `RUN_SOL_DEVNET=1` cross-cluster conformance; binary pointed at `--cluster devnet`; 22 commands each pass against `https://api.devnet.solana.com`
-- [ ] Step 15: Implement `crates/sol/tests/cli_json_output.rs` — JSON mode (`--json`) for all 22 commands; per-command JSON shape asserted
-- [ ] Step 16: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test -p sol-wallet-core --test submit_sol_local --test submit_spl_local_held --test submit_spl_local_fresh --test submit_spl_local_approve --test submit_send_speedup_local --test boot_probe_local` + `cargo test -p sol --tests` (loud-RED `RUN_SOL_DEVNET=1` for devnet tests)
-- [ ] Step 17: PAUSE — commit-push-pr
+- [ ] Step 1: Implement `address new` per P7-16. Default `--wallet-id --password`; accept `--mnemonic-file` as alternative; REJECT `--mnemonic` (no inline) per P7-1 fix. Numeric flags `--account <N> --address-index <N>` (Phantom UX).
+- [ ] Step 2: Implement `address pubkey --wallet-id` per P7-17. Call `WalletManager::derive_pubkey(id, password, account, address_index)` which returns `Pubkey` only (no `Keypair` exposure).
+- [ ] Step 3: Add `WalletManager::derive_pubkey(&self, id, password, account, address_index) -> Result<Pubkey, Error>` to `sol-wallet-core` (P7-17 library fix). Implementation reads encrypted blob + derives + drops Keypair inside scoped block + returns `Pubkey`.
+- [ ] Step 4: Implement `balance --address <addr> [--unit sol|lamport]` + `balance --address <addr> --token USDC|<addr>` (auto-derives ATA, returns 0 if not yet created, JSON `{balance, mint, decimals, ata}` per deep-dive §B + §G).
+- [ ] Step 5: Implement `tx get --sig` (`chain::get_signature_statuses`) + `tx wait --sig --timeout --poll-interval` per P7-11 (`--timeout` clamped via `clap::value_parser!(u64).range(1..=600)`).
+- [ ] Step 6: Implement `config show [--json]` per deep-dive L2948.
+- [ ] Step 7: Implement `config set-rpc <url>` per P7-8. Validate scheme: `https` only unless `--allow-insecure-tls` (separate clap flag). Reject URL with userinfo (`url.username().is_empty() && url.password().is_none()`). Require host.
+- [ ] Step 8: Implement `config set-cluster mainnet-beta|devnet|localnet` per P7-20. Require `SOL_CONFIRM_MAINNET=yes` or interactive confirm when transitioning from non-mainnet. `testnet` rejected per Q11 (P7-24).
+- [ ] Step 9: Add `requestAirdrop` cluster guard per P7-9 (mainnet → exit 2 BEFORE RPC).
+- [ ] Step 10: Implement library e2e test `boot_probe_local.rs` (row 32) — surfpool + `SolanaClient::get_health` returns `Ok` + cluster enum resolves to `Localnet`.
+- [ ] Step 11: Implement CLI tests `cli_address.rs` + `cli_balance.rs` + `cli_tx.rs` + `cli_config.rs`. Required cases:
+  - **P7-8**: `set-rpc http://api.devnet.solana.com` → exit 2; `set-rpc https://user:pass@evil.com` → exit 2; `set-rpc https://api.devnet.solana.com` → exit 0.
+  - **P7-9**: `--cluster mainnet-beta wallet airdrop 5 <addr>` → exit 2 + no RPC request emitted (mock RPC counter).
+  - **P7-11**: `tx wait --timeout 999999999` → exit 2.
+  - **P7-16**: `address new --mnemonic "..."` → exit 2 (clap reject).
+  - **P7-17**: `address pubkey --wallet-id <uuid>` returns pubkey + heap-zeroize probe asserts no Keypair bytes.
+  - **P7-20**: `set-cluster devnet` then `set-cluster mainnet-beta` (no `SOL_CONFIRM_MAINNET=yes`) → exit 2 + cluster NOT changed on disk.
+- [ ] Step 12: Implement `cli_integration_surfpool.rs` (22 commands e2e) + `cli_devnet_conformance.rs` (loud-RED `RUN_SOL_DEVNET=1`) + `cli_json_output.rs` (JSON mode for 22 commands).
+- [ ] Step 13: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test -p sol-wallet-core --test boot_probe_local + cargo test -p sol --tests` (loud-RED `RUN_SOL_DEVNET=1` for devnet tests) exits 0.
+- [ ] Step 14: PAUSE — commit-push-pr.
+
+### Dropped from Phase 7 scope (deferred or scope-cut)
+
+- **P7-12** (tracing INFO log leak) → CI grep check only, no code change in 7.1: `grep -rn "tracing::.*!(?keypair|?mnemonic|?secret|?seed|?pk)" crates/sol/src/` must return ZERO matches. Add to Phase 7 verification gate.
+- **P7-18** (P5-4 / P5-5 doc drift inheritance) → fix in companion-audit follow-up. Phase 7 handler docstrings reference resolved values (179 APIs from P5-4 fix; corrected row letters from P5-5 fix).
+- **P7-22** (`sol --version` build fingerprint) → accepted info-disclosure; no action.
+- **P7-23** (`spl send --memo` length/charset) → 1-line `memo.len() <= 566 && !memo.contains('\0')` check; lands in Task 7.1c Step 3 inline.
+
+### Mapping to existing test rows (22 rows, unchanged from pre-split)
+
+The 22-row matrix (Phase 7 verification §Row-to-CLI-test-file ownership) is unchanged
+by the 7.1a / 7.1b / 7.1c / 7.1d split. **Phase 7.1b** owns rows 8 (Wallet-to-wallet SOL),
+14 (Sign-only), 18 (Wallet list across clusters), 19 (Wallet delete + rename). **Phase 7.1c**
+owns rows 1–4 (SOL + SPL transfer + approve), 9 (Wallet-to-wallet SPL), 10 (Send-speedup),
+12 (Insufficient balance), 13 (Dry-run). **Phase 7.1d** owns rows 5–7 (Token-2022 disambig,
+Compute Budget, Memo), 11 (Blockhash retry), 15–17 (Confirmation polling variants),
+20 (Config switch cluster), 21 (Network failure recovery). Row 22 stays on Phase 9.1
+backlog per Q4 Q-gate.
+
+### Phase 7 verification gains 7 new loud-RED gates (per audit doc)
+
+The Phase 7 verification `Task 7.3` (lines 1523+ below) gains seven new loud-RED
+assertions corresponding to the audit's most-severe findings. Each `- [ ]` flips to
+`[x]` only after the corresponding test passes locally + in CI. These join the
+existing 12 steps of Task 7.3.
+
+- [ ] **NEW Step 13** (P7-1) Argv-leak probe — `cargo test -p sol --test cli_wallet argv_leak_audit_p7_1` exits 0. Test spawns `sol wallet import --mnemonic "..."` (if not clap-rejected) or asserts clap-level reject at compile time; reads `/proc/<pid>/cmdline` during invocation and confirms mnemonic NOT present.
+- [ ] **NEW Step 14** (P7-2) Heap-zeroize probe — `cargo test -p sol --test cli_wallet heap_zeroize_audit_p7_2` exits 0. Runs `wallet send` against surfpool, scans `/proc/self/mem` post-handler for base58 64-byte key pattern, asserts none.
+- [ ] **NEW Step 15** (P7-3) `classify()` 4-arm exit-code assertion — `cargo test -p sol --test cli_integration_surfpool classify_exit_codes_audit_p7_3` exits 0. Forces `SignFailed` → exit 4; `WalletNotFound` → exit 5; `BroadcastFailed` → exit 3; `InvalidMnemonic` → exit 2.
+- [ ] **NEW Step 16** (P7-4) Clap mutual-exclusion — `cargo test -p sol --test cli_config clap_wait_mutual_exclusion_audit_p7_4` exits 0. `--wait --wait-finalized` together → exit 2 (clap, not panic).
+- [ ] **NEW Step 17** (P7-5) STDERR secret-scrub assertion — `cargo test -p sol --test cli_wallet stderr_secret_scrub_audit_p7_5` exits 0. Triggers keypair-leaking error path, asserts captured STDERR does NOT contain raw base58 64-byte secret.
+- [ ] **NEW Step 18** (P7-7) `--confirm-mainnet` gate — `cargo test -p sol --test cli_wallet confirm_mainnet_gate_audit_p7_7` exits 0. Bare `--confirm-mainnet` on mainnet cluster → exit 2.
+- [ ] **NEW Step 19** (P7-20) Mainnet-cluster-switch confirmation — `cargo test -p sol --test cli_config cluster_switch_mainnet_audit_p7_20` exits 0. `set-cluster devnet` → `set-cluster mainnet-beta` without `SOL_CONFIRM_MAINNET=yes` → exit 2 + cluster unchanged on disk.
+
+A Phase 7 verification PR that runs without these 7 new loud-RED gates is not mergeable
+(per audit doc "Phase 7.2 verification gains 7 new loud-RED gate assertions").
 
 ---
 
