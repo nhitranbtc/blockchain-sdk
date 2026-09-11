@@ -840,3 +840,22 @@ fn spki_pin_rejects_non_allowlisted_url() {
         "expected allowlist rejection, got: {msg}"
     );
 }
+
+#[tokio::test]
+#[serial]
+async fn rate_limiter_refills_after_wait() {
+    // Plan §Task 5.4 Step 4 — 3rd acceptance test. Burst=1, rate=2/s.
+    // First acquire succeeds (bucket drains to 0). After ~1.5s the
+    // bucket refills to ~2 tokens (well over 1.0), so the next
+    // acquire succeeds without retry.
+    let limiter = RateLimiter::new(2, 1);
+    limiter.acquire("test-host").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let start = std::time::Instant::now();
+    limiter.acquire("test-host").await.unwrap();
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "after 1.5s refill, second acquire should be immediate, was {elapsed:?}"
+    );
+}

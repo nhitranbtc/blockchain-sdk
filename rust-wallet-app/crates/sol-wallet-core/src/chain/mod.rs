@@ -29,6 +29,7 @@
 pub mod account;
 pub mod client;
 pub mod preflight;
+pub mod rate_limit;
 
 pub use account::{
     get_account_info, get_balance, get_epoch_info, get_health, get_latest_blockhash,

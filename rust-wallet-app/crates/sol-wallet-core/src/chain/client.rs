@@ -71,71 +71,12 @@ pub const DEFAULT_RATE_LIMIT_BURST: u32 = 100;
 /// Default per-request timeout (reqwest client builder).
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Per-RPC rate limiter (token bucket).
-///
-/// Implemented as a hand-rolled bucket (no `governor` crate dep to keep
-/// the workspace lean). `acquire()` is non-blocking: returns `Ok(())` if
-/// a token is available, sleeps up to 1s if a token can be refilled, and
-/// returns `Err(Error::Transport(...))` if the bucket is still empty
-/// after the wait.
-#[derive(Debug, Clone)]
-pub struct RateLimiter {
-    capacity: f64,
-    refill_per_sec: f64,
-    tokens: Arc<std::sync::Mutex<f64>>,
-    last_refill: Arc<std::sync::Mutex<Instant>>,
-    disabled: bool,
-}
-
-impl RateLimiter {
-    /// Construct a new rate limiter.
-    ///
-    /// `req_per_sec` is the steady-state rate; `burst` is the max number
-    /// of requests allowed in a single instant. `req_per_sec == 0` AND
-    /// `burst == 0` is a sentinel for "disabled" — every call to
-    /// `acquire()` returns `Ok(())` immediately. Useful for tests that
-    /// don't want rate limiting.
-    pub fn new(req_per_sec: u32, burst: u32) -> Self {
-        let disabled = req_per_sec == 0 && burst == 0;
-        Self {
-            capacity: burst as f64,
-            refill_per_sec: req_per_sec as f64,
-            tokens: Arc::new(std::sync::Mutex::new(burst as f64)),
-            last_refill: Arc::new(std::sync::Mutex::new(Instant::now())),
-            disabled,
-        }
-    }
-
-    /// Acquire a permit. Returns `Ok(())` if a token is available, or
-    /// sleeps up to 1s for the bucket to refill before giving up.
-    /// Returns `Err(Error::Transport("rate limit exceeded: <host>"))`
-    /// if the bucket is still empty after the wait.
-    pub async fn acquire(&self, host: &str) -> Result<()> {
-        if self.disabled {
-            return Ok(());
-        }
-        // Refill bucket
-        let now = Instant::now();
-        {
-            let mut last = self.last_refill.lock().expect("RateLimiter mutex poisoned");
-            let elapsed = now.duration_since(*last).as_secs_f64();
-            let mut tokens = self.tokens.lock().expect("RateLimiter mutex poisoned");
-            *tokens = (*tokens + elapsed * self.refill_per_sec).min(self.capacity);
-            *last = now;
-        }
-        // Try to take a token
-        {
-            let mut tokens = self.tokens.lock().expect("RateLimiter mutex poisoned");
-            if *tokens >= 1.0 {
-                *tokens -= 1.0;
-                return Ok(());
-            }
-        }
-        // Bucket empty — sleep up to 1s for refill, then give up
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        Err(Error::Transport(format!("rate limit exceeded: {host}")))
-    }
-}
+// =============================================================================
+// Rate limiter — re-export from `chain::rate_limit` for back-compat with
+// Phase 5.1 callers. The implementation lives in `rate_limit.rs` (Task 5.4
+// plan spec calls for a separate `src/chain/rate_limit.rs`).
+// =============================================================================
+pub use crate::chain::rate_limit::RateLimiter;
 
 /// Cached blockhash + fetch timestamp.
 ///
