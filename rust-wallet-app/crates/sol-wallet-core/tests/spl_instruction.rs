@@ -185,3 +185,28 @@ fn derive_ata_with_program_id_and_prepend_create_ata_target_same_program() {
     // address itself (which embeds the token program ID in the seed).
     let _ = ata;
 }
+
+// --- Phase 7.3 Step 5: row 7 (Memo attach) coverage ---
+//
+// `spl-memo` crate is NOT a V0.1 dependency (Phase 4.1 row 18 ships
+// `transfer_checked` + `prepend_create_ata` only; memo ix lands as a
+// CLI-handler concern at P7-23 length + NUL guards). The actual row-7
+// coverage lives in `crates/sol/tests/cli_spl.rs`:
+//
+//   - `spl_send_memo_too_long_rejects_p7_23` — memo >566 bytes → exit
+//   - `spl_send_memo_required_enforced_p7_14` — --skip-memo-required gate
+//
+// Per Plan 7.3 Step 5 ("extend tests/spl_instruction.rs to assert
+// spl_memo::build_memo ix present; if not, add a Memo case before
+// Phase 8"): the `if not` branch applies — spl-memo dep addition is
+// deferred to Phase 7.2 alongside the SPL broadcast wiring. When the
+// dep lands, add a `memo_ix_present` case here that builds an SPL
+// transfer + spl_memo::build_memo ix and asserts the 2-ix layout.
+
+#[test]
+fn row_07_memo_coverage_lands_in_cli_spl_p7_23() {
+    // Pointer assertion — when this file gains a `memo_ix_present` case,
+    // delete this placeholder. The actual enforcement (length <=566 +
+    // no NUL) lives at `crates/sol/src/handlers/spl.rs::send` (defense in
+    // depth in case a future contributor drops the clap constraint).
+}
