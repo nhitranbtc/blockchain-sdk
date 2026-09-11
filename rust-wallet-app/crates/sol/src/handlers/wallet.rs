@@ -96,12 +96,11 @@ async fn create(
             .to_string(),
     );
 
-    // P7-21: STDERR emits trufflehog-detectable `SECRET:` prefix before persist.
-    // Background review #3 + P7-21: mnemonic leaks to STDERR (already in caller
-    // scope) — emit deliberately so the secret is git/CI-scannable, not
-    // accidentally omitted.
-    eprintln!("SECRET: mnemonic={}", *phrase);
-
+    // P7-21 (revised after background security review on commit 49ade2d3):
+    // do NOT emit the mnemonic to STDERR or any observability sink. The
+    // mnemonic stays in the zeroized buffer; the caller has the source file
+    // for recovery. Logging the secret defeats P7-1's reject-`--mnemonic`
+    // intent (STDERR is scraped / indexed / logged, exactly like cmdline).
     let now_unix = current_unix_secs();
     let result = ctx.wallet_manager.create_with_mnemonic(
         &phrase,

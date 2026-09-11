@@ -118,8 +118,11 @@ fn wallet_import_inline_mnemonic_rejects_p7_1() {
 }
 
 #[test]
-fn wallet_create_emits_secret_prefix_p7_21() {
-    // P7-21: `wallet create` STDERR first line starts with `SECRET:` (trufflehog-detectable).
+fn wallet_create_does_not_leak_mnemonic_to_stderr_p7_21() {
+    // P7-21 (revised after background security review on commit 49ade2d3):
+    // `wallet create` MUST NOT emit the mnemonic to STDERR or any
+    // observability sink. Original test pinned the bad behavior (asserted
+    // STDERR starts with `SECRET:`); inverted to prevent reintroduction.
     use std::fs;
 
     let tmp = TempDir::new().expect("tempdir");
@@ -149,19 +152,36 @@ fn wallet_create_emits_secret_prefix_p7_21() {
 
     let output = assert.get_output();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let first_line = stderr.lines().next().unwrap_or("");
-    assert!(
-        first_line.starts_with("SECRET:"),
-        "expected STDERR first line to start with `SECRET:` (P7-21 trufflehog prefix), got: {first_line:?}"
-    );
 
-    // STDOUT must be a parseable UUID (wallet_id).
+    // No SECRET: trufflehog prefix — we don't emit the secret at all.
+    assert!(
+        !stderr.lines().any(|l| l.starts_with("SECRET:")),
+        "STDERR must not contain a `SECRET:` line (P7-21 revised: mnemonic MUST NOT be logged); got STDERR: {stderr:?}"
+    );
+    // Defense in depth: no standalone BIP-39 word fragment should appear in STDERR.
+    // `abandon` is the canonical "all-zeros" BIP-39 test mnemonic word; if any
+    // of the 12 source words leaked into stderr, this catches it.
+    let source_words = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    for word in source_words.split_whitespace() {
+        assert!(
+            !stderr.contains(word),
+            "STDERR must not contain mnemonic word fragment {word:?}; got STDERR: {stderr:?}"
+        );
+    }
+
+    // STDOUT must be a parseable UUID (wallet_id) — and must not contain the mnemonic.
     let stdout = String::from_utf8_lossy(&output.stdout);
     let id_line = stdout.trim();
     assert!(
         uuid::Uuid::parse_str(id_line).is_ok(),
         "expected STDOUT to be a UUID (wallet_id), got: {id_line:?}"
     );
+    for word in source_words.split_whitespace() {
+        assert!(
+            !stdout.contains(word),
+            "STDOUT must not contain mnemonic word fragment {word:?}"
+        );
+    }
 }
 
 #[cfg(unix)]
