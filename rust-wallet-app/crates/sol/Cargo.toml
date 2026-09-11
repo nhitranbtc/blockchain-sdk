@@ -23,6 +23,7 @@ solana-sdk      = { workspace = true }
 bs58            = { workspace = true }
 uuid            = { workspace = true }
 url             = "2"
+zeroize         = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = "2"

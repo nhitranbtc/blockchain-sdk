@@ -19,6 +19,7 @@
 
 use anyhow::{anyhow, Result};
 use sol_wallet_core::{Error, WalletId};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::cli::{Cli, WalletCmd};
 use crate::handlers::AppContext;
@@ -89,18 +90,26 @@ async fn import(
     // P7-19: preview derived address before import for private-key files.
     if let Some(path) = private_key_file {
         if !yes {
-            let secret_b58 = std::fs::read_to_string(path).map_err(|source| Error::FileIo {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            let secret_b58 = secret_b58.trim();
-            let decoded =
-                bs58::decode(secret_b58)
+            // Background review #5: wrap secret bytes in `Zeroizing<>` so
+            // they are scrubbed on scope exit (RAII). Without this, the
+            // 64-byte secret key persists in heap until natural drop.
+            let mut secret_b58 = Zeroizing::new(
+                std::fs::read_to_string(path)
+                    .map_err(|source| Error::FileIo {
+                        path: path.to_path_buf(),
+                        source,
+                    })?
+                    .trim()
+                    .to_string(),
+            );
+            let decoded_vec =
+                bs58::decode(&*secret_b58)
                     .into_vec()
                     .map_err(|_| Error::InvalidBase58Secret {
                         got: secret_b58.len(),
                         expected: 64,
                     })?;
+            let mut decoded = Zeroizing::new(decoded_vec);
             if decoded.len() != 64 {
                 return Err(Error::InvalidBase58Secret {
                     got: decoded.len(),
@@ -108,14 +117,18 @@ async fn import(
                 }
                 .into());
             }
-            let pubkey_bytes: [u8; 32] =
+            let pubkey_bytes_owned: [u8; 32] =
                 decoded[32..64]
                     .try_into()
                     .map_err(|_| Error::InvalidBase58Secret {
                         got: decoded.len(),
                         expected: 64,
                     })?;
-            let pubkey = solana_sdk::pubkey::Pubkey::from(pubkey_bytes);
+            let mut pubkey_bytes = Zeroizing::new(pubkey_bytes_owned);
+            let pubkey = solana_sdk::pubkey::Pubkey::from(*pubkey_bytes);
+            secret_b58.zeroize();
+            decoded.zeroize();
+            pubkey_bytes.zeroize();
             eprintln!(
                 "Will import private key with derived address: {} (cluster: {:?})",
                 pubkey, cluster
@@ -128,19 +141,25 @@ async fn import(
     let password = read_password_from_cli()?;
     let now_unix = current_unix_secs();
     let id = if let Some(path) = mnemonic_file {
-        let phrase = std::fs::read_to_string(path).map_err(|source| Error::FileIo {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        let phrase = phrase.trim();
-        ctx.wallet_manager.import_from_phrase(
-            phrase,
+        let mut phrase = Zeroizing::new(
+            std::fs::read_to_string(path)
+                .map_err(|source| Error::FileIo {
+                    path: path.to_path_buf(),
+                    source,
+                })?
+                .trim()
+                .to_string(),
+        );
+        let result = ctx.wallet_manager.import_from_phrase(
+            &phrase,
             &password,
             name,
             account,
             address_index,
             now_unix,
-        )?
+        );
+        phrase.zeroize();
+        result?
     } else if let Some(path) = private_key_file {
         ctx.wallet_manager
             .import_from_pk_file(path, &password, name, now_unix)?

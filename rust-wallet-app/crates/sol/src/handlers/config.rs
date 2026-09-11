@@ -1,18 +1,19 @@
 //! Config command dispatcher.
 //!
 //! Phase 7.1d (partial) implements 3/3 config commands:
-//!   - `show`        — reads `<data_dir>/config.json`
+//!   - `show`        — reads `<data_dir>/config/config.json`
 //!   - `set-rpc`     — P7-8: validates scheme (https-only unless `--allow-insecure-tls`);
 //!                     rejects URL with userinfo; requires host
 //!   - `set-cluster` — P7-20: when transitioning to mainnet-beta, requires
 //!                     confirmation (interactive or `SOL_CONFIRM_MAINNET=yes`)
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{Cli, Cluster, ConfigCmd};
 use crate::handlers::AppContext;
 
+const CONFIG_SUBDIR: &str = "config";
 const CONFIG_FILE: &str = "config.json";
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -31,31 +32,59 @@ pub struct SolanaConfig {
 }
 
 impl SolanaConfig {
+    /// Config file lives in `<data_dir>/config/config.json` (sub-directory).
+    /// This isolates it from `WalletManager::FileWalletStorage` which reads
+    /// every file in `data_dir` as a wallet record — a flat `config.json`
+    /// there would break `WalletManager::new`. Sub-directory sidesteps.
     fn config_path(data_dir: &std::path::Path) -> std::path::PathBuf {
-        data_dir.join(CONFIG_FILE)
+        data_dir.join(CONFIG_SUBDIR).join(CONFIG_FILE)
     }
 
-    fn load(data_dir: &std::path::Path) -> Result<Self> {
+    fn config_dir(data_dir: &std::path::Path) -> std::path::PathBuf {
+        data_dir.join(CONFIG_SUBDIR)
+    }
+
+    pub fn load(data_dir: &std::path::Path) -> Result<Self> {
         let path = Self::config_path(data_dir);
         if !path.exists() {
             return Ok(Self::default());
         }
         let bytes = std::fs::read(&path)
-            .map_err(|source| anyhow!("failed to read config {}: {source}", path.display()))?;
+            .with_context(|| format!("failed to read config {}", path.display()))?;
         serde_json::from_slice(&bytes)
-            .map_err(|e| anyhow!("config {} malformed: {e}", path.display()))
+            .with_context(|| format!("config {} malformed", path.display()))
     }
 
-    fn save(&self, data_dir: &std::path::Path) -> Result<()> {
+    /// P7-22 + background review #3: atomic create + chmod 0o600.
+    /// Uses `OpenOptions::mode(0o600)` so the file is created with the right
+    /// permissions atomically — no TOCTOU window where the file exists with
+    /// default umask (potentially world-readable).
+    pub fn save(&self, data_dir: &std::path::Path) -> Result<()> {
+        let dir = Self::config_dir(data_dir);
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create config dir {}", dir.display()))?;
         let path = Self::config_path(data_dir);
         let bytes = serde_json::to_vec_pretty(self)?;
-        std::fs::write(&path, bytes)
-            .map_err(|source| anyhow!("failed to write config {}: {source}", path.display()))?;
-        // Unix mode 0600 — config may contain sensitive metadata (RPC URLs, SPKI pins).
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600) // atomic — file is born with restrictive mode
+                .open(&path)
+                .with_context(|| format!("failed to create config {}", path.display()))?;
+            use std::io::Write;
+            file.write_all(&bytes)
+                .with_context(|| format!("failed to write config {}", path.display()))?;
+            file.sync_all()
+                .with_context(|| format!("failed to fsync config {}", path.display()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&path, &bytes)
+                .with_context(|| format!("failed to write config {}", path.display()))?;
         }
         Ok(())
     }
