@@ -38,7 +38,7 @@ fn aad_tamper_memory_kb_errors_p6_1() {
     // Audit P6-1 loud-RED gate: flip one byte of memory_kb in JSON
     // envelope → decrypt must FAIL (AAD bound to params).
     let mut blob = encrypt(PAYLOAD);
-    blob.kdf.memory_kb += 1024;
+    blob.kdf_memory_kb += 1024;
     let err = crypto::decrypt_wallet(&blob, PASSWORD).unwrap_err();
     assert!(matches!(err, Error::WalletDecryptFailed { .. }));
 }
@@ -46,9 +46,9 @@ fn aad_tamper_memory_kb_errors_p6_1() {
 #[test]
 fn aad_tamper_salt_errors_p6_1() {
     let mut blob = encrypt(PAYLOAD);
-    let mut salt_chars: Vec<char> = blob.kdf.salt.chars().collect();
+    let mut salt_chars: Vec<char> = blob.kdf_salt.chars().collect();
     salt_chars[0] = if salt_chars[0] == '0' { '1' } else { '0' };
-    blob.kdf.salt = salt_chars.into_iter().collect();
+    blob.kdf_salt = salt_chars.into_iter().collect();
     let err = crypto::decrypt_wallet(&blob, PASSWORD).unwrap_err();
     assert!(matches!(err, Error::WalletDecryptFailed { .. }));
 }

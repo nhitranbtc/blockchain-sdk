@@ -34,7 +34,7 @@ fn encrypted_blob_does_not_contain_plaintext_mnemonic_substring() {
         .expect("encrypt");
     let json = serde_json::to_string(&blob).expect("serialize");
     assert!(!json.contains("abandon"));
-    let bytes = B64.decode(&blob.encrypted_payload_b64).expect("b64");
+    let bytes = B64.decode(&blob.encrypted_payload).expect("b64");
     let plaintext_bytes = MNEMONIC.as_bytes();
     for window in plaintext_bytes.windows(7) {
         assert!(

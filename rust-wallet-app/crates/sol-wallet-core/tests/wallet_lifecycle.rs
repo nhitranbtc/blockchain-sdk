@@ -5,7 +5,6 @@
 use sol_wallet_core::platform::{FileWalletStorage, InMemoryStorage};
 use sol_wallet_core::wallet_manager::WalletManager;
 use sol_wallet_core::Error;
-use solana_sdk::signer::Signer;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -33,7 +32,7 @@ fn create_then_list_includes_imported() {
     let store = FileWalletStorage::open(&root).expect("open");
     let mgr = WalletManager::new(store).expect("mgr");
     let id = mgr
-        .create_with_mnemonic(PHRASE, PASSWORD, "main", 1)
+        .create_with_mnemonic(PHRASE, PASSWORD, "main", 0, 0, 1)
         .expect("create");
     let list = mgr.list().expect("list");
     assert_eq!(list.len(), 1);
@@ -49,7 +48,7 @@ fn rename_updates_summary() {
     let store = FileWalletStorage::open(&root).expect("open");
     let mgr = WalletManager::new(store).expect("mgr");
     let id = mgr
-        .create_with_mnemonic(PHRASE, PASSWORD, "old-name", 1)
+        .create_with_mnemonic(PHRASE, PASSWORD, "old-name", 0, 0, 1)
         .expect("create");
     mgr.rename(id, "new-name").expect("rename");
     let s = mgr.summary(id).expect("summary");
@@ -64,10 +63,10 @@ fn delete_removes_from_list() {
     let store = FileWalletStorage::open(&root).expect("open");
     let mgr = WalletManager::new(store).expect("mgr");
     let id1 = mgr
-        .create_with_mnemonic(PHRASE, PASSWORD, "a", 1)
+        .create_with_mnemonic(PHRASE, PASSWORD, "a", 0, 0, 1)
         .expect("a");
     let id2 = mgr
-        .create_with_mnemonic(PHRASE, PASSWORD, "b", 1)
+        .create_with_mnemonic(PHRASE, PASSWORD, "b", 0, 0, 1)
         .expect("b");
     mgr.delete(id1).expect("delete");
     let list = mgr.list().expect("list");
@@ -106,16 +105,16 @@ fn unlock_then_lock_then_unlock_again_produces_distinct_bytes_audit_p6_3() {
     let store = InMemoryStorage::new();
     let mgr = WalletManager::new(store).expect("mgr");
     let id = mgr
-        .create_with_mnemonic(PHRASE, PASSWORD, "main", 1)
+        .create_with_mnemonic(PHRASE, PASSWORD, "main", 0, 0, 1)
         .expect("create");
 
     let k1 = mgr.unlock(id, PASSWORD).expect("unlock 1");
-    let pub1 = k1.keypair().pubkey();
+    let pub1 = k1.wallet().public_key();
     drop(k1);
     mgr.lock(id).expect("lock");
 
     let k2 = mgr.unlock(id, PASSWORD).expect("unlock 2");
-    let pub2 = k2.keypair().pubkey();
+    let pub2 = k2.wallet().public_key();
     assert_eq!(pub1, pub2);
     drop(k2);
 }
@@ -128,7 +127,7 @@ fn list_latency_under_fifty_wallets_audit_p6_14() {
     let store = InMemoryStorage::new();
     let mgr = WalletManager::new(store).expect("mgr");
     for i in 0..50 {
-        mgr.create_with_mnemonic(PHRASE, PASSWORD, &format!("w{i}"), i + 1)
+        mgr.create_with_mnemonic(PHRASE, PASSWORD, &format!("w{i}"), 0, 0, i + 1)
             .expect("create");
     }
     let t = Instant::now();

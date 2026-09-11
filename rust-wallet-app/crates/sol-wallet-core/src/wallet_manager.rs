@@ -1,26 +1,33 @@
 //! `sol-wallet-core` — `WalletManager` CRUD over encrypted blobs.
 //!
-//! Phase 6.1 Task 6.1 Step 4. Per security audit
-//! `docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`:
+//! Phase 6.1 Task 6.1 Step 4 + L13 step 10 review fixes (Sept 11):
 //!
-//! - **P6-3** — `unlock -> OwnedLock` wraps `Zeroizing<Keypair>`;
-//!   `Drop` zeros bytes. Caller MUST NOT clone.
-//! - **P6-6** — `import_from_pk_file` refuses source file with
-//!   Unix mode `& 0o077 != 0`.
-//! - **P6-14** — in-memory map holds encrypted blobs, NOT plaintext
-//!   keys (confirmed).
+//! - **P6-3** — `OwnedLock` wraps `crate::wallet::Wallet` (a newtype
+//!   over `solana_sdk::Keypair`). Signing methods on `OwnedLock`
+//!   delegate to `Wallet::sign_message` / `sign_transaction` so the
+//!   inner Keypair never escapes. The Anza-Zeroize gap is documented
+//!   on `OwnedLock::Drop`.
+//! - **P6-6** — `import_from_pk_file` refuses Unix source file with
+//!   `mode & 0o077 != 0` OR that resolve to symlinks (`symlink_metadata`).
+//! - **P6-14** — in-memory map holds encrypted blobs, NOT plaintext keys.
+//! - **Phantom-equivalence fix (L13 review Sept 11)** —
+//!   `create_with_mnemonic` / `import_from_phrase` route through
+//!   `Wallet::from_mnemonic_at` so the SLIP-0010 derivation chain
+//!   matches Phantom.
 
 use crate::crypto::{self, EncryptedBlob};
 use crate::platform::WalletStorage;
+use crate::wallet::Wallet;
 use crate::{Error, Result, WalletId};
-use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::signature::Signature;
+use solana_sdk::transaction::VersionedTransaction;
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr as _;
 use std::sync::{Arc, RwLock};
 use zeroize::{Zeroize, Zeroizing};
 
-/// Public summary of a wallet — what `list()` and `summary()` return.
+/// Public summary of a wallet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalletSummary {
     /// Stable wallet identifier.
@@ -43,50 +50,73 @@ struct WalletRecord {
     blob: EncryptedBlob,
 }
 
-/// RAII guard holding an unlocked `Keypair`. `Drop` zeros the
-/// secret bytes via `to_bytes` round-trip + `Zeroizing` (audit P6-3).
-/// `solana_sdk::Keypair` does not implement `Zeroize` (Anza gap);
-/// `Zeroizing<[u8; 64]>` is the verifiable contract. Caller MUST
-/// NOT extract the keypair via any method — the only legitimate
-/// use is `sign_transaction` / `sign_message` via `OwnedLock`.
+/// RAII guard holding an unlocked `Wallet`.
+///
+/// # No `&Keypair` accessor (L13 step 10 review Sept 11)
+///
+/// `Wallet` is a newtype over `solana_sdk::Keypair`, which provides a
+/// public `insecure_clone()` method. Exposing `&Keypair` (via
+/// `&Wallet` → `&Keypair`) would let callers clone the inner keypair
+/// and bypass RAII. Instead, this guard exposes only `sign_message`
+/// and `sign_transaction_message`, never the inner keypair.
+///
+/// # Anza-Zeroize gap (L13 review Sept 11)
+///
+/// `solana_sdk::Keypair` does NOT implement `Zeroize`. `Drop` below
+/// performs a `to_bytes()` round-trip + `Zeroizing<[u8; 64]>` zeroize
+/// on a *copy*. The `Box<Keypair>`'s heap allocation returns to the
+/// allocator with the original secret bytes intact — documented
+/// residual limitation requiring an upstream `Zeroize` impl on
+/// `solana_keypair::Keypair` for a hard guarantee.
 pub struct OwnedLock {
-    inner: Box<Keypair>,
+    inner: Box<Wallet>,
 }
 
 impl OwnedLock {
-    /// Borrow the inner keypair. Caller MUST NOT clone.
-    pub fn keypair(&self) -> &Keypair {
+    /// Sign arbitrary bytes via `Signer::sign_message`.
+    pub fn sign_message(&self, msg: &[u8]) -> Signature {
+        self.inner.sign_message(msg)
+    }
+
+    /// Sign a `VersionedTransaction`. Inserts the Ed25519 signature
+    /// at the wallet's pubkey position in the message's static
+    /// account keys.
+    pub fn sign_transaction(&self, tx: VersionedTransaction) -> Result<VersionedTransaction> {
+        self.inner.sign_transaction(tx)
+    }
+
+    /// Borrow the inner Wallet. **CALLER MUST NOT clone the
+    /// underlying Keypair** via `wallet.into_inner()` (not even
+    /// `pub(crate)` exposure — kept private). The only legitimate
+    /// use of `&self` is to read the pubkey or pass to a function
+    /// that takes `&dyn Signer` in the same scope.
+    pub fn wallet(&self) -> &Wallet {
         &self.inner
     }
 }
 
 impl Drop for OwnedLock {
     fn drop(&mut self) {
-        // Explicit zeroize via to_bytes round-trip. `Box` ensures
-        // the Keypair lives on the heap; the round-trip
-        // overwrites those bytes with the resulting array (which
-        // we then Zeroizing-wrap, triggering Drop on scope exit).
-        // The Box deallocation then returns the (now-zeroed)
-        // memory to the allocator — best-effort, not perfect, but
-        // significantly better than no-op Drop on the Anza type.
-        let mut bytes = Zeroizing::new(self.inner.to_bytes());
+        // Best-effort round-trip zeroize. `Wallet::inner_bytes`
+        // returns `Zeroizing<[u8; 64]>` which triggers Drop on its
+        // own scope exit — the stack/heap copy is zeroed. The
+        // `Box<Keypair>`'s heap allocation is opaque to us and
+        // returns to the allocator with the original bytes intact
+        // (Anza gap, documented on struct).
+        let mut bytes = self.inner.inner_bytes();
         bytes.zeroize();
-        // `bytes` is dropped at end of this scope, firing Zeroizing.
     }
 }
 
 impl std::fmt::Debug for OwnedLock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OwnedLock")
-            .field("pubkey", &self.inner.pubkey())
+            .field("pubkey", &self.inner.public_key())
             .finish()
     }
 }
 
-/// CRUD over encrypted blobs. Holds `Arc<S: WalletStorage>` for
-/// persistence, `RwLock<HashMap<WalletId, WalletRecord>>` for
-/// in-memory lookup. Map holds `EncryptedBlob` (ciphertext), NOT
-/// plaintext keys (audit P6-14).
+/// CRUD over encrypted blobs.
 pub struct WalletManager<S: WalletStorage> {
     storage: Arc<S>,
     inner: RwLock<HashMap<WalletId, WalletRecord>>,
@@ -100,7 +130,10 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
         for id_str in storage.list_ids()? {
             let bytes = storage.get(&id_str)?;
             let rec: WalletRecord =
-                serde_json::from_slice(&bytes).map_err(|_| Error::Placeholder)?;
+                serde_json::from_slice(&bytes).map_err(|source| Error::RecordCorrupt {
+                    context: "load wallet record",
+                    message: source.to_string(),
+                })?;
             map.insert(rec.id, rec);
         }
         Ok(Self {
@@ -109,36 +142,37 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
         })
     }
 
-    /// Generate a fresh keypair from a BIP-39 phrase, encrypt the
-    /// keypair bytes under `password`, store as new record.
+    /// Generate a fresh keypair from a BIP-39 phrase using the
+    /// Phantom SLIP-0010 path (`m/44'/501'/{account}'/0'/0'`).
     pub fn create_with_mnemonic(
         &self,
         mnemonic_words: &str,
         password: &str,
         name: &str,
+        account: u32,
+        address_index: u32,
         now_unix: u64,
     ) -> Result<WalletId> {
-        use solana_sdk::signer::SeedDerivable;
-        let mnemonic =
-            bip39::Mnemonic::parse(mnemonic_words).map_err(|_| Error::InvalidMnemonic)?;
-        let seed = Zeroizing::new(mnemonic.to_seed(""));
-        let keypair = Keypair::from_seed(seed.as_ref()).map_err(|_| Error::InvalidSeed)?;
-        self.store_keypair(&keypair, password, name, now_unix)
+        let wallet = Wallet::from_mnemonic_at(mnemonic_words, account, address_index)?;
+        self.store_wallet(&wallet, password, name, now_unix)
     }
 
-    /// Import an existing BIP-39 phrase.
+    /// Alias for `create_with_mnemonic`.
     pub fn import_from_phrase(
         &self,
         phrase: &str,
         password: &str,
         name: &str,
+        account: u32,
+        address_index: u32,
         now_unix: u64,
     ) -> Result<WalletId> {
-        self.create_with_mnemonic(phrase, password, name, now_unix)
+        self.create_with_mnemonic(phrase, password, name, account, address_index, now_unix)
     }
 
-    /// Import a base58-encoded 64-byte secret from `path`. Refuses
-    /// source files with mode `& 0o077 != 0` on Unix (audit P6-6).
+    /// Import a base58 64-byte secret. Refuses Unix source file with
+    /// `mode & 0o077 != 0` OR that resolves to a symlink (L13 review
+    /// Sept 11 — `metadata` follows symlinks, defeating mode check).
     pub fn import_from_pk_file(
         &self,
         path: &Path,
@@ -148,12 +182,18 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
     ) -> Result<WalletId> {
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let meta = std::fs::metadata(path).map_err(|source| Error::FileIo {
+            use std::os::unix::fs::MetadataExt;
+            let meta = std::fs::symlink_metadata(path).map_err(|source| Error::FileIo {
                 path: path.to_path_buf(),
                 source,
             })?;
-            let mode = meta.permissions().mode();
+            if meta.file_type().is_symlink() {
+                return Err(Error::InsecureSourceFile {
+                    path: path.to_path_buf(),
+                    mode: MetadataExt::mode(&meta),
+                });
+            }
+            let mode = MetadataExt::mode(&meta);
             if mode & 0o077 != 0 {
                 return Err(Error::InsecureSourceFile {
                     path: path.to_path_buf(),
@@ -166,13 +206,26 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
             source,
         })?;
         let secret_b58 = secret_b58.trim();
-        let keypair = Keypair::try_from_base58_string(secret_b58)
-            .map_err(|_| Error::InvalidBase58Secret(secret_b58.len()))?;
-        self.store_keypair(&keypair, password, name, now_unix)
+        let decoded =
+            bs58::decode(secret_b58)
+                .into_vec()
+                .map_err(|_| Error::InvalidBase58Secret {
+                    got: secret_b58.len(),
+                    expected: 64,
+                })?;
+        if decoded.len() != 64 {
+            return Err(Error::InvalidBase58Secret {
+                got: decoded.len(),
+                expected: 64,
+            });
+        }
+        let mut arr = [0u8; 64];
+        arr.copy_from_slice(&decoded);
+        let wallet = Wallet::from_bytes(&arr);
+        self.store_wallet(&wallet, password, name, now_unix)
     }
 
-    /// Decrypt the blob for `id`, return an `OwnedLock` wrapping
-    /// the plaintext keypair (audit P6-3).
+    /// Decrypt the blob for `id`, return an `OwnedLock`.
     pub fn unlock(&self, id: WalletId, password: &str) -> Result<OwnedLock> {
         let rec = {
             let g = self.inner.read().expect("wallet manager lock poisoned");
@@ -180,26 +233,24 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
         }
         .ok_or(Error::WalletNotFound(id))?;
         let plaintext = crypto::decrypt_wallet(&rec.blob, password)?;
-        let bytes: [u8; 64] = plaintext
+        let mut bytes = plaintext;
+        // Reconstruct Wallet from 64-byte serialization (32 secret
+        // + 32 pubkey). Ed25519 public key is deterministically
+        // derived from the secret, so the inner pubkey byte slice
+        // is redundant but we keep the standard 64-byte wire format.
+        let arr: [u8; 64] = bytes
             .as_slice()
             .try_into()
             .map_err(|_| Error::WalletDecryptFailed { id })?;
-        // Reconstruct Keypair from the 32-byte secret (first 32 bytes
-        // of the 64-byte serialized form). Ed25519 public key is
-        // deterministically derived from the secret.
-        let mut secret = [0u8; 32];
-        secret.copy_from_slice(&bytes[..32]);
-        let keypair = Keypair::new_from_array(secret);
+        bytes.zeroize();
+        let wallet = Wallet::from_bytes(&arr);
         Ok(OwnedLock {
-            inner: Box::new(keypair),
+            inner: Box::new(wallet),
         })
     }
 
-    /// Drop any in-memory plaintext key for `id`. Since this
-    /// implementation does NOT cache plaintext keys in memory
-    /// (audit P6-14), `lock` is a logical no-op that validates
-    /// the id exists. RAII happens automatically when the
-    /// `OwnedLock` from `unlock` goes out of scope.
+    /// Logical no-op — validates id exists. RAII fires when the
+    /// `OwnedLock` from `unlock` drops.
     pub fn lock(&self, id: WalletId) -> Result<()> {
         let g = self.inner.read().expect("wallet manager lock poisoned");
         if !g.contains_key(&id) {
@@ -215,8 +266,12 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
             g.get(&id).cloned()
         }
         .ok_or(Error::WalletNotFound(id))?;
-        let pubkey = solana_sdk::pubkey::Pubkey::from_str(&rec.pubkey_bs58)
-            .map_err(|_| Error::Placeholder)?;
+        let pubkey = solana_sdk::pubkey::Pubkey::from_str(&rec.pubkey_bs58).map_err(|source| {
+            Error::RecordCorrupt {
+                context: "parse stored pubkey_bs58",
+                message: source.to_string(),
+            }
+        })?;
         Ok(WalletSummary {
             id: rec.id,
             name: rec.name,
@@ -228,66 +283,86 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
     /// List all wallet summaries (sorted by id).
     pub fn list(&self) -> Result<Vec<WalletSummary>> {
         let g = self.inner.read().expect("wallet manager lock poisoned");
-        let mut out: Vec<WalletSummary> = g
-            .values()
-            .filter_map(|rec| {
-                let pubkey = solana_sdk::pubkey::Pubkey::from_str(&rec.pubkey_bs58).ok()?;
-                Some(WalletSummary {
-                    id: rec.id,
-                    name: rec.name.clone(),
-                    pubkey,
-                    created_at_unix: rec.created_at_unix,
-                })
-            })
-            .collect();
+        let mut out: Vec<WalletSummary> = Vec::with_capacity(g.len());
+        for rec in g.values() {
+            let pubkey =
+                solana_sdk::pubkey::Pubkey::from_str(&rec.pubkey_bs58).map_err(|source| {
+                    Error::RecordCorrupt {
+                        context: "parse stored pubkey_bs58 during list",
+                        message: source.to_string(),
+                    }
+                })?;
+            out.push(WalletSummary {
+                id: rec.id,
+                name: rec.name.clone(),
+                pubkey,
+                created_at_unix: rec.created_at_unix,
+            });
+        }
         out.sort_by_key(|w| w.id);
         Ok(out)
     }
 
-    /// Delete the wallet record for `id`.
+    /// Delete the wallet record for `id`. Storage-first ordering
+    /// (L13 review Sept 11).
     pub fn delete(&self, id: WalletId) -> Result<()> {
-        let removed = {
-            let mut g = self.inner.write().expect("wallet manager lock poisoned");
-            g.remove(&id)
+        let rec = {
+            let g = self.inner.read().expect("wallet manager lock poisoned");
+            g.get(&id).cloned()
         }
         .ok_or(Error::WalletNotFound(id))?;
-        let name = record_id_str(removed.id);
-        self.storage.delete(&name)
+        let id_str = record_id_str(rec.id);
+        self.storage.delete(&id_str)?;
+        let mut g = self.inner.write().expect("wallet manager lock poisoned");
+        g.remove(&id);
+        Ok(())
     }
 
-    /// Rename the wallet for `id`.
+    /// Rename the wallet for `id`. Storage-first ordering.
     pub fn rename(&self, id: WalletId, new_name: &str) -> Result<()> {
         let updated = {
-            let mut g = self.inner.write().expect("wallet manager lock poisoned");
-            let rec = g.get_mut(&id).ok_or(Error::WalletNotFound(id))?;
-            rec.name = new_name.to_string();
-            rec.clone()
+            let g = self.inner.read().expect("wallet manager lock poisoned");
+            let rec = g.get(&id).ok_or(Error::WalletNotFound(id))?;
+            let mut updated = rec.clone();
+            updated.name = new_name.to_string();
+            updated
         };
         let id_str = record_id_str(updated.id);
-        let bytes = serde_json::to_vec(&updated).map_err(|_| Error::Placeholder)?;
-        self.storage.put_atomic(&id_str, &bytes)
+        let bytes = serde_json::to_vec(&updated).map_err(|source| Error::RecordCorrupt {
+            context: "serialize updated WalletRecord for rename",
+            message: source.to_string(),
+        })?;
+        self.storage.put_atomic(&id_str, &bytes)?;
+        let mut g = self.inner.write().expect("wallet manager lock poisoned");
+        if let Some(rec) = g.get_mut(&id) {
+            rec.name = new_name.to_string();
+        }
+        Ok(())
     }
 
-    fn store_keypair(
+    fn store_wallet(
         &self,
-        keypair: &Keypair,
+        wallet: &Wallet,
         password: &str,
         name: &str,
         now_unix: u64,
     ) -> Result<WalletId> {
-        let bytes: Zeroizing<[u8; 64]> = Zeroizing::new(keypair.to_bytes());
+        let bytes = wallet.inner_bytes();
         let plaintext = Zeroizing::new(bytes.to_vec());
         let blob = crypto::encrypt_wallet(plaintext, password)?;
         let id = WalletId::new()?;
         let rec = WalletRecord {
             id,
             name: name.to_string(),
-            pubkey_bs58: keypair.pubkey().to_string(),
+            pubkey_bs58: wallet.public_key().to_string(),
             created_at_unix: now_unix,
             blob,
         };
         let id_str = record_id_str(id);
-        let bytes = serde_json::to_vec(&rec).map_err(|_| Error::Placeholder)?;
+        let bytes = serde_json::to_vec(&rec).map_err(|source| Error::RecordCorrupt {
+            context: "serialize WalletRecord for store",
+            message: source.to_string(),
+        })?;
         self.storage.put_atomic(&id_str, &bytes)?;
         let mut g = self.inner.write().expect("wallet manager lock poisoned");
         g.insert(id, rec);
@@ -299,56 +374,4 @@ fn record_id_str(id: WalletId) -> String {
     serde_json::to_string(&id)
         .map(|s| s.trim_matches('"').to_string())
         .unwrap_or_else(|_| id.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::platform::InMemoryStorage;
-
-    fn fixture() -> WalletManager<InMemoryStorage> {
-        WalletManager::new(InMemoryStorage::new()).expect("manager")
-    }
-
-    #[test]
-    fn empty_manager_lists_nothing() {
-        let m = fixture();
-        assert!(m.list().unwrap().is_empty());
-    }
-
-    #[test]
-    fn create_then_summary_round_trip() {
-        let m = fixture();
-        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let id = m
-            .create_with_mnemonic(
-                phrase,
-                "correct horse battery staple",
-                "main",
-                1_700_000_000,
-            )
-            .unwrap();
-        let s = m.summary(id).unwrap();
-        assert_eq!(s.name, "main");
-        assert!(!s.pubkey.to_string().is_empty());
-    }
-
-    #[test]
-    fn unlock_wrong_password_errors() {
-        let m = fixture();
-        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let id = m.create_with_mnemonic(phrase, "right", "main", 1).unwrap();
-        let e = m.unlock(id, "wrong").unwrap_err();
-        assert!(matches!(e, Error::WalletDecryptFailed { .. }));
-    }
-
-    #[test]
-    fn delete_then_summary_errors() {
-        let m = fixture();
-        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let id = m.create_with_mnemonic(phrase, "pw", "main", 1).unwrap();
-        m.delete(id).unwrap();
-        let e = m.summary(id).unwrap_err();
-        assert!(matches!(e, Error::WalletNotFound(_)));
-    }
 }

@@ -44,7 +44,7 @@ fn reject_wrong_params_produces_decrypt_failure() {
     // AAD mismatch (audit P6-1) → decrypt fails.
     let plaintext = Zeroizing::new(PHRASE.as_bytes().to_vec());
     let mut blob: EncryptedBlob = crypto::encrypt_wallet(plaintext, PASSWORD).expect("encrypt");
-    blob.kdf.memory_kb = 8 * 1024;
+    blob.kdf_memory_kb = 8 * 1024;
     let err = crypto::decrypt_wallet(&blob, PASSWORD).unwrap_err();
     assert!(matches!(
         err,

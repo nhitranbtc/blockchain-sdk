@@ -34,11 +34,17 @@ impl Clock for SystemClock {
 }
 
 /// Test clock — `now_unix_secs` returns the captured start time +
-/// accumulated `advance` deltas. `sleep` is a no-op.
+/// accumulated `advance` deltas. `now_monotonic` returns
+/// `start_monotonic + monotonic_offset` so the two clocks move
+/// together (L13 review Sept 11 — previous version returned the
+/// real `Instant::now()` which defeats the mock for elapsed-time
+/// tests). `sleep` is a no-op.
 #[derive(Debug)]
 pub struct MockClock {
     start_unix: u64,
     offset_secs: u64,
+    start_monotonic: Instant,
+    monotonic_offset: Duration,
 }
 
 impl Default for MockClock {
@@ -46,6 +52,8 @@ impl Default for MockClock {
         Self {
             start_unix: 1_700_000_000,
             offset_secs: 0,
+            start_monotonic: Instant::now(),
+            monotonic_offset: Duration::ZERO,
         }
     }
 }
@@ -56,17 +64,24 @@ impl MockClock {
         Self {
             start_unix,
             offset_secs: 0,
+            start_monotonic: Instant::now(),
+            monotonic_offset: Duration::ZERO,
         }
     }
-    /// Advance the clock by `duration`.
+    /// Advance the clock by `duration`. BOTH the unix-seconds and
+    /// the monotonic clock move together so tests can compare
+    /// `now_monotonic` deltas deterministically.
     pub fn advance(&mut self, duration: Duration) {
         self.offset_secs += duration.as_secs();
+        self.monotonic_offset = self.monotonic_offset.saturating_add(duration);
     }
 }
 
 impl Clock for MockClock {
     fn now_monotonic(&self) -> Instant {
-        Instant::now()
+        self.start_monotonic
+            .checked_add(self.monotonic_offset)
+            .unwrap_or_else(Instant::now)
     }
     fn now_unix_secs(&self) -> u64 {
         self.start_unix + self.offset_secs

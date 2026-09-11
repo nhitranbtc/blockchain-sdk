@@ -80,7 +80,7 @@ fn fifty_wallets_unique_uuid_no_collision() {
     let mut ids = HashSet::new();
     for i in 0..50 {
         let id = mgr
-            .create_with_mnemonic(PHRASE, PASSWORD, &format!("w{i}"), 1_700_000_000 + i)
+            .create_with_mnemonic(PHRASE, PASSWORD, &format!("w{i}"), 0, 0, 1_700_000_000 + i)
             .expect("create");
         assert!(ids.insert(id), "UUID collision at i={i}");
     }
@@ -95,7 +95,7 @@ fn name_lookup_resolves() {
     let store = FileWalletStorage::open(&root).expect("open");
     let mgr = WalletManager::new(store).expect("mgr");
     let id = mgr
-        .create_with_mnemonic(PHRASE, PASSWORD, "alpha-name", 1)
+        .create_with_mnemonic(PHRASE, PASSWORD, "alpha-name", 0, 0, 1)
         .expect("create");
     let s = mgr.summary(id).expect("summary");
     assert_eq!(s.name, "alpha-name");

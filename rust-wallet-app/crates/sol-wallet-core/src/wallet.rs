@@ -45,6 +45,23 @@ const SOLANA_COIN_TYPE: u32 = 501;
 pub struct Wallet(solana_sdk::signature::Keypair);
 
 impl Wallet {
+    /// Inner Keypair 64-byte serialization (32 secret + 32 pubkey).
+    /// Used by `WalletManager::create_with_mnemonic` to extract the
+    /// derived bytes for at-rest storage. Returns `Zeroizing` so the
+    /// caller does not leak the secret across the boundary.
+    pub(crate) fn inner_bytes(&self) -> zeroize::Zeroizing<[u8; 64]> {
+        zeroize::Zeroizing::new(self.0.to_bytes())
+    }
+
+    /// Reconstruct `Wallet` from a 64-byte serialization (32 secret
+    /// + 32 pubkey).
+    ///
+    /// Used by `WalletManager::unlock` after decrypting the at-rest blob.
+    pub(crate) fn from_bytes(bytes: &[u8; 64]) -> Self {
+        let keypair = solana_sdk::signature::Keypair::try_from(bytes.as_slice())
+            .expect("64-byte secret+pubkey serialization");
+        Self(keypair)
+    }
     /// Phantom "Import secret phrase" — defaults to
     /// `m/44'/501'/0'/0'`.
     ///
@@ -132,15 +149,20 @@ impl Wallet {
     /// `Error::InvalidBase58Secret(actual_len)` so callers see the
     /// concrete length instead of an opaque `SignatureError`.
     pub fn from_base58(secret: &str) -> Result<Self> {
-        // Decode the base58 string ourselves so we can report the
-        // actual byte count on failure. `bs58::decode` returns the
-        // decoded length even when the result errors.
         let decoded_len_hint = bs58::decode(secret)
             .into_vec()
             .map(|v| v.len())
-            .map_err(|_| Error::InvalidBase58Secret(0))?;
-        let keypair = solana_sdk::signature::Keypair::try_from_base58_string(secret)
-            .map_err(|_| Error::InvalidBase58Secret(decoded_len_hint))?;
+            .map_err(|_| Error::InvalidBase58Secret {
+                got: secret.len(),
+                expected: 64,
+            })?;
+        let keypair =
+            solana_sdk::signature::Keypair::try_from_base58_string(secret).map_err(|_| {
+                Error::InvalidBase58Secret {
+                    got: decoded_len_hint,
+                    expected: 64,
+                }
+            })?;
         Ok(Self(keypair))
     }
 
