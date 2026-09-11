@@ -28,6 +28,8 @@ pub mod chain;
 pub mod crypto;
 pub mod disambig;
 pub mod error;
+pub mod ffi;
+pub mod panic_scrubber;
 pub mod persist;
 pub mod platform;
 pub mod read_only_wallet;

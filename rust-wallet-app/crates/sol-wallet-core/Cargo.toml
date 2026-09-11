@@ -10,12 +10,13 @@ license.workspace = true
 [features]
 default = []
 
-# Phase 0 ships rlib only. Phase 8 (FFI cdylib) appends "cdylib" to this
-# list; the rust-sol-core-ci.yml `rust-ffi-cdylib` job is guarded on the
-# `cdylib` literal appearing here, so the order matters — Phase 8 is
-# the first PR that flips the job from `skipping` to actually building.
+# Phase 8 (FFI cdylib) — Phase 0 ships rlib only; Phase 8.1 appends
+# "cdylib" to this list per the `rust-ffi-cdylib` CI job guard
+# (CI is gated on the literal appearing here). Order matters — Phase 8
+# is the first PR that flips the job from `skipping` to actually building.
+# See audit H7 + plan Task 8.1 Step 11a.
 [lib]
-crate-type = ["rlib"]
+crate-type = ["rlib", "cdylib"]
 
 # Phase 0 keeps the lib dep-free so the empty module stubs compile. The
 # Anza SDK + SPL + ed25519-bip32 + crypto deps live in workspace.dependencies
@@ -130,6 +131,12 @@ aes-gcm    = "=0.10.3"
 getrandom  = "=0.2.15"
 hex        = "=0.4.3"
 uuid       = { version = "1", features = ["v4", "serde"] }
+# Phase 8.1 — panic-scrubber uses Aho-Corasick (linear-time literal
+# matcher; per audit M11 — Regex is ReDoS-prone over user-controlled
+# panic msgs). Mnemonic words (BIP-39 2048-entry wordlist), `xprv...`
+# prefix, 64-byte base58 patterns + 32-byte hex literals matched
+# in O(n+m) without backtracking. See src/panic_scrubber.rs.
+aho-corasick = "1"
 
 [dev-dependencies]
 proptest = { workspace = true }
@@ -149,3 +156,38 @@ wiremock = "0.6"
 # Serializes all `tests/chain_rpc.rs` tests so MockServer instances
 # don't cross-pollute. RUST_TEST_THREADS=1 has the same effect.
 serial_test = { workspace = true }
+# Phase 8.1 — `libloading` for in-process FFI ABI smoke test (Step 13).
+# Loads the cdylib produced by `cargo build` + resolves the 12
+# `sol_wallet_*` symbols + invokes them with documented error inputs.
+# See tests/abi_smoke.rs + audit H17.
+libloading = "0.8"
+# Phase 8.1 — cbindgen for emitting `sol_wallet_core.h` from
+# `cbindgen.toml` (Step 11a — M15). Mobile Dart/Swift/Kotlin consumers
+# bind to this header. See build.rs + cbindgen.toml.
+cbindgen  = { workspace = true }
+
+# Phase 8.1 — release-mobile profile (audit H7, H8, M18). Mobile targets
+# (iOS / Android) consume this profile. Trade-offs vs `release`:
+#   - `panic = "abort"` — Rust unwinder is disabled; FFI panic-scrubber
+#     path (Step 1) is dev-only. Combined with `setrlimit(RLIMIT_CORE, 0)`
+#     in PAL init (planned Phase 8.1 PAL amendment), panic messages do
+#     not surface in iOS unified log / Android logcat.
+#   - `opt-level = "z"` — minimum size; mobile binary size matters.
+#   - `lto = true` — cross-crate inlining reduces the exported symbol
+#     surface (a defense-in-depth complement to `Wl,--exclude-libs,ALL`
+#     in Step 3b).
+#   - `strip = "symbols"` — debug symbols stripped from the cdylib
+#     (saves 5–15 MB on mobile + reduces symbol-based ROP gadget
+#     discovery surface).
+#   - `codegen-units = 1` — required for the symbol-strip + LTO pair
+#     to produce a deterministic symbol table.
+# Build with `--profile release-mobile --target aarch64-apple-ios` etc.
+# See audit H7/H8/M18 + plan Task 8.2 Step 3b.
+[profile.release-mobile]
+inherits      = "release"
+panic         = "abort"
+opt-level     = "z"
+lto           = true
+strip         = "symbols"
+codegen-units = 1
+debug         = false
