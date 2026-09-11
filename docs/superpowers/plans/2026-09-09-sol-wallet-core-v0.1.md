@@ -1695,8 +1695,30 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
 - [ ] Step 9: Implement `sol_wallet_send_spl(*out_sig, id, *mint, *to, amount)` — high-level mobile convenience
 - [ ] Step 10: Implement `sol_wallet_get_balance_sol(*out_lamports, *address)` + `sol_wallet_get_balance_spl(*out_balance, *out_decimals, *address, *mint)`
 - [ ] Step 11: Implement `sol_wallet_last_error_message(*out_msg, buf_len)` + `sol_wallet_panic_message_clear`
+- [ ] **Step 11a — FFI safety contract (BLOCK on H1–H8 per `docs/audit/2026-09-11-sol-wallet-core-phase8-security-review.md`):**
+  - [ ] Every `*out_*` param paired with `out_len: *mut usize` + `buf_len: usize`; return `BufTooSmall` with required size via `sol_wallet_last_error_message`
+  - [ ] Every `*in_*` param paired with `in_len: usize`; reject null ptr + valid len mismatch
+  - [ ] `sol_wallet_zeroize(buf: *mut u8, len: usize)` added to Step 11 surface (H3)
+  - [ ] `sol_wallet_lock(id)` auto-zeros the matching `out_secret_bytes` for the unlocked id (H3, M14)
+  - [ ] Rust-side `Zeroizing<Vec<u8>>` discipline on password + secret; heap allocation only, no stack copies (H4)
+  - [ ] `Send + Sync` audit on all static FFI state; either `thread_local!` or `Mutex<[u8; N]>` (H6)
+  - [ ] cbindgen emits `#define SOL_WALLET_MNEMONIC_BUF_LEN 256`, `SOL_WALLET_SECRET_LEN 32`, etc. for each `*out_*` type (M15)
+  - [ ] Error enum `redact_for_ffi()` applies panic scrubber before writing to `last_error` (M10)
+  - [ ] Per-wallet policy gate on `sol_wallet_send_sol` + `sol_wallet_send_spl`: `max_per_tx_lamports`, `allowed_destinations`, `daily_limit_lamports` stored in Phase 6.1 `WalletMetadata`; FFI rejects violations (H5)
+  - [ ] `sol_wallet_set_policy` FFI fn added for mutable policy updates; requires password re-auth (H5)
 - [ ] Step 12: Implement `tests/placeholder.rs` row 24 part — fuzz panic scrubber with 10k cases containing mnemonics + 64-byte base58 + 32-byte hex + `xprv...` prefix; assert scrubbed output never contains any input secret (regex fuzz via `proptest!` or custom corpus)
 - [ ] Step 13: Implement `tests/placeholder.rs` row 25 part — call each of the 12 FFI functions from in-process `cdylib` load via `libloading::Library::new` + symbol resolution; assert each returns expected status code (0 = success, non-zero = documented error); no panic crosses FFI boundary
+- [ ] **Step 13a — Negative test matrix (BLOCK on H3, H6, M13 per `docs/audit/2026-09-11-sol-wallet-core-phase8-security-review.md`):**
+  - [ ] Null pointer test for each of the 8 `*out_*` + 6 `*in_*` args (14 cases)
+  - [ ] Undersized buffer test (caller allocates ½ required size, library returns `BufTooSmall`)
+  - [ ] Oversized buffer test (caller allocates 4× required size, library writes within bound)
+  - [ ] Concurrent test (8 threads × `unlock` + `last_error_message` race, assert no torn read; H6)
+  - [ ] Sign-after-lock test (`unlock` → `lock` → `sign_transaction` returns `WalletLocked`)
+  - [ ] Panic-during-FFI test (test-only `force_panic` fn → extern "C" boundary catches)
+  - [ ] Unlock-then-lock-then-read test (`out_secret_bytes` all-zero after `lock`; H3)
+  - [ ] Wallet-storage path injection test (cluster param rejects `"../../etc/passwd"`; M12)
+  - [ ] Policy gate tests (each gate rejects disallowed case; legitimate within-policy case succeeds; H5)
+  - [ ] Panic-scrubber ReDoS test (10MB panic msg processed in <100ms; M11)
 - [ ] Step 14: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test placeholder`
 - [ ] Step 15: PAUSE — commit-push-pr
 
@@ -1706,6 +1728,20 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
 - [ ] Step 1: Verify `cargo check --target aarch64-apple-ios` succeeds (Phase 5+ gate per Q17)
 - [ ] Step 2: Verify `cargo check --target aarch64-linux-android` succeeds
 - [ ] Step 3: Verify cbindgen emits `sol_wallet_core.h` matching Dart/Swift/Kotlin FFI consumer expectations
+- [ ] **Step 3a — Release link + ABI smoke (BLOCK on H7, H17 per `docs/audit/2026-09-11-sol-wallet-core-phase8-security-review.md`):**
+  - [ ] `cargo build --release --target aarch64-apple-ios` succeeds (actual link, not just check)
+  - [ ] `cargo build --release --target aarch64-apple-ios-sim` succeeds
+  - [ ] `cargo build --release --target aarch64-linux-android` succeeds
+  - [ ] Write `tests/abi_smoke.c` — 30-line C harness linking the dylib + calling each of 12 exports with NULL inputs
+  - [ ] CI job runs `cc tests/abi_smoke.c -L target/<triple>/release -lsol_wallet_core -o abi_smoke && ./abi_smoke && echo "ABI GREEN"`
+  - [ ] Assert return code = documented error code for each NULL input (NOT segfault)
+- [ ] **Step 3b — Symbol audit (BLOCK on H7 per `docs/audit/2026-09-11-sol-wallet-core-phase8-security-review.md`):**
+  - [ ] `nm -gU target/aarch64-apple-ios-sim/release/libsol_wallet_core.dylib | sort` output captured to `target/symbol-audit.txt`
+  - [ ] Assert only `sol_wallet_*` symbols + documented libc deps present
+  - [ ] Zero Rust runtime symbols (`__rust_alloc`, `panic_impl`, `core_*`) in exported set
+  - [ ] If violations found, add `-C link-arg=-Wl,--exclude-libs,ALL` to `[profile.release-mobile]` rustflags
+  - [ ] Or write a version script `sol_wallet_core.version` listing only the 12 symbols; pass via `-C link-arg=-Wl,--version-script=...`
+  - [ ] `[profile.release-mobile]` in `Cargo.toml`: `panic = "abort"`, `opt-level = "z"`, `lto = true`, `strip = "symbols"` (promotes V0.1.5 plan L1876 to V0.1; H8, M18)
 - [ ] Step 4: PAUSE — release-cut PR
 
 ---
