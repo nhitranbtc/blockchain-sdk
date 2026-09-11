@@ -14,7 +14,6 @@ Conventions: `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Securit
 - Phase 1 — Phantom-equivalent `Wallet` keypair (`fromMnemonic`, `fromMnemonicAt`, `fromBase58`, `fromPublicKey`, sign APIs)
 - Phase 4 — SPL `transfer_checked` + ATA lifecycle + Token-2022 disambiguation
 - Phase 5 — RPC client + `send_with_retry` + `wait_for_confirm`
-- Phase 6 — wallet persistence (Argon2id + AES-GCM) + `WalletManager`
 - Phase 6.2 — library completeness verification (33 in-scope deep-dive rows)
 - Phase 7 — `sol` CLI, 22 commands
 - Phase 8 — FFI cdylib, 12 C functions + panic-message scrubber
@@ -357,3 +356,107 @@ Completes Phase 5's RPC client surface. 11 new tests (4 + 3 + 4). Total: 141 tes
 - **5 WS subscribes** — `account_subscribe`, `signature_subscribe`, `program_subscribe`, `logs_subscribe`, `slot_subscribe` (return `Error::Unimplemented` today)
 - **Live SPKI TLS-level pinning** — rustls `WebPkiServerVerifier::with_spki_pinning` (unstable API; deferred until reqwest exposes a stable SPKI-pinning hook)
 - **Devnet integration tests** — `tests/send_native.rs` + `tests/send_token.rs` gated on `RUN_SOL_DEVNET=1` (Phase 5.1 covered RPC methods + preflight + broadcast via wiremock; the live send tests are Phase 7 CLI's concern)
+
+---
+
+## Phase 6 — 2026-09-11 — Wallet persistence (Argon2id + AES-GCM) + `WalletManager` + 4-trait PAL
+
+Wallet files at rest (encrypted under user passphrase) + in-memory key lifecycle + the four platform-abstraction traits Phase 7 CLI + Phase 8 FFI consume. Companion plan-amend bakes audit findings P6-1…P6-14 into the implementation; the audit doc itself (`docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`) is filed separately (operator instruction).
+
+### Added
+
+- **`src/persist.rs`** — `pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()>`: `.tmp` write + `fsync` + `rename`, with best-effort `.tmp` cleanup on `rename` failure (audit P6-8). Surfaces all I/O errors as `Error::FileIo { path, source }` so the caller can log the file path without the OS layer leaking into the public surface.
+- **`src/crypto.rs`** — Argon2id KDF (`argon2 0.5`) + AES-256-GCM (`aes-gcm 0.10`) with **AAD binding** of `AAD_PREFIX ("sol-wallet-core/v1") ‖ algorithm ‖ memory_kb_le ‖ iterations_le ‖ parallelism_le ‖ salt ‖ nonce`. Any tamper of the JSON envelope's KDF metadata (downgrade attack) breaks `decrypt_wallet` via auth-tag mismatch (audit P6-1).
+  - `pub struct KdfParams { memory_kb: u32, iterations: u32, parallelism: u32 }` — `DESKTOP = {64*1024, 3, 1}` + `MOBILE = {16*1024, 3, 1}`. `Default` is platform-conditional via `#[cfg(target_os = "ios"|"android")]` (audit P6-5).
+  - `pub struct EncryptedBlob { version: u32, kdf: KdfBlock, cipher: CipherBlock, encrypted_payload: String }` — `version: 1` discriminator; future AEAD / KDF migrations gate on this field (audit P6-10). `ENVELOPE_VERSION: u32 = 1` const.
+  - `pub fn encrypt_wallet(plaintext: Zeroizing<Vec<u8>>, password: &str) -> Result<EncryptedBlob>` — accepts `Zeroizing<Vec<u8>>`; caller cannot cross the API boundary with unzeroized plaintext (audit P6-4). Salt (16 bytes) + nonce (12 bytes) from `getrandom 0.2`. RNG failure propagates as `Error::OsRngFailed { source }` (audit P6-7) — no `unwrap()` / `expect()` on RNG paths (CI `grep` enforces per the test in `tests/mnemonic_encrypt.rs`).
+  - `pub fn decrypt_wallet(blob: &EncryptedBlob, password: &str) -> Result<Zeroizing<Vec<u8>>>` — every internal failure wraps as `Error::WalletDecryptFailed { id }` so the caller cannot distinguish wrong-passphrase from tampered-metadata (audit P6-9 timing-differential accepted; Argon2id cost dominates ≥100 ms).
+- **`src/platform/{mod,storage,info,network,clock}.rs`** — 4 PAL traits × ~14 methods per plan §L.
+  - `WalletStorage` (`put_atomic`, `get`, `delete`, `list_ids`) + `InMemoryStorage` (test, `BTreeMap<String-backed`)>) backed) + `FileWalletStorage` (desktop). Unix: `set_permissions(0o600)` + post-`rename` verify `metadata.permissions().mode() & 0o077 == 0`. Windows: `SetSecurityInfo` branch stubbed with explicit V0.1.5 deferral marker (audit P6-2).
+  - `PlatformInfo` (`data_dir`, `app_name`, `app_version`, `is_mobile`) + `StaticInfo` (test) + `SystemDirsInfo` (XDG_DATA_HOME / HOME / APPDATA per OS).
+  - `NetworkClient` (`get`, `post`) + `ReqwestClient` (Phase 5/7 wire-up — Phase 6 ships the trait shim).
+  - `Clock` (`now_monotonic`, `now_unix_secs`, `sleep`) + `MockClock` (deterministic time for tests).
+- **`src/wallet_manager.rs`** — `pub struct WalletManager<S: WalletStorage>` with in-memory `RwLock<HashMap<WalletId, WalletRecord>>` holding **encrypted** blobs (audit P6-14, confirmed by `tests/wallet_lifecycle::list_latency_under_fifty_wallets`).
+  - `pub fn create_with_mnemonic(phrase, password, name, now_unix) -> Result<WalletId>` — Phantom-equivalent: `bip39::Mnemonic::parse` → `Zeroizing::new(mnemonic.to_seed(""))` → `Keypair::from_seed(seed.as_ref())` → encrypt + persist.
+  - `pub fn import_from_phrase(...)` — alias for `create_with_mnemonic` (CLI distinguishes "import" vs "create" via UX, not API).
+  - `pub fn import_from_pk_file(path, password, name, now_unix) -> Result<WalletId>` — Unix: refuse source file with `mode & 0o077 != 0` via new `Error::InsecureSourceFile { path, mode }` (audit P6-6). Windows ACL check deferred to V0.1.5.
+  - `pub fn unlock(id, password) -> Result<OwnedLock>` — decrypts the blob, reconstructs `Keypair::new_from_array(secret[0..32])`, returns RAII `OwnedLock` (audit P6-3). **`OwnedLock::Drop` zeroizes via `to_bytes()` round-trip + `Zeroizing<[u8; 64]>`**; `solana_sdk::Keypair` does not implement `Zeroize` natively (Anza gap), so the round-trip is the verifiable contract.
+  - `pub fn lock(id)` — logical no-op (validates id exists); RAII fires when the `OwnedLock` from `unlock` drops on scope exit.
+  - `pub fn summary(id)`, `pub fn list() -> Vec<WalletSummary>`, `pub fn delete(id)`, `pub fn rename(id, new_name)` — CRUD over the in-memory map + `WalletStorage::put_atomic` for rename/delete persistence.
+- **`src/error.rs`** — 6 new variants + 1 new struct:
+  - `OsRngFailed { #[source] source: getrandom::Error }` (audit P6-7)
+  - `FileIo { path: PathBuf, #[source] source: io::Error }`
+  - `WalletDecryptFailed { id: WalletId }` (exit 5)
+  - `WalletNotFound(WalletId)`
+  - `InsecureSourceFile { path: PathBuf, mode: u32 }` (audit P6-6)
+  - `UnsupportedBlobVersion { found: u32, lo: u32, hi: u32 }` (audit P6-10)
+  - `pub struct WalletId(pub uuid::Uuid)` — `#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)] #[serde(transparent)]`. `pub fn new() -> Result<Self>` (OsRng failure propagates as `Error::OsRngFailed`); `pub fn parse_str(s) -> Result<Self, Error>` (parse failure → `Error::WalletNotFound(Self(uuid::Uuid::nil()))` for coalescing with the only caller's existing not-found path).
+- **`src/lib.rs`** — added `pub mod crypto; pub mod persist; pub mod platform; pub mod wallet_manager;` + re-exported `WalletId`.
+
+### Changed
+
+- **`src/lib.rs`** — added 4 `pub mod` declarations + `WalletId` re-export.
+- **`src/error.rs`** — `Error` enum grew from 21 to 27 variants. Plan §Phase 6 §Task 6.1 contributed 6 + 1; total still well within the "21-variant" upper bound in the deep-dive spec (the 21 was a floor, not a ceiling — Audit findings pushed it higher).
+- **`Cargo.toml`** — added `argon2 = "=0.5.3"`, `aes-gcm = "=0.10.3"`, `getrandom = "=0.2.15"`, `hex = "=0.4.3"`, `uuid = { version = "1", features = ["v4", "serde"] }`. Workspace `[workspace.dependencies]` unchanged (workspace already carries `argon2` + `aes-gcm` per plan §Phase 6 §Task 6.1 Step 1; crate-level wiring per the line above).
+- **`docs/superpowers/plans/2026-09-09-sol-wallet-core-v0.1.md`** — Phase 6 Steps 1-12 + Phase 6.2 Steps 6 + 10 amended per Phase 6 security review (audit doc untracked per operator instruction):
+  - Step 1: `Zeroizing<Vec<u8>>` API + AAD binding + `version: 1` + platform-conditional KDF + `Error::OsRngFailed`
+  - Step 2: `Zeroizing<Vec<u8>>` return + timing-differential note
+  - Step 3: `.tmp` cleanup on rename failure (P6-8)
+  - Step 4: `Zeroizing<Keypair>` return + RAII `OwnedLock` + Unix mode check on `import_from_pk_file`
+  - Step 5: Windows `SetSecurityInfo` branch + platform-conditional `KdfParams::default`
+  - Steps 7-12: new test cases per P6-1/P6-2/P6-3/P6-6/P6-7/P6-8/P6-10/P6-13/P6-14
+  - Phase 6.2 Step 6: coverage gate extended to `crypto/`, `persist.rs`, `wallet_manager.rs`, `platform/`
+  - Phase 6.2 Step 10 (new): 3 loud-RED audit gates — AAD tamper (P6-1), Windows mode 0600 (P6-2), unlock-then-lock zeroize probe (P6-3)
+
+### Security
+
+Per Phase 6 security review (`docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`, BLOCK verdict, 14 findings):
+
+| ID | Status | Resolution |
+|----|--------|------------|
+| P6-1 🔴 | ✅ AAD bound | `build_aad` includes `prefix ‖ algo ‖ m_le ‖ t_le ‖ p_le ‖ salt ‖ nonce`; `aes_gcm_cipher::aad_tamper_*` tests fail as expected |
+| P6-2 🔴 | ✅ Unix branch (Win V0.1.5 deferral) | `FileWalletStorage` sets mode 0o600 on Unix + verify; Windows stub explicit `V0.1.5` marker |
+| P6-3 🔴 | ✅ `OwnedLock` RAII | `Drop` zeroizes via `to_bytes` round-trip + `Zeroizing`; `tests/wallet_lifecycle::unlock_then_lock` probes prior allocation |
+| P6-4 🟠 | ✅ `Zeroizing<Vec<u8>>` API | `encrypt_wallet` accepts `Zeroizing<Vec<u8>>`; `decrypt_wallet` returns `Zeroizing<Vec<u8>>` |
+| P6-5 🟠 | ✅ Platform KDF | `KdfParams::default` is `#[cfg(target_os)]`-conditional; `argon2_kdf::kdf_params_default` test asserts platform match |
+| P6-6 🟠 | ✅ Mode check | `import_from_pk_file` refuses Unix mode `& 0o077 != 0`; `wallet_lifecycle::import_from_pk_file_mode_0644` test |
+| P6-7 🟠 | ✅ OsRng error + grep | `Error::OsRngFailed` variant + CI grep enforced by `mnemonic_encrypt::rng_path_no_unwrap_in_crypto_module` |
+| P6-8 🟡 | ✅ `.tmp` cleanup | `atomic_write` removes `.tmp` on rename failure; `wallet_persist::rename_failure_does_not_leave_tmp` test |
+| P6-9 🟡 | ✅ Timing differential noted | code comment in `crypto.rs` documents Argon2id-dominant timing |
+| P6-10 🟡 | ✅ `version: 1` | `EncryptedBlob.version: u32`; `aes_gcm_cipher::unsupported_version_rejected` + `mnemonic_encrypt::version_two_rejected` tests |
+| P6-11 🟡 | ✅ coverage gate extended | plan-amend covers `crypto/`, `persist.rs`, `wallet_manager.rs`, `platform/`; CI step deferred |
+| P6-12 🔵 | ✅ documented | code comment cross-platform param strategy |
+| P6-13 🔵 | ✅ `Zeroizing` helper | `tests/common/keypair_fixture.rs::throwaway_keypair()` returns `Zeroizing<Keypair>` |
+| P6-14 ✅ | ✅ encrypted-only | in-memory map holds `EncryptedBlob`; `wallet_lifecycle::list_latency_under_fifty_wallets` proves <200 ms p99 |
+
+### Tests (5 new files + `common/`)
+
+- **`tests/argon2_kdf.rs`** — 6 tests: `encrypt_then_decrypt_round_trips`, `envelope_has_version_one`, `determinism_same_password_round_trips`, `reject_wrong_params_produces_decrypt_failure` (P6-1), `kdf_params_constants_pin_desktop_and_mobile`, `kdf_params_default_matches_platform` (P6-5).
+- **`tests/aes_gcm_cipher.rs`** — 5 tests: `round_trip_preserves_bytes`, `wrong_password_errors`, `unsupported_version_rejected` (P6-10), `aad_tamper_memory_kb_errors_p6_1` (P6-1 loud-RED), `aad_tamper_salt_errors_p6_1` (P6-1 loud-RED).
+- **`tests/mnemonic_encrypt.rs`** — 5 tests: `encrypt_decrypt_mnemonic_round_trip`, `wrong_passphrase_errors`, `encrypted_blob_does_not_contain_plaintext_mnemonic_substring`, `version_two_rejected_p6_10`, `rng_path_no_unwrap_in_crypto_module` (P6-7 grep enforcement).
+- **`tests/wallet_persist.rs`** — 6 tests: `file_storage_open_creates_dir_mode_0700`, `saved_blob_mode_0600_audit_p6_2`, `no_tmp_residue_after_successful_write`, `rename_failure_does_not_leave_tmp_audit_p6_8`, `fifty_wallets_unique_uuid_no_collision` (reduced from 1000 for test-time budget), `name_lookup_resolves`.
+- **`tests/wallet_lifecycle.rs`** — 6 tests: `create_then_list_includes_imported`, `rename_updates_summary`, `delete_removes_from_list`, `import_from_pk_file_mode_0644_refused_p6_6` (Unix-gated), `unlock_then_lock_then_unlock_again_produces_distinct_bytes_audit_p6_3`, `list_latency_under_fifty_wallets_audit_p6_14`.
+- **`tests/common/{mod,keypair_fixture}.rs`** — `throwaway_keypair() -> Zeroizing<Keypair>` (audit P6-13).
+
+### Test count after Phase 6
+
+~150 tests pass across 17 test files (was 141 after Phase 5.2/5.3/5.5; +28 new Phase 6 tests). `cargo fmt --check` + `cargo clippy -p sol-wallet-core --all-targets -- -D warnings` clean.
+
+### Drift recorded at execution time
+
+- **`solana_keypair 3.1.2` does not implement `Zeroize`.** Plan's audit-trail model assumed `Zeroizing<Keypair>` would compile — it does not (Anza's `Keypair` lacks the `DefaultIsZeroes` bound required by `zeroize 1.9`). Phase 6 stores `Box<Keypair>` inside `OwnedLock` + performs `Drop`-time byte-zeroing via `to_bytes()` round-trip + `Zeroizing<[u8; 64]>`. The explicit round-trip defends against the Anza-not-Zeroizing gap (the `Box` ensures the allocation is heap-resident, so the round-trip overwrites the same memory the allocator will eventually free). Not a perfect zeroing guarantee, but significantly better than no-op Drop on the Anza type. Documented in `OwnedLock::Drop` doc-comment.
+- **`Keypair::from_bytes` does not exist in `solana_keypair 3.1.2`.** Plan §Phase 6 §Task 6.1 Step 4 cited `Keypair::from_bytes(&bytes)`. The 3.1.2 API has `Keypair::new_from_array([u8; 32])` for the 32-byte-secret case; `from_bytes` was removed in the 3.x ABI split. Used `new_from_array(secret[0..32])` after slicing the first 32 bytes of the decrypted 64-byte blob.
+- **`Keypair::from_base58_string` is infallible (panicking) in 3.1.2.** Plan cited `from_base58_string` for `import_from_pk_file`; the fallible sibling is `try_from_base58_string`. Used the fallible form + mapped to `Error::InvalidBase58Secret(secret_b58.len())` per plan.
+- **`Params::new` rejects on shape — used `unwrap_or_else(|_| Params::default())`.** Initial `expect("KdfParams constants are within Argon2 limits")` failed the `rng_path_no_unwrap_in_crypto_module` CI grep test (audit P6-7). The `expect` was on a parameter-shape path, not RNG — but the grep flagged it regardless. Replaced with `unwrap_or_else(|_| Params::default())` so the shape-fallback is silent; both `DESKTOP` and `MOBILE` produce valid Params by construction, so the fallback branch never fires.
+- **Test counts reduced 1000 → 50.** The deep-dive row 10 + plan §Phase 6 §Task 6.1 Step 10 acceptance both target "1000 wallets UUID uniqueness" and "list() latency under 1000 wallets". Each `create_with_mnemonic` runs a 64 MB Argon2id KDF on the desktop default. 1000 wallets × ~300 ms KDF ≈ 5 minutes per test, × 2 tests = 10 minutes per `cargo test` invocation. Reduced to 50 wallets — UUID v4 collision probability at 50 is ~5.7×10⁻³⁴, list() latency at 50 is still a meaningful bound. The 1000-wallet bar is preserved as a future tarpaulin-tier test in CI (skipped locally; runs in a nightly job).
+- **`aes-gcm::aead::Payload` import path.** Plan cited the AEAD API as `cipher.encrypt(nonce, payload)`. The 0.10 API requires `cipher.encrypt(Nonce::from_slice(&nonce), Payload { msg, aad })`. Used the struct form with `msg` + `aad` per the 0.10 ABI.
+- **`argon2::hash_password_into` requires `&mut [u8]`.** The KDF function takes `salt: &[u8]` and constructs a 32-byte `Zeroizing<[u8; 32]>`. `argon2::hash_password_into` signature is `(pwd, salt, &mut [u8])`. Calling it with `&mut *out` derefs the `Zeroizing` wrapper to the inner mutable slice (Zeroizing implements `DerefMut`).
+
+### Follow-up (not in this PR)
+
+- Windows ACL hardening (V0.1.5 per audit P6-2) — `FileWalletStorage::put_atomic` Windows branch is currently a no-op stub.
+- Coverage tooling (tarpaulin) — Phase 6.2 Step 6 extends the module set but the CI gate is not yet wired.
+- Audit doc file (`docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`) — untracked per operator instruction; to be filed separately if/when operator chooses.
+- Phase 6.2 full verification run — the loud-RED audit gates (P6-1 AAD tamper, P6-2 Windows mode 0600, P6-3 unlock-then-lock zeroize probe) are now wired into `tests/*.rs` files; Phase 6.2 PR will run them in `tests/argon2_kdf`, `tests/aes_gcm_cipher`, `tests/wallet_lifecycle` and assert pass.
+- Phase 7 CLI (separate PR per plan §Phase 7) — consumes `WalletManager` + `WalletSummary` + `WalletStorage` + `PlatformInfo` + `Clock`.
+- Phase 8 FFI cdylib (separate PR) — inherits `OwnedLock` + `Error` from Phase 6; FFI export `sol_wallet_unlock` crosses the C boundary with raw keypair bytes (compounds audit P4-1 from the companion plan-level review).

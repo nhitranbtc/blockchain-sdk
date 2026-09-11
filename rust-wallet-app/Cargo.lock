@@ -3310,9 +3310,9 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.17"
+version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
+checksum = "c4567c8db10ae91089c99af84c68c38da3ec2f087c3f82960bcdbf3656b6f4d7"
 dependencies = [
  "cfg-if",
  "js-sys",
@@ -5222,7 +5222,7 @@ version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
- "getrandom 0.2.17",
+ "getrandom 0.2.15",
 ]
 
 [[package]]
@@ -5292,7 +5292,7 @@ version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43"
 dependencies = [
- "getrandom 0.2.17",
+ "getrandom 0.2.15",
  "libredox",
  "thiserror 1.0.69",
 ]
@@ -5441,7 +5441,7 @@ checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
 dependencies = [
  "cc",
  "cfg-if",
- "getrandom 0.2.17",
+ "getrandom 0.2.15",
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
@@ -6309,12 +6309,16 @@ dependencies = [
 name = "sol-wallet-core"
 version = "0.2.0"
 dependencies = [
+ "aes-gcm",
+ "argon2",
  "ascii",
  "base64 0.22.1",
  "bincode",
  "bip39",
  "bs58 0.5.1",
  "ed25519-bip32",
+ "getrandom 0.2.15",
+ "hex",
  "hmac 0.12.1",
  "phf 0.11.3",
  "proptest",
@@ -6336,6 +6340,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "url",
+ "uuid",
  "wiremock",
  "zeroize",
 ]
@@ -7478,7 +7483,7 @@ dependencies = [
  "bytemuck",
  "bytemuck_derive",
  "curve25519-dalek",
- "getrandom 0.2.17",
+ "getrandom 0.2.15",
  "itertools 0.12.1",
  "js-sys",
  "merlin",
@@ -7810,7 +7815,7 @@ checksum = "821d96d034ea31c4965d182c742153c491ae0abee531331b55771086c5030d86"
 dependencies = [
  "arrayref",
  "bytemuck",
- "getrandom 0.2.17",
+ "getrandom 0.2.15",
  "num-derive",
  "num-traits",
  "num_enum",
