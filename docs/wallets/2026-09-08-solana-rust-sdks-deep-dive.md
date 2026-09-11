@@ -2685,7 +2685,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let data_dir = handlers::resolve_data_dir(cli.data_dir.clone())?;
-    let cfg = SolanaConfig::load(&data_dir)?.with_overrides(&cli.into());
+    let cfg = SolanaConfig::load(&data_dir)?.with_overrides(&cli);  // P5-3 fix: borrow &cli, not move via cli.into()
 
     let dispatch_result: Result<()> = async {
         match cli.command {
@@ -2819,7 +2819,7 @@ pub skip_memo_required: bool,
 pub wait: bool,
 
 /// Wait for `finalized` commitment (~12 slots) instead of `confirmed` (1 slot).
-#[arg(long, conflicts_with = "wait", conflicts_with_all = [wait])]
+#[arg(long, conflicts_with = "wait")]  // P5-3 fix: removed `conflicts_with_all = [wait]` (clap rejects `[ident]`; bare `conflicts_with` already excludes `--wait`)
 pub wait_finalized: bool,
 
 /// Confirm mainnet send with extra prompt (default: true for mainnet-beta).
