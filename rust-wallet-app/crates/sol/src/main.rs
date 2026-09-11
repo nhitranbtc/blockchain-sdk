@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use clap::Parser;
-use sol_wallet_core::platform::{FileWalletStorage, PlatformInfo, SystemDirsInfo, WalletStorage};
+use sol_wallet_core::platform::{FileWalletStorage, PlatformInfo, SystemDirsInfo};
 use sol_wallet_core::wallet_manager::WalletManager;
 
 use cli::Cli;

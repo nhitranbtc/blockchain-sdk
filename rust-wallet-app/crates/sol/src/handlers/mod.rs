@@ -30,6 +30,8 @@ pub mod wallet;
 pub struct AppContext {
     pub wallet_manager: Arc<WalletManager<FileWalletStorage>>,
     pub data_dir: PathBuf,
+    /// Active cluster; read by Phase 7.1c RPC URL selection + cluster guards.
+    #[allow(dead_code)]
     pub cluster: Cluster,
     pub rpc_url: String,
 }

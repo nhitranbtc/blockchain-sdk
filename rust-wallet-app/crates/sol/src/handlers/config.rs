@@ -3,9 +3,9 @@
 //! Phase 7.1d (partial) implements 3/3 config commands:
 //!   - `show`        — reads `<data_dir>/config/config.json`
 //!   - `set-rpc`     — P7-8: validates scheme (https-only unless `--allow-insecure-tls`);
-//!                     rejects URL with userinfo; requires host
+//!     rejects URL with userinfo; requires host
 //!   - `set-cluster` — P7-20: when transitioning to mainnet-beta, requires
-//!                     confirmation (interactive or `SOL_CONFIRM_MAINNET=yes`)
+//!     confirmation (interactive or `SOL_CONFIRM_MAINNET=yes`)
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};

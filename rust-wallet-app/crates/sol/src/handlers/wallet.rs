@@ -2,7 +2,7 @@
 //!
 //! Phase 7.1b implements 5/9 wallet commands end-to-end:
 //!   - `import`  — mnemonic-file OR private-key-file (P7-1 reject --mnemonic inline;
-//!                P7-19 mode check via `WalletManager::import_from_pk_file`)
+//!     P7-19 mode check via `WalletManager::import_from_pk_file`)
 //!   - `show`    — `WalletManager::summary` returns `id`, `name`, `pubkey`
 //!   - `list`    — `WalletManager::list` returns `Vec<WalletSummary>`
 //!   - `delete`  — P7-6: requires `--yes` in non-TTY
@@ -69,6 +69,7 @@ pub async fn dispatch(cmd: &WalletCmd, ctx: &AppContext, _cli: &Cli) -> Result<(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn import(
     ctx: &AppContext,
     name: &str,
