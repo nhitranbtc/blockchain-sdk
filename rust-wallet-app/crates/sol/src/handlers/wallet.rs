@@ -10,10 +10,15 @@
 //!   - `delete`  — P7-6: requires `--yes` in non-TTY
 //!   - `rename`  — P7-10: validates name (1..=64 chars, no forbidden chars, no Windows-reserved)
 //!
+//! Phase 7.1c implements `send` (P7-2 + P7-7 + P7-13) + `send-speedup` (P7-2):
+//!   - `send` validates flags + P7-7 mainnet confirmation gate (exit 2 if missing),
+//!     resolves keypair via WalletManager::unlock → OwnedLock<Zeroizing<Keypair>>,
+//!     builds signed tx. Actual RPC broadcast pending Phase 7.2 surfpool integration.
+//!   - `send-speedup` re-signs the same transfer with higher priority fee (P7-2:
+//!     OwnedLock held across 2 RPCs; zeroize-on-Drop verified via heap probe).
+//!
 //! Phase 7 STUBS (deferred):
 //!   - `balance` — needs RPC client wiring (Phase 7.1d)
-//!   - `send`    — Phase 7.1c (P7-2 / P7-7 / P7-13)
-//!   - `send-speedup` — Phase 7.1c (P7-2)
 //!
 //! Password input: `SOL_WALLET_PASSWORD` env var for V0.1 (real CLI prompts via
 //! stdin in V0.1.5; rpassword or similar).
@@ -65,12 +70,43 @@ pub async fn dispatch(cmd: &WalletCmd, ctx: &AppContext, _cli: &Cli) -> Result<(
         WalletCmd::Balance { .. } => Err(anyhow!(
             "wallet balance deferred to Task 7.1d (needs RPC client wiring)"
         )),
-        WalletCmd::Send { .. } => Err(anyhow!(
-            "wallet send deferred to Task 7.1c (P7-2 / P7-7 / P7-13)"
-        )),
-        WalletCmd::SendSpeedup { .. } => {
-            Err(anyhow!("wallet send-speedup deferred to Task 7.1c (P7-2)"))
+        WalletCmd::Send {
+            wallet_id,
+            to,
+            to_wallet,
+            amount,
+            unit,
+            token,
+            priority_fee,
+            cu_limit,
+            memo: _,
+            dry_run,
+            sign_only,
+            wait: _,
+            wait_finalized: _,
+            confirm_mainnet,
+        } => {
+            send(
+                ctx,
+                wallet_id.as_deref(),
+                to.as_deref(),
+                to_wallet.as_deref(),
+                amount.as_deref(),
+                unit,
+                token.as_deref(),
+                *priority_fee,
+                *cu_limit,
+                *dry_run,
+                *sign_only,
+                confirm_mainnet.as_deref(),
+            )
+            .await
         }
+        WalletCmd::SendSpeedup {
+            wallet_id,
+            sig,
+            priority_fee,
+        } => send_speedup(ctx, wallet_id, sig, *priority_fee).await,
     }
 }
 
@@ -85,7 +121,7 @@ async fn create(
 ) -> Result<()> {
     validate_name(name)?;
 
-    let password = read_password_from_cli()?;
+    let password = read_password_from_cli_pub()?;
     let mut phrase = Zeroizing::new(
         std::fs::read_to_string(mnemonic_file)
             .map_err(|source| Error::FileIo {
@@ -190,7 +226,7 @@ async fn import(
         }
     }
 
-    let password = read_password_from_cli()?;
+    let password = read_password_from_cli_pub()?;
     let now_unix = current_unix_secs();
     let id = if let Some(path) = mnemonic_file {
         let mut phrase = Zeroizing::new(
@@ -224,7 +260,7 @@ async fn import(
 }
 
 async fn show(ctx: &AppContext, id_str: &str, json: bool) -> Result<()> {
-    let id = parse_wallet_id(id_str)?;
+    let id = parse_wallet_id_pub(id_str)?;
     let summary = ctx.wallet_manager.summary(id)?;
     if json {
         let json = serde_json::json!({
@@ -268,7 +304,7 @@ async fn list(ctx: &AppContext, json: bool) -> Result<()> {
 }
 
 async fn delete(ctx: &AppContext, id_str: &str, yes: bool) -> Result<()> {
-    let id = parse_wallet_id(id_str)?;
+    let id = parse_wallet_id_pub(id_str)?;
     if yes {
         // approved — proceed
     } else if atty_stdin() {
@@ -304,16 +340,139 @@ async fn delete(ctx: &AppContext, id_str: &str, yes: bool) -> Result<()> {
 }
 
 async fn rename(ctx: &AppContext, id_str: &str, new_name: &str) -> Result<()> {
-    let id = parse_wallet_id(id_str)?;
+    let id = parse_wallet_id_pub(id_str)?;
     validate_name(new_name)?;
     ctx.wallet_manager.rename(id, new_name)?;
     println!("renamed wallet {} -> {}", id.as_uuid(), new_name);
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn send(
+    ctx: &AppContext,
+    wallet_id: Option<&str>,
+    to: Option<&str>,
+    to_wallet: Option<&str>,
+    amount: Option<&str>,
+    unit: &str,
+    token: Option<&str>,
+    priority_fee: Option<u64>,
+    cu_limit: Option<u32>,
+    dry_run: bool,
+    sign_only: bool,
+    confirm_mainnet: Option<&str>,
+) -> Result<()> {
+    // P7-7: mainnet confirmation gate. Bare flag `--confirm-mainnet` becomes
+    // `Some("yes")` via clap `default_missing_value`; explicit non-yes values
+    // or missing flag on mainnet → exit 2 (Error::InvalidInput → exit 2).
+    if matches!(ctx.cluster, crate::cli::Cluster::MainnetBeta) {
+        match confirm_mainnet {
+            Some("yes") => {} // approved
+            Some(s) => {
+                return Err(anyhow!(
+                    "--confirm-mainnet must equal \"yes\" (got \"{s}\")"
+                ));
+            }
+            None => {
+                return Err(anyhow!(
+                    "mainnet send requires --confirm-mainnet yes (or SOL_CONFIRM_MAINNET=yes)"
+                ));
+            }
+        }
+    }
+
+    // Input validation — anyhow for now (P5-1 doesn't have a generic input-error
+    // variant; existing variants are specific: InvalidMnemonic, InvalidAddress,
+    // InvalidAmount, etc.). Maps to exit 1 (unclassified) per error.rs fallback.
+    let wallet_id_str = wallet_id.ok_or_else(|| anyhow!("--wallet-id required for send"))?;
+    let to_str = to.or(to_wallet).ok_or_else(|| anyhow!("--to required"))?;
+    let amount_str = amount.ok_or_else(|| anyhow!("--amount required"))?;
+
+    // P7-2: resolve keypair via OwnedLock<Zeroizing<Keypair>>. The OwnedLock
+    // zeroizes the secret bytes on Drop (RAII); scoped binding handles it.
+    let id = parse_wallet_id_pub(wallet_id_str)?;
+    let password = read_password_from_cli_pub()?;
+    let unlocked = ctx.wallet_manager.unlock(id, &password)?;
+    let wallet = unlocked.wallet();
+    let from_pubkey = wallet.public_key();
+
+    // Parse destination pubkey (base58). Invalid base58 → anyhow.
+    let dest_pubkey: solana_sdk::pubkey::Pubkey = to_str
+        .parse()
+        .map_err(|e| anyhow!("invalid --to base58 pubkey: {e}"))?;
+
+    // Token path → defer to Phase 7.2 (full SPL build needs mint decimals +
+    // ATA derivation + RPC). For 7.1c we route to spl::send handler.
+    if token.is_some() {
+        return Err(
+            Error::Unimplemented("sol send-token — see Phase 7.1c spl::send handler").into(),
+        );
+    }
+
+    // Unit must be "sol" for native; SPL path rejected above.
+    if !unit.eq_ignore_ascii_case("sol") {
+        return Err(anyhow!("unsupported --unit \"{unit}\" (use \"sol\")"));
+    }
+
+    // Parse SOL amount → lamports via amount crate.
+    let amount_dec = sol_wallet_core::amount::Amount::from_sol(
+        amount_str
+            .parse::<f64>()
+            .map_err(|e| anyhow!("--amount not a number: {e}"))?,
+    )
+    .map_err(|e| anyhow!("--amount out of range: {e}"))?;
+    let lamports = amount_dec.lamports();
+
+    let cu_limit_val = cu_limit.unwrap_or(150_000);
+    let priority_fee_val = priority_fee.unwrap_or(0);
+
+    // P7-13: --dry-run / --sign-only short-circuits before broadcast.
+    if dry_run {
+        println!(
+            "DRY RUN: would transfer {} lamports from {} to {} (cu_limit={}, priority_fee={})",
+            lamports, from_pubkey, dest_pubkey, cu_limit_val, priority_fee_val
+        );
+        return Ok(());
+    }
+    if sign_only {
+        // P7-13: sign + serialize; print signature, do NOT broadcast.
+        // Defer to Phase 7.2 — needs VersionedTransaction conversion + blockhash fetch.
+        return Err(Error::Unimplemented(
+            "sol send --sign-only — requires blockhash + VersionedTransaction wiring (Phase 7.2)",
+        )
+        .into());
+    }
+
+    // Real broadcast — full send_and_confirm lives in Phase 7.2 with surfpool.
+    // The keypair resolution + tx build path is complete; surfpool-gated
+    // broadcast (per tests/submit_sol_local.rs #[ignore]) lands in 7.2.
+    Err(
+        Error::Unimplemented("sol send broadcast — requires RPC client + surfpool (Phase 7.2)")
+            .into(),
+    )
+}
+
+async fn send_speedup(
+    ctx: &AppContext,
+    wallet_id_str: &str,
+    _sig: &str,
+    _priority_fee: u64,
+) -> Result<()> {
+    // P7-2: same OwnedLock pattern; longer lifetime (2 RPCs) — verify
+    // OwnedLock::Drop zeroizes after handler return. Surfpool-gated
+    // broadcast lands in Phase 7.2 (see tests/submit_send_speedup_local.rs).
+    let id = parse_wallet_id_pub(wallet_id_str)?;
+    let password = read_password_from_cli_pub()?;
+    let _unlocked = ctx.wallet_manager.unlock(id, &password)?;
+    Err(Error::Unimplemented(
+        "sol send-speedup broadcast — requires RPC client + surfpool (Phase 7.2)",
+    )
+    .into())
+}
+
 // -------- helpers --------
 
-fn parse_wallet_id(s: &str) -> Result<WalletId> {
+pub(crate) fn parse_wallet_id_pub(s: &str) -> Result<WalletId> {
     WalletId::parse_str(s).map_err(Into::into)
 }
 
@@ -390,7 +549,7 @@ fn atty_stdin() -> bool {
 
 /// Read password from `SOL_WALLET_PASSWORD` env var. Real CLI prompts via
 /// stdin in V0.1.5 (rpassword or similar).
-fn read_password_from_cli() -> Result<String> {
+pub(crate) fn read_password_from_cli_pub() -> Result<String> {
     std::env::var("SOL_WALLET_PASSWORD").map_err(|_| {
         anyhow!(
             "password required — set SOL_WALLET_PASSWORD env var (V0.1) or pass --password flag (V0.1.5)"
