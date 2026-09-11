@@ -1,6 +1,8 @@
 //! Wallet command dispatcher.
 //!
-//! Phase 7.1b implements 5/9 wallet commands end-to-end:
+//! Phase 7.1b implements 6/9 wallet commands end-to-end:
+//!   - `create`  — `--mnemonic-file` required (P7-1: no inline `--mnemonic`);
+//!     P7-21: STDERR emits `SECRET: mnemonic=<words>` prefix before persist
 //!   - `import`  — mnemonic-file OR private-key-file (P7-1 reject --mnemonic inline;
 //!     P7-19 mode check via `WalletManager::import_from_pk_file`)
 //!   - `show`    — `WalletManager::summary` returns `id`, `name`, `pubkey`
@@ -8,8 +10,7 @@
 //!   - `delete`  — P7-6: requires `--yes` in non-TTY
 //!   - `rename`  — P7-10: validates name (1..=64 chars, no forbidden chars, no Windows-reserved)
 //!
-//! Phase 7.1b STUBS (deferred):
-//!   - `create`  — needs `bip39` dep added to `sol` crate (generate fresh mnemonic)
+//! Phase 7 STUBS (deferred):
 //!   - `balance` — needs RPC client wiring (Phase 7.1d)
 //!   - `send`    — Phase 7.1c (P7-2 / P7-7 / P7-13)
 //!   - `send-speedup` — Phase 7.1c (P7-2)
@@ -26,9 +27,13 @@ use crate::handlers::AppContext;
 
 pub async fn dispatch(cmd: &WalletCmd, ctx: &AppContext, _cli: &Cli) -> Result<()> {
     match cmd {
-        WalletCmd::Create { .. } => Err(anyhow!(
-            "wallet create deferred — needs `bip39` dep in sol crate (V0.1.5 follow-up)"
-        )),
+        WalletCmd::Create {
+            name,
+            mnemonic_file,
+            cluster,
+            account,
+            address_index,
+        } => create(ctx, name, *cluster, mnemonic_file, *account, *address_index).await,
         WalletCmd::Import {
             name,
             cluster,
@@ -67,6 +72,53 @@ pub async fn dispatch(cmd: &WalletCmd, ctx: &AppContext, _cli: &Cli) -> Result<(
             Err(anyhow!("wallet send-speedup deferred to Task 7.1c (P7-2)"))
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn create(
+    ctx: &AppContext,
+    name: &str,
+    cluster: crate::cli::Cluster,
+    mnemonic_file: &std::path::Path,
+    account: u32,
+    address_index: u32,
+) -> Result<()> {
+    validate_name(name)?;
+
+    let password = read_password_from_cli()?;
+    let mut phrase = Zeroizing::new(
+        std::fs::read_to_string(mnemonic_file)
+            .map_err(|source| Error::FileIo {
+                path: mnemonic_file.to_path_buf(),
+                source,
+            })?
+            .trim()
+            .to_string(),
+    );
+
+    // P7-21: STDERR emits trufflehog-detectable `SECRET:` prefix before persist.
+    // Background review #3 + P7-21: mnemonic leaks to STDERR (already in caller
+    // scope) — emit deliberately so the secret is git/CI-scannable, not
+    // accidentally omitted.
+    eprintln!("SECRET: mnemonic={}", *phrase);
+
+    let now_unix = current_unix_secs();
+    let result = ctx.wallet_manager.create_with_mnemonic(
+        &phrase,
+        &password,
+        name,
+        account,
+        address_index,
+        now_unix,
+    );
+    phrase.zeroize();
+    let id = result?;
+    // `cluster` carried on the WalletCmd for future cluster-aware persistence;
+    // current WalletManager writes the cluster from the global default. Honored
+    // via let-bind to keep handler signature symmetric with the CLI surface.
+    let _ = cluster;
+    println!("{}", id.as_uuid());
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

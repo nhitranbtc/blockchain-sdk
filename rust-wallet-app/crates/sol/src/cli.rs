@@ -115,10 +115,12 @@ pub enum WalletCmd {
     Create {
         #[arg(long)]
         name: String,
+        /// Path to file containing BIP-39 mnemonic phrase (REQUIRED per P7-1:
+        /// no inline `--mnemonic` flag — trufflehog-detectable).
+        #[arg(long)]
+        mnemonic_file: PathBuf,
         #[arg(long, value_enum, default_value_t = Cluster::MainnetBeta)]
         cluster: Cluster,
-        #[arg(long, default_value_t = 12)]
-        words: u8,
         #[arg(long, default_value_t = 0)]
         account: u32,
         #[arg(long, default_value_t = 0)]

@@ -98,6 +98,74 @@ fn wallet_rename_to_windows_reserved_rejects_p7_10() {
 
 #[cfg(unix)]
 #[test]
+fn wallet_import_inline_mnemonic_rejects_p7_1() {
+    // P7-1: `wallet import --mnemonic "<words>"` MUST be rejected at clap
+    // level (flag does not exist). Confirms trufflehog-detectable flag pattern.
+    let tmp = TempDir::new().expect("tempdir");
+    sol_bin()
+        .env("SOL_WALLET_PASSWORD", "test-password")
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("wallet")
+        .arg("import")
+        .arg("--name")
+        .arg("test")
+        .arg("--mnemonic")
+        .arg("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
+        .assert()
+        .failure()
+        .code(2);
+}
+
+#[test]
+fn wallet_create_emits_secret_prefix_p7_21() {
+    // P7-21: `wallet create` STDERR first line starts with `SECRET:` (trufflehog-detectable).
+    use std::fs;
+
+    let tmp = TempDir::new().expect("tempdir");
+    // Mnemonic file lives OUTSIDE data_dir — `WalletManager::new` reads every
+    // file in data_dir as a wallet record (Phase 6.1 PAL behavior).
+    let src_dir = TempDir::new().expect("tempdir src");
+    let mnemonic_path = src_dir.path().join("mnemonic.txt");
+    // BIP-39 test vector (abandon × 11 + about) — deterministic, valid 12-word phrase.
+    fs::write(
+        &mnemonic_path,
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\n",
+    )
+    .expect("write mnemonic");
+
+    let assert = sol_bin()
+        .env("SOL_WALLET_PASSWORD", "test-password")
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("wallet")
+        .arg("create")
+        .arg("--name")
+        .arg("test")
+        .arg("--mnemonic-file")
+        .arg(&mnemonic_path)
+        .assert()
+        .success();
+
+    let output = assert.get_output();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let first_line = stderr.lines().next().unwrap_or("");
+    assert!(
+        first_line.starts_with("SECRET:"),
+        "expected STDERR first line to start with `SECRET:` (P7-21 trufflehog prefix), got: {first_line:?}"
+    );
+
+    // STDOUT must be a parseable UUID (wallet_id).
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let id_line = stdout.trim();
+    assert!(
+        uuid::Uuid::parse_str(id_line).is_ok(),
+        "expected STDOUT to be a UUID (wallet_id), got: {id_line:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn wallet_import_pk_file_mode_0644_refuses_p7_19() {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
