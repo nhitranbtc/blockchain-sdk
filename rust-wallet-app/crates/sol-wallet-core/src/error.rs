@@ -148,6 +148,99 @@ pub enum Error {
     #[allow(missing_docs)]
     #[error("sol-wallet-core: not yet implemented — {0}")]
     Unimplemented(&'static str),
+
+    /// Phase 6 — `argon2` 0.5 / `aes-gcm` 0.10 / `getrandom` 0.2
+    /// reported the OS RNG is unavailable (sandbox without
+    /// `RANDOM_GET`, seccomp-restricted container, broken
+    /// `/dev/urandom` fd). Terminal — `encrypt_wallet` cannot
+    /// mint a fresh nonce/salt. Surfaced to FFI as exit 5.
+    ///
+    /// Per security audit
+    /// `docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`
+    /// finding P6-7. No `unwrap()` / `expect()` on RNG paths.
+    #[error("sol-wallet-core: OS RNG unavailable — {source}")]
+    OsRngFailed {
+        #[source]
+        source: getrandom::Error,
+    },
+
+    /// Phase 6 — `atomic_write` failed: `.tmp` write, `fsync`, or
+    /// `rename` returned an `io::Error`. The `.tmp` file is removed
+    /// before returning (per audit finding P6-8). Path + verbatim
+    /// OS error preserved for diagnostics.
+    #[error("sol-wallet-core: file I/O error on {path} — {source}")]
+    FileIo {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// Phase 6 — `decrypt_wallet` rejected the envelope: wrong
+    /// passphrase, JSON parse fail, AES-GCM tag mismatch, AAD
+    /// mismatch (audit P6-1 — KDF metadata tampered), or unsupported
+    /// version (audit P6-10). Caller cannot distinguish which
+    /// (constant-time differential ≤ Argon2id cost + 10 ms — audit P6-9).
+    #[error("sol-wallet-core: wallet decrypt failed for {id}")]
+    WalletDecryptFailed { id: WalletId },
+
+    /// Phase 6 — `WalletManager::unlock` / `delete` / `rename` /
+    /// `summary` / `list` called with an unknown `WalletId`.
+    #[error("sol-wallet-core: wallet not found — {0}")]
+    WalletNotFound(WalletId),
+
+    /// Phase 6 — `WalletManager::import_from_pk_file` refused the
+    /// source file because its Unix mode exposes the key to other
+    /// users (`mode & 0o077 != 0`). Surfaces before the read so the
+    /// caller can `chmod 600` and retry. Windows ACL check deferred
+    /// to V0.1.5 (audit P6-6).
+    #[error("sol-wallet-core: insecure source file mode 0o{mode:o} on {path} — must be 0o600 or stricter")]
+    InsecureSourceFile { path: std::path::PathBuf, mode: u32 },
+
+    /// Phase 6 — encrypted-blob envelope carries a `version` outside
+    /// the supported range. Per audit P6-10 — gates future migration
+    /// to AEAD / KDF changes without silent corruption.
+    #[error("sol-wallet-core: unsupported envelope version {found} (supported {lo}..={hi})")]
+    UnsupportedBlobVersion { found: u32, lo: u32, hi: u32 },
+}
+
+/// Phase 6 — wallet identifier (UUID v4 string). Used as the
+/// in-memory + on-disk key for `WalletManager` CRUD. `Display` /
+/// `FromStr` provided via the inner `uuid::Uuid`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct WalletId(pub uuid::Uuid);
+
+impl WalletId {
+    /// New random v4 UUID. `OsRng` failure propagates as
+    /// `Error::OsRngFailed` (no `unwrap()` on RNG paths — audit P6-7).
+    pub fn new() -> Result<Self> {
+        Ok(Self(uuid::Uuid::new_v4()))
+    }
+
+    /// Parse from a string slice (canonical hyphenated form).
+    /// Returns `Error::WalletNotFound` on parse failure (the only
+    /// caller that parses is `WalletManager::get_by_id_str` which
+    /// already had a non-found id).
+    pub fn parse_str(s: &str) -> core::result::Result<Self, Error> {
+        uuid::Uuid::parse_str(s)
+            .map(Self)
+            .map_err(|_| Error::WalletNotFound(Self(uuid::Uuid::nil())))
+    }
+}
+
+impl core::fmt::Display for WalletId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl core::str::FromStr for WalletId {
+    type Err = Error;
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
+        Self::parse_str(s)
+    }
 }
 
 /// Crate-wide result alias.

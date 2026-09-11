@@ -25,14 +25,18 @@
 pub mod address;
 pub mod amount;
 pub mod chain;
+pub mod crypto;
 pub mod disambig;
 pub mod error;
+pub mod persist;
+pub mod platform;
 pub mod read_only_wallet;
 pub mod tokens;
 pub mod tx;
 pub mod wallet;
+pub mod wallet_manager;
 
-pub use error::{Error, Result};
+pub use error::{Error, Result, WalletId};
 
 #[cfg(test)]
 mod tests {
