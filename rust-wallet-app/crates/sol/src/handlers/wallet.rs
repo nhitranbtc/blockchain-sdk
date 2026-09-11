@@ -67,9 +67,36 @@ pub async fn dispatch(cmd: &WalletCmd, ctx: &AppContext, _cli: &Cli) -> Result<(
         } => list(ctx, *json).await,
         WalletCmd::Delete { id, yes } => delete(ctx, id, *yes).await,
         WalletCmd::Rename { id, to } => rename(ctx, id, to).await,
-        WalletCmd::Balance { .. } => Err(anyhow!(
-            "wallet balance deferred to Task 7.1d (needs RPC client wiring)"
-        )),
+        WalletCmd::Balance {
+            wallet_id,
+            address,
+            token,
+            json: _,
+        } => {
+            // P7-2: --wallet-id path unlocks keypair (OwnedLock zeroize-on-Drop)
+            // and derives address inside the scoped block before RPC call.
+            // --address path uses raw RPC (no unlock).
+            //
+            // For Phase 7.1d the --wallet-id + --token variant still defers the
+            // SPL RPC call to 7.2; --address + --token routes to balance::dispatch.
+            let wallet_id_owned = wallet_id.clone();
+            let address_owned = address.clone();
+            let token_owned = token.clone();
+            if let Some(addr) = address_owned {
+                return balance_sol_or_spl(
+                    ctx,
+                    &addr,
+                    wallet_id_owned.as_deref(),
+                    token_owned.as_deref(),
+                );
+            }
+            // wallet-id-only path: look up pubkey from summary, query SOL RPC.
+            let id_str =
+                wallet_id_owned.ok_or_else(|| anyhow!("--wallet-id or --address required"))?;
+            let id = parse_wallet_id_pub(&id_str)?;
+            let summary = ctx.wallet_manager.summary(id)?;
+            balance_sol_or_spl(ctx, &summary.pubkey.to_string(), None, None)
+        }
         WalletCmd::Send {
             wallet_id,
             to,
@@ -468,6 +495,40 @@ async fn send_speedup(
         "sol send-speedup broadcast — requires RPC client + surfpool (Phase 7.2)",
     )
     .into())
+}
+
+/// Shared SOL/SPL balance helper. Used by both `wallet balance` (with
+/// --wallet-id or --address) and `sol balance` (via balance::dispatch).
+/// Native SOL hits `chain::get_balance`; SPL defers to Phase 7.2 (ATA derivation).
+fn balance_sol_or_spl(
+    ctx: &AppContext,
+    address: &str,
+    _wallet_id: Option<&str>,
+    token: Option<&str>,
+) -> Result<()> {
+    let owner: solana_sdk::pubkey::Pubkey = address
+        .parse()
+        .map_err(|e| anyhow!("invalid base58 address: {e}"))?;
+    if token.is_some() {
+        return Err(sol_wallet_core::Error::Unimplemented(
+            "balance --token — requires ATA derivation (Phase 7.2)",
+        )
+        .into());
+    }
+    // Synchronous async boundary — use tokio::runtime::Handle to call from sync ctx.
+    let rpc_url = ctx.rpc_url.clone();
+    let owner_clone = owner;
+    let lamports = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let rpc = sol_wallet_core::chain::RpcClient::new(&rpc_url)?;
+            sol_wallet_core::chain::get_balance(&rpc, &owner_clone)
+                .await
+                .map_err(|e| anyhow!("get_balance: {e}"))
+        })
+    })?;
+    let sol = lamports as f64 / 1_000_000_000.0;
+    println!("{} SOL ({})", sol, owner);
+    Ok(())
 }
 
 // -------- helpers --------
