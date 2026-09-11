@@ -47,8 +47,19 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = tmp_path(path);
     let guard = TmpGuard::new(tmp.clone());
 
-    // 1. Open + write `.tmp`.
-    let mut f = std::fs::File::create(&tmp).map_err(|source| Error::FileIo {
+    // 1. Open + write `.tmp` with mode 0o600 ATOMICALLY (Unix).
+    // Per L13 post-push security review: closes the umask-0o644
+    // window between `File::create` and a later `chmod`. The
+    // `mode()` on `OpenOptions` runs through `O_CREAT` with the
+    // given mode bits — no subsequent chmod needed.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp).map_err(|source| Error::FileIo {
         path: tmp.clone(),
         source,
     })?;
@@ -64,21 +75,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     })?;
     drop(f);
 
-    // 3. Unix: set mode 0o600 on `.tmp` BEFORE rename so the
-    // rename-to-target preserves the mode. Closes the TOCTOU
-    // window (L13 review Sept 11).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(
-            |source| Error::FileIo {
-                path: tmp.clone(),
-                source,
-            },
-        )?;
-    }
-
-    // 4. `fsync` parent dir so the rename is durable.
+    // 3. `fsync` parent dir so the rename is durable.
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             let dir = std::fs::File::open(parent).map_err(|source| Error::FileIo {
@@ -92,7 +89,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         }
     }
 
-    // 5. Rename. On success, disarm the guard so Drop doesn't
+    // 4. Rename. On success, disarm the guard so Drop doesn't
     // remove the renamed file.
     std::fs::rename(&tmp, path).map_err(|source| Error::FileIo {
         path: path.to_path_buf(),

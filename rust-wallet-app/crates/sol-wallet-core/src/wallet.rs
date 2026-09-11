@@ -132,11 +132,11 @@ impl Wallet {
         //    constructor — `ed25519_dalek::SigningKey::from(secret_key)`
         //    computes the matching pubkey internally. `signing_seed`
         //    drops at end of scope — ZeroizeOnDrop fires.
-        let mut seed_arr = [0u8; 32];
-        seed_arr.copy_from_slice(&signing_seed[..32]);
-        let keypair = solana_sdk::signature::Keypair::new_from_array(seed_arr);
-        drop(signing_seed);
-        let _ = seed_arr; // (kept alive through `new_from_array`)
+        let mut seed_arr = zeroize::Zeroizing::new([0u8; 32]);
+        seed_arr.as_mut_slice().copy_from_slice(&signing_seed[..32]);
+        let keypair = solana_sdk::signature::Keypair::new_from_array(*seed_arr);
+        // `seed_arr` drops at end of scope; Zeroizing's Drop zeroizes
+        // the stack bytes (L13 post-push security review).
 
         Ok(Self(keypair))
     }

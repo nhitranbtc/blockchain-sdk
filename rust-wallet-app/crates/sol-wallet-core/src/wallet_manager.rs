@@ -219,8 +219,8 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
                 expected: 64,
             });
         }
-        let mut arr = [0u8; 64];
-        arr.copy_from_slice(&decoded);
+        let mut arr = Zeroizing::new([0u8; 64]);
+        arr.as_mut_slice().copy_from_slice(&decoded);
         let wallet = Wallet::from_bytes(&arr);
         self.store_wallet(&wallet, password, name, now_unix)
     }

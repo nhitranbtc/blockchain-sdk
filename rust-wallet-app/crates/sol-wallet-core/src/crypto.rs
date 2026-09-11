@@ -29,9 +29,18 @@ use zeroize::Zeroizing;
 
 /// Argon2id spec cap on memory_kb (~4 GB). Envelopes claiming more
 /// fail `Error::InvalidKdfParams` (L13 step 10 Sept 11 — bounded
-/// newtype, prevents attacker-supplied 4 TB envelope from OOMing
-/// the wallet).
-pub const KDF_MEMORY_KB_MAX: u32 = 4 * 1024 * 1024;
+/// Argon2id memory cap. Per L13 post-push security review:
+/// 256 MiB is comfortably above DESKTOP (64 MiB) + MOBILE (16 MiB)
+/// defaults but well below the 4 GiB attacker-DOS threshold.
+pub const KDF_MEMORY_KB_MAX: u32 = 256 * 1024;
+
+/// Argon2id iteration cap. Prevents attacker-tuned envelopes that
+/// maximize CPU pressure within the memory cap.
+pub const KDF_ITERATIONS_MAX: u32 = 100;
+
+/// Argon2id parallelism cap. Prevents thread-flooding within the
+/// memory cap.
+pub const KDF_PARALLELISM_MAX: u32 = 16;
 
 /// Argon2id parameters. Recorded in the JSON envelope and bound
 /// into the AES-GCM AAD.
@@ -78,10 +87,14 @@ impl KdfParams {
     /// Validate the parameter shape (Argon2 spec + our memory cap).
     /// Returns `Err(InvalidKdfParams)` on shape failure.
     fn validate(&self) -> Result<()> {
+        // Use `>=` so the equality case is also rejected (off-by-one:
+        // KDF_MEMORY_KB_MAX itself is not allowed).
         if self.memory_kb == 0
-            || self.memory_kb > KDF_MEMORY_KB_MAX
+            || self.memory_kb >= KDF_MEMORY_KB_MAX
             || self.iterations == 0
+            || self.iterations >= KDF_ITERATIONS_MAX
             || self.parallelism == 0
+            || self.parallelism >= KDF_PARALLELISM_MAX
             || self.memory_kb < 8 * self.parallelism
         {
             return Err(Error::InvalidKdfParams {
