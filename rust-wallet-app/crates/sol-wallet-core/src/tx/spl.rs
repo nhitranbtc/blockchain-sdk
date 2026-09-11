@@ -39,6 +39,7 @@ use crate::tx::builder::{self, compute_budget_instructions, prepend_create_ata};
 /// `decimals` is the mint's decimals (from `preflight::resolve_mint_decimals`).
 /// `prepend_ata_create` adds the `create_associated_token_account_idempotent`
 /// instruction before the transfer (for first-time sends).
+#[allow(clippy::too_many_arguments)]
 pub fn prepare_spl_transfer_message(
     wallet_pubkey: &Pubkey,
     source_ata: &Pubkey,

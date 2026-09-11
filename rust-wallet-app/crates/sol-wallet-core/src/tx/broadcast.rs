@@ -157,5 +157,5 @@ fn status_satisfies_commitment(status: &TransactionStatus, commitment: &Commitme
     // No confirmation_status field (e.g. very old format or
     // `getTransaction` result) — fall back to `status.confirmations`
     // (None + signature root = "finalized" per legacy semantics).
-    matches!(status.confirmations, None)
+    status.confirmations.is_none()
 }

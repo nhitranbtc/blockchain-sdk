@@ -10,7 +10,7 @@
 //!    Returns `Err(Error::Transport(...))` for invalid URLs.
 //! 2. **Typed JSON-RPC envelope** (Tier 2 finding #7) — `RpcResponse<T>`
 //!    + `RpcError { code, message }` with `#[serde(deny_unknown_fields)]`.
-//!    No `serde_json::Value` indexing.
+//!      No `serde_json::Value` indexing.
 //! 3. **Rate limiter** (Task 5.4) — token bucket, default 50 req/s with
 //!    burst 100. Each `post()` call acquires a permit before sending.
 //! 4. **Custom `Debug` impl** (Tier 2 finding #11) — strips URL query

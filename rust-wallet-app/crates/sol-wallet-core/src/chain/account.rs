@@ -53,7 +53,6 @@ use solana_sdk::transaction::Transaction;
 // structs for the wire shapes we need.
 //
 // `EpochInfo` is re-exported by Anza 4.1.0 (use the upstream).
-#[allow(missing_docs)]
 
 /// Subset of Anza's `TransactionStatus` for V0.1.
 #[allow(missing_docs)]
@@ -576,6 +575,10 @@ pub fn map_client_error<E: std::fmt::Display>(_err: E) -> Error {
 // flag). `request_airdrop` checks `rpc.host()` against this allowlist;
 // `send` / `sendTransaction` work on any host (mainnet, devnet, testnet,
 // local).
+/// Hosts where `requestAirdrop` is permitted (devnet/testnet + local
+/// devnet). Mainnet rejects airdrops; calling it accidentally is a
+/// loss-of-funds + DoS vector — enforced per-method by
+/// [`request_airdrop`].
 pub const DEVNET_HOST_ALLOWLIST: &[&str] = &[
     "api.devnet.solana.com",
     "api.testnet.solana.com",
