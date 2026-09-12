@@ -63,7 +63,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 /// FFI error codes — returned as `i32` from every FFI fn.
 ///
@@ -105,6 +105,9 @@ pub enum FfiError {
     PolicyDenied = 12,
     /// Internal RPC returned an error envelope.
     Rpc = 13,
+    /// Process-global `WalletManager` not yet initialized — caller must
+    /// call `sol_wallet_init` before any other FFI call.
+    NotInitialized = 14,
     /// Not yet implemented (interim stub for Steps 2-10 — real impl lands
     /// in subsequent PRs per plan Task 8.1).
     Unimplemented = 98,
@@ -144,6 +147,71 @@ thread_local! {
 /// cleared by `sol_wallet_lock` (auto-zero per H3/M14).
 thread_local! {
     static UNLOCKED: RefCell<HashMap<WalletId, Zeroizing<Vec<u8>>>> = RefCell::new(HashMap::new());
+}
+
+/// Process-global `WalletManager<FileWalletStorage>`. Initialized
+/// via `sol_wallet_init`. Concrete type (not `dyn`) keeps cbindgen
+/// header emit clean — only the 16 `sol_wallet_*` exports surface.
+static MANAGER: std::sync::OnceLock<
+    std::sync::Mutex<
+        Option<
+            std::sync::Arc<
+                crate::wallet_manager::WalletManager<crate::platform::storage::FileWalletStorage>,
+            >,
+        >,
+    >,
+> = std::sync::OnceLock::new();
+
+/// Acquire the global MANAGER. Returns `FfiError::NotInitialized` if
+/// `sol_wallet_init` was not yet called.
+fn with_manager<F, T>(f: F) -> Result<T, FfiError>
+where
+    F: FnOnce(
+        &crate::wallet_manager::WalletManager<crate::platform::storage::FileWalletStorage>,
+    ) -> Result<T, FfiError>,
+{
+    let mutex = MANAGER.get().ok_or_else(|| {
+        set_last_error("sol_wallet: manager not initialized — call sol_wallet_init first");
+        FfiError::NotInitialized
+    })?;
+    let guard = mutex.lock().expect("manager mutex poisoned");
+    let mgr = guard.as_ref().ok_or(FfiError::NotInitialized)?;
+    f(mgr)
+}
+
+/// Initialize the global `WalletManager` rooted at `data_dir`.
+///
+/// Idempotent — second call returns `FfiError::Ok` without replacing
+/// the existing manager (operator must explicitly reset to swap).
+#[no_mangle]
+pub extern "C" fn sol_wallet_init(data_dir: *const c_char, data_dir_len: usize) -> i32 {
+    use crate::platform::storage::FileWalletStorage;
+    let dir_str = match read_in_str(data_dir, data_dir_len) {
+        Ok(s) => s.to_string(),
+        Err(e) => return e.code(),
+    };
+    let dir_path = std::path::PathBuf::from(dir_str);
+    let storage = match FileWalletStorage::open(dir_path.as_path()) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(&format!("sol_wallet_init: storage open failed: {}", e));
+            return FfiError::Unimplemented.code();
+        }
+    };
+    let manager = match crate::wallet_manager::WalletManager::new(storage) {
+        Ok(m) => std::sync::Arc::new(m),
+        Err(e) => {
+            set_last_error(&format!("sol_wallet_init: manager init failed: {}", e));
+            return FfiError::Unimplemented.code();
+        }
+    };
+    let mutex = MANAGER.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = mutex.lock().expect("manager mutex poisoned");
+    if guard.is_some() {
+        return FfiError::Ok.code();
+    }
+    *guard = Some(manager);
+    FfiError::Ok.code()
 }
 
 /// Store an error message in the per-thread slot, redacted via the
@@ -286,7 +354,7 @@ pub extern "C" fn sol_wallet_import_mnemonic(
     FfiError::Unimplemented.code()
 }
 
-/// `sol_wallet_unlock` — Step 4 stub (real impl follows H3 + H4 fixes).
+/// `sol_wallet_unlock` — Step 4 real impl (H3 + H4).
 #[no_mangle]
 pub extern "C" fn sol_wallet_unlock(
     out_secret: *mut u8,
@@ -296,22 +364,82 @@ pub extern "C" fn sol_wallet_unlock(
     password: *const c_char,
     password_len: usize,
 ) -> i32 {
-    let _ = (out_secret, out_secret_len);
-    let _ = parse_wallet_id(id, id_len);
-    let _ = read_in_str(password, password_len);
-    set_last_error("sol_wallet_unlock: not yet implemented (Step 4 stub; real impl in Phase 8.1)");
-    FfiError::Unimplemented.code()
+    const SECRET_BYTES: usize = 32;
+    if out_secret.is_null() {
+        set_last_error("sol_wallet_unlock: out_secret is NULL");
+        return FfiError::NullPointer.code();
+    }
+    if out_secret_len < SECRET_BYTES {
+        set_last_error(&format!(
+            "sol_wallet_unlock: out_secret too small: need {} bytes, caller supplied {}",
+            SECRET_BYTES, out_secret_len
+        ));
+        return FfiError::BufTooSmall.code();
+    }
+    let wallet_id = match parse_wallet_id(id, id_len) {
+        Ok(w) => w,
+        Err(e) => return e.code(),
+    };
+    let pw = match read_in_str(password, password_len) {
+        Ok(s) => s.to_string(),
+        Err(e) => return e.code(),
+    };
+    let result = with_manager(|mgr| {
+        mgr.unlock(wallet_id, &pw)
+            .map(|owned_lock| {
+                let secret_bytes = owned_lock.wallet().inner_bytes();
+                let secret = Zeroizing::new(secret_bytes[..SECRET_BYTES].to_vec());
+                unsafe {
+                    std::ptr::copy_nonoverlapping(secret.as_ptr(), out_secret, SECRET_BYTES);
+                }
+                let stashed = Zeroizing::new(secret.to_vec());
+                UNLOCKED.with(|cell| {
+                    cell.borrow_mut().insert(wallet_id, stashed);
+                });
+                FfiError::Ok
+            })
+            .map_err(FfiError::from)
+    });
+    match result {
+        Ok(FfiError::Ok) => FfiError::Ok.code(),
+        Ok(other) => other.code(),
+        Err(FfiError::NotInitialized) => FfiError::NotInitialized.code(),
+        Err(FfiError::WalletNotFound) => FfiError::WalletNotFound.code(),
+        Err(FfiError::DecryptFailed) => FfiError::DecryptFailed.code(),
+        Err(_) => FfiError::Unimplemented.code(),
+    }
 }
 
-/// `sol_wallet_lock` — Step 5 stub.
+/// `sol_wallet_lock` — Step 5 real impl (H3/M14 auto-zero).
 #[no_mangle]
 pub extern "C" fn sol_wallet_lock(id: *const c_char, id_len: usize) -> i32 {
-    let _ = parse_wallet_id(id, id_len);
-    set_last_error("sol_wallet_lock: not yet implemented (Step 5 stub)");
-    FfiError::Unimplemented.code()
+    let wallet_id = match parse_wallet_id(id, id_len) {
+        Ok(w) => w,
+        Err(e) => return e.code(),
+    };
+    let result = with_manager(|mgr| {
+        mgr.lock(wallet_id)
+            .map(|()| FfiError::Ok)
+            .map_err(FfiError::from)
+    });
+    match result {
+        Ok(FfiError::Ok) => {}
+        Ok(other) => return other.code(),
+        Err(FfiError::NotInitialized) => return FfiError::NotInitialized.code(),
+        Err(FfiError::WalletNotFound) => return FfiError::WalletNotFound.code(),
+        Err(_) => return FfiError::Unimplemented.code(),
+    }
+    UNLOCKED.with(|cell| {
+        if let Some(mut secret) = cell.borrow_mut().remove(&wallet_id) {
+            secret.zeroize();
+        }
+    });
+    FfiError::Ok.code()
 }
 
-/// `sol_wallet_get_address` — Step 6 stub.
+/// `sol_wallet_get_address` — Step 6 real impl. Reads pubkey from
+/// stored wallet record (no decrypt needed — pubkey is in plaintext
+/// header).
 #[no_mangle]
 pub extern "C" fn sol_wallet_get_address(
     out_pubkey: *mut c_char,
@@ -319,10 +447,20 @@ pub extern "C" fn sol_wallet_get_address(
     id: *const c_char,
     id_len: usize,
 ) -> i32 {
-    let _ = (out_pubkey, out_pubkey_len);
-    let _ = parse_wallet_id(id, id_len);
-    set_last_error("sol_wallet_get_address: not yet implemented (Step 6 stub)");
-    FfiError::Unimplemented.code()
+    let wallet_id = match parse_wallet_id(id, id_len) {
+        Ok(w) => w,
+        Err(e) => return e.code(),
+    };
+    let pubkey_str = match with_manager(|mgr| mgr.summary(wallet_id).map_err(FfiError::from)) {
+        Ok(s) => s.pubkey.to_string(),
+        Err(FfiError::WalletNotFound) => return FfiError::WalletNotFound.code(),
+        Err(FfiError::NotInitialized) => return FfiError::NotInitialized.code(),
+        Err(_) => return FfiError::Unimplemented.code(),
+    };
+    match write_out_cstr(out_pubkey, out_pubkey_len, &pubkey_str) {
+        Ok(n) => n,
+        Err(e) => e.code(),
+    }
 }
 
 /// `sol_wallet_sign_transaction` — Step 7 stub (real impl applies M9

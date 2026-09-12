@@ -99,6 +99,14 @@ typedef struct sol_wallet_KdfParams sol_wallet_KdfParams;
 
 
 /**
+ * Initialize the global `WalletManager` rooted at `data_dir`.
+ *
+ * Idempotent — second call returns `FfiError::Ok` without replacing
+ * the existing manager (operator must explicitly reset to swap).
+ */
+int32_t sol_wallet_init(const char *data_dir, uintptr_t data_dir_len);
+
+/**
  * `sol_wallet_create_mnemonic` — Step 2 stub.
  */
 int32_t sol_wallet_create_mnemonic(char *out_id,
@@ -123,7 +131,7 @@ int32_t sol_wallet_import_mnemonic(char *out_id,
                                    uintptr_t cluster_len);
 
 /**
- * `sol_wallet_unlock` — Step 4 stub (real impl follows H3 + H4 fixes).
+ * `sol_wallet_unlock` — Step 4 real impl (H3 + H4).
  */
 int32_t sol_wallet_unlock(uint8_t *out_secret,
                           uintptr_t out_secret_len,
@@ -133,12 +141,14 @@ int32_t sol_wallet_unlock(uint8_t *out_secret,
                           uintptr_t password_len);
 
 /**
- * `sol_wallet_lock` — Step 5 stub.
+ * `sol_wallet_lock` — Step 5 real impl (H3/M14 auto-zero).
  */
 int32_t sol_wallet_lock(const char *id, uintptr_t id_len);
 
 /**
- * `sol_wallet_get_address` — Step 6 stub.
+ * `sol_wallet_get_address` — Step 6 real impl. Reads pubkey from
+ * stored wallet record (no decrypt needed — pubkey is in plaintext
+ * header).
  */
 int32_t sol_wallet_get_address(char *out_pubkey,
                                uintptr_t out_pubkey_len,
