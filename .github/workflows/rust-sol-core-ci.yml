@@ -336,8 +336,6 @@ jobs:
         # in a follow-up workflow per plan Q17.
         if: runner.os == 'Linux'
         working-directory: rust-wallet-app
-        env:
-          ANDROID_NDK_HOME: ${{ vars.ANDROID_NDK_HOME || '' }}
         run: |
           if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
