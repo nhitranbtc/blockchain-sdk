@@ -128,7 +128,7 @@ fn negative_last_error_message_undersized_buffer() {
     let mut tiny = [0u8; 1];
     let rc = unsafe { sym(tiny.as_mut_ptr().cast(), 1) };
     assert!(
-        rc == SOL_BUF_TOO_SMALL || (rc >= 0 && rc <= 1),
+        rc == SOL_BUF_TOO_SMALL || (0..=1).contains(&rc),
         "got {} from undersized last_error_message",
         rc
     );
