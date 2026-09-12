@@ -334,11 +334,17 @@ jobs:
         # the Android cross-compile unless NDK is present. The mobile
         # build is verified on a dedicated macos/Linux-with-NDK runner
         # in a follow-up workflow per plan Q17.
-        if: runner.os == 'Linux' && env.ANDROID_NDK_HOME != ''
+        if: runner.os == 'Linux'
         working-directory: rust-wallet-app
+        env:
+          ANDROID_NDK_HOME: ${{ vars.ANDROID_NDK_HOME || '' }}
         run: |
           if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            echo "::notice::Mobile compile-only (aarch64-linux-android) skipped: ANDROID_NDK_HOME not set on this runner. Install Android NDK + set env var to enable cross-compile verification per plan Q17."
             exit 0
           fi
           # Anchor cdylib check to the crate-type = [...] line itself;
@@ -348,9 +354,3 @@ jobs:
             exit 0
           fi
           cargo check -p sol-wallet-core --target aarch64-linux-android
-      - name: mobile build skipped
-        # Document the skip explicitly in CI logs so operators
-        # see why the mobile job is green without an actual build.
-        if: runner.os == 'Linux' && env.ANDROID_NDK_HOME == ''
-        run: |
-          echo "::notice::Mobile compile-only skipped: ANDROID_NDK_HOME not set on this runner. Install Android NDK + set env var to enable cross-compile verification per plan Q17."
