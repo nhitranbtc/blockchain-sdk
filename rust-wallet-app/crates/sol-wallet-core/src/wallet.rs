@@ -224,6 +224,16 @@ impl Wallet {
         Ok(tx)
     }
 
+    /// Borrow the inner `Keypair`. Used by the FFI surface to build +
+    /// sign `VersionedTransaction`s without duplicating the Anza
+    /// sign-API. Marked `pub` (not `pub(crate)`) so the FFI crate
+    /// boundary can construct transactions on behalf of the mobile
+    /// caller; the consumer still needs the cached UNLOCKED secret
+    /// (no auto-export of keys).
+    pub fn as_keypair(&self) -> &solana_sdk::signature::Keypair {
+        &self.0
+    }
+
     /// Sign arbitrary bytes with this wallet's Ed25519 signing key.
     ///
     /// Returns the 64-byte Ed25519 signature. Verify with
