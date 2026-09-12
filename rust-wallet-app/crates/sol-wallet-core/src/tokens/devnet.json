@@ -1,8 +1,12 @@
-[
-  {
-    "symbol": "USDC",
-    "program": "classic",
-    "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
-    "decimals": 6
-  }
-]
+{
+  "sender-native": "27mt9dL81aHVsBnebBBB3ZZnm7UVSbQ354XcZSUss4cd",
+  "sender-native-mnemnoic": "pact possible desk flag lawn antique tumble hip staff draw abuse peasant",
+  "tokens": [
+    {
+      "symbol": "USDC",
+      "program": "classic",
+      "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      "decimals": 6
+    }
+  ]
+}
