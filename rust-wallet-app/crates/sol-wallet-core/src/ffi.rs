@@ -16,9 +16,11 @@
     unsafe_op_in_unsafe_fn,
     internal_features,
     unsafe_attributes,
-    missing_safety_doc,
     unused_doc_comments,
-    unused_variables
+    unused_variables,
+    clippy::manual_is_ascii_check,
+    clippy::unnecessary_unwrap,
+    clippy::not_unsafe_ptr_arg_deref
 )]
 //! ## FFI safety contract (audit H1–H8)
 //!
