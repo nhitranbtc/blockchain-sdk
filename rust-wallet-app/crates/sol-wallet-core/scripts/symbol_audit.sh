@@ -47,7 +47,7 @@ case "$LIB" in
         # `nm -gD` = global + defined (we want defined globals only).
         # Filter to entries whose symbol starts with a letter (skip
         # numeric addresses).
-        NM_OUTPUT=$(nm -gD "$LIB" 2>&1 | awk '$2 ~ /^[A-Za-z_]/ {print $2}' | sort -u)
+        NM_OUTPUT=$(nm -gD "$LIB" 2>&1 | awk ' $3 ~ /^[A-Za-z_]/ {print $3}' | sort -u)
         ;;
     *.dll)
         # Windows: use `dumpbin /EXPORTS` if MSVC available; fallback
@@ -68,7 +68,7 @@ case "$LIB" in
         ;;
 esac
 
-# Expected exported symbols (16 total: 12 original + 4 audit).
+# Expected exported symbols (17 total: 12 original + 4 audit + init).
 EXPECTED=(
     sol_wallet_create_mnemonic
     sol_wallet_import_mnemonic
@@ -86,6 +86,7 @@ EXPECTED=(
     sol_wallet_set_policy
     sol_wallet_get_policy
     sol_wallet_default_cluster
+    sol_wallet_init
 )
 
 # Forbidden Rust runtime symbols (H7 — Rust runtime leakage).
@@ -143,5 +144,5 @@ if [[ ${#MISSING[@]} -gt 0 || ${#FOUND_FORBIDDEN[@]} -gt 0 || -n "$EXTRA" ]]; th
     exit 1
 fi
 
-echo "GREEN: symbol audit passes — 16 expected sol_wallet_* symbols present, 0 forbidden Rust runtime symbols, 0 unexpected extras"
+echo "GREEN: symbol audit passes — 17 expected sol_wallet_* symbols present, 0 forbidden Rust runtime symbols, 0 unexpected extras"
 exit 0
