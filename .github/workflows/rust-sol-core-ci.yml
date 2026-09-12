@@ -131,6 +131,11 @@ jobs:
             echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
             exit 0
           fi
+          # Build cdylib artifact first so tests/abi_smoke.rs +
+          # tests/ffi_negative.rs (which use libloading to dlopen the
+          # cdylib) can locate it. `cargo test` alone does not emit
+          # the cdylib artifact by default.
+          cargo build -p sol-wallet-core
           cargo test -p sol-wallet-core --lib --tests
 
   # L13 step 11 gates 2-4 (dedup / audit / deny) merged into one job to share
