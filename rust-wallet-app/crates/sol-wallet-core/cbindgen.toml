@@ -38,6 +38,7 @@ trailer = """
 # audit H3 (zeroize), H5 (set_policy, get_policy), M16 (default_cluster).
 [export]
 prefix = "sol_wallet_"
+exclude = ["ffi_mnemonic"]
 
 [export.rename]
 "SolWalletId" = "WalletId"

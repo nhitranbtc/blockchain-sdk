@@ -29,6 +29,7 @@ pub mod crypto;
 pub mod disambig;
 pub mod error;
 pub mod ffi;
+pub mod ffi_mnemonic;
 pub mod panic_scrubber;
 pub mod persist;
 pub mod platform;

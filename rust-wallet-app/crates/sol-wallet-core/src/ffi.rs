@@ -20,7 +20,9 @@
     unused_variables,
     clippy::manual_is_ascii_check,
     clippy::unnecessary_unwrap,
-    clippy::not_unsafe_ptr_arg_deref
+    clippy::not_unsafe_ptr_arg_deref,
+    clippy::question_mark,
+    clippy::redundant_pattern_matching
 )]
 //! ## FFI safety contract (audit H1–H8)
 //!
@@ -315,7 +317,7 @@ fn parse_wallet_id(ptr: *const c_char, len: usize) -> Result<WalletId, FfiError>
 //   - `sol_wallet_default_cluster` (M16): STUB.
 // ---------------------------------------------------------------------------
 
-/// `sol_wallet_create_mnemonic` — Step 2 stub.
+/// `sol_wallet_create_mnemonic` — Step 2 real impl.
 #[no_mangle]
 pub extern "C" fn sol_wallet_create_mnemonic(
     out_id: *mut c_char,
@@ -327,14 +329,37 @@ pub extern "C" fn sol_wallet_create_mnemonic(
     cluster: *const c_char,
     cluster_len: usize,
 ) -> i32 {
-    let _ = (out_id, out_id_len, out_mnemonic, out_mnemonic_len);
-    let _ = read_in_str(password, password_len);
-    let _ = read_in_str(cluster, cluster_len);
-    set_last_error("sol_wallet_create_mnemonic: not yet implemented (Step 2 stub)");
-    FfiError::Unimplemented.code()
+    let _ = read_in_str(cluster, cluster_len).ok(); // cluster not bound in v0.1
+    let pw = match read_in_str(password, password_len) {
+        Ok(s) => s.to_string(),
+        Err(e) => return e.code(),
+    };
+    let phrase = match crate::ffi_mnemonic::generate_12_word_english() {
+        Ok(p) => p,
+        Err(_) => {
+            set_last_error("sol_wallet_create_mnemonic: BIP-39 generate failed");
+            return FfiError::Unimplemented.code();
+        }
+    };
+    let step2_outcome = with_manager(|mgr| {
+        crate::ffi_mnemonic::import_into_manager(mgr, &phrase, &pw, "default", 0, 0)
+            .map_err(FfiError::from)
+            .and_then(|id| {
+                if let Err(e) = write_out_cstr(out_id, out_id_len, &id.to_string()) {
+                    return Err(e);
+                }
+                write_out_cstr(out_mnemonic, out_mnemonic_len, &phrase)
+                    .map(|_| FfiError::Ok)
+                    .map_err(|_| FfiError::BufTooSmall)
+            })
+    });
+    match step2_outcome {
+        Ok(ffi_err) => ffi_err.code(),
+        Err(e) => e.code(),
+    }
 }
 
-/// `sol_wallet_import_mnemonic` — Step 3 stub.
+/// `sol_wallet_import_mnemonic` — Step 3 real impl.
 #[no_mangle]
 pub extern "C" fn sol_wallet_import_mnemonic(
     out_id: *mut c_char,
@@ -346,12 +371,35 @@ pub extern "C" fn sol_wallet_import_mnemonic(
     cluster: *const c_char,
     cluster_len: usize,
 ) -> i32 {
-    let _ = (out_id, out_id_len);
-    let _ = read_in_str(in_mnemonic, in_mnemonic_len);
-    let _ = read_in_str(password, password_len);
-    let _ = read_in_str(cluster, cluster_len);
-    set_last_error("sol_wallet_import_mnemonic: not yet implemented (Step 3 stub)");
-    FfiError::Unimplemented.code()
+    let _ = read_in_str(cluster, cluster_len).ok();
+    let pw = match read_in_str(password, password_len) {
+        Ok(s) => s.to_string(),
+        Err(e) => return e.code(),
+    };
+    let phrase = match read_in_str(in_mnemonic, in_mnemonic_len) {
+        Ok(s) => s.to_string(),
+        Err(e) => return e.code(),
+    };
+    if let Err(_) = crate::ffi_mnemonic::validate_english(&phrase) {
+        set_last_error(&format!(
+            "sol_wallet_import_mnemonic: invalid BIP-39 phrase ({} chars)",
+            phrase.len()
+        ));
+        return FfiError::InvalidUtf8.code();
+    }
+    let step3_outcome = with_manager(|mgr| {
+        crate::ffi_mnemonic::import_into_manager(mgr, &phrase, &pw, "imported", 0, 0)
+            .map_err(FfiError::from)
+            .and_then(|id| {
+                write_out_cstr(out_id, out_id_len, &id.to_string())
+                    .map(|_| FfiError::Ok)
+                    .map_err(|_| FfiError::BufTooSmall)
+            })
+    });
+    match step3_outcome {
+        Ok(ffi_err) => ffi_err.code(),
+        Err(e) => e.code(),
+    }
 }
 
 /// `sol_wallet_unlock` — Step 4 real impl (H3 + H4).
