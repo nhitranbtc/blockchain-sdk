@@ -6,14 +6,19 @@
 // Inner attributes MUST appear before any items in the module. Crate
 // root denies `unsafe_code`; this module is the ONE place in the crate
 // that legitimately uses raw-pointer derefs + `#[no_mangle]` symbol
-// exports. Silences the relevant Rust 1.85 lints at module scope.
+// exports. `unknown_lints` guards against future-Rust-only lints
+// (`unsafe_attributes`, `missing_safety_doc`) that are stable-only in
+// newer toolchains — CI uses stable Rust where these don't yet exist.
 #![allow(
+    unknown_lints,
     unsafe_code,
-    unsafe_attributes,
     unused_unsafe,
     unsafe_op_in_unsafe_fn,
+    internal_features,
+    unsafe_attributes,
     missing_safety_doc,
-    internal_features
+    unused_doc_comments,
+    unused_variables
 )]
 //! ## FFI safety contract (audit H1–H8)
 //!

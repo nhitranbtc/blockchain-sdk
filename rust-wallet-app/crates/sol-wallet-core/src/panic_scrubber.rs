@@ -37,6 +37,12 @@
 use aho_corasick::{AhoCorasick, MatchKind};
 use std::sync::OnceLock;
 
+// Local algorithm pattern matches have intentional unused captures
+// (e.g., `run_first` is read implicitly via `run_after_last` slice
+// math). `unknown_lints` + `unused_variables` for portability with
+// stable Rust CI.
+#[allow(unknown_lints, unused_variables)]
+
 /// Output marker substituted in place of any detected secret span.
 const REDACTED: &str = "[REDACTED]";
 

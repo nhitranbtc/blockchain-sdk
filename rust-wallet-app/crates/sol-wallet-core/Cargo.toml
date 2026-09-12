@@ -138,6 +138,12 @@ uuid       = { version = "1", features = ["v4", "serde"] }
 # in O(n+m) without backtracking. See src/panic_scrubber.rs.
 aho-corasick = "1"
 
+[build-dependencies]
+# Phase 8.2 Step 3 — `build.rs` invokes `cbindgen::Builder` to emit
+# `sol_wallet_core.h` at build time. Mobile Dart/Swift/Kotlin consumers
+# bind to this header. See audit Step 11a M15.
+cbindgen = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = { workspace = true }
