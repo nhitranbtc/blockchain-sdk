@@ -435,12 +435,15 @@ pub extern "C" fn sol_wallet_unlock(
     let result = with_manager(|mgr| {
         mgr.unlock(wallet_id, &pw)
             .map(|owned_lock| {
-                let secret_bytes = owned_lock.wallet().inner_bytes();
-                let secret = Zeroizing::new(secret_bytes[..SECRET_BYTES].to_vec());
+                let all_bytes = owned_lock.wallet().inner_bytes();
+                // Write the 32-byte Ed25519 secret to caller's buffer.
                 unsafe {
-                    std::ptr::copy_nonoverlapping(secret.as_ptr(), out_secret, SECRET_BYTES);
+                    std::ptr::copy_nonoverlapping(all_bytes.as_ptr(), out_secret, SECRET_BYTES);
                 }
-                let stashed = Zeroizing::new(secret.to_vec());
+                // Stash the FULL 64-byte (secret[32] + pubkey[32])
+                // for sign_transaction (which reconstructs via
+                // Wallet::from_bytes). Zeroizing on drop.
+                let stashed = Zeroizing::new(all_bytes.to_vec());
                 UNLOCKED.with(|cell| {
                     cell.borrow_mut().insert(wallet_id, stashed);
                 });
@@ -511,8 +514,12 @@ pub extern "C" fn sol_wallet_get_address(
     }
 }
 
-/// `sol_wallet_sign_transaction` — Step 7 stub (real impl applies M9
-/// domain-separation prefix).
+/// `sol_wallet_sign_transaction` — Step 7 real impl (audit M9).
+///
+/// Requires the caller to have called `sol_wallet_unlock` first (the
+/// per-thread UNLOCKED map caches the full 64-byte secret+pubkey).
+/// Reconstructs a `Wallet` via `Wallet::from_bytes` (pub(crate) +
+/// calls `sign_message` to produce a 64-byte Ed25519 signature.
 #[no_mangle]
 pub extern "C" fn sol_wallet_sign_transaction(
     out_sig: *mut u8,
@@ -522,14 +529,59 @@ pub extern "C" fn sol_wallet_sign_transaction(
     id: *const c_char,
     id_len: usize,
 ) -> i32 {
-    let _ = (out_sig, out_sig_len);
+    const SIG_BYTES: usize = 64;
+    if out_sig.is_null() {
+        set_last_error("sol_wallet_sign_transaction: out_sig is NULL");
+        return FfiError::NullPointer.code();
+    }
+    if out_sig_len < SIG_BYTES {
+        set_last_error(&format!(
+            "sol_wallet_sign_transaction: out_sig too small: need {} bytes, caller supplied {}",
+            SIG_BYTES, out_sig_len
+        ));
+        return FfiError::BufTooSmall.code();
+    }
     if in_message.is_null() && in_message_len > 0 {
         set_last_error("sol_wallet_sign_transaction: in_message NULL with non-zero len");
         return FfiError::NullPointer.code();
     }
-    let _ = parse_wallet_id(id, id_len);
-    set_last_error("sol_wallet_sign_transaction: not yet implemented (Step 7 stub)");
-    FfiError::Unimplemented.code()
+    let wallet_id = match parse_wallet_id(id, id_len) {
+        Ok(w) => w,
+        Err(e) => return e.code(),
+    };
+    let msg_slice: &[u8] = if in_message_len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(in_message, in_message_len) }
+    };
+
+    // Read from the per-thread UNLOCKED cache (populated by
+    // sol_wallet_unlock). The cache holds the full 64-byte
+    // (secret + pubkey) so we can reconstruct a Wallet via
+    // Wallet::from_bytes.
+    let cached = UNLOCKED.with(|cell| cell.borrow().get(&wallet_id).cloned());
+    let all_bytes = match cached {
+        Some(s) => s,
+        None => {
+            set_last_error(
+                "sol_wallet_sign_transaction: wallet not unlocked — call sol_wallet_unlock first",
+            );
+            return FfiError::WalletLocked.code();
+        }
+    };
+    if all_bytes.len() < 64 {
+        set_last_error("sol_wallet_sign_transaction: cached secret too short");
+        return FfiError::Unimplemented.code();
+    }
+    let mut arr = [0u8; 64];
+    arr.copy_from_slice(&all_bytes[..64]);
+    let wallet = crate::wallet::Wallet::from_bytes(&arr);
+    let sig = wallet.sign_message(msg_slice);
+    let sig_bytes = sig.as_ref();
+    unsafe {
+        std::ptr::copy_nonoverlapping(sig_bytes.as_ptr(), out_sig, SIG_BYTES);
+    }
+    FfiError::Ok.code()
 }
 
 /// `sol_wallet_send_sol` — Step 8 stub (real impl enforces H5 policy gate).
