@@ -107,7 +107,13 @@ typedef struct sol_wallet_KdfParams sol_wallet_KdfParams;
 int32_t sol_wallet_init(const char *data_dir, uintptr_t data_dir_len);
 
 /**
- * `sol_wallet_create_mnemonic` — Step 2 stub.
+ * `sol_wallet_set_rpc` — set the RPC URL used by `sol_wallet_send_*`
+ * + `sol_wallet_get_balance_*`. Idempotent (overwrites previous URL).
+ */
+int32_t sol_wallet_set_rpc(const char *url, uintptr_t url_len);
+
+/**
+ * `sol_wallet_create_mnemonic` — Step 2 real impl.
  */
 int32_t sol_wallet_create_mnemonic(char *out_id,
                                    uintptr_t out_id_len,
@@ -119,7 +125,7 @@ int32_t sol_wallet_create_mnemonic(char *out_id,
                                    uintptr_t cluster_len);
 
 /**
- * `sol_wallet_import_mnemonic` — Step 3 stub.
+ * `sol_wallet_import_mnemonic` — Step 3 real impl.
  */
 int32_t sol_wallet_import_mnemonic(char *out_id,
                                    uintptr_t out_id_len,
@@ -156,8 +162,12 @@ int32_t sol_wallet_get_address(char *out_pubkey,
                                uintptr_t id_len);
 
 /**
- * `sol_wallet_sign_transaction` — Step 7 stub (real impl applies M9
- * domain-separation prefix).
+ * `sol_wallet_sign_transaction` — Step 7 real impl (audit M9).
+ *
+ * Requires the caller to have called `sol_wallet_unlock` first (the
+ * per-thread UNLOCKED map caches the full 64-byte secret+pubkey).
+ * Reconstructs a `Wallet` via `Wallet::from_bytes` (pub(crate) +
+ * calls `sign_message` to produce a 64-byte Ed25519 signature.
  */
 int32_t sol_wallet_sign_transaction(uint8_t *out_sig,
                                     uintptr_t out_sig_len,
@@ -167,7 +177,10 @@ int32_t sol_wallet_sign_transaction(uint8_t *out_sig,
                                     uintptr_t id_len);
 
 /**
- * `sol_wallet_send_sol` — Step 8 stub (real impl enforces H5 policy gate).
+ * `sol_wallet_send_sol` — Step 8 real impl.
+ *
+ * Builds + signs + broadcasts a SystemProgram::Transfer tx.
+ * Requires `sol_wallet_set_rpc` + `sol_wallet_unlock` first.
  */
 int32_t sol_wallet_send_sol(uint8_t *out_sig,
                             uintptr_t out_sig_len,
@@ -179,7 +192,11 @@ int32_t sol_wallet_send_sol(uint8_t *out_sig,
                             uint64_t priority_fee);
 
 /**
- * `sol_wallet_send_spl` — Step 9 stub (real impl enforces H5 policy gate).
+ * `sol_wallet_send_spl` — Step 9 real impl.
+ *
+ * Builds + signs + broadcasts an SPL Token transfer_checked tx.
+ * Derives the source ATA from the cached wallet's pubkey + mint.
+ * Requires `sol_wallet_set_rpc` + `sol_wallet_unlock` first.
  */
 int32_t sol_wallet_send_spl(uint8_t *out_sig,
                             uintptr_t out_sig_len,
@@ -192,14 +209,20 @@ int32_t sol_wallet_send_spl(uint8_t *out_sig,
                             uint64_t amount);
 
 /**
- * `sol_wallet_get_balance_sol` — Step 10 stub.
+ * `sol_wallet_get_balance_sol` — Step 10 real impl.
+ *
+ * Reads the SOL balance of `address` via `getBalance` RPC call.
+ * Requires `sol_wallet_set_rpc` to have been called first.
  */
 int32_t sol_wallet_get_balance_sol(uint64_t *out_lamports,
                                    const char *address,
                                    uintptr_t address_len);
 
 /**
- * `sol_wallet_get_balance_spl` — Step 10 stub.
+ * `sol_wallet_get_balance_spl` — Step 10 real impl.
+ *
+ * Reads the SPL token balance of `address` for `mint` via
+ * `getTokenAccountBalance` RPC. Returns raw amount + decimals.
  */
 int32_t sol_wallet_get_balance_spl(uint64_t *out_balance,
                                    uint8_t *out_decimals,

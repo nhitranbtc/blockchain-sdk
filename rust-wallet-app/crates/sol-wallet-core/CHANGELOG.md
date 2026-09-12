@@ -17,10 +17,36 @@ Conventions: `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Securit
 - Phase 6.2 — library completeness verification (33 in-scope deep-dive rows)
 - Phase 7 — `sol` CLI, 22 commands
 - Phase 8 — FFI cdylib, 12 C functions + panic-message scrubber
-- Phase 9 — mainnet self-send smoke gate + release cut
+- Phase 10 — mainnet self-send smoke gate + release cut
 - v0.1 release cut: branch `rust-sol-core` → `main`
 
 ---
+
+## Phase 9 — 2026-09-12 — End-to-end create-wallet flow (devnet)
+
+Closes the prior-session gap ("why in sol-wallet-core don't support create wallet?") by surfacing `generate_12_word_english` as a library-level public API + shipping an end-to-end devnet example. Audit: [docs/audit/2026-09-12-sol-wallet-core-phase9-security-audit.md](../../../docs/audit/2026-09-12-sol-wallet-core-phase9-security-audit.md) (issue [#563](https://github.com/nhitranbtc/blockchain-sdk/issues/563)). All 8 ship-gate controls baked into the example.
+
+### Added
+
+- `src/lib.rs` — `pub use ffi_mnemonic::generate_12_word_english;` re-export. Library consumers (mobile, CLI, examples) now call `sol_wallet_core::generate_12_word_english() -> Result<String, Error>` directly without going through the FFI cdylib. RNG failure surfaces as `Error::OsRngFailed` (L13 step 10 Sept 11 — no `unwrap()`/`expect()` on RNG paths).
+- `examples/create_wallet_devnet.rs` — end-to-end demo binary: generate 12-word mnemonic → import into `WalletManager` → derive pubkey → optional devnet airdrop. Eight audit controls baked in (P9-1..P9-8 + C-P9-1 + C-P9-2).
+- `README.md` — Quick Start section: prerequisites, run command, env var table, airdrop opt-in.
+
+### Security (Phase 9 audit issue [#563](https://github.com/nhitranbtc/blockchain-sdk/issues/563))
+
+- **P9-1** — `EXAMPLE_WALLET_PASSWORD` env var only (no plaintext literal in source).
+- **P9-2** — Mnemonic written to `data_dir/mnemonic.txt` with mode 0o600 (Unix). Never to stdout.
+- **P9-3** — `data_dir` validated: absolute path + non-system + non-symlink parent.
+- **P9-4** — Non-devnet `SOL_RPC_URL` + airdrop opt-in prints loud `WARN:` banner.
+- **P9-6** — Explicit tokio runtime shutdown via `drop(runtime)`.
+- **P9-7** — Airdrop capped at 0.5 SOL (below typical devnet per-request limit).
+- **P9-8** — `CI` env var → early-return without side effects.
+- **C-P9-2** — Airdrop requires explicit `RUN_SOL_DEVNET_AIRDROP=1` opt-in (default = no RPC call).
+
+### Notes
+
+- `generate_12_word_english` itself already audited in Phase 8.1 (PR #562, commit `f2ebeca2`). Re-export is a one-line change.
+- Old Phase 9 (Mainnet smoke gate) → Phase 10 in the plan; cross-references updated across `docs/superpowers/plans/2026-09-09-sol-wallet-core-v0.1.md`.
 
 ## Phase Set Up — 2026-09-10 — repo plumbing (no crate code)
 

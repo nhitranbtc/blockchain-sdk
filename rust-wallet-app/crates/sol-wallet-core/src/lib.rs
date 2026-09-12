@@ -41,6 +41,13 @@ pub mod wallet_manager;
 
 pub use error::{Error, Result, WalletId};
 
+// Phase 9.1 — re-export the BIP-39 phrase generator as a library-level public API
+// (was FFI-internal-only in `ffi_mnemonic`). Examples + downstream library consumers
+// (mobile, CLI) call `sol_wallet_core::generate_12_word_english()` directly without
+// going through the FFI cdylib. RNG failure surfaces as `Error::OsRngFailed`
+// (L13 step 10 Sept 11 — no `unwrap()`/`expect()` on RNG paths).
+pub use ffi_mnemonic::generate_12_word_english;
+
 #[cfg(test)]
 mod tests {
     use super::*;
