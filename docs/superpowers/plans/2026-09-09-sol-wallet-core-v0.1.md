@@ -1987,10 +1987,9 @@ User-facing goal: a developer can run a single example binary that generates a f
   ```rust
   use sol_wallet_core::{
       chain::{client::RpcClient, account::{request_airdrop}},
-      ffi_mnemonic::generate_12_word_english,
+      ffi_mnemonic::{generate_12_word_english, now_unix},
       platform::storage::FileWalletStorage,
       wallet_manager::WalletManager,
-      ffi_mnemonic::now_unix,
       Result,
   };
 
@@ -2040,27 +2039,14 @@ User-facing goal: a developer can run a single example binary that generates a f
 - Without `RUN_SOL_DEVNET_AIRDROP`: prints phrase + pubkey, exits 0, no RPC call.
 - With `RUN_SOL_DEVNET_AIRDROP=1`: airdrop tx sig appears, devnet balance reflects 1 SOL on explorer.
 
-### Task 9.3 (NEW): CHANGELOG + README Quick Start pointer
-
-**Files:**
-- Modify: `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` — append Phase 8 entry under `[Unreleased]`
-- Modify (or create): `rust-wallet-app/crates/sol-wallet-core/README.md` — add "Quick Start" section pointing at `cargo run --example create_wallet_devnet`
-
-**Steps:**
-- [ ] Step 1: CHANGELOG entry — `### Phase 8 — 2026-09-12 — End-to-end create-wallet flow (devnet): re-export \`generate_12_word_english\` as library-level public API; add \`examples/create_wallet_devnet.rs\` covering generate → import → encrypt → unlock → airdrop.`
-- [ ] Step 2: README Quick Start — minimum 5 lines + 1 code block referencing the example binary. Cover: prerequisites (`cargo` + Solana CLI), run command, expected output (mnemonic + address), devnet airdrop env var.
-- [ ] Step 3: PAUSE — docs PR.
-
-**Acceptance:** A developer cloning the repo can run the example and produce the expected output (mnemonic + address) per Task 8.2 acceptance, following only the README Quick Start.
-
 ### Phase 8 deliverable summary
 
 | Item | Status |
 |------|--------|
 | Library `generate_12_word_english` re-export | ✅ (Task 8.1) |
 | `examples/create_wallet_devnet.rs` | ✅ (Task 8.2) |
-| CHANGELOG + README pointer | ✅ (Task 8.3) |
 | Devnet airdrop smoke (gated) | ✅ (Task 8.2 Step 4) |
+| CHANGELOG + README Quick Start pointer | ✅ (Task 9.3, moved under Phase 9) |
 
 ### Phase 8 drift recorded at execution time
 
@@ -2102,6 +2088,23 @@ User-facing goal: a developer can run a single example binary that generates a f
 - [ ] Step 5: Publish dry-run check: `cargo publish --dry-run -p sol-wallet-core` succeeds
 - [ ] Step 6: PAUSE — release PR (one final review pass before tag)
 
+### Task 9.3 (NEW): CHANGELOG + README Quick Start pointer
+
+> **Reformatted 2026-09-13:** relocated from Phase 8 to Phase 9 (release-cut concerns). Heading number retained as `9.3` to avoid renaming drift; cross-refs in Phase 8 deliverable summary updated to point here.
+
+**Files:**
+
+- Modify: `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` — append Phase 8 entry under `[Unreleased]`
+- Modify (or create): `rust-wallet-app/crates/sol-wallet-core/README.md` — add "Quick Start" section pointing at `cargo run --example create_wallet_devnet`
+
+**Steps:**
+
+- [ ] Step 1: CHANGELOG entry — `### Phase 8 — 2026-09-12 — End-to-end create-wallet flow (devnet): re-export \`generate_12_word_english\` as library-level public API; add \`examples/create_wallet_devnet.rs\` covering generate → import → encrypt → unlock → airdrop.`
+- [ ] Step 2: README Quick Start — minimum 5 lines + 1 code block referencing the example binary. Cover: prerequisites (`cargo` + Solana CLI), run command, expected output (mnemonic + address), devnet airdrop env var.
+- [ ] Step 3: PAUSE — docs PR.
+
+**Acceptance:** A developer cloning the repo can run the example and produce the expected output (mnemonic + address) per Task 8.2 acceptance, following only the README Quick Start.
+
 ---
 
 ## Phase 10 Security Audit — 2026-09-13
@@ -2111,17 +2114,16 @@ User-facing goal: a developer can run a single example binary that generates a f
 **Closed:**
 
 - [x] **Task 10.1** — `Wallet::from_bytes` panic on corrupt envelope (#564). Merged via PR #570 / squash `461773ac` on `rust-sol-core` (2026-09-13). `from_bytes` returns `Result<Self>` → `Error::InvalidSeed`; FFI maps to `FfiError::DecryptFailed` (6), never `Panic` (99). 3 unit tests + 2 integration tests.
-- [x] **Task 10.2** — `WalletManager` lock-poisoning recovery (#565). PR #571 in flight on branch `security-audit/task-10.2-argon2-outside-read-lock`. `read_map()` / `write_map()` helpers replace 9 `.expect("wallet manager lock poisoned")` sites. 3 new tests in `tests/wallet_manager_unlock_concurrent.rs`.
-
-**Open:**
-
-- [ ] **Task 10.3** — Narrow `Wallet::as_keypair` visibility to `pub(crate)` (#566).
-- [ ] **Task 10.4** — Document `sol_wallet_unlock` out_secret zeroize contract (#567).
-- [ ] **Task 10.5** — Enforce Solana message shape in `sol_wallet_sign_transaction` (#568).
-- [ ] **Task 10.6** — Switch `sol_wallet_send_spl` to `transfer_checked` (#569).
-- [ ] **Task 10.7** — Path-traversal guard in `WalletStorage::path_for` (issue TBD per owner directive — plan-only tracking).
+- [x] **Task 10.2** — `WalletManager` lock-poisoning recovery (#565). Merged via PR #571 / squash `e5108886`. `read_map()` / `write_map()` helpers replace 9 `.expect("wallet manager lock poisoned")` sites. Includes H1 follow-up: `import_from_pk_file` routes through `Wallet::from_base58` + `Zeroizing<String>` wrapper. 3 new tests + 1 unit test.
+- [x] **Task 10.3** — Narrow `Wallet::as_keypair` visibility to `pub(crate)` (#566). Merged via PR #572 / squash `a6ed6f75` (commit `abb123c6` originally). Acceptance pinned via `tests/wallet_as_keypair_external_reach.rs` gated on `cfg(negative_test)` + CI grep gate (PR #573 hardening + PR #574 grep ANSI fix).
+- [x] **Task 10.4** — Document `sol_wallet_unlock` out_secret zeroize contract (no GitHub issue per plan drift). Direct commit `55c80ebe` on `rust-sol-core` (2026-09-13). `sol_wallet_unlock` doc-comment expanded with caller zeroize contract + server-side discipline + known gaps.
+- [x] **Task 10.5** — Enforce Solana message shape in `sol_wallet_sign_transaction` (#567). Direct commit `17681fb5` → merged via `f37a4b12`. Refactored to `sign_serialized_solana_message` helper that parses `VersionedMessage` before signing. Arbitrary bytes return `FfiError::InvalidTransaction = 15`. 2 new unit tests (`rejects_arbitrary_bytes`, `accepts_valid_legacy_message`).
+- [x] **Task 10.6** — Switch `sol_wallet_send_spl` to `transfer_checked` (#569). Direct commit `7c7cf99b`. Fetches on-chain mint decimals via `chain::preflight::resolve_mint_decimals`, then builds `transfer_checked` ix. Closes silent-decimal-truncation gap. Required follow-up: 6 surfpool test files migrated from Anza SDK 3.x → 4.x (Signer trait + infallible Keypair::new) + 4 new test fixtures.
+- [x] **Task 10.7** — Path-traversal guard in `WalletStorage::path_for` (issue TBD per owner directive — plan-only tracking). Direct commit `6877c343`. New `Error::InvalidStorageName { name: String }` variant + `WalletStorage::validate_name` default trait method that rejects `..`, absolute paths, embedded separators, NUL bytes. `FileWalletStorage::put_atomic`/`get`/`delete` route through `validate_name(name)?` before filesystem write. 6 unit tests.
 
 **Replaces:** ad-hoc session tracking; from this commit forward, every Phase 10 audit task lands in this section via L13 per-task pipeline.
+
+**Closed (all 7 tasks):** Phase 10 Security Audit is complete as of 2026-09-13. Branch convention: `security-audit/task-10.X-<slug>`; PR base `rust-sol-core`. Post-merge ECC security review follow-ups (M1 ffi.rs global mutexes → commit `5f62b37c`) also landed in this branch.
 
 ---
 
