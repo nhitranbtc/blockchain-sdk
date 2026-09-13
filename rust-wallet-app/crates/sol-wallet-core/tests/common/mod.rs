@@ -5,6 +5,12 @@
 // the others. Allow dead_code crate-wide for this fixture.
 #![allow(dead_code)]
 
+// -- Submodules (Phase 7.1c / 7.2 surfpool fixtures) --
+pub mod faucet;
+pub mod keypair_fixture;
+pub mod mock_spl_usdc;
+pub mod surfpool_spawn;
+
 // -- Devnet-gated send-test constants + helpers -------------------------------
 //
 // Shared by `tests/submit_devnet_send.rs` (and any future devnet-gated

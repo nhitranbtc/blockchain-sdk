@@ -958,16 +958,31 @@ pub extern "C" fn sol_wallet_send_spl(
             spl_associated_token_account::get_associated_token_address(&from_pubkey, &mint_pubkey);
         let dest_ata =
             spl_associated_token_account::get_associated_token_address(&to_pubkey, &mint_pubkey);
-        // SPL transfer_checked requires decimals; we don't know it at FFI
-        // boundary. Use plain transfer (no decimals) which works for any
-        // mint. (transfer_checked ships in a follow-up PR.)
-        let ix = spl_token::instruction::transfer(
+        // Phase 10 Security Audit Task 10.6 / #569 — fetch the
+        // on-chain mint's decimals so we can build a `transfer_checked`
+        // ix. The runtime validates the on-chain decimals match the
+        // `decimals` argument passed here — closes the silent-decimal-
+        // truncation bug where a caller-supplied raw amount was sent
+        // as-is (unchecked `transfer`) instead of being checked against
+        // the mint's actual decimal precision.
+        let decimals = crate::chain::preflight::resolve_mint_decimals(&rpc, &mint_pubkey)
+            .await
+            .map_err(|e| {
+                set_last_error(&format!(
+                    "sol_wallet_send_spl: failed to resolve mint decimals ({})",
+                    e
+                ));
+                e
+            })?;
+        let ix = spl_token::instruction::transfer_checked(
             &spl_token::id(),
             &source_ata,
+            &mint_pubkey,
             &dest_ata,
             &from_pubkey,
             &[&from_pubkey],
             amount,
+            decimals,
         )
         .map_err(|_| FfiError::Unimplemented)?;
         let msg =
