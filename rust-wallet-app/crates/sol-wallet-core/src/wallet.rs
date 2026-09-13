@@ -58,10 +58,16 @@ impl Wallet {
     /// + 32 pubkey).
     ///
     /// Used by `WalletManager::unlock` after decrypting the at-rest blob.
-    pub(crate) fn from_bytes(bytes: &[u8; 64]) -> Self {
+    ///
+    /// Phase 10 / Task 10.1 — fallible, not panicking. A corrupted or
+    /// tampered blob whose decrypted 64 bytes fail `Keypair::try_from`
+    /// (all-zero secret, pubkey mismatch, off-curve scalar) returns
+    /// `Error::InvalidSeed` so callers + FFI can surface
+    /// `FfiError::DecryptFailed` (= 6) instead of `Panic` (= 99).
+    pub(crate) fn from_bytes(bytes: &[u8; 64]) -> Result<Self> {
         let keypair = solana_sdk::signature::Keypair::try_from(bytes.as_slice())
-            .expect("64-byte secret+pubkey serialization");
-        Self(keypair)
+            .map_err(|_| Error::InvalidSeed)?;
+        Ok(Self(keypair))
     }
     /// Phantom "Import secret phrase" — defaults to
     /// `m/44'/501'/0'/0'`.
@@ -341,4 +347,55 @@ fn array_from_slice_32(slice: &[u8]) -> &[u8; 32] {
     slice
         .try_into()
         .expect("caller must provide a 32-byte slice")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Phase 10 / Task 10.1 — `Wallet::from_bytes` must be fallible, not
+    // panic. Pre-fix the `.expect()` inside the fn triggered
+    // `FfiError::Panic = 99` at the FFI boundary, which (a) bypassed
+    // typed error handling and (b) risked process termination under
+    // `panic = "abort"` (release-mobile profile per ffi.rs H8).
+
+    #[test]
+    fn from_bytes_rejects_all_zero_secret() {
+        let bad = [0u8; 64];
+        let result = Wallet::from_bytes(&bad);
+        assert!(
+            matches!(result, Err(Error::InvalidSeed)),
+            "all-zero 64-byte serialization must surface as Error::InvalidSeed, not panic"
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_mismatched_pubkey() {
+        // Non-zero secret-side 32 bytes (avoid the all-zero short-circuit
+        // in ed25519-dalek's SigningKey::from_bytes) with a pubkey-side
+        // that doesn't match the derived pubkey. Keypair::try_from
+        // recomputes the pubkey from the secret and rejects on mismatch.
+        let mut bad = [0u8; 64];
+        for (i, b) in bad[..32].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_add(1);
+        }
+        let result = Wallet::from_bytes(&bad);
+        assert!(
+            matches!(result, Err(Error::InvalidSeed)),
+            "secret+pubkey mismatch must surface as Error::InvalidSeed, not panic"
+        );
+    }
+
+    #[test]
+    fn from_bytes_accepts_valid_keypair_round_trip() {
+        // Regression guard: the fallible refactor must still round-trip
+        // valid bytes produced by `Wallet::inner_bytes()`.
+        let wallet = Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("valid BIP-39 mnemonic");
+        let bytes = wallet.inner_bytes();
+        let reconstructed = Wallet::from_bytes(&bytes).expect("valid 64-byte serialization");
+        assert_eq!(reconstructed.public_key(), wallet.public_key());
+    }
 }
