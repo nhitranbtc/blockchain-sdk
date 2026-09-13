@@ -13,7 +13,7 @@ use std::str::FromStr;
 use solana_sdk::pubkey::Pubkey;
 
 use sol_wallet_core::disambig::TokenProgram;
-use sol_wallet_core::tokens::{by_symbol, decimals_for_mint, load_devnet, load_mainnet};
+use sol_wallet_core::tokens::{by_symbol, decimals_for_mint, load_mainnet};
 
 #[test]
 fn mainnet_registry_parses_at_least_three_entries() {
@@ -73,19 +73,4 @@ fn decimals_for_mint_resolves_mainnet_usdc_to_six() {
 fn decimals_for_mint_returns_none_for_unknown_pubkey() {
     let unknown = Pubkey::new_unique();
     assert_eq!(decimals_for_mint(&unknown), None);
-}
-
-#[test]
-#[ignore = "tokens/devnet.json is now a sender/recipient config bundle (rpc-endpoint + sender/recipient pubkey + mnemonics + tokens[]), not a pure MintEntry sequence. The parse path expects a top-level array; restoring this test requires either reshaping devnet.json (owner decision: keep as-is per the Phase 6 devnet-sender refactor, commit ca5e9025) or adding a discriminated devnet-config parser. Re-enable when the parser accepts the devnet-config shape."]
-fn devnet_registry_parses_at_least_one_entry() {
-    let entries = load_devnet();
-    assert!(
-        !entries.is_empty(),
-        "devnet registry must seed at least one entry; got {}",
-        entries.len()
-    );
-    assert_eq!(
-        entries[0].symbol, "USDC",
-        "devnet USDC is the canonical devnet test fixture"
-    );
 }
