@@ -131,11 +131,10 @@ pub async fn get_latest_blockhash(client: &RpcClient) -> Result<(Hash, u64)> {
         .parse::<Hash>()
         .map_err(|e| Error::Transport(format!("getLatestBlockhash: parse Hash: {e}")))?;
     let slot = raw
-        .get("value")
-        .and_then(|v| v.get("lastValidSlot"))
+        .get("context")
+        .and_then(|c| c.get("slot"))
         .and_then(|v| v.as_u64())
-        .or_else(|| raw.get("slot").and_then(|v| v.as_u64()))
-        .ok_or_else(|| Error::Transport("getLatestBlockhash: missing slot".to_string()))?;
+        .ok_or_else(|| Error::Transport("getLatestBlockhash: missing context.slot".to_string()))?;
     Ok((hash, slot))
 }
 
@@ -144,14 +143,33 @@ pub async fn get_latest_blockhash(client: &RpcClient) -> Result<(Hash, u64)> {
 // =============================================================================
 /// Submit a signed transaction; returns the first signature.
 pub async fn send_transaction(client: &RpcClient, tx: &Transaction) -> Result<Signature> {
+    send_transaction_with_options(client, tx, json!({"encoding": "base64"})).await
+}
+
+/// Submit a signed `Transaction` with explicit `sendTransaction` options
+/// (e.g. `{"encoding": "base64", "replaceRecentBlockhash": true}`).
+///
+/// The library's 2-arg `send_transaction` uses a fixed options payload.
+/// Use this overload when the cluster requires `replaceRecentBlockhash`
+/// (devnet/testnet validators may have inconsistent views of the recent
+/// blockhash).
+pub async fn send_transaction_with_options(
+    client: &RpcClient,
+    tx: &Transaction,
+    options: Value,
+) -> Result<Signature> {
     // Tier 2 finding #8: bincode wire format with `bincode::config::legacy()`
     // for Anza RPC server compatibility. The version is pinned to 1.3.3 in
     // workspace dependencies.
-    let wire = bincode::serialize(tx)
+    //
+    // Anza RPC `sendTransaction` expects `VersionedTransaction` (legacy is
+    // wrapped as `VersionedTransaction::Legacy`). Wrap before serialize.
+    let versioned = solana_sdk::transaction::VersionedTransaction::from(tx.clone());
+    let wire = bincode::serialize(&versioned)
         .map_err(|e| Error::Transport(format!("sendTransaction: bincode serialize: {e}")))?;
     let wire_b64 = BASE64.encode(&wire);
     let raw: Value = client
-        .post("sendTransaction", json!([wire_b64, {"encoding": "base64"}]))
+        .post("sendTransaction", json!([wire_b64, options]))
         .await?;
     let sig_str = raw
         .as_str()

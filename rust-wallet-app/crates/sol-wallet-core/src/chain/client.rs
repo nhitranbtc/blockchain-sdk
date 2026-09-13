@@ -146,7 +146,6 @@ impl Default for BlockhashCache {
 /// returns. `id` is a monotonic counter inside `RpcClient` to detect
 /// replayed responses (defense against HTTP smuggling).
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct RpcResponse<T> {
     #[allow(dead_code)]
     jsonrpc: String,
@@ -157,7 +156,6 @@ struct RpcResponse<T> {
 
 /// JSON-RPC response envelope (error path).
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 struct RpcErrorEnvelope {
     #[allow(dead_code)]
     jsonrpc: String,
@@ -168,7 +166,6 @@ struct RpcErrorEnvelope {
 
 /// JSON-RPC error object.
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct RpcError {
     /// JSON-RPC error code (e.g. -32000 for server error, -32003 for
     /// Solana devnet "airdrop limit").
@@ -228,6 +225,47 @@ impl std::fmt::Debug for RpcClient {
 }
 
 impl RpcClient {
+    /// Raw POST that returns the JSON-RPC response as `serde_json::Value`
+    /// without attempting to deserialize into a typed envelope.
+    ///
+    /// Use for endpoints whose `result` is not a JSON object (e.g.
+    /// `sendTransaction` returns a bare base58 sig string).
+    pub async fn post_raw(&self, method: &str, params: Value) -> Result<Value> {
+        self.rate_limiter.acquire(&self.host).await?;
+
+        let id = {
+            let mut counter = self.id_counter.lock().expect("id counter mutex poisoned");
+            *counter = counter.wrapping_add(1);
+            *counter
+        };
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        let resp = self
+            .http
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Transport(format!("RPC POST {method}: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Transport(format!(
+                "RPC POST {method} returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| Error::Transport(format!("RPC POST {method} body decode: {e}")))
+    }
+
     /// Construct a new RpcClient with default rate limiter (50 req/s, burst 100)
     /// and default request timeout (30s).
     ///
