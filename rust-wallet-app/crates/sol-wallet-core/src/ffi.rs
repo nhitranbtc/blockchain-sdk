@@ -189,6 +189,36 @@ static MANAGER: std::sync::OnceLock<
 /// send_sol/send_spl/get_balance call.
 static RPC_URL: std::sync::OnceLock<std::sync::Mutex<Option<String>>> = std::sync::OnceLock::new();
 
+/// Acquire the global `MANAGER` lock with poison recovery (same
+/// pattern as `WalletManager::read_map` / `write_map` — see Task
+/// 10.2 / PR #571 / #573 follow-up). Returning a guard from a
+/// poisoned mutex via `into_inner()` means a caller panic no longer
+/// cascades to `FfiError::Panic = 99` on every subsequent FFI call.
+fn lock_manager(
+    mutex: &std::sync::Mutex<
+        Option<
+            std::sync::Arc<
+                crate::wallet_manager::WalletManager<crate::platform::storage::FileWalletStorage>,
+            >,
+        >,
+    >,
+) -> std::sync::MutexGuard<
+    '_,
+    Option<
+        std::sync::Arc<
+            crate::wallet_manager::WalletManager<crate::platform::storage::FileWalletStorage>,
+        >,
+    >,
+> {
+    mutex.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Acquire the global `RPC_URL` lock with the same poison-recovery
+/// discipline as `lock_manager`.
+fn lock_rpc(mutex: &std::sync::Mutex<Option<String>>) -> std::sync::MutexGuard<'_, Option<String>> {
+    mutex.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Lazily build a single-threaded tokio runtime for async RPC calls
 /// from the sync FFI surface. Reused across calls.
 fn rpc_runtime() -> &'static tokio::runtime::Runtime {
@@ -213,7 +243,7 @@ where
         set_last_error("sol_wallet: manager not initialized — call sol_wallet_init first");
         FfiError::NotInitialized
     })?;
-    let guard = mutex.lock().expect("manager mutex poisoned");
+    let guard = lock_manager(mutex);
     let mgr = guard.as_ref().ok_or(FfiError::NotInitialized)?;
     f(mgr)
 }
@@ -245,7 +275,7 @@ pub extern "C" fn sol_wallet_init(data_dir: *const c_char, data_dir_len: usize) 
         }
     };
     let mutex = MANAGER.get_or_init(|| std::sync::Mutex::new(None));
-    let mut guard = mutex.lock().expect("manager mutex poisoned");
+    let mut guard = lock_manager(mutex);
     if guard.is_some() {
         return FfiError::Ok.code();
     }
@@ -262,7 +292,7 @@ pub extern "C" fn sol_wallet_set_rpc(url: *const c_char, url_len: usize) -> i32 
         Err(e) => return e.code(),
     };
     let mutex = RPC_URL.get_or_init(|| std::sync::Mutex::new(None));
-    *mutex.lock().expect("rpc url mutex") = Some(url_str);
+    *lock_rpc(mutex) = Some(url_str);
     FfiError::Ok.code()
 }
 
@@ -784,7 +814,7 @@ pub extern "C" fn sol_wallet_send_sol(
     let _ = priority_fee; // H8 + audit: accepted but not yet applied to tx
 
     let rpc_url = match RPC_URL.get() {
-        Some(m) => m.lock().expect("rpc url mutex").clone(),
+        Some(m) => lock_rpc(m).clone(),
         None => {
             set_last_error("sol_wallet_send_sol: RPC URL not set — call sol_wallet_set_rpc first");
             return FfiError::NotInitialized.code();
@@ -907,7 +937,7 @@ pub extern "C" fn sol_wallet_send_spl(
         Err(e) => return e.code(),
     };
     let rpc_url = match RPC_URL.get() {
-        Some(m) => m.lock().expect("rpc url mutex").clone(),
+        Some(m) => lock_rpc(m).clone(),
         None => return FfiError::NotInitialized.code(),
     };
     let rpc_url = match rpc_url {
@@ -1037,7 +1067,7 @@ pub extern "C" fn sol_wallet_get_balance_sol(
         Err(e) => return e.code(),
     };
     let rpc_url = match RPC_URL.get() {
-        Some(m) => m.lock().expect("rpc url mutex").clone(),
+        Some(m) => lock_rpc(m).clone(),
         None => {
             set_last_error(
                 "sol_wallet_get_balance_sol: RPC URL not set — call sol_wallet_set_rpc first",
@@ -1109,7 +1139,7 @@ pub extern "C" fn sol_wallet_get_balance_spl(
         Err(e) => return e.code(),
     };
     let rpc_url = match RPC_URL.get() {
-        Some(m) => m.lock().expect("rpc url mutex").clone(),
+        Some(m) => lock_rpc(m).clone(),
         None => {
             set_last_error(
                 "sol_wallet_get_balance_spl: RPC URL not set — call sol_wallet_set_rpc first",
