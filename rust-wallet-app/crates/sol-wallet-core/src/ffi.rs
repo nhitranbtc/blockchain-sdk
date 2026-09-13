@@ -696,12 +696,58 @@ pub extern "C" fn sol_wallet_sign_transaction(
             return FfiError::DecryptFailed.code();
         }
     };
-    let sig = wallet.sign_message(msg_slice);
+    let sig = match sign_serialized_solana_message(&wallet, msg_slice) {
+        Ok(s) => s,
+        Err(e) => {
+            set_last_error(&format!(
+                "sol_wallet_sign_transaction: input is not a valid Solana message ({})",
+                e
+            ));
+            return FfiError::InvalidTransaction.code();
+        }
+    };
     let sig_bytes = sig.as_ref();
     unsafe {
         std::ptr::copy_nonoverlapping(sig_bytes.as_ptr(), out_sig, SIG_BYTES);
     }
     FfiError::Ok.code()
+}
+
+/// Parse the input bytes as a Solana `VersionedMessage` and sign
+/// the serialized form. Refuses arbitrary bytes that do not
+/// deserialize as a Solana message — closes the audit #567 domain
+/// separation gap (wallet no longer signs "Sign in to attacker.example"
+/// strings; only Solana-message-shaped inputs are accepted).
+///
+/// # Wire format
+///
+/// Solana `VersionedMessage` is serialized as either:
+/// - **Legacy** (`Message`): no prefix byte — direct
+///   `bincode::deserialize::<Message>`.
+/// - **V0**: `0x80` prefix byte + bincode-serialized
+///   `Message::V0` (legacy-compatible fields + `MessageAddressTableLookup`s).
+///
+/// The first byte discriminates. Any other shape returns
+/// `InvalidMessage`.
+///
+/// Returns the 64-byte Ed25519 signature.
+fn sign_serialized_solana_message(
+    wallet: &crate::wallet::Wallet,
+    msg_bytes: &[u8],
+) -> Result<solana_sdk::signature::Signature, String> {
+    use solana_sdk::message::v0 as solana_message_v0;
+    use solana_sdk::message::VersionedMessage;
+    const V0_PREFIX: u8 = 0x80;
+    let message = if msg_bytes.first() == Some(&V0_PREFIX) {
+        let v0 = bincode::deserialize::<solana_message_v0::Message>(&msg_bytes[1..])
+            .map_err(|e| format!("V0 Message bincode decode failed: {e}"))?;
+        VersionedMessage::V0(v0)
+    } else {
+        let legacy = bincode::deserialize::<solana_sdk::message::Message>(msg_bytes)
+            .map_err(|e| format!("legacy Message bincode decode failed: {e}"))?;
+        VersionedMessage::Legacy(legacy)
+    };
+    Ok(wallet.sign_message(&message.serialize()))
 }
 
 /// `sol_wallet_send_sol` — Step 8 real impl.
@@ -1304,5 +1350,70 @@ mod tests {
         let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr().cast::<c_char>()) };
         assert_eq!(s.to_str().unwrap(), "hello FFI");
         clear_last_error();
+    }
+
+    /// Phase 10 Task 10.5 / audit #567 — `sign_serialized_solana_message`
+    /// refuses arbitrary bytes that do not deserialize as a Solana
+    /// message. A malformed input MUST return `Err` (not panic, not
+    /// silently sign).
+    #[test]
+    fn sign_serialized_solana_message_rejects_arbitrary_bytes() {
+        let wallet = crate::wallet::Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon about",
+        )
+        .expect("mnemonic");
+
+        // "Sign in to attacker.example" — the exact attack pattern
+        // described in audit #567.
+        let evil = b"Sign in to attacker.example: 1731532800";
+        let result = sign_serialized_solana_message(&wallet, evil);
+        assert!(result.is_err(), "arbitrary bytes MUST NOT sign");
+
+        // Empty input.
+        let result = sign_serialized_solana_message(&wallet, &[]);
+        assert!(result.is_err(), "empty bytes MUST NOT sign");
+
+        // 0x80 prefix but truncated V0 body.
+        let result = sign_serialized_solana_message(&wallet, &[0x80, 0x01, 0x02, 0x03]);
+        assert!(result.is_err(), "truncated V0 bytes MUST NOT sign");
+
+        // Legacy prefix-shaped bytes but garbage body.
+        let garbage_legacy = b"\xff\xff\xff\xff\xff\xff\xff\xff\xff";
+        let result = sign_serialized_solana_message(&wallet, garbage_legacy);
+        assert!(result.is_err(), "garbage legacy-shape bytes MUST NOT sign");
+    }
+
+    /// Phase 10 Task 10.5 / audit #567 — valid Solana message bytes
+    /// MUST sign successfully (round-trip).
+    #[test]
+    fn sign_serialized_solana_message_accepts_valid_legacy_message() {
+        use solana_sdk::message::Message;
+        use solana_sdk::pubkey::Pubkey;
+        use solana_system_interface::instruction as system_instruction;
+
+        let wallet = crate::wallet::Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon \
+             abandon abandon abandon about",
+        )
+        .expect("mnemonic");
+        let wallet_pubkey = wallet.public_key();
+
+        // Build a minimal SOL transfer message; the wallet is the
+        // fee payer.
+        let recipient = Pubkey::from_str_const("GSKYBnM2NeGT3ckfMAqEDkRxtgD9bZrcMxPwtiNgG6aj");
+        let ix = system_instruction::transfer(&wallet_pubkey, &recipient, 1_000);
+        let msg = Message::new(&[ix], Some(&wallet_pubkey));
+        let msg_bytes = msg.serialize();
+
+        let result = sign_serialized_solana_message(&wallet, &msg_bytes);
+        let sig = result.expect("valid Solana message MUST sign");
+
+        // Verify the signature against the message + wallet pubkey.
+        let sig_ok = sig.verify(&wallet_pubkey.to_bytes(), &msg_bytes);
+        assert!(
+            sig_ok,
+            "signed signature must verify against the wallet pubkey"
+        );
     }
 }
