@@ -184,13 +184,19 @@ jobs:
             echo "Audit #566 contract violated: Wallet::as_keypair is reachable from external crates."
             exit 1
           fi
-          # Anchor on the literal expected error string so a different
-          # E0624 (e.g. about a different private method) doesn't
-          # silently satisfy the gate (post-merge ECC review finding:
-          # parser-validator-differential).
-          if ! grep -qF 'error[E0624]: method `as_keypair` is private' /tmp/negative_test.log; then
-            echo "FAIL: expected literal 'error[E0624]: method \`as_keypair\` is private' not found in compiler output."
+          # Anchor on `E0624 ... as_keypair` so a different E0624
+          # (e.g. about a different private method) doesn't silently
+          # satisfy the gate (post-merge ECC review finding:
+          # parser-validator-differential). The `.*` matches across
+          # the ANSI color codes cargo emits around the error line,
+          # which vary by toolchain version and shell terminal mode
+          # — a literal backtick match (the prior attempt) broke
+          # because some envs emit different escape sequences.
+          if ! grep -qE 'E0624.*as_keypair' /tmp/negative_test.log; then
+            echo "FAIL: expected E0624 about as_keypair not found in compiler output."
             echo "Audit #566 gate is mis-targeted: the compile failure is not about as_keypair visibility."
+            echo "Captured log:"
+            cat /tmp/negative_test.log
             exit 1
           fi
           echo "PASS: negative test correctly failed with E0624 as expected."
