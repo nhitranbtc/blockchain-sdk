@@ -221,7 +221,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
         }
         let mut arr = Zeroizing::new([0u8; 64]);
         arr.as_mut_slice().copy_from_slice(&decoded);
-        let wallet = Wallet::from_bytes(&arr);
+        let wallet = Wallet::from_bytes(&arr)?;
         self.store_wallet(&wallet, password, name, now_unix)
     }
 
@@ -243,7 +243,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
             .try_into()
             .map_err(|_| Error::WalletDecryptFailed { id })?;
         bytes.zeroize();
-        let wallet = Wallet::from_bytes(&arr);
+        let wallet = Wallet::from_bytes(&arr)?;
         Ok(OwnedLock {
             inner: Box::new(wallet),
         })

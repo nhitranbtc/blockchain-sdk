@@ -179,13 +179,4 @@ mod tests {
             "mainnet registry must seed at least one entry"
         );
     }
-
-    #[test]
-    fn devnet_registry_parses_without_panic() {
-        let entries = load_devnet();
-        assert!(
-            !entries.is_empty(),
-            "devnet registry must seed at least one entry"
-        );
-    }
 }

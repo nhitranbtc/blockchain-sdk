@@ -146,6 +146,7 @@ impl Default for BlockhashCache {
 /// returns. `id` is a monotonic counter inside `RpcClient` to detect
 /// replayed responses (defense against HTTP smuggling).
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct RpcResponse<T> {
     #[allow(dead_code)]
     jsonrpc: String,
@@ -156,6 +157,7 @@ struct RpcResponse<T> {
 
 /// JSON-RPC response envelope (error path).
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 struct RpcErrorEnvelope {
     #[allow(dead_code)]
     jsonrpc: String,
@@ -166,6 +168,7 @@ struct RpcErrorEnvelope {
 
 /// JSON-RPC error object.
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RpcError {
     /// JSON-RPC error code (e.g. -32000 for server error, -32003 for
     /// Solana devnet "airdrop limit").
@@ -445,5 +448,92 @@ impl RpcClient {
     /// Stored SPKI pin (if any), as DER bytes.
     pub fn pinned_spki(&self) -> Option<&SpkiDer> {
         self.pinned_spki.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tier 2 finding #7 — typed JSON-RPC envelopes must reject unknown
+    //! fields so a future server-side field addition becomes a loud
+    //! parse error rather than a silent `None` / ignored field.
+    //!
+    //! Each of `RpcResponse<T>`, `RpcErrorEnvelope`, and `RpcError` is
+    //! covered: a JSON object with one extra field must fail to
+    //! deserialize, proving the `#[serde(deny_unknown_fields)]`
+    //! attribute is in place.
+
+    use super::*;
+
+    #[test]
+    fn rpc_response_rejects_unknown_field() {
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "result": {"some": "value"},
+            "extra_unknown_field": "BAD",
+        });
+        let parsed: std::result::Result<RpcResponse<serde_json::Value>, _> =
+            serde_json::from_value(raw);
+        assert!(
+            parsed.is_err(),
+            "RpcResponse must reject unknown fields per Tier 2 #7 — silently ignoring fields hides Solana-side protocol drift"
+        );
+    }
+
+    #[test]
+    fn rpc_error_envelope_rejects_unknown_field() {
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "error": {"code": -32000, "message": "fail"},
+            "extra_unknown_field": "BAD",
+        });
+        let parsed: std::result::Result<RpcErrorEnvelope, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_err(),
+            "RpcErrorEnvelope must reject unknown fields per Tier 2 #7"
+        );
+    }
+
+    #[test]
+    fn rpc_error_rejects_unknown_field() {
+        let raw = serde_json::json!({
+            "code": -32000,
+            "message": "fail",
+            "data": "BAD",
+        });
+        let parsed: std::result::Result<RpcError, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_err(),
+            "RpcError must reject unknown fields per Tier 2 #7"
+        );
+    }
+
+    #[test]
+    fn rpc_response_accepts_well_formed_envelope() {
+        // Regression guard: deny_unknown_fields must not reject the
+        // canonical JSON-RPC 2.0 success shape.
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "result": {"value": 42},
+        });
+        let parsed: std::result::Result<RpcResponse<serde_json::Value>, _> =
+            serde_json::from_value(raw);
+        assert!(parsed.is_ok(), "well-formed envelope must parse cleanly");
+    }
+
+    #[test]
+    fn rpc_error_envelope_accepts_well_formed_envelope() {
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "error": {"code": -32000, "message": "fail"},
+        });
+        let parsed: std::result::Result<RpcErrorEnvelope, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_ok(),
+            "well-formed error envelope must parse cleanly"
+        );
     }
 }

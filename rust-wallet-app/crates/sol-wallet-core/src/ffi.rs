@@ -110,6 +110,11 @@ pub enum FfiError {
     /// Process-global `WalletManager` not yet initialized — caller must
     /// call `sol_wallet_init` before any other FFI call.
     NotInitialized = 14,
+    /// `VersionedTransaction::try_new` rejected the message shape
+    /// (`SignerError::TooManySigners`, `NotEnoughSigners`,
+    /// `KeypairPubkeyMismatch`, etc.). Distinguishes real tx-construction
+    /// failures from `FfiError::Unimplemented = 98` ("feature not built").
+    InvalidTransaction = 15,
     /// Not yet implemented (interim stub for Steps 2-10 — real impl lands
     /// in subsequent PRs per plan Task 8.1).
     Unimplemented = 98,
@@ -130,6 +135,16 @@ impl From<Error> for FfiError {
         match e {
             Error::WalletNotFound(_) => FfiError::WalletNotFound,
             Error::WalletDecryptFailed { .. } => FfiError::DecryptFailed,
+            // Phase 10 / Task 10.1 — `Wallet::from_bytes` rejected the
+            // 64-byte secret+pubkey serialization. Surface as
+            // `DecryptFailed` (= 6), never `Panic` (= 99). The audit
+            // finding tracked this as issue #564.
+            Error::InvalidSeed => FfiError::DecryptFailed,
+            // Phase 10 / security audit follow-up — `Wallet::try_build_versioned_transaction`
+            // rejected the message shape. Distinguishes real
+            // tx-construction failures from "feature not yet
+            // implemented" (`FfiError::Unimplemented = 98`).
+            Error::InvalidTransaction(_) => FfiError::InvalidTransaction,
             Error::InsufficientFunds { .. } => FfiError::InsufficientFunds,
             Error::Transport(_) => FfiError::Transport,
             Error::Rpc { .. } => FfiError::Rpc,
@@ -604,7 +619,16 @@ pub extern "C" fn sol_wallet_sign_transaction(
     }
     let mut arr = [0u8; 64];
     arr.copy_from_slice(&all_bytes[..64]);
-    let wallet = crate::wallet::Wallet::from_bytes(&arr);
+    let wallet = match crate::wallet::Wallet::from_bytes(&arr) {
+        Ok(w) => w,
+        Err(e) => {
+            set_last_error(&format!(
+                "sol_wallet_sign_transaction: cached secret rejected — {}",
+                e
+            ));
+            return FfiError::DecryptFailed.code();
+        }
+    };
     let sig = wallet.sign_message(msg_slice);
     let sig_bytes = sig.as_ref();
     unsafe {
@@ -681,7 +705,16 @@ pub extern "C" fn sol_wallet_send_sol(
         let blockhash: solana_sdk::hash::Hash = bh_str.parse().map_err(|_| FfiError::Transport)?;
         let mut arr = [0u8; 64];
         arr.copy_from_slice(&all_bytes[..64]);
-        let wallet = crate::wallet::Wallet::from_bytes(&arr);
+        let wallet = match crate::wallet::Wallet::from_bytes(&arr) {
+            Ok(w) => w,
+            Err(e) => {
+                set_last_error(&format!(
+                    "sol_wallet_send_sol: cached secret rejected — {}",
+                    e
+                ));
+                return Err(FfiError::DecryptFailed);
+            }
+        };
         let from_pubkey = wallet.public_key();
         let to_pubkey: solana_sdk::pubkey::Pubkey =
             to_str.parse().map_err(|_| FfiError::InvalidUtf8)?;
@@ -692,12 +725,8 @@ pub extern "C" fn sol_wallet_send_sol(
         );
         let msg =
             solana_sdk::message::Message::new_with_blockhash(&[ix], Some(&from_pubkey), &blockhash);
-        let keypair = wallet.as_keypair();
-        let tx = solana_sdk::transaction::VersionedTransaction::try_new(
-            solana_sdk::message::VersionedMessage::Legacy(msg),
-            &[keypair],
-        )
-        .map_err(|_| FfiError::Unimplemented)?;
+        let tx = wallet
+            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))?;
         let signed_tx = wallet
             .sign_transaction(tx)
             .map_err(|_| FfiError::Unimplemented)?;
@@ -796,7 +825,16 @@ pub extern "C" fn sol_wallet_send_spl(
             .ok_or(FfiError::Transport)?;
         let mut arr = [0u8; 64];
         arr.copy_from_slice(&all_bytes[..64]);
-        let wallet = crate::wallet::Wallet::from_bytes(&arr);
+        let wallet = match crate::wallet::Wallet::from_bytes(&arr) {
+            Ok(w) => w,
+            Err(e) => {
+                set_last_error(&format!(
+                    "sol_wallet_send_spl: cached secret rejected — {}",
+                    e
+                ));
+                return Err(FfiError::DecryptFailed);
+            }
+        };
         let from_pubkey = wallet.public_key();
         let mint_pubkey: solana_sdk::pubkey::Pubkey =
             mint_str.parse().map_err(|_| FfiError::InvalidUtf8)?;
@@ -821,12 +859,8 @@ pub extern "C" fn sol_wallet_send_spl(
         .map_err(|_| FfiError::Unimplemented)?;
         let msg =
             solana_sdk::message::Message::new_with_blockhash(&[ix], Some(&from_pubkey), &blockhash);
-        let keypair = wallet.as_keypair();
-        let tx = solana_sdk::transaction::VersionedTransaction::try_new(
-            solana_sdk::message::VersionedMessage::Legacy(msg),
-            &[keypair],
-        )
-        .map_err(|_| FfiError::Unimplemented)?;
+        let tx = wallet
+            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))?;
         let signed_tx = wallet
             .sign_transaction(tx)
             .map_err(|_| FfiError::Unimplemented)?;

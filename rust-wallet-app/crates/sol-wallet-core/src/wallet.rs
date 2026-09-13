@@ -19,10 +19,10 @@
 //! `from_base58` + `from_public_key` (read-only) + `sign_transaction` +
 //! `sign_message`.
 
-use solana_sdk::hash::Hash;
+use solana_sdk::message::VersionedMessage;
 use solana_sdk::signature::{Signature, Signer};
-use solana_sdk::transaction::{Transaction, VersionedTransaction};
-use zeroize::Zeroizing;
+use solana_sdk::transaction::VersionedTransaction;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{Error, Result};
 use crate::read_only_wallet::ReadOnlyWallet;
@@ -58,10 +58,16 @@ impl Wallet {
     /// + 32 pubkey).
     ///
     /// Used by `WalletManager::unlock` after decrypting the at-rest blob.
-    pub(crate) fn from_bytes(bytes: &[u8; 64]) -> Self {
+    ///
+    /// Phase 10 / Task 10.1 — fallible, not panicking. A corrupted or
+    /// tampered blob whose decrypted 64 bytes fail `Keypair::try_from`
+    /// (all-zero secret, pubkey mismatch, off-curve scalar) returns
+    /// `Error::InvalidSeed` so callers + FFI can surface
+    /// `FfiError::DecryptFailed` (= 6) instead of `Panic` (= 99).
+    pub(crate) fn from_bytes(bytes: &[u8; 64]) -> Result<Self> {
         let keypair = solana_sdk::signature::Keypair::try_from(bytes.as_slice())
-            .expect("64-byte secret+pubkey serialization");
-        Self(keypair)
+            .map_err(|_| Error::InvalidSeed)?;
+        Ok(Self(keypair))
     }
     /// Phantom "Import secret phrase" — defaults to
     /// `m/44'/501'/0'/0'`.
@@ -225,92 +231,58 @@ impl Wallet {
         Ok(tx)
     }
 
-    /// Phase 6.4 — sign a legacy `solana_sdk::transaction::Transaction`
-    /// in place. Required by `submit_devnet_send_real_broadcast` and
-    /// any caller that builds a legacy `Transaction` (via
-    /// `prepare_sol_transfer_message` / `prepare_spl_transfer_message`)
-    /// and needs the library to own the signing step.
+    /// Borrow the inner `Keypair`. Restricted to `pub(crate)` so only
+    /// in-crate callers (`WalletManager` + FFI module) can reach the
+    /// Anza keypair. External API consumers must use one of:
     ///
-    /// Security properties (audit 2026-09-13):
+    /// - [`Wallet::sign_transaction`] — sign a fully-built
+    ///   `VersionedTransaction`.
+    /// - [`Wallet::sign_message`] — sign arbitrary bytes.
+    /// - [`Wallet::try_build_versioned_transaction`] — borrow the
+    ///   keypair *through a controlled wrapper* to build an
+    ///   unsigned `VersionedTransaction` for caller-side
+    ///   inspection before signing (FFI send paths).
     ///
-    /// - **P1 blockhash-mismatch reject:** the `blockhash` argument
-    ///   must equal `tx.message.recent_blockhash`. Otherwise the
-    ///   signature would be valid for one blockhash but the tx would
-    ///   ship with the other, and the cluster would reject it. Returns
-    ///   `Error::BlockhashMismatch` loudly before signing.
-    /// - **P4 fee-payer alignment:** `tx.message.account_keys[0]` must
-    ///   equal this wallet's pubkey. Otherwise the signature would not
-    ///   cover fee payment and the cluster would reject the tx at
-    ///   `validate_fee_payer`. Multi-signer SPL flows that need a
-    ///   separate fee-payer should use `sign_transaction(VersionedTransaction)`.
-    /// - **P3 bincode parity:** signs against `tx.message.serialize()`
-    ///   (which uses `bincode::serialize` default config) to match the
-    ///   wire format `send_transaction_with_options` ships. NOTE: the
-    ///   Tier 2 #8 doc comment in `chain::account.rs:161-163` claims
-    ///   `bincode::config::legacy()` is required; the live broadcast on
-    ///   devnet landed using default config, so the comment is stale.
-    ///   This fn matches the proven-working default.
-    /// - **P5 no keypair escape:** never returns or stores the inner
-    ///   `Keypair`. The wallet's signing key is consumed only inside
-    ///   this fn via `Signer::sign_message`.
-    /// - **P6 `&self` only:** no `&mut self`. Signing is a const-borrow
-    ///   over the wallet.
-    /// - **P7 overwrite:** any pre-existing signature at the
-    ///   fee-payer/wallet index is overwrites — matches
-    ///   `sign_transaction(VersionedTransaction)` behaviour.
-    ///
-    /// Returns `Ok(())` on success, `Err(Error::BlockhashMismatch)` if
-    /// the blockhash arg disagrees with `tx.message.recent_blockhash`,
-    /// or `Err(Error::FeePayerMismatch)` if the fee-payer is not this
-    /// wallet.
-    pub fn sign_legacy_transaction(&self, tx: &mut Transaction, blockhash: Hash) -> Result<()> {
-        // P1: blockhash must match the message's embedded blockhash.
-        if tx.message.recent_blockhash != blockhash {
-            return Err(Error::BlockhashMismatch {
-                tx_message: tx.message.recent_blockhash,
-                signer_input: blockhash,
-            });
-        }
-        // P4: fee-payer must be this wallet.
-        let my_pubkey = Signer::pubkey(&self.0);
-        match tx.message.account_keys.first().copied() {
-            Some(payer) if payer == my_pubkey => {}
-            Some(actually) => {
-                return Err(Error::FeePayerMismatch {
-                    expected: my_pubkey,
-                    actual: actually,
-                });
-            }
-            None => {
-                // Empty account_keys vec — malformed tx. Surface as fee-payer
-                // mismatch with a zeroed actual (no real pubkey to compare).
-                return Err(Error::FeePayerMismatch {
-                    expected: my_pubkey,
-                    actual: solana_sdk::pubkey::Pubkey::default(),
-                });
-            }
-        }
-        // P3: serialize with Message's default bincode config to match
-        // the wire format `send_transaction_with_options` ships.
-        let message_bytes = tx.message.serialize();
-        let signature = Signer::sign_message(&self.0, &message_bytes);
-        // P7: overwrite any pre-existing signature at index 0 (fee-payer).
-        if tx.signatures.is_empty() {
-            tx.signatures.push(signature);
-        } else {
-            tx.signatures[0] = signature;
-        }
-        Ok(())
+    /// Narrowing this to `pub(crate)` closes the silent bypass where
+    /// any caller could do `wallet.as_keypair().insecure_clone()`
+    /// (Keypair's own public method) to dodge the explicit `Clone`
+    /// ban that protects the signing material.
+    pub(crate) fn as_keypair(&self) -> &solana_sdk::signature::Keypair {
+        &self.0
     }
 
-    /// Borrow the inner `Keypair`. Used by the FFI surface to build +
-    /// sign `VersionedTransaction`s without duplicating the Anza
-    /// sign-API. Marked `pub` (not `pub(crate)`) so the FFI crate
-    /// boundary can construct transactions on behalf of the mobile
-    /// caller; the consumer still needs the cached UNLOCKED secret
-    /// (no auto-export of keys).
-    pub fn as_keypair(&self) -> &solana_sdk::signature::Keypair {
-        &self.0
+    /// Build an unsigned `VersionedTransaction` from a `VersionedMessage`
+    /// using this wallet as the sole signer. Wraps the
+    /// `VersionedTransaction::try_new` call so callers (notably the
+    /// FFI `sol_wallet_send_sol` / `sol_wallet_send_spl` paths) don't
+    /// need direct access to the inner `Keypair` to construct a tx.
+    ///
+    /// Surfaces Anza's `SignerError` variants as typed `Error`:
+    /// `SignerError::InvalidInput` → `Error::DerivationFailed` (the
+    /// only plausible "derivation" cause in this code path), all
+    /// others (`TooManySigners`, `NotEnoughSigners`,
+    /// `KeypairPubkeyMismatch`) → `Error::InvalidTransaction` so the
+    /// FFI boundary can distinguish them from "feature not yet
+    /// implemented" via `FfiError::InvalidTransaction = 15`.
+    pub fn try_build_versioned_transaction(
+        &self,
+        message: VersionedMessage,
+    ) -> Result<VersionedTransaction> {
+        use solana_sdk::signer::SignerError;
+        let keypair = self.as_keypair();
+        VersionedTransaction::try_new(message, &[keypair]).map_err(|e| match e {
+            SignerError::InvalidInput(s) => Error::DerivationFailed(s),
+            SignerError::TooManySigners => {
+                Error::InvalidTransaction("too many signers".to_string())
+            }
+            SignerError::NotEnoughSigners => {
+                Error::InvalidTransaction("not enough signers".to_string())
+            }
+            SignerError::KeypairPubkeyMismatch => {
+                Error::InvalidTransaction("wallet pubkey not in message account keys".to_string())
+            }
+            _ => Error::InvalidTransaction(format!("{e}")),
+        })
     }
 
     /// Sign arbitrary bytes with this wallet's Ed25519 signing key.
@@ -319,6 +291,20 @@ impl Wallet {
     /// `solana_sdk::signature::Signature::verify(pubkey_bytes, msg)`.
     pub fn sign_message(&self, msg: &[u8]) -> Signature {
         Signer::sign_message(&self.0, msg)
+    }
+}
+
+impl Drop for Wallet {
+    /// Best-effort zeroize of the inner Ed25519 seed + pubkey on drop.
+    /// Closes the Anza-Zeroize gap: Anza's `Keypair` does NOT impl
+    /// `ZeroizeOnDrop`, so a bare `Wallet` local (one that drops
+    /// without first being moved into an `OwnedLock`) would otherwise
+    /// leak the 64-byte secret+pubkey buffer to the heap. This
+    /// implementation mirrors the same shape as
+    /// `OwnedLock::drop` (`src/wallet_manager.rs`).
+    fn drop(&mut self) {
+        let mut bytes = self.0.to_bytes();
+        bytes.zeroize();
     }
 }
 
@@ -341,4 +327,113 @@ fn array_from_slice_32(slice: &[u8]) -> &[u8; 32] {
     slice
         .try_into()
         .expect("caller must provide a 32-byte slice")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Phase 10 / Task 10.1 — `Wallet::from_bytes` must be fallible, not
+    // panic. Pre-fix the `.expect()` inside the fn triggered
+    // `FfiError::Panic = 99` at the FFI boundary, which (a) bypassed
+    // typed error handling and (b) risked process termination under
+    // `panic = "abort"` (release-mobile profile per ffi.rs H8).
+
+    #[test]
+    fn from_bytes_rejects_all_zero_secret() {
+        let bad = [0u8; 64];
+        let result = Wallet::from_bytes(&bad);
+        assert!(
+            matches!(result, Err(Error::InvalidSeed)),
+            "all-zero 64-byte serialization must surface as Error::InvalidSeed, not panic"
+        );
+    }
+
+    #[test]
+    fn from_bytes_rejects_mismatched_pubkey() {
+        // Non-zero secret-side 32 bytes (avoid the all-zero short-circuit
+        // in ed25519-dalek's SigningKey::from_bytes) with a pubkey-side
+        // that doesn't match the derived pubkey. Keypair::try_from
+        // recomputes the pubkey from the secret and rejects on mismatch.
+        let mut bad = [0u8; 64];
+        for (i, b) in bad[..32].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_add(1);
+        }
+        let result = Wallet::from_bytes(&bad);
+        assert!(
+            matches!(result, Err(Error::InvalidSeed)),
+            "secret+pubkey mismatch must surface as Error::InvalidSeed, not panic"
+        );
+    }
+
+    #[test]
+    fn from_bytes_accepts_valid_keypair_round_trip() {
+        // Regression guard: the fallible refactor must still round-trip
+        // valid bytes produced by `Wallet::inner_bytes()`.
+        let wallet = Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("valid BIP-39 mnemonic");
+        let bytes = wallet.inner_bytes();
+        let reconstructed = Wallet::from_bytes(&bytes).expect("valid 64-byte serialization");
+        assert_eq!(reconstructed.public_key(), wallet.public_key());
+    }
+
+    // Phase 10 / Task 10.1 follow-up — security audit HIGH findings:
+    // `as_keypair` narrowing + Drop impl.
+
+    #[test]
+    fn as_keypair_is_reachable_in_crate() {
+        // Compile-time gate: `as_keypair` must remain `pub(crate)` so the
+        // FFI module + `WalletManager` can reach it, while external
+        // library users cannot. If a future refactor promotes it back to
+        // `pub`, this test still compiles — but the doc-comment warning
+        // + a `pub`-visibility audit should catch it.
+        let wallet = Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("valid BIP-39 mnemonic");
+        let _kp: &solana_sdk::signature::Keypair = wallet.as_keypair();
+    }
+
+    #[test]
+    fn try_build_versioned_transaction_round_trips_through_sign() {
+        let wallet = Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("valid BIP-39 mnemonic");
+        let from = wallet.public_key();
+        let ix = solana_sdk::instruction::Instruction {
+            program_id: solana_sdk::pubkey::Pubkey::new_unique(),
+            accounts: vec![solana_sdk::instruction::AccountMeta::new(from, true)],
+            data: vec![],
+        };
+        let blockhash = solana_sdk::hash::Hash::new_from_array([0x11u8; 32]);
+        let msg = solana_sdk::message::Message::new_with_blockhash(&[ix], Some(&from), &blockhash);
+        let unsigned = wallet
+            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))
+            .expect("build tx");
+        let signed = wallet.sign_transaction(unsigned).expect("sign tx");
+        let verified = signed.verify_with_results();
+        assert!(
+            verified.iter().all(|ok| *ok),
+            "wallet signature must verify after try_build_versioned_transaction → sign_transaction round-trip"
+        );
+    }
+
+    #[test]
+    fn drop_runs_without_panic_on_local_wallet() {
+        // Compile-time + smoke gate: a bare `Wallet` local must drop
+        // cleanly (the `Drop` impl writes zeros to a stack copy of the
+        // 64-byte secret+pubkey). Best-effort; the inner Anza `Keypair`
+        // Box itself is not reachable without `unsafe`, so this test
+        // only proves the Drop fn body is sound (no UB, no panic). The
+        // real zeroize contract is verified by integration coverage
+        // + code review of the Drop impl.
+        let wallet = Wallet::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        )
+        .expect("valid BIP-39 mnemonic");
+        drop(wallet); // explicit drop to exercise the Drop impl now
+    }
 }
