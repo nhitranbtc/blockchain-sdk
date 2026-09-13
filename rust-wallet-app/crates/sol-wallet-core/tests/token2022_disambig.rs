@@ -1,8 +1,7 @@
 //! `token2022_disambig` — Phase 4.1 (deep-dive rows 13, 14 part).
 //!
 //! Proves classic SPL (`TokenkegQ...`) and Token-2022 (`TokenzQdB...`)
-//! live at distinct program IDs, that `disambig::reject_wrong_token_program`
-//! catches the Q6 footgun at the parser boundary, and that
+//! live at distinct program IDs, and that
 //! `Mint::unpack` reads the on-chain `decimals` byte at offset 44 of
 //! the 82-byte Mint state for both classic and Token-2022.
 //!
@@ -10,9 +9,7 @@
 //! `RpcClient` lives in Phase 5 `chain::account`.
 
 use sol_wallet_core::address::pubkey_from_bytes;
-use sol_wallet_core::disambig::{
-    classic_token_program_id, reject_wrong_token_program, token_2022_program_id, TokenProgram,
-};
+use sol_wallet_core::disambig::{classic_token_program_id, token_2022_program_id, TokenProgram};
 use sol_wallet_core::error::Error;
 use sol_wallet_core::tokens::decimals_from_state_bytes;
 use sol_wallet_core::tx::builder::derive_ata_with_program_id;
@@ -48,24 +45,6 @@ fn token_program_from_program_id_rejects_unknown_program() {
     assert!(
         matches!(err, Error::InvalidTokenProgram(_)),
         "expected Error::InvalidTokenProgram, got {err:?}"
-    );
-}
-
-#[test]
-fn reject_wrong_token_program_passes_when_programs_match() {
-    reject_wrong_token_program(&classic_token_program_id(), &classic_token_program_id())
-        .expect("matching classic programs must pass");
-    reject_wrong_token_program(&token_2022_program_id(), &token_2022_program_id())
-        .expect("matching token-2022 programs must pass");
-}
-
-#[test]
-fn reject_wrong_token_program_errors_on_classic_vs_token2022_mismatch() {
-    let err = reject_wrong_token_program(&token_2022_program_id(), &classic_token_program_id())
-        .unwrap_err();
-    assert!(
-        matches!(err, Error::InvalidTokenProgram(_)),
-        "expected Error::InvalidTokenProgram on swap, got {err:?}"
     );
 }
 

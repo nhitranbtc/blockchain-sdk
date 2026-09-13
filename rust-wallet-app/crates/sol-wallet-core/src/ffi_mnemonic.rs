@@ -34,11 +34,6 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// Generate a fresh wallet id (Uuid v4).
-pub fn fresh_wallet_id() -> Result<WalletId> {
-    WalletId::new()
-}
-
 /// Helper: import a freshly-generated or caller-supplied mnemonic into
 /// the wallet manager. Returns the new wallet id.
 pub fn import_into_manager<S: crate::platform::WalletStorage + 'static>(

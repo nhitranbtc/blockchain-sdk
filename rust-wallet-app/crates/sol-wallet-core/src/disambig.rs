@@ -117,23 +117,6 @@ impl TokenProgram {
 /// On mismatch, returns `Error::InvalidTokenProgram` with both program
 /// IDs in the message so the operator can trace which wallet code
 /// path constructed the wrong argument.
-///
-/// This function is pure — no RPC, no I/O, no allocation beyond the
-/// `String` for the error message. Cheap to call from any hot path
-/// (tx builder, CLI handler, FFI export).
-pub fn reject_wrong_token_program(
-    claimed_program: &Pubkey,
-    attempted_program: &Pubkey,
-) -> Result<()> {
-    if claimed_program == attempted_program {
-        Ok(())
-    } else {
-        Err(Error::InvalidTokenProgram(format!(
-            "attempted={attempted_program}, mint.owner={claimed_program}"
-        )))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

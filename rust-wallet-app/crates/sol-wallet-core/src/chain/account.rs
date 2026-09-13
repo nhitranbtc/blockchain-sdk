@@ -570,10 +570,6 @@ pub async fn get_health(client: &RpcClient) -> Result<()> {
 // `getTransaction` ships in Task 5.3 with `EncodedTransaction` decoding.
 // The 5 WS subscribes (account_subscribe etc.) ship in V0.1.5.
 
-/// Legacy alias for callers that used the prior Anza-`RpcClient`
-/// naming. New code should use the free functions in this module.
-pub type SolanaClient = RpcClient;
-
 /// Stub for the prior `map_client_error` helper (no longer needed —
 /// `RpcClient::post` returns `Error::Rpc` directly). Kept for source
 /// compatibility with the stashed Phase 5 source.
