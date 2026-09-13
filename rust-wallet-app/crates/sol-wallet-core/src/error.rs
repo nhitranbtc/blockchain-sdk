@@ -141,6 +141,13 @@ pub enum Error {
     #[error("sol-wallet-core: insecure source file mode 0o{mode:o} on {path} — must be 0o600 or stricter, no symlinks")]
     InsecureSourceFile { path: std::path::PathBuf, mode: u32 },
 
+    /// Phase 10 Security Audit Task 10.7 — `WalletStorage::path_for`
+    /// refused a wallet name that would resolve outside the storage
+    /// root (path traversal: `..` segments, absolute paths, NUL bytes,
+    /// or path separators embedded in the name).
+    #[error("sol-wallet-core: invalid storage name {name:?} — must be a single path segment with no '..', no absolute prefix, no NUL bytes")]
+    InvalidStorageName { name: String },
+
     /// Phase 6 — encrypted-blob envelope carries a `version` outside
     /// the supported range. Gates future AEAD / KDF migration.
     #[error("sol-wallet-core: unsupported envelope version {found} (supported {lo}..={hi})")]
