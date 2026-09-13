@@ -122,6 +122,35 @@ pub struct WalletManager<S: WalletStorage> {
     inner: RwLock<HashMap<WalletId, WalletRecord>>,
 }
 
+impl<S: WalletStorage> WalletManager<S> {
+    /// Acquire a read guard on the in-memory wallet map.
+    ///
+    /// **Lock-poisoning recovery contract (Phase 10 Task 10.2 / #565):**
+    /// If a previous thread panicked while holding the write lock, the
+    /// `RwLock` is marked poisoned and `read().expect()` would propagate
+    /// the panic to the caller. For an FFI-exposed manager that surfaces
+    /// any Rust panic as `FfiError::Panic = 99`, this would cascade to
+    /// permanent lockout of the wallet handle — even though the data
+    /// itself is intact.
+    ///
+    /// Instead, we recover the inner data via
+    /// `unwrap_or_else(|p| p.into_inner())`. The lock remains poisoned
+    /// (future write-lock attempts still observe poison), but readers
+    /// proceed. This matches the [`std::sync::RwLock`] poison model:
+    /// poisoning is a "something went wrong" signal, not a guarantee
+    /// of data corruption.
+    fn read_map(&self) -> std::sync::RwLockReadGuard<'_, HashMap<WalletId, WalletRecord>> {
+        self.inner.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Acquire a write guard on the in-memory wallet map. Same
+    /// lock-poisoning recovery contract as [`Self::read_map`] — see the
+    /// doc comment there for the FFI `Panic = 99` rationale.
+    fn write_map(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<WalletId, WalletRecord>> {
+        self.inner.write().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
 impl<S: WalletStorage + 'static> WalletManager<S> {
     /// Construct a manager. Loads all persisted records on startup.
     pub fn new(storage: S) -> Result<Self> {
@@ -201,34 +230,22 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
                 });
             }
         }
-        let secret_b58 = std::fs::read_to_string(path).map_err(|source| Error::FileIo {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        let secret_b58 =
+            Zeroizing::new(
+                std::fs::read_to_string(path).map_err(|source| Error::FileIo {
+                    path: path.to_path_buf(),
+                    source,
+                })?,
+            );
         let secret_b58 = secret_b58.trim();
-        let decoded =
-            bs58::decode(secret_b58)
-                .into_vec()
-                .map_err(|_| Error::InvalidBase58Secret {
-                    got: secret_b58.len(),
-                    expected: 64,
-                })?;
-        if decoded.len() != 64 {
-            return Err(Error::InvalidBase58Secret {
-                got: decoded.len(),
-                expected: 64,
-            });
-        }
-        let mut arr = Zeroizing::new([0u8; 64]);
-        arr.as_mut_slice().copy_from_slice(&decoded);
-        let wallet = Wallet::from_bytes(&arr)?;
+        let wallet = Wallet::from_base58(secret_b58)?;
         self.store_wallet(&wallet, password, name, now_unix)
     }
 
     /// Decrypt the blob for `id`, return an `OwnedLock`.
     pub fn unlock(&self, id: WalletId, password: &str) -> Result<OwnedLock> {
         let rec = {
-            let g = self.inner.read().expect("wallet manager lock poisoned");
+            let g = self.read_map();
             g.get(&id).cloned()
         }
         .ok_or(Error::WalletNotFound(id))?;
@@ -252,7 +269,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
     /// Logical no-op — validates id exists. RAII fires when the
     /// `OwnedLock` from `unlock` drops.
     pub fn lock(&self, id: WalletId) -> Result<()> {
-        let g = self.inner.read().expect("wallet manager lock poisoned");
+        let g = self.read_map();
         if !g.contains_key(&id) {
             return Err(Error::WalletNotFound(id));
         }
@@ -262,7 +279,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
     /// Return the public summary for `id`.
     pub fn summary(&self, id: WalletId) -> Result<WalletSummary> {
         let rec = {
-            let g = self.inner.read().expect("wallet manager lock poisoned");
+            let g = self.read_map();
             g.get(&id).cloned()
         }
         .ok_or(Error::WalletNotFound(id))?;
@@ -282,7 +299,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
 
     /// List all wallet summaries (sorted by id).
     pub fn list(&self) -> Result<Vec<WalletSummary>> {
-        let g = self.inner.read().expect("wallet manager lock poisoned");
+        let g = self.read_map();
         let mut out: Vec<WalletSummary> = Vec::with_capacity(g.len());
         for rec in g.values() {
             let pubkey =
@@ -307,13 +324,13 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
     /// (L13 review Sept 11).
     pub fn delete(&self, id: WalletId) -> Result<()> {
         let rec = {
-            let g = self.inner.read().expect("wallet manager lock poisoned");
+            let g = self.read_map();
             g.get(&id).cloned()
         }
         .ok_or(Error::WalletNotFound(id))?;
         let id_str = record_id_str(rec.id);
         self.storage.delete(&id_str)?;
-        let mut g = self.inner.write().expect("wallet manager lock poisoned");
+        let mut g = self.write_map();
         g.remove(&id);
         Ok(())
     }
@@ -321,7 +338,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
     /// Rename the wallet for `id`. Storage-first ordering.
     pub fn rename(&self, id: WalletId, new_name: &str) -> Result<()> {
         let updated = {
-            let g = self.inner.read().expect("wallet manager lock poisoned");
+            let g = self.read_map();
             let rec = g.get(&id).ok_or(Error::WalletNotFound(id))?;
             let mut updated = rec.clone();
             updated.name = new_name.to_string();
@@ -333,7 +350,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
             message: source.to_string(),
         })?;
         self.storage.put_atomic(&id_str, &bytes)?;
-        let mut g = self.inner.write().expect("wallet manager lock poisoned");
+        let mut g = self.write_map();
         if let Some(rec) = g.get_mut(&id) {
             rec.name = new_name.to_string();
         }
@@ -364,7 +381,7 @@ impl<S: WalletStorage + 'static> WalletManager<S> {
             message: source.to_string(),
         })?;
         self.storage.put_atomic(&id_str, &bytes)?;
-        let mut g = self.inner.write().expect("wallet manager lock poisoned");
+        let mut g = self.write_map();
         g.insert(id, rec);
         Ok(id)
     }
@@ -374,4 +391,82 @@ fn record_id_str(id: WalletId) -> String {
     serde_json::to_string(&id)
         .map(|s| s.trim_matches('"').to_string())
         .unwrap_or_else(|_| id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    //! Internal unit tests for `WalletManager`. Integration tests live
+    //! under `tests/` but cannot reach `pub(crate)` items like
+    //! `Wallet::inner_bytes`; those go here.
+
+    use super::*;
+    use crate::platform::InMemoryStorage;
+    use crate::wallet::Wallet;
+    use std::os::unix::fs::PermissionsExt;
+    use zeroize::Zeroizing;
+
+    /// Canonical 12-word BIP-39 test mnemonic (matches the rest of the
+    /// test suite in `tests/wallet_lifecycle.rs`).
+    const PHRASE: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const PASSWORD: &str = "hunter2";
+
+    fn tmp_root(tag: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "sol-wallet-mgr-tests-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        p
+    }
+
+    /// H1 happy-path regression pin: after the Task 10.2 refactor of
+    /// `import_from_pk_file` to route through `Wallet::from_base58`
+    /// (eliminating the unzeroized `Vec<u8>` + `String` residue from
+    /// `bs58::decode(secret_b58).into_vec()` + the owned `secret_b58`),
+    /// a valid base58-encoded 64-byte secret still imports, stores,
+    /// and unlocks correctly with the same pubkey as the source.
+    #[test]
+    fn import_from_pk_file_round_trip_through_from_base58() {
+        let store = InMemoryStorage::new();
+        let mgr = WalletManager::new(store).expect("mgr");
+
+        // Source: derive a wallet from a known mnemonic; capture its
+        // pubkey + the 64-byte inner serialization in base58 form.
+        let src_wallet = Wallet::from_mnemonic(PHRASE).expect("source wallet");
+        let expected_pubkey = src_wallet.public_key();
+        let bytes: Zeroizing<[u8; 64]> = src_wallet.inner_bytes();
+        let encoded = bs58::encode(bytes.as_ref()).into_string();
+
+        // Write to a temp file with mode 0600 (tighten perms so the
+        // P6-6 mode-0644 refuse check does not preempt the happy path).
+        let root = tmp_root("import-happy");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("mkdir");
+
+        let secret_path = root.join("secret.key");
+        std::fs::write(&secret_path, encoded.as_bytes()).expect("write secret");
+        std::fs::set_permissions(&secret_path, std::fs::Permissions::from_mode(0o600))
+            .expect("chmod 0600");
+
+        // Import via the refactored path.
+        let id = mgr
+            .import_from_pk_file(&secret_path, PASSWORD, "imported", 1)
+            .expect("import happy path");
+
+        // Post-conditions: pubkey matches; unlock returns a usable wallet.
+        let summary = mgr.summary(id).expect("summary");
+        assert_eq!(
+            summary.pubkey, expected_pubkey,
+            "imported pubkey matches source"
+        );
+        let lock = mgr.unlock(id, PASSWORD).expect("unlock imported wallet");
+        assert_eq!(lock.wallet().public_key(), expected_pubkey);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
