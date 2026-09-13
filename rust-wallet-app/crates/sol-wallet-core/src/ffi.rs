@@ -162,6 +162,12 @@ thread_local! {
 
 /// Per-thread unlocked-secret map. Populated by `sol_wallet_unlock`;
 /// cleared by `sol_wallet_lock` (auto-zero per H3/M14).
+///
+/// Each entry is a `Zeroizing<Vec<u8>>` so the cache entry is
+/// zeroized on removal (via `Drop for Zeroizing<Vec<u8>>`) AND on
+/// thread exit (via `thread_local!` destructor). The full
+/// zeroize contract for callers of `sol_wallet_unlock` is documented
+/// on that function's doc-comment above.
 thread_local! {
     static UNLOCKED: RefCell<HashMap<WalletId, Zeroizing<Vec<u8>>>> = RefCell::new(HashMap::new());
 }
@@ -447,6 +453,61 @@ pub extern "C" fn sol_wallet_import_mnemonic(
 }
 
 /// `sol_wallet_unlock` — Step 4 real impl (H3 + H4).
+///
+/// # Out-secret zeroize contract (Phase 10 Task 10.4 / plan §"FFI
+/// safety contract")
+///
+/// The caller is **REQUIRED** to zeroize `out_secret` after use.
+///
+/// Concretely, the mobile / Dart / Swift / Kotlin consumer that
+/// allocated the buffer must:
+///
+/// 1. Treat the 32-byte Ed25519 secret returned here as
+///    **long-lived** secret material: do not copy it into other
+///    allocations, do not log it, do not persist it across
+///    application sessions.
+/// 2. Call `sol_wallet_lock(id)` (or `sol_wallet_zeroize(buf, len)`)
+///    when finished — either explicitly zeroes the caller-owned
+///    buffer via the Rust-side `Zeroizing<Vec<u8>>` discipline, or
+///    clears the per-thread `UNLOCKED` cache (which holds the full
+///    64-byte secret+pubkey for `sol_wallet_sign_transaction`).
+/// 3. On normal program exit, the `UNLOCKED` `thread_local!` is
+///    dropped (which zeroizes via `Drop for Zeroizing<Vec<u8>>`).
+///    On abnormal exit (panic, abort), the per-thread cache is
+///    **not** dropped — see "Known gaps" below.
+///
+/// # Server-side zeroize discipline
+///
+/// Inside the library, every buffer that touches the secret uses
+/// `zeroize::Zeroizing`:
+///
+/// - `let all_bytes = owned_lock.wallet().inner_bytes();` returns
+///   `Zeroizing<[u8; 64]>` — Drop zeroizes the stack copy.
+/// - `let stashed = Zeroizing::new(all_bytes.to_vec());` wraps the
+///   per-thread cache entry — Drop zeroizes on map entry removal
+///   AND on `thread_local!` drop at thread exit.
+/// - The wallet's own `impl Drop for OwnedLock` + `impl Drop for
+///   Wallet` zeroize the stack copies via
+///   `Zeroizing<[u8; 64]>::Drop` (see `src/wallet.rs`,
+///   `src/wallet_manager.rs`).
+///
+/// # Known gaps (documented as residuals, NOT a contract violation)
+///
+/// - The `Box<Keypair>` heap allocation in `Wallet::Drop` is NOT
+///   zeroized because `solana_sdk::Keypair` does not implement
+///   `ZeroizeOnDrop`. This is an upstream Anza gap; the residual
+///   secret bytes in that heap page live until the allocator
+///   reuses the page. Tracked under the "Anza-Zeroize gap" doc on
+///   the `OwnedLock` struct.
+/// - On `panic_scrubber` activation (Rust panic crossing FFI), the
+///   per-thread `UNLOCKED` cache is NOT cleared — Rust's
+///   `thread_local!` destructors do NOT run during unwinding. A
+///   subsequent `sol_wallet_sign_transaction` call on the same
+///   thread after the panic is caught would still find the cached
+///   secret. This is acceptable because the panic is already a
+///   `FfiError::Panic = 99` event and the mobile host should
+///   re-launch the process; the residual secret lifetime is bounded
+///   by thread/process lifetime.
 #[no_mangle]
 pub extern "C" fn sol_wallet_unlock(
     out_secret: *mut u8,
@@ -506,6 +567,12 @@ pub extern "C" fn sol_wallet_unlock(
 }
 
 /// `sol_wallet_lock` — Step 5 real impl (H3/M14 auto-zero).
+///
+/// Clears the per-thread `UNLOCKED` cache entry for `id` and
+/// zeroizes the 64-byte stashed secret+pubkey. The caller-owned
+/// `out_secret` buffer from the prior `sol_wallet_unlock` is the
+/// caller's responsibility to zeroize — see `sol_wallet_unlock`'s
+/// doc-comment for the full out_secret zeroize contract.
 #[no_mangle]
 pub extern "C" fn sol_wallet_lock(id: *const c_char, id_len: usize) -> i32 {
     let wallet_id = match parse_wallet_id(id, id_len) {
