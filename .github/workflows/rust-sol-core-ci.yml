@@ -156,7 +156,12 @@ jobs:
     name: Rust test (sol-wallet-core, --cfg negative_test for #566)
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    continue-on-error: true
+    # No `continue-on-error: true` here — the script handles the
+    # expected cargo failure (set +e + PIPESTATUS) and the grep gate
+    # asserts the EXACT expected error string. If either check fails,
+    # the script `exit 1` MUST fail the step + workflow. Setting
+    # continue-on-error would silently swallow the audit-violated
+    # path (post-merge ECC review finding: fail-open-control).
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -179,9 +184,13 @@ jobs:
             echo "Audit #566 contract violated: Wallet::as_keypair is reachable from external crates."
             exit 1
           fi
-          if ! grep -q 'E0624' /tmp/negative_test.log; then
-            echo "FAIL: negative test failed to compile but did not emit E0624 (privacy error)."
-            echo "Expected 'error[E0624]: method \`as_keypair\` is private'."
+          # Anchor on the literal expected error string so a different
+          # E0624 (e.g. about a different private method) doesn't
+          # silently satisfy the gate (post-merge ECC review finding:
+          # parser-validator-differential).
+          if ! grep -qF 'error[E0624]: method `as_keypair` is private' /tmp/negative_test.log; then
+            echo "FAIL: expected literal 'error[E0624]: method \`as_keypair\` is private' not found in compiler output."
+            echo "Audit #566 gate is mis-targeted: the compile failure is not about as_keypair visibility."
             exit 1
           fi
           echo "PASS: negative test correctly failed with E0624 as expected."
