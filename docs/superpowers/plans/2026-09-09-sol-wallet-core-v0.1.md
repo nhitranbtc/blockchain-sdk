@@ -2104,6 +2104,27 @@ User-facing goal: a developer can run a single example binary that generates a f
 
 ---
 
+## Phase 10 Security Audit — 2026-09-13
+
+**Origin:** ECC `security-reviewer` agent audit of `rust-wallet-app/crates/sol-wallet-core/src/` on 2026-09-13. 7 issues filed (#564–#569) + 1 plan-only gap (10.7). Branch convention: `security-audit/task-10.X-<slug>` — base off `rust-sol-core`, never `main`.
+
+**Closed:**
+
+- [x] **Task 10.1** — `Wallet::from_bytes` panic on corrupt envelope (#564). Merged via PR #570 / squash `461773ac` on `rust-sol-core` (2026-09-13). `from_bytes` returns `Result<Self>` → `Error::InvalidSeed`; FFI maps to `FfiError::DecryptFailed` (6), never `Panic` (99). 3 unit tests + 2 integration tests.
+- [x] **Task 10.2** — `WalletManager` lock-poisoning recovery (#565). PR #571 in flight on branch `security-audit/task-10.2-argon2-outside-read-lock`. `read_map()` / `write_map()` helpers replace 9 `.expect("wallet manager lock poisoned")` sites. 3 new tests in `tests/wallet_manager_unlock_concurrent.rs`.
+
+**Open:**
+
+- [ ] **Task 10.3** — Narrow `Wallet::as_keypair` visibility to `pub(crate)` (#566).
+- [ ] **Task 10.4** — Document `sol_wallet_unlock` out_secret zeroize contract (#567).
+- [ ] **Task 10.5** — Enforce Solana message shape in `sol_wallet_sign_transaction` (#568).
+- [ ] **Task 10.6** — Switch `sol_wallet_send_spl` to `transfer_checked` (#569).
+- [ ] **Task 10.7** — Path-traversal guard in `WalletStorage::path_for` (issue TBD per owner directive — plan-only tracking).
+
+**Replaces:** ad-hoc session tracking; from this commit forward, every Phase 10 audit task lands in this section via L13 per-task pipeline.
+
+---
+
 ## Test Coverage Reconciliation (deep-dive §"Test scenario — sol-wallet-core V0.1" → Phase file ownership)
 
 Deep-dive [§"Test scenario — sol-wallet-core V0.1"](docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md) enumerates **34 test scenarios** + **16 entry-points** + **32 named library test files** + 10 CLI test files. SOL plan tracks these as Phase-owned file creates per `## Test File Structure`. This section reconciles the two: which deep-dive rows map to which Phase test, and which rows are GAPS that require explicit Phase-tickets or V0.1.5 deferral.

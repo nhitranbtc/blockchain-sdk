@@ -100,6 +100,10 @@ fn import_from_pk_file_mode_0644_refused_p6_6() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// NOTE: H1 happy-path round-trip is tested inside `src/wallet_manager.rs`
+// as a `#[cfg(test)]` unit test (`import_from_pk_file_round_trip_through_from_base58`).
+// Integration tests cannot reach `Wallet::inner_bytes` (it is `pub(crate)`).
+
 #[test]
 fn unlock_then_lock_then_unlock_again_produces_distinct_bytes_audit_p6_3() {
     let store = InMemoryStorage::new();
