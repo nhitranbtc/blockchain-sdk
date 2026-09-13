@@ -39,7 +39,12 @@ use sol_wallet_core::{
     },
     wallet::Wallet,
 };
-use solana_sdk::{pubkey::Pubkey, signature::Signature, transaction::Transaction};
+use solana_sdk::{
+    message::VersionedMessage,
+    pubkey::Pubkey,
+    signature::Signature,
+    transaction::{Transaction, VersionedTransaction},
+};
 use std::{str::FromStr, time::Duration};
 
 #[test]
@@ -373,13 +378,18 @@ fn submit_devnet_send_real_broadcast() {
             blockhash,
         );
         let mut tx = Transaction::new_unsigned(msg);
-        // Phase 6.4 Step 2: use the library's `Wallet::sign_legacy_transaction`
-        // wrapper instead of raw `Transaction::try_sign(&[as_keypair()], ...)`.
-        // Closes the legacy-sign gap from the Phase 6.4 audit + drops the
-        // `as_keypair()` escape-hatch leak from this hot path (P6-3 win).
-        sender
-            .sign_legacy_transaction(&mut tx, blockhash)
-            .expect("sign_legacy_transaction");
+        // Phase 10: consolidated into `Wallet::sign_transaction(VersionedTransaction)`.
+        // The legacy message is wrapped, signed via the unified API, then the
+        // signatures are copied back into the original `tx` for
+        // `send_transaction_with_options` (Anza's API takes `&Transaction`).
+        let versioned = VersionedTransaction {
+            message: VersionedMessage::Legacy(tx.message.clone()),
+            signatures: vec![Signature::default(); 1],
+        };
+        let signed = sender
+            .sign_transaction(versioned)
+            .expect("sign_transaction");
+        tx.signatures = signed.signatures;
 
         // ---- (3) broadcast via library API ----
         // `skipPreflight: true` bypasses simulator-side blockhash lookup; cluster
