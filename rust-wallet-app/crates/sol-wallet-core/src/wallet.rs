@@ -19,8 +19,9 @@
 //! `from_base58` + `from_public_key` (read-only) + `sign_transaction` +
 //! `sign_message`.
 
+use solana_sdk::hash::Hash;
 use solana_sdk::signature::{Signature, Signer};
-use solana_sdk::transaction::VersionedTransaction;
+use solana_sdk::transaction::{Transaction, VersionedTransaction};
 use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
@@ -222,6 +223,84 @@ impl Wallet {
         }
         tx.signatures[position] = signature;
         Ok(tx)
+    }
+
+    /// Phase 6.4 — sign a legacy `solana_sdk::transaction::Transaction`
+    /// in place. Required by `submit_devnet_send_real_broadcast` and
+    /// any caller that builds a legacy `Transaction` (via
+    /// `prepare_sol_transfer_message` / `prepare_spl_transfer_message`)
+    /// and needs the library to own the signing step.
+    ///
+    /// Security properties (audit 2026-09-13):
+    ///
+    /// - **P1 blockhash-mismatch reject:** the `blockhash` argument
+    ///   must equal `tx.message.recent_blockhash`. Otherwise the
+    ///   signature would be valid for one blockhash but the tx would
+    ///   ship with the other, and the cluster would reject it. Returns
+    ///   `Error::BlockhashMismatch` loudly before signing.
+    /// - **P4 fee-payer alignment:** `tx.message.account_keys[0]` must
+    ///   equal this wallet's pubkey. Otherwise the signature would not
+    ///   cover fee payment and the cluster would reject the tx at
+    ///   `validate_fee_payer`. Multi-signer SPL flows that need a
+    ///   separate fee-payer should use `sign_transaction(VersionedTransaction)`.
+    /// - **P3 bincode parity:** signs against `tx.message.serialize()`
+    ///   (which uses `bincode::serialize` default config) to match the
+    ///   wire format `send_transaction_with_options` ships. NOTE: the
+    ///   Tier 2 #8 doc comment in `chain::account.rs:161-163` claims
+    ///   `bincode::config::legacy()` is required; the live broadcast on
+    ///   devnet landed using default config, so the comment is stale.
+    ///   This fn matches the proven-working default.
+    /// - **P5 no keypair escape:** never returns or stores the inner
+    ///   `Keypair`. The wallet's signing key is consumed only inside
+    ///   this fn via `Signer::sign_message`.
+    /// - **P6 `&self` only:** no `&mut self`. Signing is a const-borrow
+    ///   over the wallet.
+    /// - **P7 overwrite:** any pre-existing signature at the
+    ///   fee-payer/wallet index is overwrites — matches
+    ///   `sign_transaction(VersionedTransaction)` behaviour.
+    ///
+    /// Returns `Ok(())` on success, `Err(Error::BlockhashMismatch)` if
+    /// the blockhash arg disagrees with `tx.message.recent_blockhash`,
+    /// or `Err(Error::FeePayerMismatch)` if the fee-payer is not this
+    /// wallet.
+    pub fn sign_legacy_transaction(&self, tx: &mut Transaction, blockhash: Hash) -> Result<()> {
+        // P1: blockhash must match the message's embedded blockhash.
+        if tx.message.recent_blockhash != blockhash {
+            return Err(Error::BlockhashMismatch {
+                tx_message: tx.message.recent_blockhash,
+                signer_input: blockhash,
+            });
+        }
+        // P4: fee-payer must be this wallet.
+        let my_pubkey = Signer::pubkey(&self.0);
+        match tx.message.account_keys.first().copied() {
+            Some(payer) if payer == my_pubkey => {}
+            Some(actually) => {
+                return Err(Error::FeePayerMismatch {
+                    expected: my_pubkey,
+                    actual: actually,
+                });
+            }
+            None => {
+                // Empty account_keys vec — malformed tx. Surface as fee-payer
+                // mismatch with a zeroed actual (no real pubkey to compare).
+                return Err(Error::FeePayerMismatch {
+                    expected: my_pubkey,
+                    actual: solana_sdk::pubkey::Pubkey::default(),
+                });
+            }
+        }
+        // P3: serialize with Message's default bincode config to match
+        // the wire format `send_transaction_with_options` ships.
+        let message_bytes = tx.message.serialize();
+        let signature = Signer::sign_message(&self.0, &message_bytes);
+        // P7: overwrite any pre-existing signature at index 0 (fee-payer).
+        if tx.signatures.is_empty() {
+            tx.signatures.push(signature);
+        } else {
+            tx.signatures[0] = signature;
+        }
+        Ok(())
     }
 
     /// Borrow the inner `Keypair`. Used by the FFI surface to build +

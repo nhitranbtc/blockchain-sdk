@@ -1347,7 +1347,220 @@ Phase 5 lands the full RPC client surface needed by Phase 7's 22-command `sol` C
 - [ ] Step 4: PAUSE — merge the no-op PR; Phase 7 can now begin.
   - [ ] Verified by: squash-merge commit SHA `<pending-sha>` on `<pending-date>` (operator fills after `gh pr merge --squash` exits 0 per `update-issues-before-merge` rule)
 
-#### Phase 6.2 — Verification
+### Task 6.3 (NEW, runs after 6.2 library-completeness gate): Devnet live broadcast scenario — submit-transaction on networks
+
+**Goal:** prove the library `submit_transaction` path actually lands on a real Solana network end-to-end, not just the wire-format shape (Phase 5.1 covers the wire-mock tests, Phase 6.2 covers library completeness, neither exercises a live cluster). Captures one real broadcast as audit-trail evidence before Phase 7 CLI binds the same handlers.
+
+**Position rationale:** sequential after 6.2 — 6.3 depends on the `submit_and_confirm` library surface being declared complete (Phase 6.2 row-coverage table) AND on `RpcClient` being present (Phase 5.1). Running 6.3 before 6.2 would exercise handlers that the library-completeness gate has not yet validated.
+
+**Files:**
+- Create: `tests/submit_devnet_send.rs` — 8 library unit tests (builder shape) + 1 `#[ignore]`-gated live broadcast against `https://api.devnet.solana.com`
+- Modify: `tests/common/mod.rs` — replaces broken Phase-6.1 submodule stubs (`faucet`, `keypair_fixture`, `mock_spl_usdc` per audit-issue #563 P9-2 deviation) with `DevnetConfig { rpc_endpoint, sender_mnemonic, recipient }` + `load_config()` parsing `src/tokens/devnet.json` directly via `include_str!`
+- Modify: `src/tokens/devnet.json` — `rpc-endpoint` flips from `https://api.testnet.solana.com` to `https://api.devnet.solana.com`
+
+**Steps:**
+
+- [ ] Step 1: 8 library unit tests prove the submit pipeline shape (no network). All 8 tests use ONLY `sol-wallet-core` library functions (no `RpcClient::post_raw`, no manual bincode, no manual base58). The function-to-test mapping table below is the audit trail — each row names the library fn under test and the assertion that proves it.
+  - **Verified by:** commit `<pending-sha>` on `<pending-date>` (operator fills after `cargo test -p sol-wallet-core --test submit_devnet_send` exits 0 with 8 passed + 1 ignored)
+- [ ] Step 2: 1 `#[ignore]`-gated live broadcast — full wire path against `https://api.devnet.solana.com`. Uses ONLY library functions: `RpcClient::new`, `get_balance`, `get_latest_blockhash`, `prepare_sol_transfer_message`, `Wallet::sign_legacy_transaction`, `send_transaction_with_options`, `wait_for_confirm`. NO `post_raw`, NO manual bincode. Confirmed landing via balance-delta poll (authoritative — not `confirmations=Some(0)`). **Confirmed evidence:** TX `3zESw9S5Px7zr3M65ChHidoLpQr4vSdVLLQxFf3oE4rkufpG8X6pYKXHvUGC2Bs3rEsoMJ8zn1gziEmWPx7ugeTY` landed on devnet 2026-09-13 (blockhash `FUrsgKNmVXXDqq6ufFGSMnjcLERKggwTMZruV4q8Z8XH`, slot 497519967, confirmations=Some(2) at first poll, err=None), balance delta −1_005_000 lamports = 0.001 SOL + 5000 lamport fee (exact, post=10_994_975_000, pre=10_995_980_000). Phase 6.4 Step 2 swap from raw `Transaction::try_sign` to library wrapper `Wallet::sign_legacy_transaction` landed same day; sign path emits no `as_keypair()` escape (P6-3 tightening).
+  - **Verified by:** commit `<pending-sha>` on `<pending-date>` (operator fills after `cargo test -p sol-wallet-core --test submit_devnet_send -- --include-ignored --nocapture` exits 0 with 9 passed)
+- [ ] Step 3: TBD — migrate `submit_devnet_send_real_broadcast` from `#[ignore]` to explicit `RUN_SOL_DEVNET=1` env-var gate for Phase 6.2 Step 8 compliance ("Zero `#[ignore]`-away on gated-live tests; loud-RED env vars present"). Loud-RED until flipped.
+  - **Verified by:** commit `<pending-sha>` on `<pending-date>` (operator fills after `grep -n 'RUN_SOL_DEVNET' tests/submit_devnet_send.rs` returns a hit AND `#[ignore]` removed)
+- [ ] Step 4: Update `CHANGELOG.md` per L24 — append Task 6.3 entry: "Devnet live broadcast scenario landed: 8 unit tests + 1 live broadcast on `https://api.devnet.solana.com`. Evidence: TX `3zESw9S5Px7zr3M65ChHidoLpQr4vSdVLLQxFf3oE4rkufpG8X6pYKXHvUGC2Bs3rEsoMJ8zn1gziEmWPx7ugeTY` (0.001 SOL transfer, balance delta −1_005_000 lamports = amount + fee, blockhash `FUrsgKNmVXXDqq6ufFGSMnjcLERKggwTMZruV4q8Z8XH` slot 497519967, confirmations=Some(2) at first poll). Phase 6.4 Step 2 also landed: `Wallet::sign_legacy_transaction` wrapper closes the legacy-sign gap; live broadcast switched from raw `Transaction::try_sign` to the library fn. Follow-up: migrate `#[ignore]` → `RUN_SOL_DEVNET=1` env gate (Task 6.3 Step 3)."
+  - **Verified by:** commit `<pending-sha>` on `<pending-date>` (operator fills after CHANGELOG.md commit lands)
+- [ ] Step 5: PAUSE — commit-push-pr. PR title: `test(sol): submit_devnet_send live broadcast scenario + library submit path verification (Task 6.3)`.
+  - **Verified by:** PR number `<pending>` + squash-merge commit SHA `<pending-sha>` on `<pending-date>` (operator fills after `gh pr create` + `gh pr merge --squash` exit 0)
+
+**Test cases ↔ library function mapping** (the primary deliverable of Task 6.3 — proves every test exercises a `sol-wallet-core` API, not raw RPC primitives):
+
+| # | Test fn (in `tests/submit_devnet_send.rs`) | Library fn(s) under test | What the assertion proves |
+|---|---|---|---|
+| 1 | `wallet_from_mnemonic_derives_phantom_canonical_address` | `sol_wallet_core::wallet::Wallet::from_mnemonic` | Phantom-canonical SLIP-0010 derivation: `27mt9dL81aHVsBnebBBB3ZZnm7UVSbQ354XcZSUss4cd` for the fixed test mnemonic. |
+| 2 | `wallet_sign_message_round_trips_ed25519` | `Wallet::sign_message` (returns `Signature`), `Signature::verify` | Ed25519 sig is 64 bytes and verifies against `wallet.public_key()` + raw msg bytes (round-trip). |
+| 3 | `prepare_sol_transfer_message_produces_cu_budget_then_transfer` | `tx::native::prepare_sol_transfer_message` | 3-ix `Message` layout — ix 0 + ix 1 target `ComputeBudget` program (CU limit + CU price), ix 2 targets System Program (transfer), payer = sender (fee), `recent_blockhash` embedded. |
+| 4 | `compute_budget_instructions_returns_limit_then_price` | `tx::builder::compute_budget_instructions` | Returns 2-element array with distinct variant tags (CU-limit discriminator ≠ CU-price discriminator per Solana wire format). |
+| 5 | `prepare_spl_transfer_message_produces_transfer_checked` | `tx::spl::prepare_spl_transfer_message`, `disambig::classic_token_program_id`, `tx::builder::derive_ata_with_program_id` | 3-ix `Message` (no ATA-create prepend): ix 2 targets classic Token Program, ix 2 data byte 0 == 12 (`TokenInstruction::TransferChecked` discriminator). |
+| 6 | `prepare_spl_transfer_message_with_ata_create_prepends_create_ix` | `tx::spl::prepare_spl_transfer_message` (`prepend_ata_create: true`), `tx::builder::derive_ata_with_program_id` | 4-ix `Message`: ix 0 targets the ATA program (`spl_associated_token_account::id()`), ix 1-3 = CU + transfer. |
+| 7 | `derive_ata_with_program_id_is_deterministic_per_token_program` | `tx::builder::derive_ata_with_program_id`, `disambig::{classic_token_program_id, token_2022_program_id}` | Q6 invariant: same `(owner, mint)` → different ATAs for classic vs Token-2022. Same `(owner, mint, program_id)` → identical ATA on repeat (deterministic). |
+| 8 | `disambig_token_program_resolves_canonical_program_ids` | `disambig::{classic_token_program_id, token_2022_program_id, TokenProgram::{program_id, from_program_id}}` | `classic_token_program_id()` == `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`; `token_2022_program_id()` == `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`; `TokenProgram::Classic.program_id() == classic_token_program_id()`; `TokenProgram::from_program_id(...)` round-trips both program IDs. |
+| 9 (ignored) | `submit_devnet_send_real_broadcast` | `chain::client::RpcClient::new`, `chain::account::{get_balance, get_latest_blockhash, send_transaction_with_options}`, `tx::native::prepare_sol_transfer_message`, `tx::broadcast::wait_for_confirm`, `wallet::Wallet::sign_legacy_transaction` | Full wire path: URL allowlist, pre-balance check (loud-RED if < 1.005 SOL), build+sign 0.001 SOL transfer (Phase 6.4 Step 2 wrapper enforces blockhash-mismatch + fee-payer-mismatch rejection), broadcast with `skipPreflight: true` + `replaceRecentBlockhash: true` (bincode wire + base64 envelope), wait for `Confirmed` commitment (60 s timeout), poll `get_balance` until balance decreases (max 30 s). |
+
+**Constraint** (the audit-trail rule): every test must use ONLY functions exported from `sol_wallet_core::*` (or its submodules). NO `RpcClient::post_raw`, NO manual bincode encoding, NO manual base58 conversion, NO inline JSON-RPC string construction. This guarantees the Phase 7 CLI `sol send` handler can bind to the same library surface and inherit the same audit trail.
+
+**Shared constants** (live in `tests/common/mod.rs`, imported via `mod common; use common::*`):
+
+- `SENDER_MNEMONIC`, `EXPECTED_SENDER_PUBKEY`, `RECIPIENT_PUBKEY`, `USDC_MINT`, `DUMMY_BLOCKHASH`, `dummy_blockhash()` — see table above for which tests use which.
+
+**`submit_devnet_send_real_broadcast` per-step assertions** (test #9, devnet-only — the only live broadcast; every `expect()` and `Ok(...)` is itself an assertion that fails loud if the library fn breaks):
+
+| # | Step | Library fn (`sol-wallet-core` path unless `*ext`/`*tst`) | Asserts | Fail mode |
+|---|------|----------------------------------------------------------|---------|-----------|
+| 1 | Config + wallet setup | `tst` `tests::common::load_config` *(test fixture)* → `Ok(DevnetConfig)` | `src/tokens/devnet.json` parses (rpc-endpoint / sender-devnet-mnemonic / recipient-devnet fields present) | fast-fail before any RPC |
+| 2 | Config + wallet setup | `chain::client::RpcClient::new(url)` → `Ok` | URL passes allowlist (`https://*` / `http://localhost` / `http://127.0.0.1`) | rejects non-devnet URL |
+| 3 | Config + wallet setup | `wallet::Wallet::from_mnemonic(phrase)` → `Ok` | BIP-39 + SLIP-0010 Phantom derivation succeeds | mnemonic / derivation path wrong |
+| 4 | Config + wallet setup | `address::parse_user_address(s)` → `Ok` | recipient base58 decodes AND is on-curve (PDA-shaped rejected at parse time with typed `Error::InvalidAddress`) | config typo or PDA-shape |
+| 5 | Pre-fund check (loud-RED gate) | `chain::account::get_balance(&rpc, &pubkey)` → `Ok(u64)` | JSON-RPC `getBalance` parses | RPC schema drift |
+| 6 | Pre-fund check (loud-RED gate) | *(reuses row 5 value)* `pre >= 1_005_000` lamports → `panic!` with devnet explorer URL | sender ≥ 0.001 SOL + 5000-lamport base fee | silent devnet-cycle burn on unfunded txs |
+| 7 | Message build + sign | `chain::account::get_latest_blockhash(&rpc)` → `Ok((Hash, u64))` at commitment=`"confirmed"` | RPC blockhash fetch works at library default commitment | RPC schema drift |
+| 8 | Message build + sign | `tx::native::prepare_sol_transfer_message(payer, recipient, 1_000_000, 150_000, 0, blockhash)` | `Message` constructs valid (lamports + compute units + blockhash) | builder math wrong |
+| 9 | Message build + sign | `wallet::Wallet::sign_legacy_transaction(&mut tx, blockhash)` → `Ok` | ed25519 sig is 64 bytes; wrapper enforces blockhash matches `tx.message.recent_blockhash` (P1) and fee-payer == wallet pubkey (P4) before signing | keypair / signing broken |
+| 10 | Broadcast (heart of test) | `chain::account::send_transaction_with_options(&rpc, &tx, { encoding: "base64", replaceRecentBlockhash: true, skipPreflight: true })` → `Ok(Signature)` | library bincode-serializes signed tx, base64-encodes envelope, sends `sendTransaction` JSON-RPC, decodes base58 sig | wire layer broken |
+| 11 | Confirm + on-chain effect (landing proof) | `tx::broadcast::wait_for_landing(&rpc, &sig, &sender.pubkey(), pre, 1_005_000, 30s)` → `Ok(post_balance)` OR `Err(Error::ConfirmTimeout)` (tolerate `ConfirmPending` from inner confirm) | RPC client can poll `getSignatureStatuses` (inner `wait_for_confirm`) AND poll `get_balance` until `pre - cur >= expected_delta`. Phase 6.4 Step 3 composed fn — replaces the hand-rolled `wait_for_confirm` + balance-poll loop. | confirmation polling or balance-delta broken |
+
+**Total:** 11 library-call rows (down from 12 — Step 3 merged confirm + balance-poll into one composed call) corresponding to 12 assertions (8 `Ok(...)` unwraps + 1 `wait_for_landing` result assertion that tolerates `Err` + 2 panics at boundary: pre-fund threshold + `wait_for_landing` timeout = 11 explicit gate points; the two `panic!`s are the boundary checks, the `Err` tolerance is the third). Library fns exercised: 10 (`load_config`, `RpcClient::new`, `Wallet::from_mnemonic`, `address::parse_user_address`, `get_balance`, `get_latest_blockhash`, `prepare_sol_transfer_message`, `Wallet::sign_legacy_transaction`, `send_transaction_with_options`, `wait_for_landing`).
+
+**Live broadcast path** (test #9, devnet-only):
+
+```text
+tests/common::load_config()                                  // parses src/tokens/devnet.json
+  → RpcClient::new(cfg.rpc_endpoint)                         // URL allowlist (https only)
+  → Wallet::from_mnemonic(cfg.sender_mnemonic)               // funded sender
+  → get_balance(&rpc, &sender.public_key())                  // pre
+  → if pre < 1_005_000 → panic loud-RED
+  → get_latest_blockhash(&rpc)  // commitment="confirmed" via library
+  → prepare_sol_transfer_message(payer, recipient, 1_000_000, 150_000, 0, blockhash)
+  → sender.sign_legacy_transaction(&mut tx, blockhash)              // Phase 6.4 Step 2 wrapper; P1 blockhash + P4 fee-payer checks
+  → send_transaction_with_options(&rpc, &tx, {
+        encoding: "base64",
+        replaceRecentBlockhash: true,
+        skipPreflight: true,
+    })                                                        // library handles bincode+base64
+  → wait_for_landing(&rpc, &sig, &sender.public_key(), pre, 1_005_000, 30s)
+                                                              // Phase 6.4 Step 3 composed: confirm + balance-delta poll
+  → post_balance returned → delta == 1_005_000 lamports (0.001 SOL + 5000 fee)
+```
+
+`skipPreflight: true` is critical — bypasses simulator-side blockhash lookup that fails on devnet load-balanced backends (which disagree on recent blockhashes). Without it, every devnet broadcast hits `-32002 Blockhash not found`. With it, the cluster leader accepts our signed tx directly.
+
+**Loud-RED gate:** Steps 1-2 unchecked → Phase 7 CLI `sol send` binding cannot be proven to land on a network without this evidence. Step 3 unchecked → Phase 6.2 Step 8 compliance gate stays open.
+
+**Replay via:** `cargo test -p sol-wallet-core --test submit_devnet_send -- --include-ignored --nocapture` (9 tests, ~10 s wall-clock once funded). Sender `27mt9dL81aHVsBnebBBB3ZZnm7UVSbQ354XcZSUss4cd` MUST be pre-funded with ≥ 1.005 SOL out-of-band (operator runs `solana airdrop 1 <pubkey> --url devnet` or external faucet; the test bails loud-RED if underfunded — devnet faucet rate-limits HTTP 429). The test exercises the broadcast path only, not the funding path.
+
+---
+
+#### Phase 6.4 — sol-wallet-core transaction-surface audit (loud-RED gate)
+
+**Scope:** every `pub fn` in `sol-wallet-core` that supports the end-to-end "SOL / SPL transfer on a Solana network" path (build → sign → broadcast → confirm → verify on-chain effect). Review based on the live crate tree under `rust-wallet-app/crates/sol-wallet-core/src/` (29 files, 12 modules touched by tx path).
+
+**Position rationale:** runs after 6.3 (live broadcast lands) — at this point a working tx path exists. 6.4 catalogs the full surface and lists gaps. 6.5 verification gates on 6.4's gap-list being closed (Phase 6.4 Steps 2-3) OR each gap being explicitly deferred (V0.1.5 backlog).
+
+---
+
+##### Transaction-surface function inventory (live in `sol-wallet-core`)
+
+| Layer | Module path | Function | Signature (essential) | End-to-end role |
+|-------|-------------|----------|------------------------|-----------------|
+| Wallet | `wallet::Wallet` | `from_mnemonic` | `pub fn from_mnemonic(phrase: &str) -> Result<Self>` (wallet.rs:71) | 1. Derive signer keypair from BIP-39 + SLIP-0010 |
+| Wallet | `wallet::Wallet` | `from_mnemonic_at` | `pub fn from_mnemonic_at(phrase, account, address_index) -> Result<Self>` (wallet.rs:88) | 1. Alt derivation path |
+| Wallet | `wallet::Wallet` | `sign_transaction` | `pub fn sign_transaction(&self, tx: VersionedTransaction) -> Result<VersionedTransaction>` (wallet.rs:197) | 5. Sign VT — does NOT cover legacy `Transaction` |
+| Wallet | `wallet::Wallet` | `sign_message` | `pub fn sign_message(&self, msg: &[u8]) -> Signature` (wallet.rs:241) | (off-chain sig, not in live broadcast path) |
+| Wallet | `wallet::Wallet` | `as_keypair` | `pub fn as_keypair(&self) -> &Keypair` (wallet.rs:233) | 5. Escape hatch: raw keypair (FFI only) |
+| Wallet | `wallet::Wallet` | `public_key` | `pub fn public_key(&self) -> Pubkey` (wallet.rs:184) | 1. Used as signer pubkey for tx + balance poll |
+| Wallet (read-only) | `read_only_wallet::ReadOnlyWallet` | `from_base58` | `pub fn from_base58(secret: &str) -> Result<Self>` (read_only_wallet.rs:151) | 1. Import watch-only pubkey |
+| Wallet (read-only) | `read_only_wallet::ReadOnlyWallet` | `from_public_key` | `pub fn from_public_key(pubkey: Pubkey) -> ReadOnlyWallet` (read_only_wallet.rs:175) | 1. Construct from raw pubkey |
+| Wallet (manager) | `wallet_manager::OwnedLock` | `sign_message` | `pub fn sign_message(&self, msg: &[u8]) -> Signature` (wallet_manager.rs:77) | (zeroizing sign, off-chain) |
+| Wallet (manager) | `wallet_manager::OwnedLock` | `sign_transaction` | `pub fn sign_transaction(&self, tx: VersionedTransaction) -> Result<VersionedTransaction>` (wallet_manager.rs:84) | 5. Sign VT under RAII lock (no keypair clone) |
+| RPC client | `chain::client::RpcClient` | `new` | `pub fn new(url: &str) -> Result<Self>` (client.rs:282) | 3. Allowlisted URL → JSON-RPC client |
+| RPC client | `chain::client::RpcClient` | `with_rate_limit` | `pub fn with_rate_limit(url, req_per_sec, burst) -> Result<Self>` (client.rs:287) | 3. Token-bucket rate-limit |
+| RPC client | `chain::client::RpcClient` | `new_with_pinned_spki` | `pub fn new_with_pinned_spki(url, spki_der) -> Result<Self>` (client.rs:433) | 3. TLS SPKI pin (defense in depth) |
+| RPC client | `chain::client::RpcClient` | `post` | `pub async fn post<T>(&self, method, params) -> Result<T>` (client.rs:338) | 3. Typed JSON-RPC dispatch |
+| RPC (queries) | `chain::account` | `get_latest_blockhash` | `pub async fn get_latest_blockhash(client) -> Result<(Hash, u64)>` (account.rs:119) | 4. Blockhash at `"confirmed"` |
+| RPC (queries) | `chain::account` | `get_balance` | `pub async fn get_balance(client, pubkey) -> Result<u64>` (account.rs:268) | 2 / 8. Pre + post-fund check |
+| RPC (queries) | `chain::account` | `get_signature_status` | `pub async fn get_signature_status(client, sig) -> Result<Option<TransactionStatus>>` (account.rs:186) | 7. Single-shot status poll |
+| RPC (queries) | `chain::account` | `simulate_transaction` | `pub async fn simulate_transaction(...)` (account.rs:222) | 4. Local simulation (preflight, optional) |
+| RPC (queries) | `chain::account` | `get_account_info` | `pub async fn get_account_info(client, pubkey) -> Result<Option<Account>>` (account.rs:281) | 2. Owner + data fetch (e.g., token accounts) |
+| RPC (queries) | `chain::account` | `get_token_account_balance` | `pub async fn get_token_account_balance(...)` (account.rs:404) | 8. SPL balance read |
+| RPC (queries) | `chain::account` | `get_token_accounts_by_owner` | `pub async fn get_token_accounts_by_owner(...)` (account.rs:423) | 8. List ATAs |
+| RPC (queries) | `chain::account` | `get_token_supply` | `pub async fn get_token_supply(client, mint) -> Result<UiTokenAmount>` (account.rs:473) | 8. Mint supply |
+| RPC (queries) | `chain::account` | `get_recent_prioritization_fees` | `pub async fn get_recent_prioritization_fees(client) -> Result<...>` (account.rs:507) | 4. Fee market observation |
+| RPC (queries) | `chain::account` | `request_airdrop` | `pub async fn request_airdrop(rpc, pubkey, lamports) -> Result<Signature>` (account.rs:614) | (test/devnet funding helper) |
+| RPC (queries) | `chain::account` | `get_transaction` | `pub async fn get_transaction(...)` (account.rs:675) | 7. Full tx body fetch (audit) |
+| RPC (queries) | `chain::account` | `get_version`, `get_epoch_info`, `get_health` | (account.rs:532 / 545 / 560) | (cluster metadata) |
+| RPC (preflight) | `chain::preflight` | `check_native_balance` | `pub async fn check_native_balance(client, owner, min) -> Result<()>` (preflight.rs:37) | 2. Loud-RED gate (≥ min SOL) |
+| RPC (preflight) | `chain::preflight` | `check_token_balance` | `pub async fn check_token_balance(client, ata, min, decimals)` (preflight.rs:61) | 2. Loud-RED gate (≥ min token) |
+| RPC (preflight) | `chain::preflight` | `check_ata_exists` | `pub async fn check_ata_exists(client, ata) -> Result<bool>` (preflight.rs:100) | 4. Skip create-ATA if exists |
+| RPC (preflight) | `chain::preflight` | `resolve_mint_decimals` | `pub async fn resolve_mint_decimals(client, mint) -> Result<u8>` (preflight.rs:109) | 4. Auto-fill decimals for SPL |
+| RPC (preflight) | `chain::preflight` | `check_rent_exempt` | `pub async fn check_rent_exempt(client, data_len) -> Result<u64>` (preflight.rs:133) | 4. Pre-create account sizing |
+| Broadcast | `chain::account` | `send_transaction` | `pub async fn send_transaction(client, tx: &Transaction) -> Result<Signature>` (account.rs:145) | 6. Send w/ default options |
+| Broadcast | `chain::account` | `send_transaction_with_options` | `pub async fn send_transaction_with_options(client, tx: &Transaction, options: Value) -> Result<Signature>` (account.rs:156) | 6. Send w/ caller JSON options (devnet path) |
+| Broadcast | `tx::broadcast` | `wait_for_confirm` | `pub async fn wait_for_confirm(client, sig, commitment, timeout) -> Result<TransactionStatus>` (broadcast.rs:88) | 7. Poll `getSignatureStatuses` 60s |
+| Broadcast | `tx::broadcast` | `send_and_confirm` | `pub async fn send_and_confirm(...)` (broadcast.rs:60) | 6 + 7. Convenience: send + wait |
+| Tx build (native) | `tx::native` | `prepare_sol_transfer_message` | `pub fn prepare_sol_transfer_message(payer, recipient, lamports, cu_limit, priority_fee, blockhash) -> Message` (native.rs:29) | 4. SOL transfer message |
+| Tx build (builder) | `tx::builder` | `build_sol_transfer` | `pub fn build_sol_transfer(from, to, lamports) -> Vec<Instruction>` (builder.rs:54) | 4. Lower-level: just transfer ix |
+| Tx build (builder) | `tx::builder` | `build_sol_transfer_with_budget` | `pub fn build_sol_transfer_with_budget(from, to, lamports, cu_limit, priority_fee) -> Vec<Instruction>` (builder.rs:92) | 4. Transfer + CU budget ixs |
+| Tx build (builder) | `tx::builder` | `compute_budget_instructions` | `pub fn compute_budget_instructions(cu_limit, priority_fee) -> [Instruction; 2]` (builder.rs:70) | 4. CU-limit + CU-price ix pair |
+| Tx build (SPL) | `tx::builder` | `build_spl_transfer_checked` | `pub fn build_spl_transfer_checked(...) -> Vec<Instruction>` (builder.rs:248) | 4. SPL transfer-checked ix |
+| Tx build (SPL) | `tx::builder` | `build_spl_approve` | `pub fn build_spl_approve(...)` (builder.rs:298) | 4. Delegate approval ix |
+| Tx build (SPL) | `tx::builder` | `build_spl_close_account` | `pub fn build_spl_close_account(...)` (builder.rs:335) | 4. Close ATA, recover rent |
+| Tx build (SPL) | `tx::spl` | `prepare_spl_transfer_message` | `pub fn prepare_spl_transfer_message(...)` (spl.rs:43) | 4. SPL transfer message (with optional ATA-create prepend) |
+| Tx build (SPL) | `tx::builder` | `derive_ata_with_program_id` | `pub fn derive_ata_with_program_id(owner, mint, program_id) -> Pubkey` (builder.rs:196) | 4. Deterministic ATA addr |
+| Tx build (SPL) | `tx::builder` | `prepend_create_ata` | `pub fn prepend_create_ata(ixs, payer, ata) -> Vec<Instruction>` (builder.rs:215) | 4. Idempotent ATA-create prepend |
+| Disambig | `disambig` | `classic_token_program_id` | `pub fn classic_token_program_id() -> Pubkey` (disambig.rs:46) | 4. Resolve Classic vs Token-2022 |
+| Disambig | `disambig` | `token_2022_program_id` | `pub fn token_2022_program_id() -> Pubkey` (disambig.rs:57) | 4. Resolve Token-2022 |
+| Disambig | `disambig` | `TokenProgram::from_program_id` / `program_id` | (disambig.rs:84 / 100) | 4. Round-trip disambig |
+| Disambig | `disambig` | `reject_wrong_token_program` | `pub fn reject_wrong_token_program(actual, expected)` (disambig.rs:124) | 4. Loud-RED on program mismatch |
+| Rate-limit | `chain::rate_limit::RateLimiter` | `new`, `acquire` | (rate_limit.rs:49 / 64) | 3. Token-bucket per host |
+
+**Total:** 41 library fns across 11 source modules (`wallet`, `read_only_wallet`, `wallet_manager`, `chain::client`, `chain::account`, `chain::preflight`, `chain::rate_limit`, `tx::native`, `tx::builder`, `tx::spl`, `tx::broadcast`, `disambig`).
+
+##### End-to-end coverage map (per live broadcast path test #9)
+
+| Step | Required capability | Library fn(s) | Status |
+|------|--------------------|---------------|--------|
+| 1 | Wallet derive | `Wallet::from_mnemonic` | ✅ covered |
+| 1 | Pubkey decode | `address::parse_user_address` | ✅ **covered** (Phase 6.4 Step 4, landed 2026-09-13) — wraps `solana_sdk::Pubkey::from_str`, adds off-curve PDA rejection returning typed `Error::InvalidAddress`. Live broadcast `tests/submit_devnet_send_real_broadcast` switched from raw `solana_sdk::pubkey::Pubkey::from_str` to the library wrapper. Unit tests (`wallet_from_mnemonic_*`, `prepare_*_transfer_message_*`) still use raw `Pubkey::from_str` — out of audit scope (message-builder tests, not library-surface tests). |
+| 2 | Prefund balance | `get_balance` / `chain::preflight::check_native_balance` | ✅ covered |
+| 3 | RPC client | `RpcClient::new` | ✅ covered |
+| 4 | Build SOL message | `prepare_sol_transfer_message` | ✅ covered |
+| 4 | Build SPL message | `prepare_spl_transfer_message` + `derive_ata_with_program_id` + `prepend_create_ata` | ✅ covered |
+| 4 | Auto-fill decimals | `chain::preflight::resolve_mint_decimals` | ✅ covered |
+| 4 | Check ATA exists | `chain::preflight::check_ata_exists` | ✅ covered |
+| 5 | Sign legacy tx | `Wallet::sign_legacy_transaction` | ✅ **covered** (Phase 6.4 Step 2, landed 2026-09-13) — wraps `Transaction::try_sign`, enforces P1 blockhash-mismatch + P4 fee-payer rejection, returns `Error::BlockhashMismatch` / `Error::FeePayerMismatch`. `tests/submit_devnet_send_real_broadcast` switched from raw `try_sign(&[as_keypair()], ...)` to library fn; live broadcast TX `3zESw9S5…eTY` proves cluster acceptance. 6 unit tests in `tests/sign_legacy_transaction.rs`. |
+| 5 | Sign versioned tx | `Wallet::sign_transaction` | ✅ covered |
+| 6 | Broadcast w/ options | `send_transaction_with_options` | ✅ covered (devnet path) |
+| 6 | Broadcast convenience | `send_transaction` / `send_and_confirm` | ✅ covered |
+| 7 | Confirm poll | `wait_for_confirm` | ✅ covered |
+| 7 | Single-shot status | `get_signature_status` | ✅ covered |
+| 8 | On-chain effect check | `tx::broadcast::wait_for_landing` | ✅ **covered** (Phase 6.4 Step 3, landed 2026-09-13) — composes `wait_for_confirm` + balance-delta poll. Returns `Result<u64>` (post-balance). Tolerates `ConfirmPending` / `ConfirmTimeout` from inner confirm; `Error::ConfirmTimeout` on landing-deadline if balance didn't decrease by `expected_delta_lamports`. Live broadcast switched from hand-rolled loop (~10 lines) to single library call. |
+| 8 | SPL on-chain effect | `get_token_account_balance` | ✅ covered |
+| 8 | Cluster health gate | `get_health` / `get_version` | ✅ covered |
+
+##### Unsupported / partial features for end-to-end SOL/SPL tx completion
+
+Loud-RED gates: any item below without an explicit V0.1.5 deferral or Phase 6.4 follow-up → blocks Phase 7 CLI `sol send` and Phase 8 FFI binding (no library surface to call).
+
+| Gap | What's missing | End-to-end impact | Deferral / Phase 6.4 follow-up |
+|-----|----------------|-------------------|---------------------------------|
+| **Legacy-tx sign wrapper** | `Wallet::sign_legacy_transaction(&self, &mut Transaction, Hash) -> Result<()>` | Test #9 reaches into `as_keypair()` + raw `solana_sdk::transaction::Transaction::try_sign`; library never owns the sign step | **Phase 6.4 Step 2:** add wrapper, switch test, keep `as_keypair()` only for FFI crate (`sol_wallet_sign_transaction`) |
+| **Combined landing-proof helper** | ~~No `tx::broadcast::wait_for_landing(...)`~~ — **closed** (Phase 6.4 Step 3, landed 2026-09-13). Composed fn at `src/tx/broadcast.rs` wraps `wait_for_confirm` + `get_balance` poll; test #9 + Phase 7 CLI + Phase 8 FFI all call it | ~~Test #9 hand-rolls the confirm-then-balance-delta loop~~ — replaced with single library call. | ~~**Phase 6.4 Step 3**~~ closed |
+| **Fee-payer separation** | No `prepare_sol_transfer_message_with_fee_payer(fee_payer, signer, recipient, …)` — every fn assumes `signer == fee_payer` | Can't build a tx where the mobile wallet signs but a relayer/foreign payer pays the fee | V0.1.5 — third-party-payer is out of v0.1 scope per plan §1.2 |
+| **Durable nonce txs** | No `advance_nonce_account(nonce_account, authority) -> Instruction`, no `prepare_nonce_tx_message(...)` builder | Can't sign offline-friendly durable-nonce txs (cancel/upgrade flows) | V0.1.5 — durable nonce requires separate lifecycle work |
+| **Memo ix builder** | No `build_memo(memo: &str) -> Instruction` (spl-memo or native memo program) | On-chain tagging of transfers (tax / audit trails) requires raw ix build | V0.1.5 — defer; not in 33-row matrix |
+| **Address lookup tables (ALTs)** | No `resolve_alt(client, alt_address)`, no `Message::try_compile` overload with ALT keys, no `Transaction` ALT-aware variants | Wallets with > 12 tx accounts can't fit in a single legacy tx | V0.1.5 — ALT adds wire-format complexity; not in v0.1 row matrix |
+| **Auto-pick priority fee** | `get_recent_prioritization_fees` exists (account.rs:507) but no `recommend_priority_fee(client, percentile) -> u64` helper | Caller must guess priority fee or use 0 (current test uses 0) | V0.1.5 — observation tool only; auto-pick adds policy surface |
+| **Replace-blockhash retry loop** | No `send_with_blockhash_retry(...)` — caller must re-fetch + re-sign + re-send manually when `replaceRecentBlockhash: true` triggers re-sign | Stale-blockhash failure mode is silent (relies on `skipPreflight: true` cluster-side fixup) | V0.1.5 — retry semantics need error taxonomy work |
+| **SPL token burn** | No `build_spl_burn(...)` — burn-then-recover-rent flow incomplete | Can't permanently remove supply from a mint we control | V0.1.5 — not in 33-row matrix |
+| **SPL sync_native** | No `build_spl_sync_native(...)` — wrapped SOL (wSOL) recovery flow incomplete | Can't recover wSOL back to native SOL after unwrap | V0.1.5 — wrapped-SOL UX not in v0.1 row matrix |
+| **Compute budget dynamic sizing** | `compute_budget_instructions(cu_limit, priority_fee)` requires caller to know CU usage up-front; no `simulate_and_pick_cu(client, msg, multiplier)` helper | Mobile callers pick fixed 200k CU; overpays most txs, underpays complex SPL txs | V0.1.5 — simulation-replay adds RPC cost |
+| **Pre-flight tx simulation loop** | `simulate_transaction` exists (account.rs:222) but no `simulate_replace_blockhash(msg) -> Message` helper that auto-substitutes stale hashes before broadcast | Every devnet broadcast relies on `replaceRecentBlockhash: true` flag, not a pre-check | V0.1.5 — pre-flight loop adds latency cost |
+| **`as_keypair()` exposure** | `Wallet::as_keypair(&self) -> &Keypair` (wallet.rs:233) lets callers bypass library signing | Phase 6 security review P6-3 🔴 logged this; RAII `OwnedLock` hides it under `sign_message` / `sign_transaction` but `Wallet` itself exposes | **Phase 6.4 Step 2:** once `sign_legacy_transaction` lands, audit whether `Wallet::as_keypair` stays pub (FFI crate needs it for `sol_wallet_sign_transaction`) |
+
+##### Summary
+
+- **41 library fns** cover the live broadcast path with **2 explicit gaps** (legacy-tx sign wrapper + combined landing-proof helper) — both get Phase 6.4 fix-steps.
+- **10 partial / missing capabilities** all deferred to V0.1.5 (out of v0.1 scope per plan §1.2 / 33-row matrix).
+- **Phase 6.4 Steps:**
+
+  1. (no-op) Audit complete — function table + gap-list written.
+  2. **Add `Wallet::sign_legacy_transaction(&self, &mut Transaction, Hash) -> Result<()>`** to close the legacy-sign gap; switch test #9 to call it; re-audit `Wallet::as_keypair` visibility under FFI-only invariant.
+  3. ~~**Add `tx::broadcast::wait_for_landing(client, sig, sender_pubkey, expected_delta_lamports, timeout) -> Result<u64>`**~~ — landed 2026-09-13. Test #9 switched to single library call; drops ~10 lines of polling code.
+  4. Re-run test #9 on devnet; commit push PR; flip `[x]` only after green on `rust-sol-core`.
+
+**Loud-RED gate:** Step 2 unchecked → Phase 7 CLI `sol send` cannot reuse a library fn for sign; must re-implement in the CLI = scope creep + duplicate test surface. Step 3 unchecked → Phase 8 FFI amplifies the gap (every mobile caller re-implements the polling loop).
+
+---
+
+#### Phase 6.5 — Verification
 
 - [ ] All 33 in-scope rows have a passing test (rows 1-20, 22-34); row 21 explicitly on V0.1.5 backlog.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after Task 6.2.1 Step 3 + row-coverage table check)

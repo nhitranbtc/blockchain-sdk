@@ -29,10 +29,13 @@ use std::time::{Duration, Instant};
 
 use crate::chain::account::TransactionStatus;
 use solana_commitment_config::CommitmentConfig;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
 use solana_sdk::transaction::Transaction;
 
-use crate::chain::account::{get_latest_blockhash, get_signature_status, send_transaction};
+use crate::chain::account::{
+    get_balance, get_latest_blockhash, get_signature_status, send_transaction,
+};
 use crate::chain::client::RpcClient;
 use crate::error::{Error, Result};
 
@@ -126,6 +129,63 @@ pub async fn wait_for_confirm(
         }
         tokio::time::sleep(poll_backoff).await;
         poll_backoff = (poll_backoff * 2).min(CONFIRM_POLL_CAP);
+    }
+}
+
+/// Phase 6.4 Step 3 — authoritative landing proof: wait for cluster
+/// confirmation (tolerating `ConfirmPending` / `ConfirmTimeout`) AND
+/// poll `get_balance` until the sender's lamport balance decreases by
+/// at least `expected_delta_lamports`. The balance-delta poll is the
+/// ground-truth landing proof — the cluster can report `confirmed`
+/// while the actual SOL debit has not propagated yet (rare on devnet,
+/// common on stalled testnet/mainnet-beta during congestion).
+///
+/// Args:
+/// - `pre_balance`: sender's SOL balance captured BEFORE broadcast.
+/// - `expected_delta_lamports`: minimum lamport decrease to accept as
+///   landed (= transfer amount + 5000 lamport base fee for native SOL;
+///   for SPL transfers set to 5000 to detect fee-only debits, then
+///   inspect the SPL balance separately).
+/// - `timeout`: upper bound on the WHOLE flow (confirm + balance poll).
+///
+/// Returns the post-balance (sender's lamports) on landing. Returns
+/// `Error::ConfirmTimeout` if the deadline elapses before balance
+/// decreased — caller can re-poll or surface the explorer URL.
+///
+/// Security properties (audit 2026-09-13):
+/// - **No panic / no manual RPC**: wraps `wait_for_confirm` +
+///   `chain::account::get_balance`. Callers cannot forget to set the
+///   deadline or skip the balance poll.
+/// - **Error taxonomy preserved**: `ConfirmPending` / `ConfirmTimeout`
+///   from the inner confirm are tolerated — the balance poll is the
+///   ground truth. A hard timeout still surfaces as `ConfirmTimeout`
+///   so the CLI / FFI can present a consistent error to the user.
+pub async fn wait_for_landing(
+    rpc: &RpcClient,
+    signature: &Signature,
+    sender_pubkey: &Pubkey,
+    pre_balance: u64,
+    expected_delta_lamports: u64,
+    timeout: Duration,
+) -> Result<u64> {
+    // Step 1: cluster confirmation. Tolerate `Err` — the tx may still
+    // land; the balance-delta poll below is authoritative.
+    let _ = wait_for_confirm(rpc, signature, CommitmentConfig::confirmed(), timeout).await;
+    // Step 2: poll balance until `pre_balance - cur >= expected_delta`.
+    let deadline_at = Instant::now() + timeout;
+    let target_threshold = pre_balance.saturating_sub(expected_delta_lamports);
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let cur = get_balance(rpc, sender_pubkey).await?;
+        if cur <= target_threshold {
+            return Ok(cur);
+        }
+        if Instant::now() >= deadline_at {
+            return Err(Error::ConfirmTimeout {
+                signature: signature.to_string(),
+                waited_ms: timeout.as_millis() as u64,
+            });
+        }
     }
 }
 

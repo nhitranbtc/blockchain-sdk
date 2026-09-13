@@ -189,6 +189,33 @@ pub enum Error {
     /// coalesced into `WalletNotFound` (semantically wrong).
     #[error("sol-wallet-core: invalid wallet-id — {input:?}")]
     InvalidWalletId { input: String },
+
+    /// Phase 6.4 — `Wallet::sign_legacy_transaction` was called with a
+    /// `blockhash` argument that does not match the `Transaction`'s
+    /// embedded `recent_blockhash`. Signing would produce a valid
+    /// signature for the wrong blockhash, causing the cluster to reject
+    /// the transaction. Rejected loudly rather than silently signing.
+    #[error(
+        "sol-wallet-core: transaction blockhash mismatch — message has {tx_message}, signer received {signer_input}"
+    )]
+    BlockhashMismatch {
+        tx_message: solana_sdk::hash::Hash,
+        signer_input: solana_sdk::hash::Hash,
+    },
+
+    /// Phase 6.4 — `Wallet::sign_legacy_transaction` was called on a
+    /// `Transaction` whose first account key (fee-payer) is not this
+    /// wallet's pubkey. The signature would not cover fee payment and
+    /// the cluster would reject the transaction at `validate_fee_payer`.
+    /// Multi-signer SPL flows that need a separate fee-payer should use
+    /// `Wallet::sign_transaction(VersionedTransaction)` instead.
+    #[error(
+        "sol-wallet-core: fee-payer mismatch — expected wallet pubkey {expected}, got {actual}"
+    )]
+    FeePayerMismatch {
+        expected: solana_sdk::pubkey::Pubkey,
+        actual: solana_sdk::pubkey::Pubkey,
+    },
 }
 
 /// Crate-wide result alias.
