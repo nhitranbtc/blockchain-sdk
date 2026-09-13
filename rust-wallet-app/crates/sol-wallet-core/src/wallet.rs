@@ -257,15 +257,32 @@ impl Wallet {
     /// FFI `sol_wallet_send_sol` / `sol_wallet_send_spl` paths) don't
     /// need direct access to the inner `Keypair` to construct a tx.
     ///
-    /// Returns the same `SignatureError` mapping as the Anza
-    /// `try_new` (e.g. fee-payer-not-in-static-account-keys).
+    /// Surfaces Anza's `SignerError` variants as typed `Error`:
+    /// `SignerError::InvalidInput` → `Error::DerivationFailed` (the
+    /// only plausible "derivation" cause in this code path), all
+    /// others (`TooManySigners`, `NotEnoughSigners`,
+    /// `KeypairPubkeyMismatch`) → `Error::InvalidTransaction` so the
+    /// FFI boundary can distinguish them from "feature not yet
+    /// implemented" via `FfiError::InvalidTransaction = 15`.
     pub fn try_build_versioned_transaction(
         &self,
         message: VersionedMessage,
     ) -> Result<VersionedTransaction> {
+        use solana_sdk::signer::SignerError;
         let keypair = self.as_keypair();
-        VersionedTransaction::try_new(message, &[keypair])
-            .map_err(|e| Error::DerivationFailed(format!("VersionedTransaction::try_new: {e}")))
+        VersionedTransaction::try_new(message, &[keypair]).map_err(|e| match e {
+            SignerError::InvalidInput(s) => Error::DerivationFailed(s),
+            SignerError::TooManySigners => {
+                Error::InvalidTransaction("too many signers".to_string())
+            }
+            SignerError::NotEnoughSigners => {
+                Error::InvalidTransaction("not enough signers".to_string())
+            }
+            SignerError::KeypairPubkeyMismatch => {
+                Error::InvalidTransaction("wallet pubkey not in message account keys".to_string())
+            }
+            _ => Error::InvalidTransaction(format!("{e}")),
+        })
     }
 
     /// Sign arbitrary bytes with this wallet's Ed25519 signing key.

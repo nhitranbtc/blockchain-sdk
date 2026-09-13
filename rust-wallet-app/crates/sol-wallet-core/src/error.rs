@@ -190,27 +190,16 @@ pub enum Error {
     #[error("sol-wallet-core: invalid wallet-id — {input:?}")]
     InvalidWalletId { input: String },
 
-    /// Phase 6.4 — `Wallet::sign_legacy_transaction` was called on a
-    /// `Transaction` whose first account key (fee-payer) is not this
-    /// wallet's pubkey. The signature would not cover fee payment and
-    /// the cluster would reject the transaction at `validate_fee_payer`.
-    /// Multi-signer SPL flows that need a separate fee-payer should use
-    /// `Wallet::sign_transaction(VersionedTransaction)` instead.
-    ///
-    /// After the Phase 10 consolidation that removed `sign_legacy_transaction`,
-    /// this variant is currently unreachable from the crate's own API.
-    /// It is kept as a documented invariant for callers that build
-    /// `VersionedTransaction` manually and want a typed signal when
-    /// they attempt to sign at the wrong position. Use
-    /// `Wallet::sign_transaction(VersionedTransaction)` directly for
-    /// the supported multi-signer flow.
-    #[error(
-        "sol-wallet-core: fee-payer mismatch — expected wallet pubkey {expected}, got {actual}"
-    )]
-    FeePayerMismatch {
-        expected: solana_sdk::pubkey::Pubkey,
-        actual: solana_sdk::pubkey::Pubkey,
-    },
+    /// `Wallet::try_build_versioned_transaction` rejected the message
+    /// shape — typically `SignerError::TooManySigners`,
+    /// `SignerError::NotEnoughSigners`, or
+    /// `SignerError::KeypairPubkeyMismatch` from Anza's
+    /// `VersionedTransaction::try_new`. Surfaces as
+    /// `FfiError::InvalidTransaction = 15` on the FFI boundary so
+    /// mobile consumers can distinguish tx-construction failures
+    /// from "feature not yet implemented" (`FfiError::Unimplemented = 98`).
+    #[error("sol-wallet-core: invalid transaction — {0}")]
+    InvalidTransaction(String),
 }
 
 /// Crate-wide result alias.

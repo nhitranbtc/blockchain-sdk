@@ -110,6 +110,11 @@ pub enum FfiError {
     /// Process-global `WalletManager` not yet initialized — caller must
     /// call `sol_wallet_init` before any other FFI call.
     NotInitialized = 14,
+    /// `VersionedTransaction::try_new` rejected the message shape
+    /// (`SignerError::TooManySigners`, `NotEnoughSigners`,
+    /// `KeypairPubkeyMismatch`, etc.). Distinguishes real tx-construction
+    /// failures from `FfiError::Unimplemented = 98` ("feature not built").
+    InvalidTransaction = 15,
     /// Not yet implemented (interim stub for Steps 2-10 — real impl lands
     /// in subsequent PRs per plan Task 8.1).
     Unimplemented = 98,
@@ -135,6 +140,11 @@ impl From<Error> for FfiError {
             // `DecryptFailed` (= 6), never `Panic` (= 99). The audit
             // finding tracked this as issue #564.
             Error::InvalidSeed => FfiError::DecryptFailed,
+            // Phase 10 / security audit follow-up — `Wallet::try_build_versioned_transaction`
+            // rejected the message shape. Distinguishes real
+            // tx-construction failures from "feature not yet
+            // implemented" (`FfiError::Unimplemented = 98`).
+            Error::InvalidTransaction(_) => FfiError::InvalidTransaction,
             Error::InsufficientFunds { .. } => FfiError::InsufficientFunds,
             Error::Transport(_) => FfiError::Transport,
             Error::Rpc { .. } => FfiError::Rpc,
@@ -716,8 +726,7 @@ pub extern "C" fn sol_wallet_send_sol(
         let msg =
             solana_sdk::message::Message::new_with_blockhash(&[ix], Some(&from_pubkey), &blockhash);
         let tx = wallet
-            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))
-            .map_err(|_| FfiError::Unimplemented)?;
+            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))?;
         let signed_tx = wallet
             .sign_transaction(tx)
             .map_err(|_| FfiError::Unimplemented)?;
@@ -851,8 +860,7 @@ pub extern "C" fn sol_wallet_send_spl(
         let msg =
             solana_sdk::message::Message::new_with_blockhash(&[ix], Some(&from_pubkey), &blockhash);
         let tx = wallet
-            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))
-            .map_err(|_| FfiError::Unimplemented)?;
+            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))?;
         let signed_tx = wallet
             .sign_transaction(tx)
             .map_err(|_| FfiError::Unimplemented)?;
