@@ -271,6 +271,44 @@ jobs:
           (cd crates/sol-wallet-core && CARGO_TARGET_DIR=/tmp/geiger-target cargo geiger) || true
           echo "::endgroup::"
 
+  # Manual-dispatch gate: runs every `#[ignore]`'d test in
+  # sol-wallet-core. Currently 1 such test:
+  # `submit_devnet_send_real_broadcast` (live devnet broadcast,
+  # ~0.001005 SOL cost per run — see `tests/submit_devnet_send.rs`).
+  #
+  # Gated on `workflow_dispatch` so the auto PR/push path doesn't burn
+  # SOL or depend on broadcast success. Operator triggers via:
+  #   gh workflow run rust-sol-core-ci.yml -f job=rust-test-ignored
+  # when they want a live-cluster regression check (typically after a
+  # broadcast-path change is merged). Merge gates do not depend on this
+  # job. If a future ignored test is added, `cargo test -- --ignored`
+  # picks it up automatically.
+  rust-test-ignored:
+    name: Rust test (sol-wallet-core, --ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        # Required by `spikes/.../build.rs` only — workspace-wide cargo
+        # touches the path; mirror of `rust-test` install step.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --ignored (manual dispatch only)
+        working-directory: rust-wallet-app
+        # Runs every `#[ignore]`'d test across all test binaries.
+        # Current set: `submit_devnet_send_real_broadcast` (live
+        # devnet broadcast, --nocapture so the TX hash prints to CI
+        # logs). No `--fail-fast` here — we want every ignored test to
+        # run even if one fails, so the operator sees the full picture.
+        run: cargo test -p sol-wallet-core -- --ignored --nocapture
+
 
   # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)" + Q17.
   # `sol-wallet-core` MUST compile for iOS + Android arm64 with no source
