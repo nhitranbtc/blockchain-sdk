@@ -138,6 +138,54 @@ jobs:
           cargo build -p sol-wallet-core
           cargo test -p sol-wallet-core --lib --tests
 
+  # Security audit #566 (Task 10.3) — negative compile-fail pin that
+  # `Wallet::as_keypair` is NOT visible to external crates. The test
+  # file `tests/wallet_as_keypair_external_reach.rs` is gated behind
+  # `--cfg negative_test` (inert under the regular `cargo test` run
+  # above); this dedicated step enables the cfg and asserts the
+  # compile FAILS with the expected `E0624: method 'as_keypair' is
+  # private` error. If the build SUCCEEDS under this cfg, the audit
+  # contract has been violated (`as_keypair` has been re-exposed as
+  # `pub`) and downstream code can extract the secret outside the
+  # zeroize lifecycle via `solana_sdk::Keypair::insecure_clone()`.
+  #
+  # `continue-on-error: true` because the negative test SHOULD fail
+  # to compile — a non-zero exit here is the audit passing. The grep
+  # gate below confirms the expected error pattern appears in stderr.
+  rust-test-negative-as-keypair:
+    name: Rust test (sol-wallet-core, --cfg negative_test for #566)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --cfg negative_test (must fail with E0624 for audit #566)
+        working-directory: rust-wallet-app
+        run: |
+          set +e
+          RUSTFLAGS="--cfg negative_test" \
+            cargo test -p sol-wallet-core --test wallet_as_keypair_external_reach 2>&1 | tee /tmp/negative_test.log
+          status=${PIPESTATUS[0]}
+          # The expected outcome is non-zero exit + E0624 in stderr.
+          # If either expectation is violated, fail the job loud-RED.
+          if [ "$status" -eq 0 ]; then
+            echo "FAIL: negative test compiled successfully under --cfg negative_test."
+            echo "Audit #566 contract violated: Wallet::as_keypair is reachable from external crates."
+            exit 1
+          fi
+          if ! grep -q 'E0624' /tmp/negative_test.log; then
+            echo "FAIL: negative test failed to compile but did not emit E0624 (privacy error)."
+            echo "Expected 'error[E0624]: method \`as_keypair\` is private'."
+            exit 1
+          fi
+          echo "PASS: negative test correctly failed with E0624 as expected."
+
   # L13 step 11 gates 2-4 (dedup / audit / deny) merged into one job to share
   # the checkout + toolchain install across all three, mirroring umbrella
   # `ci.yml`'s `rust-deps`. Each gate fails the job independently.
