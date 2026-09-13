@@ -18,6 +18,18 @@ default = []
 [lib]
 crate-type = ["rlib", "cdylib"]
 
+# Register `negative_test` cfg so clippy's `-D unexpected-cfgs`
+# (implied by `-D warnings` in `rust-lint` CI job) does not reject
+# the gated file `tests/wallet_as_keypair_external_reach.rs`. The
+# dedicated CI step
+# `.github/workflows/rust-sol-core-ci.yml::rust-test-negative-as-keypair`
+# enables `--cfg negative_test` and asserts the gated file fails to
+# compile with `E0624: method 'as_keypair' is private` — pinning the
+# audit #566 contract that `Wallet::as_keypair` is NOT reachable from
+# external crates.
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ["cfg(negative_test)"] }
+
 # Phase 0 keeps the lib dep-free so the empty module stubs compile. The
 # Anza SDK + SPL + ed25519-bip32 + crypto deps live in workspace.dependencies
 # (Cargo.toml at the umbrella) and are wired here in Phase 1, once

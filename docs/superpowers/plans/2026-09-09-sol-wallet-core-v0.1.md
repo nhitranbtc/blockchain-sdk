@@ -24,8 +24,8 @@
 - **Phase 5** = RPC client (reqwest JSON-RPC, 15 HTTP methods in 5.1 + 1 in 5.2 `requestAirdrop` + 1 in 5.3 `getTransaction` + per-`RpcClient` rate limiter in 5.4 + SPKI escape hatch in 5.5 — Anza `solana-rpc-client` DROPPED per issue #555) + `send_and_confirm` (single send + poll, no retry-on-stale-hash). Retry-on-stale-hash + BlockhashCache + full SPKI pin + 5 WS subscribes DEFERRED to V0.1.5. The 17 RPC methods across 5.1/5.2/5.3 + the security hardening in 5.4/5.5 cover all 22 Phase 7 `sol` CLI commands. Final test count: 94 (Phase 1-4) + 70 (5.1) + 3 (5.2) + 4 (5.3) + 3 (5.4) + 5 (5.5) = **179 tests pass** at Phase 5 done.
 - **Phase 6** = Wallet persistence (Argon2id + AES-256-GCM) + WalletManager CRUD + encrypted blob atomic write.
 - **Phase 7** = `sol` CLI (22 commands: wallet / address / balance / spl / tx / config).
-- **Phase 8** = FFI cdylib (12 C functions + panic-message scrubber).
-- **Phase 10** = Mainnet smoke gate ($0.001 USDC self-send via `RUN_SOL_MAINNET=1`).
+- **Phase 7.5** = FFI cdylib (12 C functions + panic-message scrubber).
+- **Phase 9** = Mainnet smoke gate ($0.001 USDC self-send via `RUN_SOL_MAINNET=1`).
 
 **Tech Stack:** Rust 1.89.0 stable (mandatory MSRV per every Anza crate), `solana-sdk` 4.1.0 (facade) + `solana-client` 4.2.2 (RPC) + `solana-program` 4.1.0 + `solana-keypair` 3.1.2 + `solana-message` 4.6.0 + `solana-transaction` 4.3.0 + `solana-instruction` 3.5.0 + `solana-compute-budget-program` 4.2.2, SPL: `spl-token` 9.0.0 + `spl-token-2022` 11.0.0 + `spl-associated-token-account` 8.0.0 + `spl-memo` 7.0.0, HD: `ed25519-bip32` 0.4.3 + `bip39` 2.2 (English only), crypto: `argon2` 0.5 + `aes-gcm` 0.10 + `zeroize` 1.x + `subtle` 2 + `ed25519-dalek` 3.0.0 (transitive pin), async+HTTP: `tokio` 1.x + `reqwest` 0.12 (`rustls-tls`) + `rustls` 0.23 + `webpki` 0.22 + `x509-parser` 0.16, errors+tracing: `thiserror` 1.x + `tracing` workspace, FFI safety: `once_cell` 1.x + `regex` 1.x, build-time: `cbindgen`, CLI: `clap` 4, encoding: `serde` + `serde_json` + `bs58` 0.5 + `hex` + `chrono` + `uuid` 1.x.
 
@@ -265,7 +265,7 @@ rust-wallet-app/crates/sol-wallet-core/tests/   # created by owning phases (Phas
 ├── spki_pin.rs                       # Phase 5.5 (V0.1.5 opt-in): row 21 — SPKI pin match/mismatch
 ├── rpc_methods_mock.rs              # Phase 5.1 (V0.1): 15 HTTP RPC methods against wiremock — full Phase 7 critical-path binding-point coverage (4 send/confirm + 5 account/balance + 2 mint/metadata + 4 cluster info/priority fee); 5.2 adds `requestAirdrop` mock, 5.3 adds `getTransaction` mock
 ├── error_mapping.rs                  # Phase 5/6: row 23 — Error From + Debug redaction
-├── placeholder.rs                    # Phase 8.1: rows 24, 25 — FFI panic scrubber + C ABI smoke
+├── placeholder.rs                    # Phase 7.5.1: rows 24, 25 — FFI panic scrubber + C ABI smoke
 ├── submit_sol_local.rs               # Phase 7.2: row 26 — submit_sol E2E on surfpool
 ├── submit_spl_local_held.rs          # Phase 7.2: row 27 — submit_spl E2E on held ATA (mock USDC)
 ├── submit_spl_local_fresh.rs         # Phase 7.2: row 28 — submit_spl E2E on fresh ATA (rent delta)
@@ -274,7 +274,7 @@ rust-wallet-app/crates/sol-wallet-core/tests/   # created by owning phases (Phas
 ├── send_token.rs                    # Phase 5.1 (V0.1): prepare_spl_transfer_message + sign + send + confirm; integration gated `RUN_SOL_DEVNET=1`
 # (V0.1.5) send_with_retry.rs        # Phase 5.5: rows 30, 31 — stale blockhash retry + wait_for_confirm timeout
 ├── boot_probe_local.rs               # Phase 7.2: row 32 — get_health boot probe
-├── mainnet_smoke.rs                  # Phase 10.1: row 33 — mainnet $0.001 USDC self-send (gated RUN_SOL_MAINNET=1)
+├── mainnet_smoke.rs                  # Phase 9.1: row 33 — mainnet $0.001 USDC self-send (gated RUN_SOL_MAINNET=1)
 ├── transport_failure.rs              # Phase 5.1: row 34 — transport failure (closed port)
 ├── submit_send_speedup_local.rs      # Phase 7.2: row 35 — submit_send_speedup (new sig + higher priority fee)
 ├── wallet_lifecycle.rs               # Phase 6.1: rows 36, 37, 38 — import_from_pk + summary + list/delete/rename lifecycle
@@ -287,7 +287,7 @@ rust-wallet-app/crates/sol-wallet-core/tests/   # created by owning phases (Phas
 └── fixtures/
     └── spki_pin_test_cert.der        # leaf cert captured from api.mainnet-beta.solana.com (Phase 5.5)
 
-rust-wallet-app/crates/sol/tests/  # Phase 7.1 + Phase 7.2 + Phase 10.1 (CLI tests; 10 files)
+rust-wallet-app/crates/sol/tests/  # Phase 7.1 + Phase 7.2 + Phase 9.1 (CLI tests; 10 files)
 ├── cli_wallet.rs                     # Phase 7.1: wallet create/import/show/list/delete/rename/balance/send
 ├── cli_address.rs                    # Phase 7.1: address new/pubkey (Phantom UX parity)
 ├── cli_balance.rs                    # Phase 7.1: balance --address (SOL), --address --token (SPL)
@@ -295,7 +295,7 @@ rust-wallet-app/crates/sol/tests/  # Phase 7.1 + Phase 7.2 + Phase 10.1 (CLI tes
 ├── cli_tx.rs                         # Phase 7.1: tx get/wait (poll for confirm)
 ├── cli_config.rs                     # Phase 7.1: config show/set-rpc/set-cluster (Testnet rejected per Q11)
 ├── cli_json_output.rs                # Phase 7.2 GAP stub: row N-shape — JSON output for all 22 commands
-├── cli_mainnet_smoke.rs              # Phase 10.1: loud-RED `RUN_SOL_MAINNET=1` operator-run smoke
+├── cli_mainnet_smoke.rs              # Phase 9.1: loud-RED `RUN_SOL_MAINNET=1` operator-run smoke
 ├── cli_integration_surfpool.rs       # Phase 7.2: row V15 — surfpool spawn + ephemeral port + 22 commands
 └── cli_devnet_conformance.rs         # Phase 7.2: loud-RED `RUN_SOL_DEVNET=1` cross-cluster conformance
 ```
@@ -316,8 +316,8 @@ rust-wallet-app/crates/sol/tests/  # Phase 7.1 + Phase 7.2 + Phase 10.1 (CLI tes
 | **Phase 7.1** (CLI scaffold + handlers)                   | `cli_wallet`, `cli_address`, `cli_balance`, `cli_spl`, `cli_tx`, `cli_config` (6)                             | 6  |
 | **Phase 7.2** (CLI full integration)                      | `submit_sol_local`, `submit_spl_local_held`, `submit_spl_local_fresh`, `submit_spl_local_approve`, `submit_send_speedup_local`, `boot_probe_local`, `cli_integration_surfpool`, `cli_devnet_conformance`, `cli_json_output` (9) | 9  |
 | **Phase 7 verification** (CLI completeness)              | (no test creates — verification only; cross-checks 21/22 deep-dive CLI rows GREEN, 10/10 CLI files compile, rows 7+13 extended via Phase 4.1/3.1 Modify) | 0  |
-| **Phase 8.1** (FFI cdylib)                                | `placeholder` (1 — covers FFI smoke + panic scrubber)                                                       | 1  |
-| **Phase 10.1** (mainnet smoke gate)                        | `mainnet_smoke`, `cli_mainnet_smoke` (2)                                                                       | 2  |
+| **Phase 7.5.1** (FFI cdylib)                                | `placeholder` (1 — covers FFI smoke + panic scrubber)                                                       | 1  |
+| **Phase 9.1** (mainnet smoke gate)                        | `mainnet_smoke`, `cli_mainnet_smoke` (2)                                                                       | 2  |
 | common + helpers (cross-phase, no stubs)                 | `common/{mod, mock_spl_usdc, surfpool_spawn, faucet, keypair_fixture}` (5)                                  | 5  |
 | **Total**                                                |                                                                                                              | **48 file-creates** (32 lib + 6 CLI + 5 common + 5 CLI extra; matches deep-dive scope)       |
 
@@ -352,7 +352,7 @@ The rule, stated once so every later phase can cite it:
 
 - **Branch from:** `rust-sol-core`. Never `main`, never another task branch.
 - **PR into:** `rust-sol-core`. Never `main`.
-- **Only exception:** the final v0.1 cut PR, `rust-sol-core` → `main`, opened once at the end of Phase 10 after the acceptance criteria pass.
+- **Only exception:** the final v0.1 cut PR, `rust-sol-core` → `main`, opened once at the end of Phase 9 after the acceptance criteria pass.
 - **Naming:** `sol/<phase>-<slug>`, e.g. `sol/phase1-wallet-keypair`, `sol/phase4-spl-ata-disambig`.
 
 Per-task ritual:
@@ -513,7 +513,7 @@ CI:
     cancel-in-progress: true
   ```
 
-  **Skip-guard pattern (Phase 0 — cdylib gated).** Each crate-scoped step runs `awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml` — exits 0 only when a `crate-type = [...]` line itself contains `"cdylib"`. The guard tests the MANIFEST, not a directory (Phase Set Up's own `CHANGELOG.md` creates the directory; only `Cargo.toml` proves a cargo package exists) AND not a comment (the Phase 0 manifest comment line 13 contains the literal `"cdylib"` explaining what Phase 8 will add — original `grep -q 'cdylib'` matched the comment and let the build through, runs `34437404128` + `34438180847` reproduced the failure).
+  **Skip-guard pattern (Phase 0 — cdylib gated).** Each crate-scoped step runs `awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml` — exits 0 only when a `crate-type = [...]` line itself contains `"cdylib"`. The guard tests the MANIFEST, not a directory (Phase Set Up's own `CHANGELOG.md` creates the directory; only `Cargo.toml` proves a cargo package exists) AND not a comment (the Phase 0 manifest comment line 13 contains the literal `"cdylib"` explaining what Phase 7.5 will add — original `grep -q 'cdylib'` matched the comment and let the build through, runs `34437404128` + `34438180847` reproduced the failure).
 
   **Toolchain pin.** All six jobs use `dtolnay/rust-toolchain@stable`; `rust-wallet-app/rust-toolchain.toml` pins channel `1.98.1`, which overrides the action for every cargo invocation inside that directory. Plan asked for `1.89.0` (Anza `rust-version`); `1.89.0` would be inert since the workspace file always wins.
 
@@ -1285,8 +1285,8 @@ Phase 5 lands the full RPC client surface needed by Phase 7's 22-command `sol` C
 | 21 | `chain/spki.rs` SPKI pin match/mismatch | Phase 5.5 (V0.1.5) | `tests/spki_pin.rs` + `fixtures/spki_pin_test_cert.der` | ⚠️ V0.1.5 DEFERRED |
 | 22 | `chain/solana_client.rs` 12 RPC methods | Phase 5.1 | `tests/rpc_methods_mock.rs` | ✅ |
 | 23 | `error.rs` 21 From + Debug redaction | Phase 5/6 | `tests/error_mapping.rs` | ✅ |
-| 24 | `ffi/panic.rs` panic scrubber | Phase 8.1 | `tests/placeholder.rs` | ✅ |
-| 25 | `ffi/` C ABI smoke (12 exports) | Phase 8.1 | `tests/placeholder.rs` | ✅ |
+| 24 | `ffi/panic.rs` panic scrubber | Phase 7.5.1 | `tests/placeholder.rs` | ✅ |
+| 25 | `ffi/` C ABI smoke (12 exports) | Phase 7.5.1 | `tests/placeholder.rs` | ✅ |
 | 26 | `tx/` submit_sol E2E | Phase 7.2 | `tests/submit_sol_local.rs` | ✅ |
 | 27 | `tx/` submit_spl_transfer held | Phase 7.2 | `tests/submit_spl_local_held.rs` | ✅ |
 | 28 | `tx/` submit_spl_transfer fresh | Phase 7.2 | `tests/submit_spl_local_fresh.rs` | ✅ |
@@ -1294,7 +1294,7 @@ Phase 5 lands the full RPC client surface needed by Phase 7's 22-command `sol` C
 | 30 | `tx/broadcast.rs` send_with_retry stale | Phase 5.5 (V0.1.5) | `tests/send_with_retry.rs` (V0.1.5) | ⏸️ V0.1.5 |
 | 31 | `tx/wait.rs` wait_for_confirm + timeout | Phase 5.5 (V0.1.5) | `tests/send_with_retry.rs` (V0.1.5) | ⏸️ V0.1.5 |
 | 32 | `chain/solana_client.rs` get_health boot probe | Phase 7.2 | `tests/boot_probe_local.rs` | ✅ |
-| 33 | SPL USDC mainnet $0.001 self-send | Phase 10.1 | `tests/mainnet_smoke.rs` + `crates/sol/tests/cli_mainnet_smoke.rs` | ✅ |
+| 33 | SPL USDC mainnet $0.001 self-send | Phase 9.1 | `tests/mainnet_smoke.rs` + `crates/sol/tests/cli_mainnet_smoke.rs` | ✅ |
 | 34 | transport failure: closed port | Phase 5.1 | `tests/transport_failure.rs` | ✅ |
 
 ### Entry-point coverage cross-check (16 functions per deep-dive Entry-point coverage table)
@@ -1318,8 +1318,8 @@ Phase 5 lands the full RPC client surface needed by Phase 7's 22-command `sol` C
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after backlog cross-check)
 - [ ] Step 6: Coverage gates per deep-dive `### Coverage gates` — confirm 100% line coverage on `crypto/`, `amount.rs`, `tx/builder.rs`, `spl/disambig.rs`, `persist.rs`, `wallet_manager.rs`, `platform/` (audit P6-11 — Phase 6 module set added) via `cargo tarpaulin -p sol-wallet-core --lib`. Loud-RED if any of these 7 modules drops below 100%.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `tarpaulin` exits 0 with 100% on the 7 named modules)
-- [ ] Step 7: Redaction gate per rows 23+24 — confirm `tests/error_mapping.rs` asserts no mnemonic/seed/secret bytes in `Debug` output; `tests/placeholder.rs` (Phase 8.1) asserts panic scrubber regex strips all secret patterns. Pre-Phase 7 cannot fully execute row 24 (Phase 8.1 stub) — defer row 24 to Phase 8.1 verify gate.
-  - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after redaction gate check; row 24 partial until Phase 8.1)
+- [ ] Step 7: Redaction gate per rows 23+24 — confirm `tests/error_mapping.rs` asserts no mnemonic/seed/secret bytes in `Debug` output; `tests/placeholder.rs` (Phase 7.5.1) asserts panic scrubber regex strips all secret patterns. Pre-Phase 7 cannot fully execute row 24 (Phase 7.5.1 stub) — defer row 24 to Phase 7.5.1 verify gate.
+  - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after redaction gate check; row 24 partial until Phase 7.5.1)
 - [ ] Step 8: Loud-RED gate audit per deep-dive `### Coverage gates` — confirm NO `#[ignore]`-away on devnet/mainnet tests. All gated-live tests use explicit `RUN_SOL_DEVNET=1` or `RUN_SOL_MAINNET=1` env var + clear STDERR message.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `grep -rn "#\[ignore\]" tests/` audit)
 - [ ] Step 9: Update `CHANGELOG.md` per L24 — append Phase 6.2 verification entry: "Library completeness verified: 33/34 deep-dive rows GREEN (row 21 deferred V0.1.5); 32/32 test files compile; 100% coverage on crypto/, amount.rs, tx/builder.rs, spl/disambig.rs, persist.rs, wallet_manager.rs, platform/."
@@ -1527,12 +1527,12 @@ tests/common::load_config()                                  // parses src/token
 
 ##### Unsupported / partial features for end-to-end SOL/SPL tx completion
 
-Loud-RED gates: any item below without an explicit V0.1.5 deferral or Phase 6.4 follow-up → blocks Phase 7 CLI `sol send` and Phase 8 FFI binding (no library surface to call).
+Loud-RED gates: any item below without an explicit V0.1.5 deferral or Phase 6.4 follow-up → blocks Phase 7 CLI `sol send` and Phase 7.5 FFI binding (no library surface to call).
 
 | Gap | What's missing | End-to-end impact | Deferral / Phase 6.4 follow-up |
 |-----|----------------|-------------------|---------------------------------|
 | **Legacy-tx sign wrapper** | `Wallet::sign_legacy_transaction(&self, &mut Transaction, Hash) -> Result<()>` | Test #9 reaches into `as_keypair()` + raw `solana_sdk::transaction::Transaction::try_sign`; library never owns the sign step | **Phase 6.4 Step 2:** add wrapper, switch test, keep `as_keypair()` only for FFI crate (`sol_wallet_sign_transaction`) |
-| **Combined landing-proof helper** | ~~No `tx::broadcast::wait_for_landing(...)`~~ — **closed** (Phase 6.4 Step 3, landed 2026-09-13). Composed fn at `src/tx/broadcast.rs` wraps `wait_for_confirm` + `get_balance` poll; test #9 + Phase 7 CLI + Phase 8 FFI all call it | ~~Test #9 hand-rolls the confirm-then-balance-delta loop~~ — replaced with single library call. | ~~**Phase 6.4 Step 3**~~ closed |
+| **Combined landing-proof helper** | ~~No `tx::broadcast::wait_for_landing(...)`~~ — **closed** (Phase 6.4 Step 3, landed 2026-09-13). Composed fn at `src/tx/broadcast.rs` wraps `wait_for_confirm` + `get_balance` poll; test #9 + Phase 7 CLI + Phase 7.5 FFI all call it | ~~Test #9 hand-rolls the confirm-then-balance-delta loop~~ — replaced with single library call. | ~~**Phase 6.4 Step 3**~~ closed |
 | **Fee-payer separation** | No `prepare_sol_transfer_message_with_fee_payer(fee_payer, signer, recipient, …)` — every fn assumes `signer == fee_payer` | Can't build a tx where the mobile wallet signs but a relayer/foreign payer pays the fee | V0.1.5 — third-party-payer is out of v0.1 scope per plan §1.2 |
 | **Durable nonce txs** | No `advance_nonce_account(nonce_account, authority) -> Instruction`, no `prepare_nonce_tx_message(...)` builder | Can't sign offline-friendly durable-nonce txs (cancel/upgrade flows) | V0.1.5 — durable nonce requires separate lifecycle work |
 | **Memo ix builder** | No `build_memo(memo: &str) -> Instruction` (spl-memo or native memo program) | On-chain tagging of transfers (tax / audit trails) requires raw ix build | V0.1.5 — defer; not in 33-row matrix |
@@ -1556,7 +1556,7 @@ Loud-RED gates: any item below without an explicit V0.1.5 deferral or Phase 6.4 
   3. ~~**Add `tx::broadcast::wait_for_landing(client, sig, sender_pubkey, expected_delta_lamports, timeout) -> Result<u64>`**~~ — landed 2026-09-13. Test #9 switched to single library call; drops ~10 lines of polling code.
   4. Re-run test #9 on devnet; commit push PR; flip `[x]` only after green on `rust-sol-core`.
 
-**Loud-RED gate:** Step 2 unchecked → Phase 7 CLI `sol send` cannot reuse a library fn for sign; must re-implement in the CLI = scope creep + duplicate test surface. Step 3 unchecked → Phase 8 FFI amplifies the gap (every mobile caller re-implements the polling loop).
+**Loud-RED gate:** Step 2 unchecked → Phase 7 CLI `sol send` cannot reuse a library fn for sign; must re-implement in the CLI = scope creep + duplicate test surface. Step 3 unchecked → Phase 7.5 FFI amplifies the gap (every mobile caller re-implements the polling loop).
 
 ---
 
@@ -1585,7 +1585,7 @@ Loud-RED gates: any item below without an explicit V0.1.5 deferral or Phase 6.4 
 
 ### Phase 6 security review — Pre-ship checklist (14 findings, companion `docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`)
 
-Pre-implementation security review of Phase 6 surfaced 14 findings (3 🔴 HIGH + 4 🟠 MEDIUM + 4 🟡 MEDIUM + 3 🔵 LOW/HARDENING). Every finding's fix landed in the Phase 6.1 PR #558 squash-merged as `56a5bfe3`; the box below flips `[x]` only when the cited test or code change is present in the merged tree. Loud-RED gate: any `[ ]` box at release-cut time blocks Phase 7 + Phase 8 (FFI amplifies P6-3 + P6-4).
+Pre-implementation security review of Phase 6 surfaced 14 findings (3 🔴 HIGH + 4 🟠 MEDIUM + 4 🟡 MEDIUM + 3 🔵 LOW/HARDENING). Every finding's fix landed in the Phase 6.1 PR #558 squash-merged as `56a5bfe3`; the box below flips `[x]` only when the cited test or code change is present in the merged tree. Loud-RED gate: any `[ ]` box at release-cut time blocks Phase 7 + Phase 7.5 (FFI amplifies P6-3 + P6-4).
 
 - [x] **P6-1 🔴** KDF params + salt + nonce + magic-prefix bound in AES-GCM AAD — `src/crypto.rs:encrypt_wallet` AAD string includes `version‖algo‖memory_kb‖iterations‖parallelism‖salt‖nonce`; tamper test in `tests/aes_gcm_cipher.rs` flips one byte of `memory_kb` → `Error::DecryptFailed`.
 - [x] **P6-2 🔴** Windows ACL hardening OR explicit V0.1.5 deferral documented — `FileWalletStorage::put_atomic` Unix branch sets mode 0600 atomically + post-rename verify; Windows branch deferred V0.1.5 per `CHANGELOG.md` (no silent regression); `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md` §Windows support matrix updated.
@@ -1602,7 +1602,7 @@ Pre-implementation security review of Phase 6 surfaced 14 findings (3 🔴 HIGH 
 - [x] **P6-13 🔵** test helper wraps in `Zeroizing<Keypair>` — `tests/common/keypair_fixture.rs:throwaway_keypair() -> Zeroizing<Keypair>`; `clippy::large_types_passed_by_value` not yet enabled crate-wide (deferred V0.1.5 — would expand scope across multiple test files; P6-13's zeroize-on-panic guarantee is what matters).
 - [x] **P6-14 ✅** `RwLock<HashMap>` encrypted-blob iteration only — `src/wallet_manager.rs:list` iterates encrypted blobs without decrypt; test `tests/wallet_lifecycle.rs:list_latency_under_fifty_wallets_audit_p6_14` asserts ≤ 200 ms for 50 wallets (reduced from 1000 for CI budget; argument that p99 stays ≤ 10 ms per audit holds at 50).
 
-**Loud-RED gate:** any `[ ]` at release-cut time blocks Phase 7 + Phase 8. Per `update-issues-before-merge` rule, all 14 boxes are flipped in the merged tree; the audit doc (`docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`) remains the canonical record.
+**Loud-RED gate:** any `[ ]` at release-cut time blocks Phase 7 + Phase 7.5. Per `update-issues-before-merge` rule, all 14 boxes are flipped in the merged tree; the audit doc (`docs/audit/2026-09-11-sol-wallet-core-phase6-security-review.md`) remains the canonical record.
 
 ---
 
@@ -1772,7 +1772,7 @@ by the 7.1a / 7.1b / 7.1c / 7.1d split. **Phase 7.1b** owns rows 8 (Wallet-to-wa
 owns rows 1–4 (SOL + SPL transfer + approve), 9 (Wallet-to-wallet SPL), 10 (Send-speedup),
 12 (Insufficient balance), 13 (Dry-run). **Phase 7.1d** owns rows 5–7 (Token-2022 disambig,
 Compute Budget, Memo), 11 (Blockhash retry), 15–17 (Confirmation polling variants),
-20 (Config switch cluster), 21 (Network failure recovery). Row 22 stays on Phase 10.1
+20 (Config switch cluster), 21 (Network failure recovery). Row 22 stays on Phase 9.1
 backlog per Q4 Q-gate.
 
 ### Phase 7 verification gains 7 new loud-RED gates (per audit doc)
@@ -1797,9 +1797,9 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
 
 ## Phase 7 verification — CLI completeness (all 22 in-scope deep-dive rows PASS)
 
-**Goal:** confirm every `## Test scenario — sol CLI` row from `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md` (lines 4232-4267, 22 rows) has a passing CLI test before Phase 8 begins FFI work. FFI depends on CLI surface being complete; a missing row blocks the FFI gates downstream.
+**Goal:** confirm every `## Test scenario — sol CLI` row from `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md` (lines 4232-4267, 22 rows) has a passing CLI test before Phase 7.5 begins FFI work. FFI depends on CLI surface being complete; a missing row blocks the FFI gates downstream.
 
-**Scope:** 21 of 22 rows in Phase 7 verification scope. Row 22 (mainnet $0.001 USDC self-send) is **explicitly owned by Phase 10.1** per Q4 Q-gate + `## V0.1 mainnet gate` section; Phase 7 verification asserts row 22 is on the Phase 10.1 backlog, NOT on the V0.1 library gate.
+**Scope:** 21 of 22 rows in Phase 7 verification scope. Row 22 (mainnet $0.001 USDC self-send) is **explicitly owned by Phase 9.1** per Q4 Q-gate + `## V0.1 mainnet gate` section; Phase 7 verification asserts row 22 is on the Phase 9.1 backlog, NOT on the V0.1 library gate.
 
 **Marking discipline (L13 step 14 + `never-auto-commit` rule):** same as Phase 6.2 — each `- [ ] Step N:` stays unchecked until that step has been RUN locally by the operator; the nested `- [ ] Verified:` sub-checkbox flips to `[x]` only after the step exits 0 + commit SHA + date filled in + PR merged into `rust-sol-core` per L13 step 15.
 
@@ -1828,7 +1828,7 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
 | 19 | Wallet delete + rename | `tests/wallet_lifecycle.rs` (Phase 6.1) + `crates/sol/tests/cli_wallet.rs` | Phase 6.1 + 7.1 |
 | 20 | Config switch cluster | `crates/sol/tests/cli_config.rs` | Phase 7.1 |
 | 21 | Network failure recovery | `tests/transport_failure.rs` (Phase 5.1) + `crates/sol/tests/cli_integration_surfpool.rs` | Phase 5.1 + 7.2 |
-| 22 | Mainnet smoke (Q4 analog) | `tests/mainnet_smoke.rs` + `crates/sol/tests/cli_mainnet_smoke.rs` (Phase 10.1 owns) | Phase 10.1 (not Phase 7) |
+| 22 | Mainnet smoke (Q4 analog) | `tests/mainnet_smoke.rs` + `crates/sol/tests/cli_mainnet_smoke.rs` (Phase 9.1 owns) | Phase 9.1 (not Phase 7) |
 
 ### Task 7.3 (DONE 2026-09-11): CLI test compile + run gate
 
@@ -1843,11 +1843,11 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after step exits 0 with funded test keypair)
 - [ ] Step 4: Cross-check 22 rows against `cli_integration_surfpool.rs` — confirm each row 1-21 has at least one `#[test]` function with the row's pass criterion asserted. Loud-RED if any row is missing.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after manual row cross-check)
-- [ ] Step 5: Confirm row 7 (Memo attach) is covered — extend `tests/spl_instruction.rs` (Phase 4.1 Modify) to assert `spl_memo::build_memo` ix present; if not, add a Memo case to `spl_instruction.rs` before Phase 8.
+- [ ] Step 5: Confirm row 7 (Memo attach) is covered — extend `tests/spl_instruction.rs` (Phase 4.1 Modify) to assert `spl_memo::build_memo` ix present; if not, add a Memo case to `spl_instruction.rs` before Phase 7.5.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `cargo test -p sol-wallet-core --test spl_instruction` exits 0 with memo case)
-- [ ] Step 6: Confirm row 13 (Dry-run/simulate) is covered — extend `tests/tx_serde.rs` (Phase 3.1 Modify) to assert `simulate_transaction` returns CU consumed + no sig emitted + no balance change; if not, add a Dry-run case to `tx_serde.rs` before Phase 8.
+- [ ] Step 6: Confirm row 13 (Dry-run/simulate) is covered — extend `tests/tx_serde.rs` (Phase 3.1 Modify) to assert `simulate_transaction` returns CU consumed + no sig emitted + no balance change; if not, add a Dry-run case to `tx_serde.rs` before Phase 7.5.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `cargo test -p sol-wallet-core --test tx_serde` exits 0 with simulate case)
-- [ ] Step 7: Confirm row 22 (Mainnet smoke) is on the Phase 10.1 backlog — verify `tests/mainnet_smoke.rs` + `crates/sol/tests/cli_mainnet_smoke.rs` are scheduled for Phase 10.1 creation per Q4 Q-gate. Loud-RED if row 22 is silently dropped from V0.1.
+- [ ] Step 7: Confirm row 22 (Mainnet smoke) is on the Phase 9.1 backlog — verify `tests/mainnet_smoke.rs` + `crates/sol/tests/cli_mainnet_smoke.rs` are scheduled for Phase 9.1 creation per Q4 Q-gate. Loud-RED if row 22 is silently dropped from V0.1.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after backlog cross-check)
 - [ ] Step 8: Confirm `sol --help` exits 0 + all 22 commands listed in help output.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `cargo run -p sol -- --help` exits 0)
@@ -1855,14 +1855,14 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after exit code audit)
 - [ ] Step 10: Loud-RED gate audit — confirm NO `#[ignore]`-away on devnet tests; row 14 cli_devnet_conformance uses explicit `RUN_SOL_DEVNET=1` env var + clear STDERR message.
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after `grep -rn "#\[ignore\]" crates/sol/tests/` audit)
-- [ ] Step 11: Update `CHANGELOG.md` per L24 — append Phase 7 verification entry: "CLI completeness verified: 21/22 deep-dive rows GREEN (row 22 deferred Phase 10.1); 10/10 CLI test files compile; rows 7+13 extended via Phase 4.1/3.1 Modify."
+- [ ] Step 11: Update `CHANGELOG.md` per L24 — append Phase 7 verification entry: "CLI completeness verified: 21/22 deep-dive rows GREEN (row 22 deferred Phase 9.1); 10/10 CLI test files compile; rows 7+13 extended via Phase 4.1/3.1 Modify."
   - [ ] Verified by: commit `<pending-sha>` on `<pending-date>` (operator fills after CHANGELOG.md commit lands)
 - [ ] Step 12: Open a no-op scratch PR `sol/phase7-verified → rust-sol-core` — title "chore(sol): Phase 7 CLI completeness verified — 21/22 rows GREEN". CI must pass.
   - [ ] Verified by: PR number `<pending>` + squash-merge commit SHA `<pending-sha>` on `<pending-date>` (operator fills after `gh pr create` returns URL + CI green + `gh pr merge --squash` exits 0)
 
 #### Phase 7 verification — Verification block
 
-- [x] All 21 in-scope rows (1-21) have a passing CLI test; row 22 explicitly on Phase 10.1 backlog.
+- [x] All 21 in-scope rows (1-21) have a passing CLI test; row 22 explicitly on Phase 9.1 backlog.
   - [x] Verified by: commit `d48c79ab` on `2026-09-11` (Task 7.3 Step 4 — `cli_integration_surfpool.rs` 22-row cross-check table; rows 1-21 marked surfpool-gated, row 22 mainnet smoke deferred per Q4 Q-gate)
 - [x] All 10 CLI test files compile under `cargo build -p sol --tests`.
   - [x] Verified by: commit `d48c79ab` on `2026-09-11` (Task 7.3 Step 1 — `cli_wallet.rs` + `cli_spl.rs` + `cli_completeness.rs` + `cli_address.rs` + `cli_balance.rs` + `cli_tx.rs` + `cli_config.rs` + `cli_devnet_conformance.rs` + `cli_integration_surfpool.rs` = 9 compile; `cli_json_output.rs` deferred to Phase 7.2 alongside broadcast wiring per plan)
@@ -1870,8 +1870,8 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
   - [x] Verified by: commit `d48c79ab` on `2026-09-11` (Task 7.3 Step 2 — 53 passed + 1 ignored P7-20 across 9 CLI test files; P7-7 mainnet-confirm test un-ignored after PR #560 review fix in commit 0a6ba93e)
 - [x] Rows 7 + 13 (Memo + Dry-run) extended in Phase 4.1 + 3.1 Modify cases.
   - [x] Verified by: commit `d48c79ab` on `2026-09-11` (Task 7.3 Steps 5+6 — `spl_instruction.rs::row_07_memo_coverage_lands_in_cli_spl_p7_23` placeholder; `tx_serde.rs::row_13_dry_run_simulate_serde_side_round_trip` serde-side coverage; both per Plan "if not" branch — spl-memo crate not in V0.1 deps + simulate_transaction RPC-gated)
-- [x] Row 22 on Phase 10.1 backlog per Q4 Q-gate.
-  - [x] Verified by: commit `c4235d90` on `2026-09-11` (CHANGELOG [Unreleased] entry explicitly defers row 22; `cli_integration_surfpool.rs::row_22_mainnet_smoke` placeholder marks Phase 10.1 backlog; gh issue creation auto-denied per workflow-approval-required classifier — deferral recorded in PR body)
+- [x] Row 22 on Phase 9.1 backlog per Q4 Q-gate.
+  - [x] Verified by: commit `c4235d90` on `2026-09-11` (CHANGELOG [Unreleased] entry explicitly defers row 22; `cli_integration_surfpool.rs::row_22_mainnet_smoke` placeholder marks Phase 9.1 backlog; gh issue creation auto-denied per workflow-approval-required classifier — deferral recorded in PR body)
 - [x] `sol --help` exits 0 + 22 commands listed.
   - [x] Verified by: `cargo run -p sol --quiet -- --help` exits 0; lists 6 subcommand groups covering 22 commands (9 wallet + 2 address + 2 balance + 4 spl + 2 tx + 3 config)
 - [~] Exit code mapping (0/1/2/3/4/5) verified for all error paths.
@@ -1883,18 +1883,18 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
 - [x] No-op scratch PR merged into `rust-sol-core`.
   - [x] Verified by: PR **#560** (squash-merged with `--admin` per L6 bypass authorization) → commit **`3abab9c9`** on `2026-09-11`; PR title updated to "chore(sol): Phase 7 CLI completeness verified — 21/22 rows GREEN (7.1a/b/c/d + 7.3)"
 
-**Loud-RED gate:** all boxes flipped [x] or [~] with evidence. Step 9 exit-code mapping is [~] partial — codes 3+5 require surfpool RPC and land in Phase 7.2. No blocker for Phase 8 (FFI cdylib).
+**Loud-RED gate:** all boxes flipped [x] or [~] with evidence. Step 9 exit-code mapping is [~] partial — codes 3+5 require surfpool RPC and land in Phase 7.2. No blocker for Phase 7.5 (FFI cdylib).
 
 ---
 
-## Phase 8 — FFI cdylib
+## Phase 7.5 — FFI cdylib
 
-### Task 8.1 (TBD): ffi.rs + 12 C functions + panic-message scrubber
+### Task 7.5.1 (TBD): ffi.rs + 12 C functions + panic-message scrubber
 
 **Files:**
 - Create: `src/ffi.rs`
 - Create: `src/panic_scrubber.rs` (separate module for testability)
-- Create: `rust-wallet-app/crates/sol-wallet-core/tests/placeholder.rs` (Phase 8.1 owns creation + implementation — covers deep-dive rows 24+25: FFI panic scrubber fuzz + C ABI smoke across all 12 exports)
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/placeholder.rs` (Phase 7.5.1 owns creation + implementation — covers deep-dive rows 24+25: FFI panic scrubber fuzz + C ABI smoke across all 12 exports)
 
 **Steps:**
 - [ ] Step 1: Implement panic-message scrubber (`once_cell::Lazy<regex::Regex>` matching mnemonic word patterns + 64-byte base58 + `xprv...` prefix + 32-byte hex); all STDERR panic msgs filtered; `Zeroizing` wrap on secrets; FFI returns exit code 99 + scrubbed msg (per deep-dive FFI safety contract line 1839 + F47 zeroize gap Plan line 151)
@@ -1935,7 +1935,7 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
 - [ ] Step 14: Verify gate: `cargo fmt + cargo clippy -- -D warnings + cargo test --test placeholder`
 - [ ] Step 15: PAUSE — commit-push-pr
 
-### Task 8.2 (TBD): Mobile compile gate
+### Task 7.5.2 (TBD): Mobile compile gate
 
 **Steps:**
 - [ ] Step 1: Verify `cargo check --target aarch64-apple-ios` succeeds (Phase 5+ gate per Q17)
@@ -1959,11 +1959,11 @@ A Phase 7 verification PR that runs without these 7 new loud-RED gates is not me
 
 ---
 
-## Phase 9 — End-to-end create-wallet flow (devnet)
+## Phase 8 — End-to-end create-wallet flow (devnet)
 
 User-facing goal: a developer can run a single example binary that generates a fresh 12-word mnemonic, derives a Phantom-equivalent wallet, encrypts it via `WalletManager`, surfaces the base58 pubkey, and (gated by env var) airdrops SOL on devnet. Closes the prior-session gap (`why in sol-wallet-core don't support create wallet?`) by surfacing `generate_12_word_english` as a library-level public API (currently FFI-internal in `src/ffi_mnemonic.rs`).
 
-### Task 9.1 (NEW): Library-level `generate_12_word_english` re-export
+### Task 8.1 (NEW): Library-level `generate_12_word_english` re-export
 
 **Files:**
 - Modify: `rust-wallet-app/crates/sol-wallet-core/src/lib.rs` — add `pub use ffi_mnemonic::generate_12_word_english;`
@@ -1977,7 +1977,7 @@ User-facing goal: a developer can run a single example binary that generates a f
 
 **Acceptance:** `sol_wallet_core::generate_12_word_english() -> Result<String, sol_wallet_core::Error>` reachable from `examples/` + downstream library consumers (not just FFI).
 
-### Task 9.2 (NEW): `examples/create_wallet_devnet.rs` — end-to-end demo
+### Task 8.2 (NEW): `examples/create_wallet_devnet.rs` — end-to-end demo
 
 **Files:**
 - Create: `rust-wallet-app/crates/sol-wallet-core/examples/create_wallet_devnet.rs`
@@ -2043,38 +2043,38 @@ User-facing goal: a developer can run a single example binary that generates a f
 ### Task 9.3 (NEW): CHANGELOG + README Quick Start pointer
 
 **Files:**
-- Modify: `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` — append Phase 9 entry under `[Unreleased]`
+- Modify: `rust-wallet-app/crates/sol-wallet-core/CHANGELOG.md` — append Phase 8 entry under `[Unreleased]`
 - Modify (or create): `rust-wallet-app/crates/sol-wallet-core/README.md` — add "Quick Start" section pointing at `cargo run --example create_wallet_devnet`
 
 **Steps:**
-- [ ] Step 1: CHANGELOG entry — `### Phase 9 — 2026-09-12 — End-to-end create-wallet flow (devnet): re-export \`generate_12_word_english\` as library-level public API; add \`examples/create_wallet_devnet.rs\` covering generate → import → encrypt → unlock → airdrop.`
+- [ ] Step 1: CHANGELOG entry — `### Phase 8 — 2026-09-12 — End-to-end create-wallet flow (devnet): re-export \`generate_12_word_english\` as library-level public API; add \`examples/create_wallet_devnet.rs\` covering generate → import → encrypt → unlock → airdrop.`
 - [ ] Step 2: README Quick Start — minimum 5 lines + 1 code block referencing the example binary. Cover: prerequisites (`cargo` + Solana CLI), run command, expected output (mnemonic + address), devnet airdrop env var.
 - [ ] Step 3: PAUSE — docs PR.
 
-**Acceptance:** A developer cloning the repo can run the example and produce the expected output (mnemonic + address) per Task 9.2 acceptance, following only the README Quick Start.
+**Acceptance:** A developer cloning the repo can run the example and produce the expected output (mnemonic + address) per Task 8.2 acceptance, following only the README Quick Start.
 
-### Phase 9 deliverable summary
+### Phase 8 deliverable summary
 
 | Item | Status |
 |------|--------|
-| Library `generate_12_word_english` re-export | ✅ (Task 9.1) |
-| `examples/create_wallet_devnet.rs` | ✅ (Task 9.2) |
-| CHANGELOG + README pointer | ✅ (Task 9.3) |
-| Devnet airdrop smoke (gated) | ✅ (Task 9.2 Step 4) |
+| Library `generate_12_word_english` re-export | ✅ (Task 8.1) |
+| `examples/create_wallet_devnet.rs` | ✅ (Task 8.2) |
+| CHANGELOG + README pointer | ✅ (Task 8.3) |
+| Devnet airdrop smoke (gated) | ✅ (Task 8.2 Step 4) |
 
-### Phase 9 drift recorded at execution time
+### Phase 8 drift recorded at execution time
 
 (filled at PR time per L24)
 
 ---
 
-## Phase 10 — Mainnet smoke gate + release cut
+## Phase 9 — Mainnet smoke gate + release cut
 
 ### Task 9.1 (TBD): Mainnet self-send smoke test (Q4 Q-gate)
 
 **Files:**
 - Create: `rust-wallet-app/crates/sol-wallet-core/tests/mainnet_smoke.rs` (deep-dive row 33 — mainnet $0.001 USDC self-send)
-- Create: `rust-wallet-app/crates/sol/tests/cli_mainnet_smoke.rs` (Phase 7.2 created; Phase 10.1 activates the loud-RED gate + operator runbook)
+- Create: `rust-wallet-app/crates/sol/tests/cli_mainnet_smoke.rs` (Phase 7.2 created; Phase 9.1 activates the loud-RED gate + operator runbook)
 
 **Steps:**
 - [ ] Step 1: Implement gated live test (loud-RED per deep-dive `### Gated live tests`):
@@ -2156,8 +2156,8 @@ Deep-dive [§"Test scenario — sol-wallet-core V0.1"](docs/wallets/2026-09-08-s
 | 21  | SPKI pin match / mismatch              | real leaf cert fixture                                 | **V7** Phase 5.5 (V0.1.5 opt-in)  | ⚠️ DEFERRED V0.1.5 (per Q9 Scenario B default)      |
 | 22  | 12 RPC methods vs wiremock              | success + 5xx → `Transport`                            | **NEW** Phase 5.1 unit           | ⚠️ GAP                                                |
 | 23  | `error.rs` 21 From impls + Debug redact  | no mnemonic/secret leak                                | **NEW** Phase 0 unit            | ⚠️ GAP                                                |
-| 24  | FFI panic scrubber fuzz                  | 10k fuzz cases; scrubbed output no secret               | **ffi_scrubber** Phase 8.1       | ⚠️ PARTIAL — explicit fuzz test missing              |
-| 25  | C ABI smoke (12 exports)                | create → sign → status code                             | **ffi_smoke** Phase 8.1          | ✅ covered                                           |
+| 24  | FFI panic scrubber fuzz                  | 10k fuzz cases; scrubbed output no secret               | **ffi_scrubber** Phase 7.5.1       | ⚠️ PARTIAL — explicit fuzz test missing              |
+| 25  | C ABI smoke (12 exports)                | create → sign → status code                             | **ffi_smoke** Phase 7.5.1          | ✅ covered                                           |
 | 26  | end-to-end SOL transfer                 | sender/recipient lamport delta                          | **V15** Phase 7.2                 | ✅ covered                                           |
 | 27  | end-to-end SPL transfer (held ATA)     | receipt SUCCESS, ~5k CU                                 | **V15** Phase 7.2                 | ✅ covered                                           |
 | 28  | end-to-end SPL transfer (fresh ATA)    | 2 ATAs created, ~0.00204 SOL rent                       | **V15** Phase 7.2                 | ✅ covered                                           |
@@ -2165,7 +2165,7 @@ Deep-dive [§"Test scenario — sol-wallet-core V0.1"](docs/wallets/2026-09-08-s
 | 30  | `send_with_retry` stale blockhash      | `BlockhashNotFound` → retry with fresh                  | **V6** Phase 5.5 (V0.1.5) (devnet-gated)  | ⏸️ V0.1.5                           |
 | 31  | `wait_for_confirm` success + timeout    | success returns receipt; bogus sig → `ConfirmTimeout`  | **V6** Phase 5.1 (implicit)     | ⚠️ PARTIAL — explicit timeout test missing         |
 | 32  | `get_health` boot probe                  | cluster enum resolves `Localnet`                       | **V15** Phase 7.2                 | ⚠️ PARTIAL                                           |
-| 33  | mainnet $0.001 USDC self-send           | confirmed on explorer                                  | **V12** Phase 10.1 (Q4 gate)     | ✅ covered                                           |
+| 33  | mainnet $0.001 USDC self-send           | confirmed on explorer                                  | **V12** Phase 9.1 (Q4 gate)     | ✅ covered                                           |
 | 34  | transport failure (closed port)         | `Error::Transport` within 30s timeout                   | **NEW** Phase 7.1 unit          | ⚠️ GAP                                                |
 
 **Coverage summary:**
@@ -2189,7 +2189,7 @@ The plan-guide loud-RED gate contract applies to live-network tests: V6 (devnet 
 
 ### Phasing constraint
 
-GAPS cannot defer to V0.1.5 — Phase 10 mainnet smoke gate (V12) is gated on **all 34 deep-dive rows returning PASS** (or explicit accepted-with-known-issue per owner sign-off). Operator signs off on each row via `cargo test -p sol-wallet-core --test <name>` showing GREEN.
+GAPS cannot defer to V0.1.5 — Phase 9 mainnet smoke gate (V12) is gated on **all 34 deep-dive rows returning PASS** (or explicit accepted-with-known-issue per owner sign-off). Operator signs off on each row via `cargo test -p sol-wallet-core --test <name>` showing GREEN.
 
 ---
 
@@ -2217,7 +2217,7 @@ Per CLAUDE.md "every claim links back to a source file" + plan-guide principle o
 | └ §H. Wallet file encryption (Argon2id + AES-256-GCM JSON schema)   | 1754-1790 | Phase 6.1 Step 1 (parameters; full JSON schema delegated)                                    | ⚠️ Delegated |
 | └ §I. RPC client (16 HTTP + 5 WS = 21 methods, full method coverage) | 1792-1823 | Phase 5.1 Step 2 (full 21-method enumeration delegated — 10 inline; 11 in deep-dive)         | ⚠️ Delegated |
 | └ §J. Error classification (21 variants + 5 exit codes)             | 1825-1862 | Phase 7.1 Step 11 (`error::classify`; full variant table delegated to deep-dive)             | ⚠️ Delegated |
-| └ §K. FFI surface (cdylib, 12 C functions)                          | 1864-1890 | Phase 8.1 (full enumeration in plan)                                                        | ✅       |
+| └ §K. FFI surface (cdylib, 12 C functions)                          | 1864-1890 | Phase 7.5.1 (full enumeration in plan)                                                        | ✅       |
 | └ §L. PAL (Platform Abstraction Layer) — 4 traits × 14 methods       | 1892-1910 | Plan `### Four-layer PAL design` + Phase 6.1 (4 traits named; per-method table delegated)   | ⚠️ Delegated |
 | └ §M. Complete CLI command reference (22 commands, full flag ref)   | 1912-2054 | Phase 7.1 + Phase 7.2                                                                        | ✅       |
 | └ §N. Output formats (JSON mode per command)                       | 2056-2082 | Phase 7.1 + Phase 7.2 (--json flag mentioned; full per-command JSON shape delegated)         | ⚠️ Delegated |
@@ -2445,9 +2445,10 @@ Step   L13 step               Skill invoked                                     
 | Phase 5 | pending | V6 | RPC + send_with_retry + wait_for_confirm |
 | Phase 6 | pending | V11 | Wallet persistence + WalletManager CRUD |
 | Phase 7 | pending | V14, V15 | CLI 22 commands + surfpool e2e |
-| Phase 8 | pending | ffi_smoke | FFI cdylib + 12 C functions + panic scrubber |
-| Phase 9 | pending | examples | End-to-end create-wallet flow (devnet): `generate_12_word_english` library re-export + `examples/create_wallet_devnet.rs` |
-| Phase 10 | pending | V12 | mainnet $0.001 USDC self-send (loud-RED gate) |
+| Phase 7.5 | pending | ffi_smoke | FFI cdylib + 12 C functions + panic scrubber |
+| Phase 8 | pending | examples | End-to-end create-wallet flow (devnet): `generate_12_word_english` library re-export + `examples/create_wallet_devnet.rs` |
+| Phase 9 | pending | V12 | mainnet $0.001 USDC self-send (loud-RED gate) |
+| Phase 10 Security Audit | merged (Task 10.1 via PR #570, Task 10.2 via PR #571) | sec | Lock-poisoning recovery + zeroize import path + 6 open issues (#566–#569, 10.7) |
 
 ---
 
