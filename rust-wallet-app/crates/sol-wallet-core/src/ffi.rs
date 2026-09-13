@@ -715,12 +715,9 @@ pub extern "C" fn sol_wallet_send_sol(
         );
         let msg =
             solana_sdk::message::Message::new_with_blockhash(&[ix], Some(&from_pubkey), &blockhash);
-        let keypair = wallet.as_keypair();
-        let tx = solana_sdk::transaction::VersionedTransaction::try_new(
-            solana_sdk::message::VersionedMessage::Legacy(msg),
-            &[keypair],
-        )
-        .map_err(|_| FfiError::Unimplemented)?;
+        let tx = wallet
+            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))
+            .map_err(|_| FfiError::Unimplemented)?;
         let signed_tx = wallet
             .sign_transaction(tx)
             .map_err(|_| FfiError::Unimplemented)?;
@@ -853,12 +850,9 @@ pub extern "C" fn sol_wallet_send_spl(
         .map_err(|_| FfiError::Unimplemented)?;
         let msg =
             solana_sdk::message::Message::new_with_blockhash(&[ix], Some(&from_pubkey), &blockhash);
-        let keypair = wallet.as_keypair();
-        let tx = solana_sdk::transaction::VersionedTransaction::try_new(
-            solana_sdk::message::VersionedMessage::Legacy(msg),
-            &[keypair],
-        )
-        .map_err(|_| FfiError::Unimplemented)?;
+        let tx = wallet
+            .try_build_versioned_transaction(solana_sdk::message::VersionedMessage::Legacy(msg))
+            .map_err(|_| FfiError::Unimplemented)?;
         let signed_tx = wallet
             .sign_transaction(tx)
             .map_err(|_| FfiError::Unimplemented)?;
