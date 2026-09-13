@@ -130,6 +130,11 @@ impl From<Error> for FfiError {
         match e {
             Error::WalletNotFound(_) => FfiError::WalletNotFound,
             Error::WalletDecryptFailed { .. } => FfiError::DecryptFailed,
+            // Phase 10 / Task 10.1 — `Wallet::from_bytes` rejected the
+            // 64-byte secret+pubkey serialization. Surface as
+            // `DecryptFailed` (= 6), never `Panic` (= 99). The audit
+            // finding tracked this as issue #564.
+            Error::InvalidSeed => FfiError::DecryptFailed,
             Error::InsufficientFunds { .. } => FfiError::InsufficientFunds,
             Error::Transport(_) => FfiError::Transport,
             Error::Rpc { .. } => FfiError::Rpc,
@@ -604,7 +609,16 @@ pub extern "C" fn sol_wallet_sign_transaction(
     }
     let mut arr = [0u8; 64];
     arr.copy_from_slice(&all_bytes[..64]);
-    let wallet = crate::wallet::Wallet::from_bytes(&arr);
+    let wallet = match crate::wallet::Wallet::from_bytes(&arr) {
+        Ok(w) => w,
+        Err(e) => {
+            set_last_error(&format!(
+                "sol_wallet_sign_transaction: cached secret rejected — {}",
+                e
+            ));
+            return FfiError::DecryptFailed.code();
+        }
+    };
     let sig = wallet.sign_message(msg_slice);
     let sig_bytes = sig.as_ref();
     unsafe {
@@ -681,7 +695,16 @@ pub extern "C" fn sol_wallet_send_sol(
         let blockhash: solana_sdk::hash::Hash = bh_str.parse().map_err(|_| FfiError::Transport)?;
         let mut arr = [0u8; 64];
         arr.copy_from_slice(&all_bytes[..64]);
-        let wallet = crate::wallet::Wallet::from_bytes(&arr);
+        let wallet = match crate::wallet::Wallet::from_bytes(&arr) {
+            Ok(w) => w,
+            Err(e) => {
+                set_last_error(&format!(
+                    "sol_wallet_send_sol: cached secret rejected — {}",
+                    e
+                ));
+                return Err(FfiError::DecryptFailed);
+            }
+        };
         let from_pubkey = wallet.public_key();
         let to_pubkey: solana_sdk::pubkey::Pubkey =
             to_str.parse().map_err(|_| FfiError::InvalidUtf8)?;
@@ -796,7 +819,16 @@ pub extern "C" fn sol_wallet_send_spl(
             .ok_or(FfiError::Transport)?;
         let mut arr = [0u8; 64];
         arr.copy_from_slice(&all_bytes[..64]);
-        let wallet = crate::wallet::Wallet::from_bytes(&arr);
+        let wallet = match crate::wallet::Wallet::from_bytes(&arr) {
+            Ok(w) => w,
+            Err(e) => {
+                set_last_error(&format!(
+                    "sol_wallet_send_spl: cached secret rejected — {}",
+                    e
+                ));
+                return Err(FfiError::DecryptFailed);
+            }
+        };
         let from_pubkey = wallet.public_key();
         let mint_pubkey: solana_sdk::pubkey::Pubkey =
             mint_str.parse().map_err(|_| FfiError::InvalidUtf8)?;
