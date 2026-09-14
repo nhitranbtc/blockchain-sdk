@@ -25,7 +25,7 @@ use sol_wallet_core::{
         client::RpcClient,
     },
     tx::{
-        broadcast::send_and_confirm_versioned,
+        broadcast::{default_send_options, send_and_confirm},
         builder::build_sol_transfer_with_budget,
         speedup::{speedup_transfer, SpeedupRequest},
         SpeedupResult,
@@ -95,14 +95,15 @@ async fn submit_send_speedup_local_bumps_fee() -> Result<()> {
         &[&sender_kp],
     )
     .expect("sign first v0");
-    let sig_first = send_and_confirm_versioned(
+    let sig_first = send_and_confirm(
         &rpc,
         &tx_first,
+        default_send_options(),
         solana_commitment_config::CommitmentConfig::confirmed(),
         std::time::Duration::from_secs(30),
     )
     .await
-    .expect("send_and_confirm_versioned first");
+    .expect("send_and_confirm first");
     eprintln!("submit_send_speedup: first transfer confirmed, sig={sig_first}");
 
     // ─── Speedup — fresh blockhash + bumped priority fee ───

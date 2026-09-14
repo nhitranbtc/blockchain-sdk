@@ -23,14 +23,16 @@ use sol_wallet_core::chain::{
 };
 use sol_wallet_core::disambig::TokenProgram;
 use sol_wallet_core::error::Error;
-use sol_wallet_core::tx::broadcast::{send_and_confirm, wait_for_confirm, DEFAULT_CONFIRM_TIMEOUT};
+use sol_wallet_core::tx::broadcast::{
+    default_send_options, send_and_confirm, wait_for_confirm, DEFAULT_CONFIRM_TIMEOUT,
+};
 use sol_wallet_core::tx::native::prepare_sol_transfer_message;
 use sol_wallet_core::tx::spl::prepare_spl_transfer_message;
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::hash::Hash;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signature, Signer};
-use solana_sdk::transaction::Transaction;
+use solana_sdk::transaction::{Transaction, VersionedTransaction};
 use solana_system_interface::instruction as system_instruction;
 use std::time::Duration;
 use wiremock::matchers::{body_partial_json, method, path};
@@ -595,7 +597,8 @@ async fn broadcast_send_and_confirm_returns_signature_on_success() {
     let tx = Transaction::new(&[&keypair], msg_for_tx, Hash::new_from_array([1u8; 32]));
     let sig = send_and_confirm(
         &rpc,
-        &tx,
+        &VersionedTransaction::from(tx.clone()),
+        default_send_options(),
         CommitmentConfig::confirmed(),
         DEFAULT_CONFIRM_TIMEOUT,
     )

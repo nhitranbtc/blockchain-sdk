@@ -24,7 +24,10 @@ use sol_wallet_core::{
         account::{get_balance, get_latest_blockhash},
         client::RpcClient,
     },
-    tx::{broadcast::send_and_confirm_versioned, builder::build_sol_transfer_with_budget},
+    tx::{
+        broadcast::{default_send_options, send_and_confirm},
+        builder::build_sol_transfer_with_budget,
+    },
     Result,
 };
 use solana_sdk::{pubkey::Pubkey, signer::Signer};
@@ -85,14 +88,17 @@ async fn submit_sol_local_round_trip() -> Result<()> {
     .expect("sign v0 tx");
 
     let recipient_pre = get_balance(&rpc, &recipient_pubkey).await.unwrap_or(0);
-    let _sig = send_and_confirm_versioned(
+    // Unified broadcast helper — same function devnet uses, with
+    // `default_send_options()` (single-node local has no LB disagreement).
+    let _sig = send_and_confirm(
         &rpc,
         &v0_tx,
+        default_send_options(),
         solana_commitment_config::CommitmentConfig::confirmed(),
         std::time::Duration::from_secs(30),
     )
     .await
-    .expect("send_and_confirm_versioned");
+    .expect("send_and_confirm");
 
     let recipient_post = get_balance(&rpc, &recipient_pubkey)
         .await

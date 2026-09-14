@@ -27,12 +27,12 @@ use common::{
 };
 use sol_wallet_core::{
     chain::{
-        account::{get_balance, get_latest_blockhash, send_transaction_with_options},
+        account::{get_balance, get_latest_blockhash},
         client::RpcClient,
     },
     disambig::{classic_token_program_id, token_2022_program_id, TokenProgram},
     tx::{
-        broadcast::wait_for_landing,
+        broadcast::{send_and_confirm, wait_for_landing},
         builder::{compute_budget_instructions, derive_ata_with_program_id},
         native::prepare_sol_transfer_message,
         spl::prepare_spl_transfer_message,
@@ -377,11 +377,12 @@ fn submit_devnet_send_real_broadcast() {
             0,         // priority fee
             blockhash,
         );
-        let mut tx = Transaction::new_unsigned(msg);
+        let tx = Transaction::new_unsigned(msg);
         // Phase 10: consolidated into `Wallet::sign_transaction(VersionedTransaction)`.
-        // The legacy message is wrapped, signed via the unified API, then the
-        // signatures are copied back into the original `tx` for
-        // `send_transaction_with_options` (Anza's API takes `&Transaction`).
+        // Build the versioned wrap directly — the unified broadcast helper
+        // takes `&VersionedTransaction`, so we no longer need the legacy
+        // `tx` round-trip. Devnet's wire-format requirement (Phase 8.5)
+        // is satisfied because the broadcast payload IS the versioned tx.
         let versioned = VersionedTransaction {
             message: VersionedMessage::Legacy(tx.message.clone()),
             signatures: vec![Signature::default(); 1],
@@ -389,25 +390,30 @@ fn submit_devnet_send_real_broadcast() {
         let signed = sender
             .sign_transaction(versioned)
             .expect("sign_transaction");
-        tx.signatures = signed.signatures;
 
-        // ---- (3) broadcast via library API ----
-        // `skipPreflight: true` bypasses simulator-side blockhash lookup; cluster
-        // leader accepts our signed tx or rejects via sendTransaction error.
-        // `replaceRecentBlockhash: true` lets the leader substitute a fresh hash
-        // if our embedded one is unknown (defense against devnet load-balanced
-        // backends disagreeing on recent blockhashes).
-        let sig: Signature = send_transaction_with_options(
+        // ---- (3) broadcast via unified library API ----
+        // `send_and_confirm` is the single broadcast helper for every
+        // cluster — devnet just needs defensive options; local does not.
+        //
+        // `skipPreflight: true` bypasses simulator-side blockhash lookup;
+        // cluster leader accepts our signed tx or rejects via
+        // sendTransaction error. `replaceRecentBlockhash: true` lets the
+        // leader substitute a fresh hash if our embedded one is unknown
+        // (defense against devnet load-balanced backends disagreeing on
+        // recent blockhashes).
+        let sig: Signature = send_and_confirm(
             &rpc,
-            &tx,
+            &signed,
             serde_json::json!({
                 "encoding": "base64",
                 "replaceRecentBlockhash": true,
                 "skipPreflight": true,
             }),
+            solana_commitment_config::CommitmentConfig::confirmed(),
+            Duration::from_secs(30),
         )
         .await
-        .expect("send_transaction_with_options");
+        .expect("send_and_confirm");
         eprintln!("TX HASH (SOL native send on devnet): {sig}");
         eprintln!("https://explorer.solana.com/tx/{sig}?cluster=devnet");
 

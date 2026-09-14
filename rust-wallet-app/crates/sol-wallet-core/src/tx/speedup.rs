@@ -25,7 +25,7 @@ use solana_sdk::{
 use crate::wallet::Wallet;
 
 use crate::chain::{account::get_latest_blockhash, client::RpcClient};
-use crate::tx::broadcast::send_and_confirm_versioned;
+use crate::tx::broadcast::{default_send_options, send_and_confirm};
 use crate::tx::builder::compute_budget_instructions;
 use crate::Error;
 
@@ -185,10 +185,15 @@ pub async fn speedup_transfer(
             },
         )?;
 
-    let new_signature =
-        send_and_confirm_versioned(rpc, &versioned_tx, request.commitment, request.timeout)
-            .await
-            .map_err(SpeedupError::from)?;
+    let new_signature = send_and_confirm(
+        rpc,
+        &versioned_tx,
+        default_send_options(),
+        request.commitment,
+        request.timeout,
+    )
+    .await
+    .map_err(SpeedupError::from)?;
 
     let _ = request.original_signature;
     Ok(SpeedupResult {

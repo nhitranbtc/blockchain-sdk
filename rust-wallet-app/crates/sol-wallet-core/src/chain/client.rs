@@ -167,14 +167,23 @@ struct RpcErrorEnvelope {
 }
 
 /// JSON-RPC error object.
+///
+/// Per JSON-RPC 2.0 spec §5.1 the `data` field is OPTIONAL — surfpool
+/// 1.5.0 and Solana clusters include it (e.g. `-32005 Node is unhealthy`
+/// returns `{ "data": { "numSlotsBehind": null } }`). We accept it as
+/// `Option<Value>` and DROP `deny_unknown_fields` here (the OUTER
+/// `RpcErrorEnvelope` keeps it — drift on `jsonrpc`/`id`/`error` is
+/// still a loud parse error).
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct RpcError {
     /// JSON-RPC error code (e.g. -32000 for server error, -32003 for
-    /// Solana devnet "airdrop limit").
+    /// Solana devnet "airdrop limit", -32005 for cluster unhealthy).
     pub code: i64,
     /// Human-readable error message.
     pub message: String,
+    /// Optional JSON-RPC spec data payload (cluster-specific).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
 }
 
 /// Thin reqwest-based JSON-RPC client replacing Anza's `solana-rpc-client`
@@ -535,5 +544,67 @@ mod tests {
             parsed.is_ok(),
             "well-formed error envelope must parse cleanly"
         );
+    }
+
+    // =============================================================================
+    // Network support matrix — URL allowlist regression guards.
+    //
+    // `RpcClient::new` is the single construction point for the submit-on-
+    // network surface (`tx::broadcast::send_and_confirm`,
+    // `send_and_confirm_versioned`, `wait_for_landing`,
+    // `tx::speedup::speedup_transfer` all take `&RpcClient` so the URL is
+    // the only cluster discriminator). The constructor must accept:
+    //
+    // - mainnet-beta: `https://api.mainnet-beta.solana.com`
+    // - devnet:       `https://api.devnet.solana.com`
+    // - localnet:     `http://127.0.0.1:8899` / `http://localhost:8899`
+    //
+    // These four pure-parser checks assert the URL allowlist accepts every
+    // cluster the wallet targets. NO network call is made — the test only
+    // exercises `RpcClient::new` (URL parse + scheme/host match).
+    // =============================================================================
+
+    #[test]
+    fn rpc_client_accepts_mainnet_beta_url() {
+        let url = "https://api.mainnet-beta.solana.com";
+        let client = RpcClient::new(url)
+            .expect("mainnet-beta URL must pass allowlist: https://api.mainnet-beta.solana.com");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "api.mainnet-beta.solana.com");
+    }
+
+    #[test]
+    fn rpc_client_accepts_devnet_url() {
+        let url = "https://api.devnet.solana.com";
+        let client = RpcClient::new(url)
+            .expect("devnet URL must pass allowlist: https://api.devnet.solana.com");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "api.devnet.solana.com");
+    }
+
+    #[test]
+    fn rpc_client_accepts_localnet_loopback_url() {
+        let url = "http://127.0.0.1:8899";
+        let client = RpcClient::new(url)
+            .expect("localnet 127.0.0.1 URL must pass allowlist: http://127.0.0.1:8899");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "127.0.0.1");
+    }
+
+    #[test]
+    fn rpc_client_accepts_localnet_localhost_url() {
+        let url = "http://localhost:8899";
+        let client = RpcClient::new(url)
+            .expect("localnet localhost URL must pass allowlist: http://localhost:8899");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "localhost");
+    }
+
+    #[test]
+    fn rpc_client_rejects_non_loopback_http() {
+        // http://attacker.com is exactly the cleartext exfil vector Tier 1
+        // finding #1 names. Regression guard: it must remain rejected.
+        let res = RpcClient::new("http://attacker.com");
+        assert!(res.is_err(), "non-loopback http must be rejected");
     }
 }

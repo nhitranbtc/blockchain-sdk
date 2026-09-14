@@ -28,3 +28,7 @@ tangem-app-ios/
 
 # Engineering scratch (ephemeral engineering notes — not committed)
 docs/superpowers/engineering/
+
+# Surfpool test cache (local Solana validator runtime state)
+.surfpool/
+**/.surfpool/

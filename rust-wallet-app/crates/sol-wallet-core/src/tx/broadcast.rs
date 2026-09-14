@@ -1,11 +1,8 @@
 //! `tx::broadcast` — `send_and_confirm` (Phase 5.1).
 //!
-//! Single send + poll with exponential backoff. V0.1 does NOT retry on
-//! stale blockhash (deferred to V0.1.5 retry-on-stale-hash follow-up).
-//!
 //! ## Confirm semantics (grilled decision Q9)
 //!
-//! `wait_for_confirm` (internal) returns:
+//! `wait_for_confirm` returns:
 //! - `Ok(TransactionStatus)` on confirm
 //! - `Err(ConfirmPending { signature, commitment, elapsed_ms })` at
 //!   `timeout / 2` if SOME status was returned but commitment not yet
@@ -24,24 +21,45 @@
 //! devnet, ~1%), the user re-runs `sol send`. V0.1.5 ships
 //! `send_with_retry` with 3 attempts, exponential backoff 100ms→200ms→400ms,
 //! and `BlockhashCache` (V0.1.5). Plan §Phase 5 Task 5.1 deferred.
+//!
+//! ## Network support matrix
+//!
+//! `send_and_confirm` takes `&RpcClient` — the URL passed to
+//! `RpcClient::new` is the only cluster discriminator. Per-cluster
+//! behavior is expressed via the `options` payload:
+//!
+//! | Cluster     | URL                                       | options flags |
+//! |-------------|-------------------------------------------|---------------|
+//! | mainnet-beta| `https://api.mainnet-beta.solana.com`     | none          |
+//! | devnet      | `https://api.devnet.solana.com`           | `replaceRecentBlockhash`, `skipPreflight` |
+//! | localnet    | `http://127.0.0.1:8899` / `localhost:8899`| none          |
+//!
+//! URL allowlist regression guards live in `chain::client::tests`
+//! (`rpc_client_accepts_mainnet_beta_url`, `_devnet_url`,
+//! `_localnet_loopback_url`, `_localnet_localhost_url`,
+//! `_rejects_non_loopback_http`).
+//!
+//! ## Wire format (Phase 8.5)
+//!
+//! `tx` must be a `VersionedTransaction`. surfpool 1.5.0 (and Anza RPC
+//! in 2026-Q3) reject the legacy `Transaction` wire envelope — callers
+//! holding a legacy `Transaction` must wrap via
+//! `VersionedTransaction::from(tx.clone())` before calling.
 
 use std::time::{Duration, Instant};
 
 use crate::chain::account::{
-    get_balance, get_latest_blockhash, get_signature_status, send_transaction,
-    send_transaction_versioned, TransactionStatus,
+    get_balance, get_latest_blockhash, get_signature_status, send_transaction_versioned,
+    TransactionStatus,
 };
+use serde_json::{json, Value};
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_sdk::transaction::{Transaction, VersionedTransaction};
+use solana_sdk::transaction::VersionedTransaction;
 
 use crate::chain::client::RpcClient;
 use crate::error::{Error, Result};
-
-/// Default max-attempts for `send_and_confirm`. V0.1 = 1 (no retry);
-/// V0.1.5 = 3 with exponential backoff.
-pub const DEFAULT_SEND_MAX_ATTEMPTS: u32 = 1;
 
 /// Default confirm timeout for `send_and_confirm`. 30s covers
 /// `confirmed` (~1 slot = ~400ms) + headroom; `Finalized` sends
@@ -53,11 +71,14 @@ pub const DEFAULT_CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
 const CONFIRM_POLL_BASE: Duration = Duration::from_millis(200);
 const CONFIRM_POLL_CAP: Duration = Duration::from_secs(2);
 
-/// Shared V0.1 send-then-confirm pipeline. `send_and_confirm` and
-/// `send_and_confirm_versioned` are thin wrappers that supply the
-/// appropriate wire-format send call. Returns the signature on
-/// success; `ConfirmPending` / `ConfirmTimeout` from `wait_for_confirm`
-/// propagate to the caller.
+/// Default `sendTransaction` options for single-node / healthy clusters
+/// (localnet + mainnet-beta). Per-cluster quirks (devnet's load-balanced
+/// backends) layer extra flags on top via this helper.
+pub fn default_send_options() -> Value {
+    json!({"encoding": "base64"})
+}
+
+/// Internal helper — single send + confirm-poll path.
 async fn broadcast_one(
     rpc: &RpcClient,
     sig: Signature,
@@ -72,40 +93,24 @@ async fn broadcast_one(
     Ok(sig)
 }
 
-/// Send `tx` signed by the wallet, then poll for confirmation.
+/// Send a signed `VersionedTransaction` and poll for confirmation.
 ///
-/// `commitment` defaults to `Confirmed` (per plan doc open design
-/// questions 2026-09-10 session-end). `timeout` defaults to
-/// `DEFAULT_CONFIRM_TIMEOUT` (30s). On `Confirmed`, returns
-/// `Ok(TransactionStatus)` once the sig reaches the requested level.
-/// On `Finalized`, the poll waits up to ~12 slots (cluster-dependent).
+/// `options` carries `sendTransaction` flags. Per-cluster:
+///
+/// - **localnet / mainnet-beta**: `default_send_options()` —
+///   single-node or healthy cluster, no defensive flags.
+/// - **devnet / testnet**: `{ "encoding": "base64",
+///   "replaceRecentBlockhash": true, "skipPreflight": true }` — load-
+///   balanced backends disagree on `recent_blockhash`; the leader must
+///   substitute a fresh hash and skip preflight simulation.
 pub async fn send_and_confirm(
     rpc: &RpcClient,
-    tx: &Transaction,
-    commitment: CommitmentConfig,
-    timeout: Duration,
-) -> Result<Signature> {
-    // Phase 5.1: single send. V0.1.5 wraps this in a 3-attempt loop
-    // (see plan §Phase 5 Q7 + grilled decision R1-Q1).
-    let sig = send_transaction(rpc, tx).await?;
-    broadcast_one(rpc, sig, commitment, timeout).await
-}
-
-/// Phase 8.5 overload: accept an already-versioned `VersionedTransaction`
-/// and run the same confirm poll. surfpool 1.5.0 (and Anza RPC in
-/// 2026-Q3) require the wire-format from this overload — the legacy
-/// `send_and_confirm` still wraps legacy `Transaction` to a versioned
-/// one internally, but call sites that construct V0 messages
-/// (`tx::speedup::speedup_transfer`, Phase 8.5.2) skip the wrap hop
-/// entirely.
-pub async fn send_and_confirm_versioned(
-    rpc: &RpcClient,
     tx: &VersionedTransaction,
+    options: Value,
     commitment: CommitmentConfig,
     timeout: Duration,
 ) -> Result<Signature> {
-    let sig =
-        send_transaction_versioned(rpc, tx, serde_json::json!({"encoding": "base64"})).await?;
+    let sig = send_transaction_versioned(rpc, tx, options).await?;
     broadcast_one(rpc, sig, commitment, timeout).await
 }
 
@@ -142,9 +147,6 @@ pub async fn wait_for_confirm(
         }
         let now = Instant::now();
         if now >= half_deadline {
-            // Status was returned but commitment not yet reached —
-            // surface `ConfirmPending` so the CLI can offer "check
-            // explorer" instead of treating it as a hard failure.
             return Err(Error::ConfirmPending {
                 signature: signature.to_string(),
                 commitment: poll_commitment,
@@ -181,15 +183,6 @@ pub async fn wait_for_confirm(
 /// Returns the post-balance (sender's lamports) on landing. Returns
 /// `Error::ConfirmTimeout` if the deadline elapses before balance
 /// decreased — caller can re-poll or surface the explorer URL.
-///
-/// Security properties (audit 2026-09-13):
-/// - **No panic / no manual RPC**: wraps `wait_for_confirm` +
-///   `chain::account::get_balance`. Callers cannot forget to set the
-///   deadline or skip the balance poll.
-/// - **Error taxonomy preserved**: `ConfirmPending` / `ConfirmTimeout`
-///   from the inner confirm are tolerated — the balance poll is the
-///   ground truth. A hard timeout still surfaces as `ConfirmTimeout`
-///   so the CLI / FFI can present a consistent error to the user.
 pub async fn wait_for_landing(
     rpc: &RpcClient,
     signature: &Signature,
