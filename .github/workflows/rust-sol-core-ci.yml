@@ -109,11 +109,12 @@ jobs:
           cargo clippy -p sol-wallet-core --all-targets -- -D warnings
 
   rust-test:
-    name: Rust test (sol-wallet-core)
+    name: Rust test (sol-wallet-core, all tests including #[ignore])
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-D warnings"
+      RUN_SOL_SURFPOOL: "1"
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -124,7 +125,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
-      - name: cargo test (sol-wallet-core)
+      - name: Install surfpool (txtx/surfpool)
+        # Local-network fixture for Phase 7.1c/7.2 SOL/SPL e2e tests
+        # (deep-dive rows 26-29, 32, 35). Plan Q5: surfpool is the V0.1
+        # default local validator — sub-second boot, in-memory, no
+        # Docker. Tests gate on `RUN_SOL_SURFPOOL=1`; install binary
+        # first so `tokio::process::Command::new("surfpool")` resolves.
+        # Source: https://github.com/txtx/surfpool (crate: `surfpool-cli`,
+        # bin: `surfpool`).
+        run: cargo install surfpool-cli --locked
+      - name: cargo test (sol-wallet-core, all tests including #[ignore])
         working-directory: rust-wallet-app
         run: |
           if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
@@ -136,7 +146,15 @@ jobs:
           # cdylib) can locate it. `cargo test` alone does not emit
           # the cdylib artifact by default.
           cargo build -p sol-wallet-core
-          cargo test -p sol-wallet-core --lib --tests
+          # `--include-ignored` runs both non-ignored + #[ignore] tests
+          # in one pass. The 6 surfpool-gated #[ignore] tests
+          # (submit_sol_local, submit_spl_local_{held,fresh,approve},
+          # submit_send_speedup_local, boot_probe_local) run against
+          # the locally-installed surfpool binary; the live-devnet
+          # `submit_devnet_send_real_broadcast` ignores RUN_SOL_SURFPOOL
+          # and gates on its own `RUN_SOL_DEVNET=1` env var (default
+          # missing → test remains ignored in this run).
+          cargo test -p sol-wallet-core --lib --tests -- --include-ignored
 
   # Security audit #566 (Task 10.3) — negative compile-fail pin that
   # `Wallet::as_keypair` is NOT visible to external crates. The test

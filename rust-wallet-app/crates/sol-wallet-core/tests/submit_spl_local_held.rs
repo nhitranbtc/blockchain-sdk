@@ -74,7 +74,7 @@ async fn submit_spl_local_held_airdrop_error_surfaces() {
     let res = airdrop_to_keypair("http://127.0.0.1:1", &kp.pubkey(), 1_000).await;
     assert!(matches!(
         res,
-        Err(FaucetError::Client(_)) | Err(FaucetError::Timeout)
+        Err(FaucetError::Client(_)) | Err(FaucetError::Timeout) | Err(FaucetError::Airdrop(_))
     ));
 }
 

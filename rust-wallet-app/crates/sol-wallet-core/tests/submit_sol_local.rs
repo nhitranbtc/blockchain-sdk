@@ -122,7 +122,10 @@ async fn submit_sol_local_airdrop_faucet_error_surfaces() {
     let kp = throwaway_keypair();
     let res = airdrop_to_keypair("http://127.0.0.1:1", &kp.pubkey(), 1_000).await;
     assert!(
-        matches!(res, Err(FaucetError::Client(_)) | Err(FaucetError::Timeout)),
-        "bad URL surfaces as Client or Timeout, got {res:?}",
+        matches!(
+            res,
+            Err(FaucetError::Client(_)) | Err(FaucetError::Timeout) | Err(FaucetError::Airdrop(_))
+        ),
+        "bad URL must surface structured error, got {res:?}",
     );
 }

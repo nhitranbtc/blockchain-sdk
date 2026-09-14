@@ -71,10 +71,22 @@ pub async fn spawn_surfpool() -> Result<SurfpoolGuard, SurfpoolError> {
     let rpc_url = format!("http://127.0.0.1:{port}");
 
     let mut cmd = tokio::process::Command::new("surfpool");
-    cmd.args(["start", "--rpc-port", &port.to_string(), "--faucet"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
+    // surfpool v1.5.0 CLI: `--port` is the RPC bind port (was `--rpc-port`
+    // in older 0.x). `--no-tui` avoids trying to draw an interactive TUI
+    // inside the test runner (no TTY). `--offline` skips the remote
+    // datasource fork so the local fixture boots fully offline.
+    cmd.args([
+        "start",
+        "--port",
+        &port.to_string(),
+        "--host",
+        "127.0.0.1",
+        "--no-tui",
+        "--offline",
+    ])
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .kill_on_drop(true);
 
     let child = match cmd.spawn() {
         Ok(c) => c,
