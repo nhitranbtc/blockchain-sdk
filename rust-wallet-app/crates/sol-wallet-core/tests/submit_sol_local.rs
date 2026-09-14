@@ -24,7 +24,7 @@ use sol_wallet_core::{
         account::{get_balance, get_latest_blockhash},
         client::RpcClient,
     },
-    tx::{broadcast::send_and_confirm, builder::build_sol_transfer_with_budget},
+    tx::{broadcast::send_and_confirm_versioned, builder::build_sol_transfer_with_budget},
     Result,
 };
 use solana_sdk::{pubkey::Pubkey, signer::Signer};
@@ -68,18 +68,31 @@ async fn submit_sol_local_round_trip() -> Result<()> {
         150_000,
         0,
     );
-    let msg = solana_sdk::message::Message::new(&ixs, Some(&sender.pubkey()));
-    let tx = solana_sdk::transaction::Transaction::new(&[&sender], msg, blockhash);
+    // Phase 8.5: build a `VersionedTransaction` directly via V0 — surfpool
+    // 1.5.0 (and Anza RPC in 2026-Q3) reject the legacy `Transaction`
+    // wire format produced by `Transaction::new`.
+    let v0_msg = solana_sdk::message::v0::Message::try_compile(
+        &sender.pubkey(),
+        &ixs,
+        &[], // no address lookups for direct simple transfer
+        blockhash,
+    )
+    .expect("compile v0 message");
+    let v0_tx = solana_sdk::transaction::VersionedTransaction::try_new(
+        solana_sdk::message::VersionedMessage::V0(v0_msg),
+        &[&sender],
+    )
+    .expect("sign v0 tx");
 
     let recipient_pre = get_balance(&rpc, &recipient_pubkey).await.unwrap_or(0);
-    let _sig = send_and_confirm(
+    let _sig = send_and_confirm_versioned(
         &rpc,
-        &tx,
+        &v0_tx,
         solana_commitment_config::CommitmentConfig::confirmed(),
         std::time::Duration::from_secs(30),
     )
     .await
-    .expect("send_and_confirm");
+    .expect("send_and_confirm_versioned");
 
     let recipient_post = get_balance(&rpc, &recipient_pubkey)
         .await

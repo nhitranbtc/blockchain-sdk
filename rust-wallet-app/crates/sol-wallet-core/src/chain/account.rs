@@ -165,7 +165,21 @@ pub async fn send_transaction_with_options(
     // Anza RPC `sendTransaction` expects `VersionedTransaction` (legacy is
     // wrapped as `VersionedTransaction::Legacy`). Wrap before serialize.
     let versioned = solana_sdk::transaction::VersionedTransaction::from(tx.clone());
-    let wire = bincode::serialize(&versioned)
+    send_transaction_versioned(client, &versioned, options).await
+}
+
+/// Submit an already-versioned `VersionedTransaction`. Phase 8.5
+/// overload added when surfpool 1.5.0 rejects `Transaction::from`
+/// wraps produced by the legacy overload — the wire format Anza
+/// RPC accepts in 2026-Q3 is a strict `VersionedTransaction` payload,
+/// so call sites that construct V0 messages (e.g. `tx::speedup`)
+/// skip the legacy-wrap hop entirely.
+pub async fn send_transaction_versioned(
+    client: &RpcClient,
+    tx: &solana_sdk::transaction::VersionedTransaction,
+    options: Value,
+) -> Result<Signature> {
+    let wire = bincode::serialize(tx)
         .map_err(|e| Error::Transport(format!("sendTransaction: bincode serialize: {e}")))?;
     let wire_b64 = BASE64.encode(&wire);
     let raw: Value = client

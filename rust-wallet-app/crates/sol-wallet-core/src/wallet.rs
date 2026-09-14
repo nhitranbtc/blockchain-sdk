@@ -69,6 +69,14 @@ impl Wallet {
             .map_err(|_| Error::InvalidSeed)?;
         Ok(Self(keypair))
     }
+    /// Internal accessor for crate-level signing paths (`tx::speedup`).
+    /// NOT part of the public API; external callers must use
+    /// `sign_transaction` / `sign_message`. Returned reference is
+    /// borrowed — the underlying keypair is zeroized on `Wallet` drop.
+    pub(crate) fn keypair(&self) -> &solana_sdk::signature::Keypair {
+        &self.0
+    }
+
     /// Phantom "Import secret phrase" — defaults to
     /// `m/44'/501'/0'/0'`.
     ///

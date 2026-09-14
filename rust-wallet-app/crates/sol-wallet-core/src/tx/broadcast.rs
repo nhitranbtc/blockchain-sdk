@@ -27,15 +27,15 @@
 
 use std::time::{Duration, Instant};
 
-use crate::chain::account::TransactionStatus;
+use crate::chain::account::{
+    get_balance, get_latest_blockhash, get_signature_status, send_transaction,
+    send_transaction_versioned, TransactionStatus,
+};
 use solana_commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
-use solana_sdk::transaction::Transaction;
+use solana_sdk::transaction::{Transaction, VersionedTransaction};
 
-use crate::chain::account::{
-    get_balance, get_latest_blockhash, get_signature_status, send_transaction,
-};
 use crate::chain::client::RpcClient;
 use crate::error::{Error, Result};
 
@@ -53,6 +53,25 @@ pub const DEFAULT_CONFIRM_TIMEOUT: Duration = Duration::from_secs(30);
 const CONFIRM_POLL_BASE: Duration = Duration::from_millis(200);
 const CONFIRM_POLL_CAP: Duration = Duration::from_secs(2);
 
+/// Shared V0.1 send-then-confirm pipeline. `send_and_confirm` and
+/// `send_and_confirm_versioned` are thin wrappers that supply the
+/// appropriate wire-format send call. Returns the signature on
+/// success; `ConfirmPending` / `ConfirmTimeout` from `wait_for_confirm`
+/// propagate to the caller.
+async fn broadcast_one(
+    rpc: &RpcClient,
+    sig: Signature,
+    commitment: CommitmentConfig,
+    timeout: Duration,
+) -> Result<Signature> {
+    // Refetch blockhash for the confirm-poll context (older versions
+    // pre-fetched before send; we send first now to mirror how the
+    // CLI builds messages off the same blockhash it signed against).
+    let (_blockhash, _slot) = get_latest_blockhash(rpc).await?;
+    let _status = wait_for_confirm(rpc, &sig, commitment, timeout).await?;
+    Ok(sig)
+}
+
 /// Send `tx` signed by the wallet, then poll for confirmation.
 ///
 /// `commitment` defaults to `Confirmed` (per plan doc open design
@@ -68,15 +87,26 @@ pub async fn send_and_confirm(
 ) -> Result<Signature> {
     // Phase 5.1: single send. V0.1.5 wraps this in a 3-attempt loop
     // (see plan §Phase 5 Q7 + grilled decision R1-Q1).
-    let (_blockhash, _slot) = get_latest_blockhash(rpc).await?;
-
-    // Single send attempt. Caller is responsible for signing the
-    // message with the fetched blockhash (Phase 7 CLI handler).
     let sig = send_transaction(rpc, tx).await?;
+    broadcast_one(rpc, sig, commitment, timeout).await
+}
 
-    // Poll for confirmation
-    let _status = wait_for_confirm(rpc, &sig, commitment, timeout).await?;
-    Ok(sig)
+/// Phase 8.5 overload: accept an already-versioned `VersionedTransaction`
+/// and run the same confirm poll. surfpool 1.5.0 (and Anza RPC in
+/// 2026-Q3) require the wire-format from this overload — the legacy
+/// `send_and_confirm` still wraps legacy `Transaction` to a versioned
+/// one internally, but call sites that construct V0 messages
+/// (`tx::speedup::speedup_transfer`, Phase 8.5.2) skip the wrap hop
+/// entirely.
+pub async fn send_and_confirm_versioned(
+    rpc: &RpcClient,
+    tx: &VersionedTransaction,
+    commitment: CommitmentConfig,
+    timeout: Duration,
+) -> Result<Signature> {
+    let sig =
+        send_transaction_versioned(rpc, tx, serde_json::json!({"encoding": "base64"})).await?;
+    broadcast_one(rpc, sig, commitment, timeout).await
 }
 
 /// Wait for `signature` to reach the requested commitment, polling

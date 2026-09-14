@@ -78,6 +78,12 @@ extern "C" {
 #define sol_wallet_DEFAULT_COMPUTE_UNIT_LIMIT 150000
 
 /**
+ * Maximum priority fee the surface will accept. Plan Q8 (V0.1)
+ * decision — caps a misuse before it broadcasts.
+ */
+#define sol_wallet_PRIORITY_FEE_CEILING_MICRO_LAMPORTS 10000000
+
+/**
  * Solana-native lamport amount.
  *
  * Holds `u64` lamports. Construct via [`Amount::from_lamports`] for

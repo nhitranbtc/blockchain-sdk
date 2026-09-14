@@ -489,19 +489,94 @@ async fn send(
 async fn send_speedup(
     ctx: &AppContext,
     wallet_id_str: &str,
-    _sig: &str,
-    _priority_fee: u64,
+    sig_str: &str,
+    priority_fee: u64,
 ) -> Result<()> {
-    // P7-2: same OwnedLock pattern; longer lifetime (2 RPCs) — verify
-    // OwnedLock::Drop zeroizes after handler return. Surfpool-gated
-    // broadcast lands in Phase 7.2 (see tests/submit_send_speedup_local.rs).
+    // Phase 8.5 Task 8.5.4: real impl via `tx::speedup::speedup_transfer`.
+    use sol_wallet_core::tx::speedup::{speedup_transfer, SpeedupRequest};
+    use solana_sdk::signature::Signature;
+
+    let original_sig: Signature = sig_str
+        .parse()
+        .map_err(|e| anyhow!("invalid --sig base58: {e}"))?;
+
     let id = parse_wallet_id_pub(wallet_id_str)?;
     let password = read_password_from_cli_pub()?;
-    let _unlocked = ctx.wallet_manager.unlock(id, &password)?;
-    Err(Error::Unimplemented(
-        "sol send-speedup broadcast — requires RPC client + surfpool (Phase 7.2)",
-    )
-    .into())
+    let unlocked = ctx.wallet_manager.unlock(id, &password)?;
+    let wallet = unlocked.wallet();
+
+    let rpc_url = ctx.rpc_url.clone();
+    let (original_tx_bytes, _slot) = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let rpc = sol_wallet_core::chain::RpcClient::new(&rpc_url)?;
+            fetch_original_tx_bytes(&rpc, &original_sig, &rpc_url).await
+        })
+    })?;
+
+    let original_tx: solana_sdk::transaction::VersionedTransaction =
+        bincode::deserialize(&original_tx_bytes)
+            .map_err(|e| anyhow!("decode original tx bytes: {e}"))?;
+
+    let request = SpeedupRequest {
+        original_signature: original_sig,
+        original_transaction: original_tx,
+        new_priority_fee_micro_lamports: priority_fee,
+        commitment: solana_commitment_config::CommitmentConfig::confirmed(),
+        timeout: std::time::Duration::from_secs(30),
+    };
+
+    let result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            let rpc = sol_wallet_core::chain::RpcClient::new(&rpc_url)?;
+            speedup_transfer(&rpc, wallet, request).await
+        })
+    })
+    .map_err(|e| anyhow!("speedup_transfer: {e}"))?;
+
+    let json = serde_json::json!({
+        "new_signature": result.new_signature.to_string(),
+        "original_signature": original_sig.to_string(),
+        "expires_at_slot": result.expires_at_slot,
+        "priority_fee_micro_lamports": priority_fee,
+    });
+    println!("{}", serde_json::to_string_pretty(&json)?);
+    Ok(())
+}
+
+async fn fetch_original_tx_bytes(
+    rpc: &sol_wallet_core::chain::RpcClient,
+    sig: &solana_sdk::signature::Signature,
+    _rpc_url: &str,
+) -> Result<(Vec<u8>, u64)> {
+    use base64::Engine;
+    let body = serde_json::json!([
+        sig.to_string(),
+        {
+            "encoding": "base64",
+            "commitment": "confirmed",
+            "maxSupportedTransactionVersion": 0
+        }
+    ]);
+    let raw: serde_json::Value = rpc
+        .post("getTransaction", body)
+        .await
+        .map_err(|e| anyhow!("getTransaction RPC: {e}"))?;
+    let slot = raw
+        .get("slot")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow!("getTransaction: missing `slot` field"))?;
+    let tx_arr = raw
+        .get("transaction")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow!("getTransaction: missing `transaction` array"))?;
+    let tx_b64 = tx_arr
+        .first()
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("getTransaction: transaction[0] not a string"))?;
+    let tx_bytes = base64::engine::general_purpose::STANDARD
+        .decode(tx_b64)
+        .map_err(|e| anyhow!("getTransaction: base64 decode: {e}"))?;
+    Ok((tx_bytes, slot))
 }
 
 /// Shared SOL/SPL balance helper. Used by both `wallet balance` (with

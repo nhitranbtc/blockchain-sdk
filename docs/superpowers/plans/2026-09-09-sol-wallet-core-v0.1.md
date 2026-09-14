@@ -2054,6 +2054,144 @@ User-facing goal: a developer can run a single example binary that generates a f
 
 ---
 
+## Phase 8.5 — Transaction speedup (Phase 7.1c/7.2 row 35 backfill)
+
+**Origin:** Phase 7.1c scaffolded `submit_send_speedup_local::bumps_fee`
+as a `todo!()` stub; the test body landed earlier this session against
+surfpool 1.5.0 (commit on `rust-sol-core`) using a *new* transaction with
+a bumped priority fee rather than re-broadcasting an existing on-chain
+signature. Q7 (Blockhash retry) originally deferred `send_with_retry +
+versioned tx + retry-on-stale-hash` to V0.1.5. This phase backfills the
+ergonomic V0.1.5 surface **early** because surfpool 1.5.0 rejects
+legacy `Transaction` on the wire (surfpool upgrade surfaced when the
+scaffold e2e test ran for the first time — `submit_sol_local_round_trip`
+panics with `malformed JSON-RPC envelope`).
+
+**Two-PR split** (user grill 2026-09-14):
+
+1. **PR #N — broadcast overload.** Lands `send_and_confirm_versioned`
+   + flips `submit_sol_local::round_trip` to the versioned path. Fixes
+   the wire-format gap. **Must land first.**
+2. **PR #N+1 — speedup feature.** `tx::speedup` module +
+   `WalletManager::speedup` + extended surfpool e2e + CLI handler.
+
+Blockhash policy: **always fresh** (per grill). Original-tx blockhash
+reuse is the caller's contract; staleness is theirs to detect via the
+returned `expires_at_slot` + `get_epoch_info`.
+
+### Task 8.5.1 (NEW): `tx::broadcast::send_and_confirm_versioned` overload
+
+**Files:**
+- Modify: `rust-wallet-app/crates/sol-wallet-core/src/tx/broadcast.rs`
+- Modify: `rust-wallet-app/crates/sol-wallet-core/src/lib.rs` — re-export
+- Create: `rust-wallet-app/crates/sol-wallet-core/tests/broadcast_versioned.rs`
+- Modify: `rust-wallet-app/crates/sol-wallet-core/tests/submit_sol_local.rs::submit_sol_local_round_trip` — switch to versioned path
+
+**Steps:**
+- [ ] Step 1: Add `pub async fn send_and_confirm_versioned(rpc: &RpcClient, tx: &VersionedTransaction, commitment: CommitmentConfig, timeout: Duration) -> Result<Signature>` mirroring `send_and_confirm` but accepting `VersionedTransaction` (Anza `solana-sdk` 4.1.0 `solana_sdk::transaction::versioned::VersionedTransaction`).
+- [ ] Step 2: Internally delegate to a shared `broadcast_one(rpc, wire: SerializableTransaction, commitment, timeout)` private helper — keep `send_and_confirm` and `send_and_confirm_versioned` thin wrappers around it.
+- [ ] Step 3: Unit tests in `tests/broadcast_versioned.rs`:
+  - `versioned_round_trips_through_wiremock` — wire-format fixture against mock RPC.
+  - `versioned_legacy_diverge_on_signature_count` — assert `VersionedTransaction` and legacy `Transaction` produce distinct sig payloads under Anza 4.1.0.
+- [ ] Step 4: Flip `submit_sol_local::round_trip` from `Transaction::new` to `VersionedTransaction::try_new` + new overload. Verify `RUN_SOL_SURFPOOL=1 cargo test -p sol-wallet-core --test submit_sol_local -- --ignored --nocapture` PASSES against surfpool 1.5.0.
+- [ ] Step 5: Update `submit_send_speedup_local::bumps_fee` to use `send_and_confirm_versioned` too (now that the helper exists).
+- [ ] Step 6: PAUSE — broadcast-overload PR.
+
+**Acceptance:** `submit_sol_local_round_trip` + `submit_send_speedup_local_bumps_fee` both pass on surfpool 1.5.0.
+
+### Task 8.5.2 (NEW): `tx::speedup` module
+
+**Files:**
+- Create: `rust-wallet-app/crates/sol-wallet-core/src/tx/speedup.rs`
+- Modify: `rust-wallet-app/crates/sol-wallet-core/src/tx/mod.rs` — `pub mod speedup;`
+- Modify: `rust-wallet-rust-wallet-app/crates/sol-wallet-core/src/lib.rs` — re-export
+
+**Steps:**
+- [ ] Step 1: Define `pub struct SpeedupRequest { original_signature: Signature, original_tx_bytes: Vec<u8>, new_priority_fee_micro_lamports: u64, commitment: CommitmentConfig, timeout: Duration }`.
+- [ ] Step 2: Define `pub enum SpeedupError { InsufficientBump { current_fee, requested_fee }, PriorityFeeExceedsCeiling { requested, ceiling }, RpcTransport(String), Decode(String), BroadcastFailed(String) }` with `Display + Error`.
+- [ ] Step 3: Implement `pub async fn speedup_transfer(rpc: &RpcClient, signer: &dyn Signer, request: SpeedupRequest) -> Result<Signature, SpeedupError>`:
+  a. `VersionedTransaction::try_from_slice(&request.original_tx_bytes).map_err(|e| Decode(e.to_string()))?`.
+  b. Strip Compute Budget ixes (filter ixs whose `program_id` == `solana_sdk::compute_budget::id()`).
+  c. Decode `compute_unit_price` from the stripped Compute Budget ix. Validate `new > old` (`InsufficientBump`) and `new <= 10_000_000` (`PriorityFeeExceedsCeiling`).
+  d. Fetch fresh `get_latest_blockhash(&rpc)` (always — blockhash reuse out of scope).
+  e. Build `Message::new_with_blockhash(&stripped_ixs, Some(&signer.pubkey()), blockhash)`. Prepend `compute_budget_instructions(cu_limit, new_priority_fee)`.
+  f. `sign_transaction` via `signer`. Construct `VersionedTransaction::try_new(v0_message, &[signer])`.
+  g. `send_and_confirm_versioned(...)`.
+  h. Return new signature.
+- [ ] Step 4: `#[cfg(test)] mod tests` in `speedup.rs`:
+  - `speedup_decodes_legacy_or_versioned_original_tx` — fixtures for both wire formats.
+  - `speedup_rejects_insufficient_bump` — equal fees → `InsufficientBump`.
+  - `speedup_rejects_priority_fee_over_ceiling` — `new == 11_000_000` → `PriorityFeeExceedsCeiling`.
+  - `speedup_strips_compute_budget_ixes_from_original` — count ixes before + after = N + 2 (re-prepended).
+- [ ] Step 5: PAUSE — speedup module PR.
+
+**Acceptance:** `cargo test -p sol-wallet-core --lib speedup` all pass.
+
+### Task 8.5.3 (NEW): `WalletManager::speedup` + full surfpool speedup e2e
+
+**Files:**
+- Modify: `rust-wallet-app/crates/sol-wallet-core/src/wallet_manager.rs` — add `WalletManager::speedup`.
+- Modify: `rust-wallet-app/crates/sol-wallet-core/tests/submit_send_speedup_local.rs` — full body rewrite to exercise the cycle.
+
+**Steps:**
+- [ ] Step 1: Define `pub struct SpeedupResult { pub new_signature: Signature, pub owned_lock: OwnedLock, pub expires_at_slot: u64 }`.
+- [ ] Step 2: `pub async fn WalletManager::speedup(self: &Self, id: WalletId, password: &str, request: SpeedupRequest) -> Result<SpeedupResult>`:
+  - `let lock = self.unlock(id, password)?;`
+  - `let new_sig = tx::speedup::speedup_transfer(rpc, lock.wallet().keypair_ref(), request).await?;`
+  - `let slot = get_latest_blockhash(...).await?.1;`  // `last_valid_slot`
+  - `Ok(SpeedupResult { new_signature: new_sig, owned_lock: lock, expires_at_slot: slot })`
+- [ ] Step 3: Rewrite `submit_send_speedup_local::bumps_fee`:
+  - Airdrop 2 SOL to sender.
+  - Round-trip 1 SOL transfer (uses versioned path from 8.5.1) → capture `original_signature`.
+  - `wait_for_confirm` until `original_signature.confirmed`.
+  - Fetch original: `get_transaction(&rpc, &original_signature)` → extract `TransactionEnvelope::Transaction.message_bytes` → `request.original_tx_bytes = base64-decoded bytes`.
+  - Build `SpeedupRequest { original_signature, original_tx_bytes: bytes, new_priority_fee_micro_lamports: PRIORITY_FEE_BUMP, .. }`.
+  - `WalletManager::speedup(id, "pw", request).await?` → `new_signature`.
+  - `wait_for_confirm(new_signature, confirmed)`.
+  - Assert `new_signature != original_signature` (different blockhash → different sig).
+  - Assert recipient balance == 2 SOL.
+- [ ] Step 4: PAUSE — `WalletManager` integration PR.
+
+**Acceptance:** `RUN_SOL_SURFPOOL=1 cargo test -p sol-wallet-core --test submit_send_speedup_local -- --ignored --nocapture` passes end-to-end.
+
+### Task 8.5.4 (NEW): CLI handler `sol wallet send-speedup` + JSON contract
+
+**Files:**
+- Modify: `rust-wallet-app/crates/sol/src/handlers/wallet.rs` — `WalletCmd::SendSpeedup { .. }` branch.
+- Modify: `rust-wallet-app/crates/sol/src/main.rs` — already wires the variant; verify nothing breaks.
+- Modify: `rust-wallet-app/crates/sol/tests/cli_json_output.rs::row_10_wallet_send_speedup_json` — JSON shape for `{new_signature, original_signature, expires_at_slot, priority_fee_micro_lamports}`.
+
+**Steps:**
+- [ ] Step 1: In `WalletCmd::SendSpeedup { wallet_id, sig, priority_fee, json, data_dir }`:
+  - Parse `sig: String` → `Signature::from_str`.
+  - Build `SpeedupRequest { original_signature, original_tx_bytes, new_priority_fee_micro_lamports: priority_fee, .. }`.
+  - Fetch original tx bytes via `get_transaction` RPC (CLI commands already wire RPC context).
+  - Call `WalletManager::speedup(...)`.
+  - Emit either human-readable `new_signature <old> (slot <expires_at_slot>)` or JSON.
+- [ ] Step 2: Update `cli_json_output::row_10_wallet_send_speedup_json` assertion shape — object with 4 keys listed above.
+- [ ] Step 3: PAUSE — CLI handler PR.
+
+**Acceptance:** `RUN_SOL_SURFPOOL=1 cargo test -p sol --test cli_json_output -- --ignored` PASSES row_10 against surfpool.
+
+### Phase 8.5 deliverable summary
+
+| Item | Status |
+|------|--------|
+| `tx::broadcast::send_and_confirm_versioned` overload | ⏳ (Task 8.5.1) |
+| `tests/broadcast_versioned.rs` (wiremock + versioned) | ⏳ (Task 8.5.1) |
+| `submit_sol_local::round_trip` passes on surfpool | ⏳ (Task 8.5.1) |
+| `tx::speedup` module + types | ⏳ (Task 8.5.2) |
+| `WalletManager::speedup` + `SpeedupResult` | ⏳ (Task 8.5.3) |
+| `submit_send_speedup_local::bumps_fee` round-trip + speedup cycle | ⏳ (Task 8.5.3) |
+| CLI `sol wallet send-speedup --json` handler | ⏳ (Task 8.5.4) |
+| Deep-dive row 35 status flip: ready → shipped | ⏳ |
+
+### Phase 8.5 drift recorded at execution time
+
+(filled at PR time per L24)
+
+---
+
 ## Phase 9 — Mainnet smoke gate + release cut
 
 ### Task 9.1 (TBD): Mainnet self-send smoke test (Q4 Q-gate)

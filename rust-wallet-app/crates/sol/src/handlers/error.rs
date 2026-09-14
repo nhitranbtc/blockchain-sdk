@@ -53,7 +53,9 @@ pub fn classify(err: &anyhow::Error) -> i32 {
                 | Error::InsecureSourceFile { .. }
                 | Error::UnsupportedBlobVersion { .. }
                 | Error::InvalidKdfParams { .. }
-                | Error::InvalidWalletId { .. } => 4,
+                | Error::InvalidWalletId { .. }
+                | Error::InvalidStorageName { .. }
+                | Error::InvalidTransaction(_) => 4,
 
                 // Exit 5 — sign / persistence / config / internal.
                 Error::OsRngFailed { .. }
