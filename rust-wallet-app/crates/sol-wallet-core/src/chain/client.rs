@@ -505,17 +505,28 @@ mod tests {
     }
 
     #[test]
-    fn rpc_error_rejects_unknown_field() {
+    fn rpc_error_accepts_spec_optional_data_field() {
+        // Per JSON-RPC 2.0 spec §5.1 the `data` field is OPTIONAL.
+        // Solana clusters and surfpool 1.5.0 include it (e.g.
+        // `-32005 Node is unhealthy` returns `{ "data": { "numSlotsBehind": null } }`).
+        // `RpcError` MUST accept it — the OUTER `RpcErrorEnvelope` keeps
+        // `deny_unknown_fields` so drift on the envelope-level fields
+        // (`jsonrpc`/`id`/`error`) is still a loud parse error.
         let raw = serde_json::json!({
-            "code": -32000,
-            "message": "fail",
-            "data": "BAD",
+            "code": -32005,
+            "message": "Node is unhealthy",
+            "data": {"numSlotsBehind": null},
         });
         let parsed: std::result::Result<RpcError, _> = serde_json::from_value(raw);
         assert!(
-            parsed.is_err(),
-            "RpcError must reject unknown fields per Tier 2 #7"
+            parsed.is_ok(),
+            "RpcError must accept JSON-RPC 2.0 spec §5.1 optional `data` field; got {:?}",
+            parsed.err()
         );
+        let err = parsed.unwrap();
+        assert_eq!(err.code, -32005);
+        assert_eq!(err.message, "Node is unhealthy");
+        assert!(err.data.is_some(), "data must round-trip into Some(Value)");
     }
 
     #[test]

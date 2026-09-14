@@ -18,7 +18,6 @@ use solana_sdk::{
     message::{v0::Message as V0Message, VersionedMessage},
     pubkey::Pubkey,
     signature::Signature,
-    signer::Signer,
     transaction::VersionedTransaction,
 };
 
@@ -48,19 +47,30 @@ pub const PRIORITY_FEE_CEILING_MICRO_LAMPORTS: u64 = 10_000_000;
 /// Error variants surfaced by `speedup_transfer`.
 #[derive(Debug, Serialize)]
 pub enum SpeedupError {
+    /// Requested priority fee was not higher than the original tx.
     InsufficientBump {
+        /// Original priority fee (micro-lamports).
         current_fee: u64,
+        /// Requested priority fee (micro-lamports).
         requested_fee: u64,
     },
+    /// Requested priority fee exceeded the safety ceiling.
     PriorityFeeExceedsCeiling {
+        /// Requested fee (micro-lamports).
         requested: u64,
+        /// Configured ceiling (micro-lamports).
         ceiling: u64,
     },
+    /// Failed to decode the original transaction's instructions or fees.
     Decode {
+        /// Human-readable decode failure detail.
         message: String,
     },
+    /// RPC transport error wrapping a Solana node failure.
     RpcTransport(String),
+    /// Broadcast (send+confirm) failed after retries / timeout.
     BroadcastFailed(String),
+    /// Catch-all variant for uncategorised errors.
     Other(String),
 }
 
@@ -106,17 +116,24 @@ impl From<Error> for SpeedupError {
 /// out of scope — `speedup_transfer` always fetches a fresh one.
 #[derive(Clone, Debug)]
 pub struct SpeedupRequest {
+    /// Signature of the original (still-pending) transaction.
     pub original_signature: Signature,
+    /// Decoded original transaction; its instructions are re-signed with the bumped fee.
     pub original_transaction: VersionedTransaction,
+    /// New priority fee in micro-lamports; must be > original fee and `<= PRIORITY_FEE_CEILING_MICRO_LAMPORTS`.
     pub new_priority_fee_micro_lamports: u64,
+    /// Commitment level at which to confirm the resubmitted transaction.
     pub commitment: CommitmentConfig,
+    /// Total timeout for the broadcast + confirm poll.
     pub timeout: Duration,
 }
 
 /// Result returned to caller (and surfaced to the FFI / CLI layers).
 #[derive(Clone, Debug)]
 pub struct SpeedupResult {
+    /// Signature of the resubmitted transaction (different from original — fresh blockhash + bumped fee).
     pub new_signature: Signature,
+    /// Last blockhash slot the resubmitted transaction remains valid for; UI can warn as it approaches.
     pub expires_at_slot: u64,
 }
 
@@ -302,12 +319,20 @@ fn extract_compute_unit_price(tx: &VersionedTransaction) -> Option<u64> {
 mod tests {
     use super::*;
     use solana_sdk::signature::Keypair;
+    // Tests below call `Keypair::pubkey()` which is provided by the
+    // `Signer` trait — bring it into scope locally so the lib-level
+    // `use` block above can stay lean (clippy: `unused_imports`).
+    use solana_sdk::signer::Signer;
 
     fn fixture_versioned_with_price(price: u64) -> VersionedTransaction {
         let keypair = Keypair::new();
         let recipient = Pubkey::new_unique();
-        let mut data = Vec::with_capacity(12);
-        data.extend_from_slice(&3u32.to_le_bytes());
+        // Match the Anza `set_compute_unit_price` wire layout exactly:
+        // 1-byte discriminator (3) + u64 LE micro_lamports = 9 bytes.
+        // See `solana-compute-budget-interface-3.1.0/src/lib.rs` lines 41-50
+        // and the crate's own `test_to_instruction` round-trip.
+        let mut data = Vec::with_capacity(9);
+        data.push(3u8);
         data.extend_from_slice(&price.to_le_bytes());
         let cb_ix = Instruction {
             program_id: compute_budget_program_id(),

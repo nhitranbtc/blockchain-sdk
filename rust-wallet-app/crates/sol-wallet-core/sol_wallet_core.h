@@ -62,12 +62,6 @@ extern "C" {
 #define sol_wallet_ENVELOPE_VERSION 1
 
 /**
- * Default max-attempts for `send_and_confirm`. V0.1 = 1 (no retry);
- * V0.1.5 = 3 with exponential backoff.
- */
-#define sol_wallet_DEFAULT_SEND_MAX_ATTEMPTS 1
-
-/**
  * Default compute unit limit per Phase 3.1 Step 4 + Q8.
  *
  * Matches Solana's validator default (200_000) divided to leave headroom
