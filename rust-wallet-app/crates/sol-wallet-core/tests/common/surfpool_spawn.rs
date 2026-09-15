@@ -59,7 +59,38 @@ impl Drop for SurfpoolGuard {
 }
 
 /// Spawn surfpool on an ephemeral port and wait for `get_health` to return Ok.
+///
+/// On a surfpool early-exit (process crashes during spawn — observed in
+/// job 104325459502 → `boot_probe_local_get_health_ok`, with
+/// `ExitStatus(unix_wait_status(256))` = exit code 1), retry up to
+/// `MAX_SPAWN_ATTEMPTS` times with a brief backoff. The exit is
+/// transient: under parallel `cargo test` load the validator crashes
+/// during init; a fresh process on a new ephemeral port usually boots
+/// cleanly. Bounded retries keep a hard-bad binary (e.g. wrong arch)
+/// from looping forever — `NotFound` errors are surfaced immediately.
 pub async fn spawn_surfpool() -> Result<SurfpoolGuard, SurfpoolError> {
+    const MAX_SPAWN_ATTEMPTS: u32 = 3;
+    const SPAWN_RETRY_DELAY: Duration = Duration::from_millis(500);
+
+    let mut last_err: Option<SurfpoolError> = None;
+    for _ in 0..MAX_SPAWN_ATTEMPTS {
+        match spawn_surfpool_once().await {
+            Ok(guard) => return Ok(guard),
+            Err(SurfpoolError::SpawnFailed(msg)) if msg.contains("exited early") => {
+                last_err = Some(SurfpoolError::SpawnFailed(msg));
+                tokio::time::sleep(SPAWN_RETRY_DELAY).await;
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.unwrap_or(SurfpoolError::SpawnFailed(
+        "spawn retries exhausted without error".to_string(),
+    )))
+}
+
+/// Single-attempt surfpool spawn — no retry wrapping.
+async fn spawn_surfpool_once() -> Result<SurfpoolGuard, SurfpoolError> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
         .map_err(|e| SurfpoolError::SpawnFailed(format!("bind: {e}")))?;
     let port = listener
