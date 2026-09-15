@@ -5,7 +5,10 @@
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use sol_wallet_core::chain::{account::get_health, client::RpcClient};
+use sol_wallet_core::chain::{
+    account::{get_health, get_latest_blockhash},
+    client::RpcClient,
+};
 
 const BOOT_DEADLINE: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
@@ -105,7 +108,14 @@ pub async fn spawn_surfpool() -> Result<SurfpoolGuard, SurfpoolError> {
         .map_err(|e| SurfpoolError::SpawnFailed(format!("RpcClient::new: {e}")))?;
     let deadline = Instant::now() + BOOT_DEADLINE;
     loop {
-        if get_health(&rpc).await.is_ok() {
+        // Both signals must be Ok before we hand the guard back:
+        //   * `getHealth` confirms the RPC endpoint is responsive,
+        //   * `getLatestBlockhash` confirms the tx-processing pipeline
+        //     is warm. Surfpool returns Ok to `getHealth` before the
+        //     blockhash pipeline is live, leading to a `Rpc { code:
+        //     -32005, message: "Node is unhealthy" }` from
+        //     `send_and_confirm` mid-test (observed in job 104249341528).
+        if get_health(&rpc).await.is_ok() && get_latest_blockhash(&rpc).await.is_ok() {
             return Ok(guard);
         }
         if Instant::now() >= deadline {
