@@ -11,6 +11,7 @@
 //! Cross-ref: `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md` (22 rows).
 
 use assert_cmd::Command;
+use std::net::TcpListener;
 use tempfile::TempDir;
 
 fn sol_bin() -> Command {
@@ -127,3 +128,115 @@ surfpool_row!(row_21_spl_allowance, "spl allowance --token --owner --delegate �
 surfpool_row!(row_22_mainnet_smoke, "Mainnet smoke — deferred to Phase 9.1 per Q4 Q-gate (Plan 7.3 Step 7)" =>
     "config", "set-cluster", "--cluster", "mainnet-beta", "--yes"
 );
+
+// ─── classify() exit-code audit gates (Plan 7.3 NEW Step 15) ─────────────
+//
+// Per `handlers/error.rs::classify()`:
+//   exit 3 = Transport | Rpc | InsufficientFunds | BroadcastFailed
+//          | ConfirmTimeout | ComputeBudgetExceeded | ConfirmPending
+//   exit 5 = OsRngFailed | FileIo | KdfFailed | CipherInit
+//          | RecordCorrupt | Unimplemented
+//
+// Both tests gated on `RUN_SOL_SURFPOOL=1` so `tx wait` has a reachable RPC
+// endpoint. The exit-5 path (`wallet send` without --dry-run/--sign-only)
+// returns Unimplemented before any RPC call; surfpool not strictly required
+// but kept co-located for regression-guard grouping.
+
+/// `tx wait` against a closed-port RPC must surface as `Error::Transport`
+/// (per `chain/client.rs:267` — all RpcClient POST failures wrap as
+/// `Error::Transport(...)`) → exit code 3.
+///
+/// We bind a `TcpListener` on `127.0.0.1:0` (OS-assigned port), capture the
+/// port, drop the listener, then point `--rpc` at it — guaranteed
+/// `ECONNREFUSED` on any OS without depending on IANA-reserved ports
+/// (`127.0.0.1:1` is `tcpmux` and may be bound on hardened CI images).
+///
+/// The stderr substring assertion anchors on the exact
+/// `chain/client.rs:267` path (`"RPC POST getSignatureStatuses"`), so a
+/// regression to `Error::Rpc` / `Error::BroadcastFailed` (both also exit 3
+/// per `classify()`) would still pass the exit-code check but fail this
+/// specific-fragment pin.
+#[test]
+#[ignore = "RUN_SOL_SURFPOOL=1 required for surfpool-audit co-location grouping (this test does not contact surfpool)."]
+fn classify_exit_code_3_tx_wait_transport_audit_p7_3() {
+    // 87-char base58 placeholder signature — valid format, never confirms.
+    let sig: String = "5".repeat(87);
+    let closed_port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = l.local_addr().expect("local_addr").port();
+        drop(l);
+        port
+    };
+    let mut cmd = sol_bin();
+    cmd.env("RUN_SOL_SURFPOOL", "1")
+        .args([
+            "tx",
+            "wait",
+            "--sig",
+            &sig,
+            "--timeout",
+            "1",
+            "--poll-interval",
+            "1",
+            "--rpc",
+            &format!("http://127.0.0.1:{closed_port}"),
+        ])
+        .arg("--data-dir")
+        .arg(tmp().path());
+    let output = cmd.output().expect("spawn sol binary");
+    let got = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        got,
+        Some(3),
+        "expected exit 3 (Error::Transport per handlers/error.rs::classify); got {got:?}; stderr=\n{stderr}"
+    );
+    assert!(
+        stderr.contains("RPC POST getSignatureStatuses"),
+        "stderr missing `RPC POST getSignatureStatuses` fragment — \
+         Error::Transport path not exercised (got stderr=\n{stderr})"
+    );
+}
+
+/// `wallet create --name x --mnemonic-file /no/such/path` with
+/// `SOL_WALLET_PASSWORD` set hits the `std::fs::read_to_string` →
+/// `Error::FileIo { path, source }` mapping in `wallet.rs:153-156` →
+/// exit code 5. Password env var is required by
+/// `read_password_from_cli_pub()` (`wallet.rs:695-701`) which fires
+/// BEFORE the FileIo mapping; without it the test would short-circuit
+/// to exit 1 (anyhow fallback).
+///
+/// The stderr substring assertion anchors on the exact `FileIo` Display
+/// fragment (`"file I/O error"`) so a regression to one of the seven other
+/// exit-5 variants (`OsRngFailed`, `KdfFailed`, `CipherInit`, `RecordCorrupt`,
+/// `Unimplemented`, etc.) cannot silently pass this gate.
+#[test]
+#[ignore = "RUN_SOL_SURFPOOL=1 required for surfpool-audit co-location grouping (this test does not contact surfpool)."]
+fn classify_exit_code_5_wallet_create_file_io_audit_p7_3() {
+    let mut cmd = sol_bin();
+    cmd.env("RUN_SOL_SURFPOOL", "1")
+        .env("SOL_WALLET_PASSWORD", "test-password-for-fileio-path-only")
+        .args([
+            "wallet",
+            "create",
+            "--name",
+            "audit-p7-3",
+            "--mnemonic-file",
+            "/no/such/directory/that/cannot/exist/mnemonic.txt",
+        ])
+        .arg("--data-dir")
+        .arg(tmp().path());
+    let output = cmd.output().expect("spawn sol binary");
+    let got = output.status.code();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        got,
+        Some(5),
+        "expected exit 5 (Error::FileIo per handlers/error.rs::classify); got {got:?}; stderr=\n{stderr}"
+    );
+    assert!(
+        stderr.contains("file I/O error"),
+        "stderr missing `file I/O error` fragment — \
+         Error::FileIo path not exercised (got stderr=\n{stderr})"
+    );
+}

@@ -27,10 +27,16 @@ async fn get_tx(ctx: &AppContext, sig_str: &str, json: bool) -> Result<()> {
         .map_err(|e| anyhow!("invalid signature base58: {e}"))?;
 
     let rpc = sol_wallet_core::chain::RpcClient::new(&ctx.rpc_url)
-        .map_err(|e| anyhow!("RpcClient::new: {e}"))?;
+        // Chain-preservation rewrite (sister to `wait_tx` lines 67-70):
+        // plain `anyhow!("…: {e}")` interpolates the Display string and drops
+        // the typed `sol_wallet_core::Error` from `chain()`. `handlers/error.rs`
+        // ::classify()` walks the chain to map e.g. `Error::Transport` → exit 3;
+        // without `.context(e)` the audit gate `classify_exit_code_3_*` falls
+        // through to the anyhow-fallback exit 1.
+        .map_err(|e| anyhow::Error::new(e).context("RpcClient::new"))?;
     let response = get_transaction(&rpc, &sig)
         .await
-        .map_err(|e| anyhow!("get_transaction: {e}"))?;
+        .map_err(|e| anyhow::Error::new(e).context("get_transaction"))?;
 
     if json {
         let val = serde_json::json!({
@@ -66,7 +72,7 @@ async fn wait_tx(
         .map_err(|e| anyhow!("invalid signature base58: {e}"))?;
 
     let rpc = sol_wallet_core::chain::RpcClient::new(&ctx.rpc_url)
-        .map_err(|e| anyhow!("RpcClient::new: {e}"))?;
+        .map_err(|e| anyhow::Error::new(e).context("RpcClient::new"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     let poll_dur = std::time::Duration::from_secs(poll_interval.max(1));
 
@@ -89,16 +95,22 @@ async fn wait_tx(
                 // signature not visible on cluster yet — keep polling.
             }
             Err(e) => {
-                return Err(anyhow!("get_signature_status: {e}"));
+                // Preserve the typed `sol_wallet_core::Error` in the chain so
+                // `handlers/error.rs::classify()` can map e.g. `Error::Transport`
+                // → exit 3. Plain `anyhow!("…: {e}")` interpolates the Display
+                // string and drops the Error from the cause chain (caught by
+                // the classify_exit_code_3 regression guard).
+                return Err(anyhow::Error::new(e).context("get_signature_status"));
             }
         }
         tokio::time::sleep(poll_dur).await;
     }
-    Err(anyhow!(
-        "timed out after {}s waiting for signature {}",
-        timeout_secs,
-        sig_str
-    ))
+    // Same chain-preservation rule: surface a typed `Error::ConfirmTimeout`
+    // so `classify()` maps to exit 3, not anyhow-fallback exit 1.
+    Err(anyhow::Error::new(sol_wallet_core::Error::ConfirmTimeout {
+        signature: sig_str.to_string(),
+        waited_ms: timeout_secs * 1000,
+    }))
 }
 
 fn print_status(sig: &str, status: &str, json: bool) -> Result<()> {
