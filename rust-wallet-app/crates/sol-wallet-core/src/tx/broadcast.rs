@@ -103,6 +103,16 @@ async fn broadcast_one(
 ///   "replaceRecentBlockhash": true, "skipPreflight": true }` — load-
 ///   balanced backends disagree on `recent_blockhash`; the leader must
 ///   substitute a fresh hash and skip preflight simulation.
+///
+/// On `Rpc { code: -32005, .. }` (Solana "Node is unhealthy"), the call
+/// is retried up to `MAX_UNHEALTHY_RETRIES` times with linear backoff.
+/// Surfpool's local validator can return this transient error during
+/// the first second of a tx pipeline warm-up (observed in job
+/// 104249341528 → `submit_sol_local_round_trip`); Solana validators on
+/// devnet/mainnet can return it under load. Resending the SAME signed
+/// tx is idempotent — Solana dedupes by signature at the leader, so a
+/// retry after a successful send returns the same signature rather than
+/// double-broadcasting.
 pub async fn send_and_confirm(
     rpc: &RpcClient,
     tx: &VersionedTransaction,
@@ -110,7 +120,37 @@ pub async fn send_and_confirm(
     commitment: CommitmentConfig,
     timeout: Duration,
 ) -> Result<Signature> {
-    let sig = send_transaction_versioned(rpc, tx, options).await?;
+    const MAX_UNHEALTHY_RETRIES: u32 = 5;
+    const RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
+
+    for attempt in 0..MAX_UNHEALTHY_RETRIES {
+        match try_send_and_confirm(rpc, tx, &options, commitment, timeout).await {
+            Ok(sig) => return Ok(sig),
+            Err(Error::Rpc { code: -32005, .. }) => {
+                if attempt + 1 < MAX_UNHEALTHY_RETRIES {
+                    tokio::time::sleep(RETRY_BASE_DELAY * (attempt + 1)).await;
+                    continue;
+                }
+                return Err(Error::Rpc {
+                    code: -32005,
+                    message: format!("Node is unhealthy after {MAX_UNHEALTHY_RETRIES} retries"),
+                });
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!("retry loop must return on each path")
+}
+
+/// Single-attempt helper for `send_and_confirm` (no retry wrapping).
+async fn try_send_and_confirm(
+    rpc: &RpcClient,
+    tx: &VersionedTransaction,
+    options: &Value,
+    commitment: CommitmentConfig,
+    timeout: Duration,
+) -> Result<Signature> {
+    let sig = send_transaction_versioned(rpc, tx, options.clone()).await?;
     broadcast_one(rpc, sig, commitment, timeout).await
 }
 
