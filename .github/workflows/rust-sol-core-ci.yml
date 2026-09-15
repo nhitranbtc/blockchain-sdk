@@ -132,8 +132,13 @@ jobs:
         # Docker. Tests gate on `RUN_SOL_SURFPOOL=1`; install binary
         # first so `tokio::process::Command::new("surfpool")` resolves.
         # Source: https://github.com/txtx/surfpool (crate: `surfpool-cli`,
-        # bin: `surfpool`).
-        run: cargo install surfpool-cli --locked
+        # bin: `surfpool`). Pin to the v1.5.0 git rev because crates.io's
+        # `surfpool-cli` package (currently v0.1.2) is the pre-monorepo
+        # split version and lacks the `--no-tui` / `--offline` flags
+        # that `tests/common/surfpool_spawn.rs` relies on. Mismatched
+        # versions caused CI surfpool-spawn failures (job 104238951194)
+        # — surfpool exited with code 1 immediately on spawn.
+        run: cargo install --git https://github.com/txtx/surfpool --rev v1.5.0 surfpool-cli --locked
       - name: cargo test (sol-wallet-core, all tests including #[ignore])
         working-directory: rust-wallet-app
         run: |
