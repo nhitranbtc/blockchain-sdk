@@ -144,6 +144,16 @@ jobs:
         # `git ls-remote https://github.com/txtx/surfpool refs/tags/v1.5.0`):
         #   tag    v1.5.0 -> commit 86493c4bf716b01d4bedbc531aa9288cb14d5f36
         # Re-pin by hand if the upstream tag moves; commit SHAs are immutable.
+        #
+        # Step-scoped `env: RUSTFLAGS: ""` clears the job-level
+        # `RUSTFLAGS: "-D warnings"` for THIS step only. surfpool-cli
+        # at SHA 86493c4 has a never-constructed `CheckVersionResponse`
+        # struct (`crates/cli/src/cli/simnet/mod.rs:46`); modern rustc
+        # promotes that dead-code warning to a hard error under
+        # `-D warnings`, breaking the install (job 104246264771, exit
+        # 101). The `cargo test` step below keeps the strict flag.
+        env:
+          RUSTFLAGS: ""
         run: cargo install --git https://github.com/txtx/surfpool --rev 86493c4bf716b01d4bedbc531aa9288cb14d5f36 surfpool-cli --locked
       - name: cargo test (sol-wallet-core, all tests including #[ignore])
         working-directory: rust-wallet-app
