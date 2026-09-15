@@ -126,15 +126,14 @@ pub async fn send_and_confirm(
     for attempt in 0..MAX_UNHEALTHY_RETRIES {
         match try_send_and_confirm(rpc, tx, &options, commitment, timeout).await {
             Ok(sig) => return Ok(sig),
-            Err(Error::Rpc { code: -32005, .. }) => {
+            Err(Error::Rpc { code: -32005, .. }) | Err(Error::Transport(_)) => {
                 if attempt + 1 < MAX_UNHEALTHY_RETRIES {
                     tokio::time::sleep(RETRY_BASE_DELAY * (attempt + 1)).await;
                     continue;
                 }
-                return Err(Error::Rpc {
-                    code: -32005,
-                    message: format!("Node is unhealthy after {MAX_UNHEALTHY_RETRIES} retries"),
-                });
+                return Err(Error::Transport(format!(
+                    "send_and_confirm: RPC call failed after {MAX_UNHEALTHY_RETRIES} retries"
+                )));
             }
             Err(e) => return Err(e),
         }
