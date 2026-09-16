@@ -193,7 +193,7 @@ pub enum WalletCmd {
     Send {
         #[arg(long)]
         wallet_id: Option<String>,
-        #[arg(long, conflicts_with = "wallet_id")]
+        #[arg(long)]
         to: Option<String>,
         #[arg(long, conflicts_with = "to")]
         to_wallet: Option<String>,

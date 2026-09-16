@@ -34,18 +34,33 @@ pub async fn dispatch(cmd: &BalanceCmd, ctx: &AppContext, _cli: &Cli) -> Result<
             Ok(())
         }
         BalanceCmd::Spl { address, token } => {
-            // SPL balance requires ATA derivation + token-account lookup.
-            // Defer to Phase 7.2 alongside spl::balance.
-            let _owner: solana_sdk::pubkey::Pubkey = address
+            let owner: solana_sdk::pubkey::Pubkey = address
                 .parse()
                 .map_err(|e| anyhow!("invalid --address base58: {e}"))?;
-            let _mint: solana_sdk::pubkey::Pubkey = token
+            let mint: solana_sdk::pubkey::Pubkey = token
                 .parse()
                 .map_err(|e| anyhow!("invalid --token base58: {e}"))?;
-            Err(sol_wallet_core::Error::Unimplemented(
-                "sol balance --token — requires ATA derivation (Phase 7.2)",
-            )
-            .into())
+            let rpc = sol_wallet_core::chain::RpcClient::new(&ctx.rpc_url)
+                .map_err(|e| anyhow!("RpcClient::new: {e}"))?;
+            let program_id = sol_wallet_core::disambig::classic_token_program_id();
+            let ata = sol_wallet_core::tx::builder::derive_ata_with_program_id(
+                &owner,
+                &mint,
+                &program_id,
+            );
+            let ui_amount = sol_wallet_core::chain::get_token_account_balance(&rpc, &ata)
+                .await
+                .map_err(|e| match e {
+                    sol_wallet_core::Error::Rpc { .. } => {
+                        anyhow!("ATA not found for owner={owner} mint={mint} (derive_ata={ata})")
+                    }
+                    other => anyhow!("get_token_account_balance: {other:?}"),
+                })?;
+            println!(
+                "{} {} (decimals={}, ata={})",
+                ui_amount.amount, token, ui_amount.decimals, ata
+            );
+            Ok(())
         }
     }
 }

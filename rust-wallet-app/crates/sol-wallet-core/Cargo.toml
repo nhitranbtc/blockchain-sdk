@@ -88,15 +88,10 @@ serde_json                   = { workspace = true }
 #                   from the workspace entry (already has `zeroize` + `rand`).
 #   zeroize       — wraps seed + xprv bytes during derivation so ZeroizeOnDrop
 #                   fires before the Keypair consumes them (F53, U3).
-#   hmac, sha2    — BIP-32 master-node + seed-stretch primitives that
-#                   ed25519-bip32 exposes indirectly; declared so the feature
-#                   flags line up with the Anza SDK's expectations.
 solana-sdk     = { workspace = true }
 ed25519-bip32  = { workspace = true }
 bip39          = { workspace = true }
 zeroize        = { workspace = true }
-hmac           = { workspace = true }
-sha2           = { workspace = true }
 bs58           = { workspace = true }
 # Phase 3 — `system_instruction::transfer` is in `solana-system-interface`
 # in the modern Anza split; `ComputeBudgetInstruction` lives in
@@ -117,14 +112,9 @@ solana-compute-budget-interface = { workspace = true }
 # - `url`         — `RpcClient::new` URL parsing + allowlist check
 # - `base64`      — wire-format encoding for `sendTransaction` / `getAccountInfo`
 #                    bodies (Tier 2 finding #8: bincode wire + base64 envelope)
-# - `phf`         — header-name HTTP/2 validator (for the rate limiter's
-#                    `host` extraction; cheap compile-time hash map)
-# - `ascii`       — case-insensitive header matching
 reqwest       = { workspace = true }
 url           = "2"
 base64        = "0.22"
-phf           = { version = "0.11", features = ["macros"] }
-ascii         = "1"
 # Anza 4.x ABI split — V0.1 defines local minimal wire structs
 # (`TransactionStatus`, `UiTokenAmount`, `Version`, `EpochInfo`,
 # `RpcPrioritizationFee`) in `chain::account` instead of pulling

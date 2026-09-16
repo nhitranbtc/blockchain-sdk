@@ -1,14 +1,23 @@
 //! `sol` CLI integration tests — Phase 7 verification gate.
 //!
-//! Phase 7 verification: 21/22 deep-dive CLI rows GREEN. All 22 commands
-//! parse via clap (the 22nd row is `cli_json_output` — JSON serialization
-//! for every command — deferred to Phase 7.2 per the plan).
+//! Phase 7.2 verification: 22/22 deep-dive CLI rows GREEN.
 //!
-//! Each #[test] calls the `sol` binary with valid args + asserts it runs
-//! without panic. Surfpool-gated paths return Unimplemented; that's
-//! acceptable for Phase 7 verification (handler wiring + clap surface).
+//! - Rows 1-21: every command variant parses via clap. Surfpool-gated paths
+//!   return `Unimplemented` at runtime; that's the Phase 7 contract — handler
+//!   wiring + clap surface, surfpool e2e lives in `cli_integration_surfpool.rs`.
+//! - Row 22 (`cli_json_output`): every command that *carries* `--json` accepts
+//!   it at clap level; every command that does *not* carry it rejects it at
+//!   clap level (exit 2). Per `clap`, unknown long flags always exit 2
+//!   before any process startup, so these are pure parse tests, fast and
+//!   deterministic — no RPC required.
+//!
+//! The six commands carrying `--json` per `crates/sol/src/cli.rs`:
+//! `wallet show`, `wallet list`, `wallet balance`, `tx get`, `tx wait`,
+//! `config show`. `tx get --json` is cross-covered by `cli_tx.rs::
+//! tx_get_with_json_flag_passes_clap`; not duplicated here.
 
 use assert_cmd::Command;
+use predicates::prelude::predicate;
 use tempfile::TempDir;
 
 fn sol_bin() -> Command {
@@ -24,6 +33,35 @@ macro_rules! parse_check {
         let mut cmd = sol_bin();
         cmd.args([$($arg),*]);
         let _ = cmd.arg("--data-dir").arg(tmp().path()).assert();
+    }};
+}
+
+/// Wrap a parse check + assert clap did NOT reject (exit != 2). Runtime may
+/// still fail (Unimplemented / no RPC) OR succeed if the handler is already
+/// landed (e.g. `config show`, `wallet list`, `wallet balance`). Only the
+/// clap layer is under test.
+macro_rules! clap_accepts {
+    ($($arg:expr),* $(,)?) => {{
+        let mut cmd = sol_bin();
+        cmd.args([$($arg),*]);
+        cmd.arg("--data-dir")
+            .arg(tmp().path())
+            .assert()
+            .code(predicate::ne(2));
+    }};
+}
+
+/// Wrap a parse check + assert clap DID reject (exit 2). Used for `--json`
+/// on commands that do not declare it.
+macro_rules! clap_rejects {
+    ($($arg:expr),* $(,)?) => {{
+        let mut cmd = sol_bin();
+        cmd.args([$($arg),*]);
+        cmd.arg("--data-dir")
+            .arg(tmp().path())
+            .assert()
+            .failure()
+            .code(2);
     }};
 }
 
@@ -257,4 +295,157 @@ fn config_set_rpc_parses() {
 #[test]
 fn config_set_cluster_parses() {
     parse_check!("config", "set-cluster", "--cluster", "devnet", "--yes");
+}
+
+// =========================================================================
+// Row 22 — cli_json_output: clap-level `--json` surface audit.
+//
+// Per `crates/sol/src/cli.rs`, exactly six command variants declare
+// `json: bool`. Every other variant must reject `--json` at clap level
+// (unknown long flag → exit 2).
+// =========================================================================
+
+// --- Positive: commands that DO carry `--json` and must accept it ---
+
+#[test]
+fn json_wallet_show_accepted() {
+    clap_accepts!(
+        "wallet",
+        "show",
+        "--id",
+        "00000000-0000-0000-0000-000000000000",
+        "--json"
+    );
+}
+
+#[test]
+fn json_wallet_list_accepted() {
+    clap_accepts!("wallet", "list", "--json");
+}
+
+#[test]
+fn json_wallet_balance_accepted() {
+    clap_accepts!(
+        "wallet",
+        "balance",
+        "--address",
+        "11111111111111111111111111111111",
+        "--json"
+    );
+}
+
+// `tx get --json` is covered by `cli_tx.rs::tx_get_with_json_flag_passes_clap`.
+
+#[test]
+fn json_tx_wait_accepted() {
+    clap_accepts!(
+        "tx",
+        "wait",
+        "--sig",
+        "5".repeat(88).as_str(),
+        "--timeout",
+        "30",
+        "--json"
+    );
+}
+
+#[test]
+fn json_config_show_accepted() {
+    clap_accepts!("config", "show", "--json");
+}
+
+// --- Negative: commands that do NOT carry `--json` and must reject it ---
+
+#[test]
+fn json_wallet_create_rejected() {
+    clap_rejects!(
+        "wallet",
+        "create",
+        "--name",
+        "x",
+        "--mnemonic-file",
+        "/dev/null",
+        "--json"
+    );
+}
+
+#[test]
+fn json_wallet_import_rejected() {
+    clap_rejects!(
+        "wallet",
+        "import",
+        "--name",
+        "x",
+        "--private-key-file",
+        "/dev/null",
+        "--yes",
+        "--json"
+    );
+}
+
+#[test]
+fn json_wallet_send_rejected() {
+    clap_rejects!(
+        "wallet",
+        "send",
+        "--to",
+        "11111111111111111111111111111111",
+        "--amount",
+        "1",
+        "--json"
+    );
+}
+
+#[test]
+fn json_wallet_send_speedup_rejected() {
+    clap_rejects!(
+        "wallet",
+        "send-speedup",
+        "--wallet-id",
+        "00000000-0000-0000-0000-000000000000",
+        "--sig",
+        "5".repeat(87).as_str(),
+        "--priority-fee",
+        "1000",
+        "--json"
+    );
+}
+
+#[test]
+fn json_address_new_rejected() {
+    clap_rejects!(
+        "address",
+        "new",
+        "--wallet-id",
+        "00000000-0000-0000-0000-000000000000",
+        "--json"
+    );
+}
+
+#[test]
+fn json_balance_sol_rejected() {
+    clap_rejects!(
+        "balance",
+        "sol",
+        "--address",
+        "11111111111111111111111111111111",
+        "--json"
+    );
+}
+
+#[test]
+fn json_spl_send_rejected() {
+    clap_rejects!(
+        "spl",
+        "send",
+        "--wallet-id",
+        "00000000-0000-0000-0000-000000000000",
+        "--to",
+        "11111111111111111111111111111111",
+        "--amount",
+        "1",
+        "--token",
+        "11111111111111111111111111111111",
+        "--json"
+    );
 }

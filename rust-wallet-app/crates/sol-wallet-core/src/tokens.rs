@@ -166,9 +166,66 @@ pub fn decimals_from_state_bytes(data: &[u8], program: TokenProgram) -> Result<u
     }
 }
 
+/// Decode the SPL token-account state bytes (`spl_token::state::Account` /
+/// `spl_token_2022::state::Account`) into `(delegate, amount)`.
+///
+/// **Layout** (per spl-program/token program/src/state.rs `Account`):
+/// ```text
+/// offset  size  field
+///   0     32    mint (Pubkey)
+///  32     32    owner (Pubkey)
+///  64      8    amount (u64 LE)
+///  72      4    delegate discriminant (0 = None, 1 = Some)
+///  76     32    delegate (Pubkey, only present when discriminant = 1)
+/// 108      1    state (u8)
+/// 109      8    is_native (COption<u64>)
+/// 117      8    delegated_amount (u64 LE)
+/// 125     36    close_authority (COption<Pubkey>)
+/// ```
+///
+/// Returns `(None, 0)` for the empty/delegate-less case. Returns
+/// `Error::InvalidTokenState` for truncated data or `Pack::unpack`
+/// failure (wrong owner / corrupted bytes / wrong program tag).
+pub fn delegate_amount_from_state_bytes(
+    data: &[u8],
+    program: TokenProgram,
+) -> Result<(Option<Pubkey>, u64)> {
+    // `Account::SIZE` is 165 on spl-token 9.0.0; the literal
+    // matches the on-chain wire layout documented above and avoids
+    // the `SizedTypeProperties` trait gate.
+    const ACCOUNT_STATE_SIZE: usize = 165;
+    if data.len() < ACCOUNT_STATE_SIZE {
+        return Err(Error::InvalidTokenState(format!(
+            "token-account data too short: {} < {ACCOUNT_STATE_SIZE} bytes",
+            data.len(),
+        )));
+    }
+    match program {
+        TokenProgram::Classic => {
+            let acct = spl_token::state::Account::unpack(data)
+                .map_err(|e| Error::InvalidTokenState(format!("classic Account::unpack: {e:?}")))?;
+            Ok((acct.delegate.into(), acct.amount))
+        }
+        TokenProgram::Token2022 => {
+            let acct = spl_token_2022::state::Account::unpack(data).map_err(|e| {
+                Error::InvalidTokenState(format!("token-2022 Account::unpack: {e:?}"))
+            })?;
+            Ok((acct.delegate.into(), acct.amount))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use spl_token::solana_program::program_pack::Pack as _;
+
+    // Hand-picked known-good inputs for delegate-amount parse tests.
+    // Independent of the parser's internal `Account::unpack` — we
+    // build the expected tuple from the same fields we put into
+    // the encoder. The byte layout is the on-chain wire spec, not
+    // the parser's logic.
+    const DELEGATE_PUBKEY_BASE58: &str = "7EYnhToRck5MV9y7s8KgZL6Wt7iV6JHv3eJ87rZ6q2HR";
 
     #[test]
     fn mainnet_registry_parses_without_panic() {
@@ -178,5 +235,108 @@ mod tests {
             !entries.is_empty(),
             "mainnet registry must seed at least one entry"
         );
+    }
+
+    #[test]
+    fn delegate_amount_classic_with_delegate() {
+        let mint = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let delegate = Pubkey::from_str(DELEGATE_PUBKEY_BASE58)
+            .expect("DELEGATE_PUBKEY_BASE58 must be a valid base58 pubkey");
+        let amount: u64 = 100_000_000; // 0.1 USDC at 6 decimals — arbitrary known value
+
+        let acct = spl_token::state::Account {
+            mint,
+            owner,
+            amount,
+            delegate: Some(delegate).into(),
+            state: spl_token::state::AccountState::Initialized,
+            is_native: None.into(),
+            delegated_amount: amount,
+            close_authority: None.into(),
+        };
+        let mut buf = vec![0u8; spl_token::state::Account::get_packed_len()];
+        spl_token::state::Account::pack_into_slice(&acct, &mut buf);
+
+        let (got_delegate, got_amount) =
+            delegate_amount_from_state_bytes(&buf, TokenProgram::Classic)
+                .expect("classic Account with delegate must parse");
+
+        assert_eq!(got_delegate, Some(delegate));
+        assert_eq!(got_amount, amount);
+    }
+
+    #[test]
+    fn delegate_amount_token2022_with_delegate() {
+        let mint = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let delegate = Pubkey::from_str(DELEGATE_PUBKEY_BASE58)
+            .expect("DELEGATE_PUBKEY_BASE58 must be a valid base58 pubkey");
+        let amount: u64 = 250_000_000; // 0.25 token-2022 at 6 decimals — arbitrary known value
+
+        let acct = spl_token_2022::state::Account {
+            mint,
+            owner,
+            amount,
+            delegate: Some(delegate).into(),
+            state: spl_token_2022::state::AccountState::Initialized,
+            is_native: None.into(),
+            delegated_amount: amount,
+            close_authority: None.into(),
+        };
+        let mut buf = vec![0u8; spl_token_2022::state::Account::get_packed_len()];
+        spl_token_2022::state::Account::pack_into_slice(&acct, &mut buf);
+
+        let (got_delegate, got_amount) =
+            delegate_amount_from_state_bytes(&buf, TokenProgram::Token2022)
+                .expect("token-2022 Account with delegate must parse");
+
+        assert_eq!(got_delegate, Some(delegate));
+        assert_eq!(got_amount, amount);
+    }
+
+    #[test]
+    fn delegate_amount_classic_no_delegate() {
+        let mint = Pubkey::new_unique();
+        let owner = Pubkey::new_unique();
+        let amount: u64 = 0; // empty-but-initialized ATA — no tokens, no delegate
+
+        let acct = spl_token::state::Account {
+            mint,
+            owner,
+            amount,
+            delegate: None.into(),
+            state: spl_token::state::AccountState::Initialized,
+            is_native: None.into(),
+            delegated_amount: 0,
+            close_authority: None.into(),
+        };
+        let mut buf = vec![0u8; spl_token::state::Account::get_packed_len()];
+        spl_token::state::Account::pack_into_slice(&acct, &mut buf);
+
+        let (got_delegate, got_amount) =
+            delegate_amount_from_state_bytes(&buf, TokenProgram::Classic)
+                .expect("classic Account without delegate must parse");
+
+        assert_eq!(got_delegate, None);
+        assert_eq!(got_amount, 0);
+    }
+
+    #[test]
+    fn delegate_amount_truncated_data_errors() {
+        // 100 bytes < 165-byte Account state — length guard must trip
+        // before `Account::unpack` runs.
+        let truncated = vec![0u8; 100];
+        let err = delegate_amount_from_state_bytes(&truncated, TokenProgram::Classic)
+            .expect_err("truncated data must reject");
+        match err {
+            Error::InvalidTokenState(msg) => {
+                assert!(
+                    msg.contains("too short"),
+                    "error message must mention length: got {msg}"
+                );
+            }
+            other => panic!("expected InvalidTokenState, got {other:?}"),
+        }
     }
 }

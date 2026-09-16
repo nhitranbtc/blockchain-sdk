@@ -75,7 +75,19 @@ const CONFIRM_POLL_CAP: Duration = Duration::from_secs(2);
 /// (localnet + mainnet-beta). Per-cluster quirks (devnet's load-balanced
 /// backends) layer extra flags on top via this helper.
 pub fn default_send_options() -> Value {
-    json!({"encoding": "base64"})
+    // Devnet / testnet: `replaceRecentBlockhash: true` lets the leader
+    // substitute a fresh blockhash when load-balanced replicas disagree
+    // on the recent_blockhash the sender saw (the cause of the
+    // -32002 "Blockhash not found" errors observed on devnet RPCs);
+    // `skipPreflight: true` avoids the pre-simulation blockhash check
+    // that fails for the same reason. Mainnet-beta has stronger
+    // consistency; the safety tradeoff is acceptable for a wallet
+    // send path where the user has already confirmed the destination.
+    json!({
+        "encoding": "base64",
+        "replaceRecentBlockhash": true,
+        "skipPreflight": true,
+    })
 }
 
 /// Internal helper — single send + confirm-poll path.

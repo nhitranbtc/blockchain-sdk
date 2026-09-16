@@ -416,9 +416,6 @@ async fn send(
     // anyhow! (exit 1) so the P5-1 corrected mapping lights up for input errors.
     let wallet_id_str = wallet_id
         .ok_or_else(|| Error::DerivationFailed("--wallet-id required for send".to_string()))?;
-    let to_str = to
-        .or(to_wallet)
-        .ok_or_else(|| Error::DerivationFailed("--to required".to_string()))?;
     let amount_str =
         amount.ok_or_else(|| Error::DerivationFailed("--amount required".to_string()))?;
 
@@ -430,10 +427,30 @@ async fn send(
     let wallet = unlocked.wallet();
     let from_pubkey = wallet.public_key();
 
-    // Parse destination pubkey (base58). Invalid base58 → anyhow.
-    let dest_pubkey: solana_sdk::pubkey::Pubkey = to_str
-        .parse()
-        .map_err(|e| anyhow!("invalid --to base58 pubkey: {e}"))?;
+    // Resolve destination pubkey from either `--to <base58>` or
+    // `--to-wallet <local wallet name>`. The `--to-wallet` flag was
+    // previously dead code: its value flowed straight to
+    // `pubkey.parse()` and failed base58 validation. Resolve the
+    // local-wallet name via `wallet_manager.list()`.
+    let dest_pubkey: solana_sdk::pubkey::Pubkey = if let Some(name) = to_wallet {
+        let summary = ctx
+            .wallet_manager
+            .list()?
+            .into_iter()
+            .find(|w| w.name == name)
+            .ok_or_else(|| {
+                Error::DerivationFailed(format!(
+                    "--to-wallet '{name}' not found in local wallet store"
+                ))
+            })?;
+        summary.pubkey
+    } else if let Some(addr) = to {
+        addr.parse()
+            .map_err(|e| anyhow!("invalid --to base58 pubkey: {e}"))?
+    } else {
+        return Err(Error::DerivationFailed("--to or --to-wallet required".to_string()).into());
+    };
+    let _ = to; // suppress unused warning (consumed in branch above)
 
     // Token path → defer to Phase 7.2 (full SPL build needs mint decimals +
     // ATA derivation + RPC). For 7.1c we route to spl::send handler.
@@ -477,13 +494,52 @@ async fn send(
         .into());
     }
 
-    // Real broadcast — full send_and_confirm lives in Phase 7.2 with surfpool.
-    // The keypair resolution + tx build path is complete; surfpool-gated
-    // broadcast (per tests/submit_sol_local.rs #[ignore]) lands in 7.2.
-    Err(
-        Error::Unimplemented("sol send broadcast — requires RPC client + surfpool (Phase 7.2)")
-            .into(),
+    // Real broadcast — fetch blockhash, build v0 message, sign, send.
+    use sol_wallet_core::chain::{account::get_latest_blockhash, client::RpcClient};
+    use sol_wallet_core::tx::broadcast::send_and_confirm;
+    use solana_commitment_config::CommitmentConfig;
+    use solana_sdk::message::{v0::Message as V0Message, VersionedMessage};
+    use solana_sdk::transaction::VersionedTransaction;
+
+    let rpc = RpcClient::new(&ctx.rpc_url)
+        .map_err(|e| anyhow::Error::new(e).context("RpcClient::new"))?;
+    let (blockhash, _slot) = get_latest_blockhash(&rpc)
+        .await
+        .map_err(|e| anyhow::Error::new(e).context("get_latest_blockhash"))?;
+
+    let v0_msg = V0Message::try_compile(
+        &from_pubkey,
+        &sol_wallet_core::tx::builder::build_sol_transfer_with_budget(
+            &from_pubkey,
+            &dest_pubkey,
+            lamports,
+            cu_limit_val,
+            priority_fee_val,
+        ),
+        &[], // no address lookups for direct SOL transfer
+        blockhash,
     )
+    .map_err(|e| anyhow!("compile v0 message: {e}"))?;
+    let unsigned = VersionedTransaction {
+        signatures: vec![solana_sdk::signature::Signature::default()],
+        message: VersionedMessage::V0(v0_msg),
+    };
+    let signed = wallet
+        .sign_transaction(unsigned)
+        .map_err(|e| anyhow::Error::new(e).context("sign_transaction"))?;
+
+    let signature = send_and_confirm(
+        &rpc,
+        &signed,
+        serde_json::json!({"encoding": "base64", "skipPreflight": true}),
+        CommitmentConfig::confirmed(),
+        std::time::Duration::from_secs(60),
+    )
+    .await
+    .map_err(|e| anyhow::Error::new(e).context("send_and_confirm"))?;
+
+    println!("{signature}");
+    Ok(())
 }
 
 async fn send_speedup(
@@ -506,12 +562,9 @@ async fn send_speedup(
     let wallet = unlocked.wallet();
 
     let rpc_url = ctx.rpc_url.clone();
-    let (original_tx_bytes, _slot) = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            let rpc = sol_wallet_core::chain::RpcClient::new(&rpc_url)?;
-            fetch_original_tx_bytes(&rpc, &original_sig, &rpc_url).await
-        })
-    })?;
+    let rpc = sol_wallet_core::chain::RpcClient::new(&rpc_url)
+        .map_err(|e| anyhow::Error::new(e).context("RpcClient::new"))?;
+    let (original_tx_bytes, _slot) = fetch_original_tx_bytes(&rpc, &original_sig, &rpc_url).await?;
 
     let original_tx: solana_sdk::transaction::VersionedTransaction =
         bincode::deserialize(&original_tx_bytes)
@@ -525,13 +578,9 @@ async fn send_speedup(
         timeout: std::time::Duration::from_secs(30),
     };
 
-    let result = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
-            let rpc = sol_wallet_core::chain::RpcClient::new(&rpc_url)?;
-            speedup_transfer(&rpc, wallet, request).await
-        })
-    })
-    .map_err(|e| anyhow!("speedup_transfer: {e}"))?;
+    let result = speedup_transfer(&rpc, wallet, request)
+        .await
+        .map_err(|e| anyhow!("speedup_transfer: {e}"))?;
 
     let json = serde_json::json!({
         "new_signature": result.new_signature.to_string(),

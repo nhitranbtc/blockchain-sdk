@@ -22,9 +22,7 @@
 
 mod common;
 
-use common::{
-    dummy_blockhash, EXPECTED_SENDER_PUBKEY, RECIPIENT_PUBKEY, SENDER_MNEMONIC, USDC_MINT,
-};
+use common::dummy_blockhash;
 use sol_wallet_core::{
     chain::{
         account::{get_balance, get_latest_blockhash},
@@ -49,17 +47,19 @@ use std::{str::FromStr, time::Duration};
 
 #[test]
 fn wallet_from_mnemonic_derives_phantom_canonical_address() {
-    let wallet = Wallet::from_mnemonic(SENDER_MNEMONIC).expect("from_mnemonic");
+    let wallet =
+        Wallet::from_mnemonic(&common::load_config().sender_mnemonic).expect("from_mnemonic");
     assert_eq!(
         wallet.public_key().to_string(),
-        EXPECTED_SENDER_PUBKEY,
+        common::load_config().sender_pubkey,
         "Phantom-canonical derivation mismatch"
     );
 }
 
 #[test]
 fn wallet_sign_message_round_trips_ed25519() {
-    let wallet = Wallet::from_mnemonic(SENDER_MNEMONIC).expect("from_mnemonic");
+    let wallet =
+        Wallet::from_mnemonic(&common::load_config().sender_mnemonic).expect("from_mnemonic");
     let msg = b"sol-wallet-core library sign_message test";
     let sig: Signature = wallet.sign_message(msg);
     assert_eq!(sig.as_ref().len(), 64, "Ed25519 sig must be 64 bytes");
@@ -71,8 +71,9 @@ fn wallet_sign_message_round_trips_ed25519() {
 
 #[test]
 fn prepare_sol_transfer_message_produces_cu_budget_then_transfer() {
-    let wallet = Wallet::from_mnemonic(SENDER_MNEMONIC).expect("from_mnemonic");
-    let recipient = Pubkey::from_str(RECIPIENT_PUBKEY).expect("recipient");
+    let wallet =
+        Wallet::from_mnemonic(&common::load_config().sender_mnemonic).expect("from_mnemonic");
+    let recipient = Pubkey::from_str(&common::load_config().recipient).expect("recipient");
     let blockhash = dummy_blockhash();
     let lamports = 1_000_000u64;
     let cu_limit = 150_000u32;
@@ -129,9 +130,10 @@ fn compute_budget_instructions_returns_limit_then_price() {
 
 #[test]
 fn prepare_spl_transfer_message_produces_transfer_checked() {
-    let wallet = Wallet::from_mnemonic(SENDER_MNEMONIC).expect("from_mnemonic");
-    let recipient = Pubkey::from_str(RECIPIENT_PUBKEY).expect("recipient");
-    let mint = Pubkey::from_str(USDC_MINT).expect("USDC mint");
+    let wallet =
+        Wallet::from_mnemonic(&common::load_config().sender_mnemonic).expect("from_mnemonic");
+    let recipient = Pubkey::from_str(&common::load_config().recipient).expect("recipient");
+    let mint = Pubkey::from_str(&common::load_config().usdc_mint).expect("USDC mint");
     let blockhash = dummy_blockhash();
     let program_id = classic_token_program_id();
     let source_ata = derive_ata_with_program_id(&wallet.public_key(), &mint, &program_id);
@@ -169,9 +171,10 @@ fn prepare_spl_transfer_message_produces_transfer_checked() {
 
 #[test]
 fn prepare_spl_transfer_message_with_ata_create_prepends_create_ix() {
-    let wallet = Wallet::from_mnemonic(SENDER_MNEMONIC).expect("from_mnemonic");
-    let recipient = Pubkey::from_str(RECIPIENT_PUBKEY).expect("recipient");
-    let mint = Pubkey::from_str(USDC_MINT).expect("USDC mint");
+    let wallet =
+        Wallet::from_mnemonic(&common::load_config().sender_mnemonic).expect("from_mnemonic");
+    let recipient = Pubkey::from_str(&common::load_config().recipient).expect("recipient");
+    let mint = Pubkey::from_str(&common::load_config().usdc_mint).expect("USDC mint");
     let blockhash = dummy_blockhash();
     let program_id = classic_token_program_id();
     let source_ata = derive_ata_with_program_id(&wallet.public_key(), &mint, &program_id);
@@ -202,8 +205,9 @@ fn prepare_spl_transfer_message_with_ata_create_prepends_create_ix() {
 
 #[test]
 fn derive_ata_with_program_id_is_deterministic_per_token_program() {
-    let wallet = Wallet::from_mnemonic(SENDER_MNEMONIC).expect("from_mnemonic");
-    let mint = Pubkey::from_str(USDC_MINT).expect("USDC mint");
+    let wallet =
+        Wallet::from_mnemonic(&common::load_config().sender_mnemonic).expect("from_mnemonic");
+    let mint = Pubkey::from_str(&common::load_config().usdc_mint).expect("USDC mint");
 
     // Same (owner, mint) → different ATA per token program (Q6 invariant)
     let classic_ata =
@@ -259,7 +263,7 @@ fn disambig_token_program_resolves_canonical_program_ids() {
 // Asserts (each step below is an explicit assertion; no step is decorative):
 //
 // (1) Config + wallet setup
-//     - `common::load_config()` returns `Ok(DevnetConfig)` (parses
+//     - `&common::load_config()` returns `Ok(DevnetConfig)` (parses
 //       `src/tokens/devnet.json` — fails fast if fields missing).
 //     - `RpcClient::new(url)` returns `Ok` (URL passes the allowlist: must
 //       be `https://*`, `http://localhost`, or `http://127.0.0.1`).
@@ -336,7 +340,7 @@ fn submit_devnet_send_real_broadcast() {
         .build()
         .expect("tokio build");
     runtime.block_on(async {
-        let cfg = common::load_config();
+        let cfg = &common::load_config();
         let rpc_url = std::env::var("SOL_RPC_URL")
             .ok()
             .unwrap_or_else(|| cfg.rpc_endpoint.clone());
