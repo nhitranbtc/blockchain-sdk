@@ -150,6 +150,12 @@ jobs:
     name: Rust test (sol CLI, --ignored)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Best-effort: ignored tests in `crates/sol/` are devnet-bound
+    # (e.g. `cli_devnet_wallet_send_native_sol`, `cli_devnet_wallet_send_speedup`)
+    # and require real SOL funding + devnet RPC. CI cannot satisfy either,
+    # so failures here must not block PR merge. Mirrors
+    # `rust-test-sol-wallet-core-ignored` above.
+    continue-on-error: true
     env:
       RUSTFLAGS: "-D warnings"
     steps:
