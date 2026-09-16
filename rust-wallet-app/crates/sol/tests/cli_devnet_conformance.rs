@@ -220,8 +220,6 @@ fn cli_devnet_wallet_send_native_sol() {
     let (rpc_endpoint, _sender_pubkey, _recipient_pubkey, wallet_id, tmp) =
         setup_devnet_funded_wallet().expect("setup_devnet_funded_wallet");
 
-    let pre_lamports = parse_sol_to_lamports(&read_balance(&wallet_id, tmp.path()));
-
     let send_output = sol_bin()
         .env("SOL_WALLET_PASSWORD", "test-pw-721")
         .args(devnet_cli_args(tmp.path(), &rpc_endpoint))
