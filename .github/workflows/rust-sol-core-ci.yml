@@ -141,7 +141,10 @@ jobs:
           workspaces: rust-wallet-app -> target
       - name: cargo test (sol CLI)
         working-directory: rust-wallet-app
-        run: cargo test -p sol --lib --tests
+        # `--lib` omitted: `sol` is binary-only (no `[lib]` section),
+        # so `cargo test --lib` fails with "no library targets found".
+        # `--tests` runs the 9 integration test files under `crates/sol/tests/`.
+        run: cargo test -p sol --tests
 
   rust-test-sol-cli-ignored:
     name: Rust test (sol CLI, --ignored)
@@ -165,4 +168,5 @@ jobs:
         # are covered by `rust-test-sol-cli` above. A failure here
         # isolates the ignored set; a `cargo build`-style regression
         # would surface there, not here.
-        run: cargo test -p sol --lib --tests -- --ignored
+        # `--lib` omitted: `sol` is binary-only, same reason as above.
+        run: cargo test -p sol --tests -- --ignored
