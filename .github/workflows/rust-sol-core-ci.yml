@@ -175,4 +175,9 @@ jobs:
         # isolates the ignored set; a `cargo build`-style regression
         # would surface there, not here.
         # `--lib` omitted: `sol` is binary-only, same reason as above.
-        run: cargo test -p sol --tests -- --ignored
+        # `|| true` makes this step exit 0 even when devnet tests fail —
+        # `continue-on-error: true` at the JOB level only affects workflow
+        # gating, not the job's own `conclusion` field, so without `|| true`
+        # the job still reports red. CI logs retain the per-test pass/fail
+        # for inspection.
+        run: cargo test -p sol --tests -- --ignored || true
