@@ -218,7 +218,6 @@ pub fn delegate_amount_from_state_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spl_token::solana_program::program_pack::Pack as _;
 
     // Hand-picked known-good inputs for delegate-amount parse tests.
     // Independent of the parser's internal `Account::unpack` — we
