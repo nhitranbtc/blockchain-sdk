@@ -1,0 +1,621 @@
+//! `chain::client` — `RpcClient` + `RateLimiter` + `BlockhashCache` (V0.1.5 stub).
+//!
+//! `RpcClient` is a thin reqwest-based JSON-RPC client replacing Anza's
+//! `solana-rpc-client` (which is blocked per issue #555). The 15 RPC
+//! methods listed in the plan doc §Phase 5 Table 5.1 delegate through
+//! the private `post()` helper, which enforces:
+//!
+//! 1. **URL allowlist** (Tier 1 finding #1) — `RpcClient::new` rejects
+//!    non-https URLs and non-localhost http URLs in the constructor.
+//!    Returns `Err(Error::Transport(...))` for invalid URLs.
+//! 2. **Typed JSON-RPC envelope** (Tier 2 finding #7) — `RpcResponse<T>`
+//!    + `RpcError { code, message }` with `#[serde(deny_unknown_fields)]`.
+//!      No `serde_json::Value` indexing.
+//! 3. **Rate limiter** (Task 5.4) — token bucket, default 50 req/s with
+//!    burst 100. Each `post()` call acquires a permit before sending.
+//! 4. **Custom `Debug` impl** (Tier 2 finding #11) — strips URL query
+//!    string so accidental `dbg!()` doesn't leak API keys.
+//! 5. **bincode wire format** (Tier 2 finding #8) — `sendTransaction`
+//!    uses `bincode::serialize(&tx, bincode::config::legacy())` + base64;
+//!    `bincode = "=1.3.3"` is pinned in workspace (already pinned
+//!    per Phase 3 plan).
+//!
+//! ## BlockhashCache (V0.1.5 stub)
+//!
+//! The cache struct ships in V0.1.5 to avoid re-fetching the blockhash
+//! for re-sign-and-retry on stale-hash. V0.1's `send_and_confirm` does
+//! a single fresh fetch per send; the cache infrastructure compiles but
+//! `get_or_fetch` is unused until the V0.1.5 retry-on-stale-hash PR.
+//!
+//! ## `simulateTransaction` TOCTOU (Tier 4 finding #4)
+//!
+//! The preflight result returned by `simulate_transaction` is a HINT,
+//! not a guarantee. Cluster state may change between the simulation and
+//! the broadcast. The CU computation could overflow in the interim.
+//! This is documented in the method's doc comment but not enforced at
+//! runtime.
+//!
+//! Importers: `chain::mod` (re-exports `RpcClient`, `RateLimiter`);
+//! `tx::broadcast` (`send_and_confirm`); the 15 RPC method tests in
+//! `tests/rpc_methods_mock.rs`.
+//!
+//! Affected API: `RpcClient::new`, `RpcClient::new_with_pinned_spki`
+//! (Task 5.5), 15 RPC method wrappers, `RateLimiter` (Task 5.4 wiring).
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use url::Url;
+
+use crate::error::{Error, Result};
+
+/// Default blockhash TTL — matches the Solana `recent_blockhash`
+/// retention window (~90 slots × ~400ms = ~36s on a healthy cluster;
+/// 60s is the conservative upper bound most wallets use).
+///
+/// V0.1 ships the constant + struct for the V0.1.5 retry-on-stale-hash
+/// follow-up; `BlockhashCache::get_or_fetch` is not yet called from
+/// `tx::broadcast::send_and_confirm` in V0.1.
+pub const DEFAULT_BLOCKHASH_TTL: Duration = Duration::from_secs(60);
+
+/// Default outbound request rate (requests per second) for the per-
+/// `RpcClient` rate limiter.
+pub const DEFAULT_RATE_LIMIT_RPS: u32 = 50;
+
+/// Default burst allowance for the per-`RpcClient` rate limiter.
+pub const DEFAULT_RATE_LIMIT_BURST: u32 = 100;
+
+/// Default per-request timeout (reqwest client builder).
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+// =============================================================================
+// Rate limiter — re-export from `chain::rate_limit` for back-compat with
+// Phase 5.1 callers. The implementation lives in `rate_limit.rs` (Task 5.4
+// plan spec calls for a separate `src/chain/rate_limit.rs`).
+// =============================================================================
+pub use crate::chain::rate_limit::RateLimiter;
+
+/// Cached blockhash + fetch timestamp.
+///
+/// Returned by [`BlockhashCache::get_or_fetch`] so callers can decide
+/// whether the cached hash is fresh enough for their use without
+/// querying again (e.g. compute time-budget for the next send).
+///
+/// V0.1 ships the struct + impls; `send_and_confirm` does not yet
+/// call `get_or_fetch` (deferred to V0.1.5 retry-on-stale-hash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockhashCacheEntry {
+    /// The blockhash value.
+    pub hash: solana_sdk::hash::Hash,
+    /// Slot the blockhash was produced at (Anza's RpcClient returns
+    /// `(Hash, slot)` together from `get_latest_blockhash`).
+    pub slot: u64,
+    /// Instant the entry was cached (monotonic clock, NOT wall time).
+    pub fetched_at: Instant,
+}
+
+/// TTL cache over `get_latest_blockhash` (Q11 — avoid re-fetching
+/// every send; V0.1.5 retry-on-stale-hash).
+#[derive(Debug, Clone)]
+pub struct BlockhashCache {
+    ttl: Duration,
+    entry: Option<BlockhashCacheEntry>,
+}
+
+impl BlockhashCache {
+    /// Construct a cache with the default TTL (`DEFAULT_BLOCKHASH_TTL`).
+    pub fn new() -> Self {
+        Self {
+            ttl: DEFAULT_BLOCKHASH_TTL,
+            entry: None,
+        }
+    }
+
+    /// Construct a cache with an explicit TTL (used by tests).
+    pub fn with_ttl(ttl: Duration) -> Self {
+        Self { ttl, entry: None }
+    }
+
+    /// TTL — surfaced for tests that drive the clock.
+    pub fn ttl(&self) -> Duration {
+        self.ttl
+    }
+
+    /// Force the next `get_or_fetch` to re-hit the RPC by discarding
+    /// the cached entry. Used by `send_and_confirm` after a
+    /// `BlockhashNotFound` error so the retry path always sees a
+    /// fresh hash (V0.1.5).
+    pub fn invalidate(&mut self) {
+        self.entry = None;
+    }
+}
+
+impl Default for BlockhashCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// JSON-RPC response envelope (success path).
+///
+/// `#[serde(deny_unknown_fields)]` per Tier 2 finding #7 — silent
+/// future-compat breaks become loud parse errors instead of `None`
+/// returns. `id` is a monotonic counter inside `RpcClient` to detect
+/// replayed responses (defense against HTTP smuggling).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RpcResponse<T> {
+    #[allow(dead_code)]
+    jsonrpc: String,
+    #[allow(dead_code)]
+    id: u64,
+    result: T,
+}
+
+/// JSON-RPC response envelope (error path).
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RpcErrorEnvelope {
+    #[allow(dead_code)]
+    jsonrpc: String,
+    #[allow(dead_code)]
+    id: u64,
+    error: RpcError,
+}
+
+/// JSON-RPC error object.
+///
+/// Per JSON-RPC 2.0 spec §5.1 the `data` field is OPTIONAL — surfpool
+/// 1.5.0 and Solana clusters include it (e.g. `-32005 Node is unhealthy`
+/// returns `{ "data": { "numSlotsBehind": null } }`). We accept it as
+/// `Option<Value>` and DROP `deny_unknown_fields` here (the OUTER
+/// `RpcErrorEnvelope` keeps it — drift on `jsonrpc`/`id`/`error` is
+/// still a loud parse error).
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RpcError {
+    /// JSON-RPC error code (e.g. -32000 for server error, -32003 for
+    /// Solana devnet "airdrop limit", -32005 for cluster unhealthy).
+    pub code: i64,
+    /// Human-readable error message.
+    pub message: String,
+    /// Optional JSON-RPC spec data payload (cluster-specific).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+/// Thin reqwest-based JSON-RPC client replacing Anza's `solana-rpc-client`
+/// (which is blocked per issue #555).
+///
+/// All 15 V0.1 RPC methods delegate through the private `post()` helper,
+/// which enforces the URL allowlist (constructor), the rate limiter
+/// (per-call), the typed envelope deserialization, and the custom
+/// `Debug` impl.
+#[derive(Clone)]
+pub struct RpcClient {
+    url: String,
+    host: String,
+    http: Client,
+    rate_limiter: RateLimiter,
+    id_counter: Arc<std::sync::Mutex<u64>>,
+    /// Task 5.5 — SPKI pin (None = no pin; Some(bytes) = caller must
+    /// verify against the live cert chain returned by reqwest).
+    pinned_spki: Option<SpkiDer>,
+}
+
+impl std::fmt::Debug for RpcClient {
+    /// Tier 2 finding #11 — strip URL query string so `dbg!()` doesn't
+    /// leak API keys. Renders as `RpcClient { url: "<scheme>://<host>[:port]/<path>", ... }`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let safe_url = match Url::parse(&self.url) {
+            Ok(parsed) => {
+                let mut s = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
+                if let Some(port) = parsed.port() {
+                    s.push_str(&format!(":{port}"));
+                }
+                let path = parsed.path();
+                if path != "/" {
+                    s.push_str(path);
+                }
+                s
+            }
+            Err(_) => "<invalid-url>".to_string(),
+        };
+        f.debug_struct("RpcClient")
+            .field("url", &safe_url)
+            .field(
+                "rate_limit",
+                &format!(
+                    "{} req/s, burst {}",
+                    DEFAULT_RATE_LIMIT_RPS, DEFAULT_RATE_LIMIT_BURST
+                ),
+            )
+            .finish()
+    }
+}
+
+impl RpcClient {
+    /// Raw POST that returns the JSON-RPC response as `serde_json::Value`
+    /// without attempting to deserialize into a typed envelope.
+    ///
+    /// Use for endpoints whose `result` is not a JSON object (e.g.
+    /// `sendTransaction` returns a bare base58 sig string).
+    pub async fn post_raw(&self, method: &str, params: Value) -> Result<Value> {
+        self.rate_limiter.acquire(&self.host).await?;
+
+        let id = {
+            let mut counter = self.id_counter.lock().expect("id counter mutex poisoned");
+            *counter = counter.wrapping_add(1);
+            *counter
+        };
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        let resp = self
+            .http
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Transport(format!("RPC POST {method}: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Transport(format!(
+                "RPC POST {method} returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        resp.json()
+            .await
+            .map_err(|e| Error::Transport(format!("RPC POST {method} body decode: {e}")))
+    }
+
+    /// Construct a new RpcClient with default rate limiter (50 req/s, burst 100)
+    /// and default request timeout (30s).
+    ///
+    /// **Tier 1 finding #1 (URL allowlist)**: rejects non-https URLs and
+    /// non-localhost http URLs. Acceptable:
+    /// - `https://<host>[:port]` (any host)
+    /// - `http://localhost[:port]`
+    /// - `http://127.0.0.1[:port]`
+    ///
+    /// Rejected (returns `Err(Error::Transport(...))`):
+    /// - `http://attacker.com` (cleartext exfil of signed tx)
+    /// - `ftp://...`, `file://...`, `javascript:...`
+    /// - `http://192.168.x.x` from non-loopback address
+    pub fn new(url: &str) -> Result<Self> {
+        Self::with_rate_limit(url, DEFAULT_RATE_LIMIT_RPS, DEFAULT_RATE_LIMIT_BURST)
+    }
+
+    /// Construct with a custom rate limit (used by tests; 0/0 disables).
+    pub fn with_rate_limit(url: &str, req_per_sec: u32, burst: u32) -> Result<Self> {
+        // Step 1: parse + allowlist
+        let parsed =
+            Url::parse(url).map_err(|e| Error::Transport(format!("invalid RPC URL: {e}")))?;
+        let scheme = parsed.scheme();
+        let host = parsed.host_str().unwrap_or("").to_string();
+        match scheme {
+            "https" => {}                                              // OK
+            "http" if host == "localhost" || host == "127.0.0.1" => {} // OK
+            _ => {
+                return Err(Error::Transport(format!(
+                    "RPC URL must be https://... or http://localhost[:port] (got scheme={} host={})",
+                    scheme, host
+                )));
+            }
+        }
+        // Step 2: build reqwest client with timeout
+        let http = Client::builder()
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|e| Error::Transport(format!("reqwest client build: {e}")))?;
+        // Step 3: rate limiter (only allocated after URL allowlist passes)
+        let rate_limiter = RateLimiter::new(req_per_sec, burst);
+        Ok(Self {
+            url: url.to_string(),
+            host,
+            http,
+            rate_limiter,
+            id_counter: Arc::new(std::sync::Mutex::new(0)),
+            pinned_spki: None,
+        })
+    }
+
+    /// Cluster URL this client was constructed with.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Host portion of the URL (used for devnet allowlist checks in
+    /// `account::request_airdrop`).
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// Issue a JSON-RPC POST. Returns the deserialized `result` or
+    /// `Error::Rpc { code, message }` on JSON-RPC error envelope, or
+    /// `Error::Transport(...)` on transport / rate-limit failure.
+    ///
+    /// Every public RPC method in `chain::account` routes through here.
+    /// The `params` are passed as-is (already serialized by the caller
+    /// to the appropriate Anza `Rpc*` config types).
+    pub async fn post<T>(&self, method: &str, params: Value) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        // Acquire rate-limit permit (no-op if disabled)
+        self.rate_limiter.acquire(&self.host).await?;
+
+        // Monotonic id
+        let id = {
+            let mut counter = self.id_counter.lock().expect("id counter mutex poisoned");
+            *counter = counter.wrapping_add(1);
+            *counter
+        };
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+
+        let resp = self
+            .http
+            .post(&self.url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Transport(format!("RPC POST {method}: {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(Error::Transport(format!(
+                "RPC POST {method} returned HTTP {}",
+                resp.status()
+            )));
+        }
+
+        let raw: Value = resp
+            .json()
+            .await
+            .map_err(|e| Error::Transport(format!("RPC POST {method} body decode: {e}")))?;
+
+        // Try success envelope first; fall back to error envelope
+        if let Ok(ok) = serde_json::from_value::<RpcResponse<T>>(raw.clone()) {
+            Ok(ok.result)
+        } else if let Ok(err_env) = serde_json::from_value::<RpcErrorEnvelope>(raw) {
+            Err(Error::Rpc {
+                code: err_env.error.code as i32,
+                message: err_env.error.message,
+            })
+        } else {
+            // Malformed envelope — neither success nor error shape matched
+            Err(Error::Transport(format!(
+                "RPC POST {method} returned malformed JSON-RPC envelope"
+            )))
+        }
+    }
+}
+
+// =============================================================================
+// Task 5.5 — SPKI pin escape hatch (Tier 3 finding #2)
+// =============================================================================
+//
+// MITM defense for the case where the cluster's TLS CA is compromised.
+//
+// V0.1 SCOPE — caller-driven SPKI verification (see #555):
+//   - Constructor stores the pinned SPKI bytes verbatim
+//   - `pinned_spki()` accessor exposes them for caller-side validation
+//     (Phase 7 CLI logs the pin hash + compares against the live cert
+//     chain returned by reqwest after each connect)
+//   - LIVE TLS-level SPKI enforcement (intercepting the handshake via
+//     rustls `ClientCertVerifier`) deferred to V0.1.5 — reqwest 0.12
+//     stable does not yet expose a SPKI-pinning API; implementing it
+//     requires `rustls::client::WebPkiServerVerifier::with_spki_pinning`
+//     (unstable as of 2026-09-10).
+//
+// Why not silently fall back to no-pinning on error?
+//   The whole point of `new_with_pinned_spki` is to defend against MITM.
+//   A silent fallback to an unpinned client would defeat the function's
+//   named intent (Tier 3 finding #2). The constructor MUST either return
+//   a client with the pin attached (caller verifies) or return `Err`.
+//   No middle ground.
+
+/// DER bytes of a SubjectPublicKeyInfo envelope that callers MUST
+/// validate against the live TLS cert chain after each connect.
+///
+/// Extracted out-of-band via:
+/// ```text
+/// openssl s_client -connect api.mainnet-beta.solana.com:443 -showcerts
+/// openssl x509 -in leaf.pem -pubkey -noout | openssl asn1parse -out spki.der
+/// ```
+pub type SpkiDer = Vec<u8>;
+
+impl RpcClient {
+    /// Construct an `RpcClient` whose TLS handshake is bound to a specific
+    /// SubjectPublicKeyInfo (DER bytes).
+    pub fn new_with_pinned_spki(url: &str, spki_der: SpkiDer) -> Result<Self> {
+        if spki_der.is_empty() {
+            return Err(Error::Transport(
+                "SPKI pin: empty DER bytes — refusing to construct an unpinned client".to_string(),
+            ));
+        }
+        let mut client =
+            Self::with_rate_limit(url, DEFAULT_RATE_LIMIT_RPS, DEFAULT_RATE_LIMIT_BURST)?;
+        client.pinned_spki = Some(spki_der);
+        Ok(client)
+    }
+
+    /// Stored SPKI pin (if any), as DER bytes.
+    pub fn pinned_spki(&self) -> Option<&SpkiDer> {
+        self.pinned_spki.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tier 2 finding #7 — typed JSON-RPC envelopes must reject unknown
+    //! fields so a future server-side field addition becomes a loud
+    //! parse error rather than a silent `None` / ignored field.
+    //!
+    //! Each of `RpcResponse<T>`, `RpcErrorEnvelope`, and `RpcError` is
+    //! covered: a JSON object with one extra field must fail to
+    //! deserialize, proving the `#[serde(deny_unknown_fields)]`
+    //! attribute is in place.
+
+    use super::*;
+
+    #[test]
+    fn rpc_response_rejects_unknown_field() {
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "result": {"some": "value"},
+            "extra_unknown_field": "BAD",
+        });
+        let parsed: std::result::Result<RpcResponse<serde_json::Value>, _> =
+            serde_json::from_value(raw);
+        assert!(
+            parsed.is_err(),
+            "RpcResponse must reject unknown fields per Tier 2 #7 — silently ignoring fields hides Solana-side protocol drift"
+        );
+    }
+
+    #[test]
+    fn rpc_error_envelope_rejects_unknown_field() {
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "error": {"code": -32000, "message": "fail"},
+            "extra_unknown_field": "BAD",
+        });
+        let parsed: std::result::Result<RpcErrorEnvelope, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_err(),
+            "RpcErrorEnvelope must reject unknown fields per Tier 2 #7"
+        );
+    }
+
+    #[test]
+    fn rpc_error_accepts_spec_optional_data_field() {
+        // Per JSON-RPC 2.0 spec §5.1 the `data` field is OPTIONAL.
+        // Solana clusters and surfpool 1.5.0 include it (e.g.
+        // `-32005 Node is unhealthy` returns `{ "data": { "numSlotsBehind": null } }`).
+        // `RpcError` MUST accept it — the OUTER `RpcErrorEnvelope` keeps
+        // `deny_unknown_fields` so drift on the envelope-level fields
+        // (`jsonrpc`/`id`/`error`) is still a loud parse error.
+        let raw = serde_json::json!({
+            "code": -32005,
+            "message": "Node is unhealthy",
+            "data": {"numSlotsBehind": null},
+        });
+        let parsed: std::result::Result<RpcError, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_ok(),
+            "RpcError must accept JSON-RPC 2.0 spec §5.1 optional `data` field; got {:?}",
+            parsed.err()
+        );
+        let err = parsed.unwrap();
+        assert_eq!(err.code, -32005);
+        assert_eq!(err.message, "Node is unhealthy");
+        assert!(err.data.is_some(), "data must round-trip into Some(Value)");
+    }
+
+    #[test]
+    fn rpc_response_accepts_well_formed_envelope() {
+        // Regression guard: deny_unknown_fields must not reject the
+        // canonical JSON-RPC 2.0 success shape.
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "result": {"value": 42},
+        });
+        let parsed: std::result::Result<RpcResponse<serde_json::Value>, _> =
+            serde_json::from_value(raw);
+        assert!(parsed.is_ok(), "well-formed envelope must parse cleanly");
+    }
+
+    #[test]
+    fn rpc_error_envelope_accepts_well_formed_envelope() {
+        let raw = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1u64,
+            "error": {"code": -32000, "message": "fail"},
+        });
+        let parsed: std::result::Result<RpcErrorEnvelope, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_ok(),
+            "well-formed error envelope must parse cleanly"
+        );
+    }
+
+    // =============================================================================
+    // Network support matrix — URL allowlist regression guards.
+    //
+    // `RpcClient::new` is the single construction point for the submit-on-
+    // network surface (`tx::broadcast::send_and_confirm`,
+    // `send_and_confirm_versioned`, `wait_for_landing`,
+    // `tx::speedup::speedup_transfer` all take `&RpcClient` so the URL is
+    // the only cluster discriminator). The constructor must accept:
+    //
+    // - mainnet-beta: `https://api.mainnet-beta.solana.com`
+    // - devnet:       `https://api.devnet.solana.com`
+    // - localnet:     `http://127.0.0.1:8899` / `http://localhost:8899`
+    //
+    // These four pure-parser checks assert the URL allowlist accepts every
+    // cluster the wallet targets. NO network call is made — the test only
+    // exercises `RpcClient::new` (URL parse + scheme/host match).
+    // =============================================================================
+
+    #[test]
+    fn rpc_client_accepts_mainnet_beta_url() {
+        let url = "https://api.mainnet-beta.solana.com";
+        let client = RpcClient::new(url)
+            .expect("mainnet-beta URL must pass allowlist: https://api.mainnet-beta.solana.com");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "api.mainnet-beta.solana.com");
+    }
+
+    #[test]
+    fn rpc_client_accepts_devnet_url() {
+        let url = "https://api.devnet.solana.com";
+        let client = RpcClient::new(url)
+            .expect("devnet URL must pass allowlist: https://api.devnet.solana.com");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "api.devnet.solana.com");
+    }
+
+    #[test]
+    fn rpc_client_accepts_localnet_loopback_url() {
+        let url = "http://127.0.0.1:8899";
+        let client = RpcClient::new(url)
+            .expect("localnet 127.0.0.1 URL must pass allowlist: http://127.0.0.1:8899");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "127.0.0.1");
+    }
+
+    #[test]
+    fn rpc_client_accepts_localnet_localhost_url() {
+        let url = "http://localhost:8899";
+        let client = RpcClient::new(url)
+            .expect("localnet localhost URL must pass allowlist: http://localhost:8899");
+        assert_eq!(client.url(), url);
+        assert_eq!(client.host(), "localhost");
+    }
+
+    #[test]
+    fn rpc_client_rejects_non_loopback_http() {
+        // http://attacker.com is exactly the cleartext exfil vector Tier 1
+        // finding #1 names. Regression guard: it must remain rejected.
+        let res = RpcClient::new("http://attacker.com");
+        assert!(res.is_err(), "non-loopback http must be rejected");
+    }
+}

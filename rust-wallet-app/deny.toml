@@ -50,6 +50,15 @@ allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause", "ISC", "Unicode-3.
 
 [bans]
 multiple-versions = "warn"
+# SOL v0.1 Q12: sol-wallet-core ships no Metaplex/NFT-metadata surface.
+# Denying the crates outright means a future `cargo add` cannot pull the
+# dependency in silently — `cargo deny check` fails the PR instead of the
+# scope creep landing unnoticed. GPL is already excluded by omission from
+# the `[licenses] allow` list above.
+deny = [
+    { name = "mpl-token-metadata" },
+    { name = "mpl-core" },
+]
 
 [sources]
 unknown-registry = "deny"

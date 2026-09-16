@@ -1,0 +1,201 @@
+[package]
+name = "sol-wallet-core"
+description = "Solana wallet engine — Anza SDK re-exports + Phantom-equivalent Wallet API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+# repository.workspace = true  # uncomment if workspace.repository set
+
+[features]
+default = []
+
+# Phase 8 (FFI cdylib) — Phase 0 ships rlib only; Phase 8.1 appends
+# "cdylib" to this list per the `rust-ffi-cdylib` CI job guard
+# (CI is gated on the literal appearing here). Order matters — Phase 8
+# is the first PR that flips the job from `skipping` to actually building.
+# See audit H7 + plan Task 8.1 Step 11a.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+# Register `negative_test` cfg so clippy's `-D unexpected-cfgs`
+# (implied by `-D warnings` in `rust-lint` CI job) does not reject
+# the gated file `tests/wallet_as_keypair_external_reach.rs`. The
+# dedicated CI step
+# `.github/workflows/rust-sol-core-ci.yml::rust-test-negative-as-keypair`
+# enables `--cfg negative_test` and asserts the gated file fails to
+# compile with `E0624: method 'as_keypair' is private` — pinning the
+# audit #566 contract that `Wallet::as_keypair` is NOT reachable from
+# external crates.
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ["cfg(negative_test)"] }
+
+# Phase 0 keeps the lib dep-free so the empty module stubs compile. The
+# Anza SDK + SPL + ed25519-bip32 + crypto deps live in workspace.dependencies
+# (Cargo.toml at the umbrella) and are wired here in Phase 1, once
+# `cargo tree` has surfaced a compatible exact-pin set (plan §Task 0.1
+# Step 6 deferred to Phase 1 — see CHANGELOG.md entry "Phase 0 — 2026-09-10"
+# for the pin-drift rationale).
+#
+# Phase 1 — Anza SDK + ed25519-bip32 + bip39 (Wallet keypair, HD via SLIP-0010).
+# Phase 2 — base58 / curve helpers (no new workspace deps).
+# Phase 3 — system_instruction + Compute Budget (modern Anza split).
+# Phase 4 — SPL crates.
+# Phase 5 — tokio / reqwest / rustls / webpki / x509-parser.
+# Phase 6 — argon2 / aes-gcm / chrono / uuid / serde_json.
+[dependencies]
+thiserror = { workspace = true }
+# Phase 4 — SPL token program crates.
+#   spl-token                  — classic SPL (`TokenkegQ...`) `instruction::*` builders
+#                                + `state::Mint::unpack` (Q10 — decimals NEVER hardcoded).
+#   spl-token-2022             — Token-2022 (`TokenzQdB...`) extension-aware builders + unpack.
+#                                Same wire layout for the base Mint state (82 bytes); TLV
+#                                extensions follow but Phase 4 only reads the base fields.
+#   spl-associated-token-account — ATA program; `get_associated_token_address_with_program_id`
+#                                   seeds with `[owner, token_program_id, mint]` (Q6).
+#
+# All three SPL crates are Pod-based and ship every public module (instruction,
+# state) under default features — no `instruction` / `bincode` / `serde` feature
+# gates. `serde` + `serde_json` are needed only for the bundled JSON registry
+# (tokens/mainnet.json + tokens/devnet.json via include_str!).
+#
+# `no-entrypoint` disables the SPL crates' default `entrypoint()` symbol
+# (the on-chain program entry fn). `spl-token` + `spl-token-2022` both
+# ship the same symbol under default features, which causes a linker
+# "duplicate symbol" error when both are linked into a single binary
+# (the test harness). Wallet lib code never calls `entrypoint` — we
+# only consume `instruction::*` + `state::*` — so the disable is safe.
+#
+# Phase 4 dispatches `instruction::*` by program:
+#   `spl_token::instruction` validates program_id == classic → use for Classic.
+#   `spl_token_2022::instruction` validates program_id == Token-2022 →
+#     use for Token2022. The `instruction` module is `#[deprecated]` since
+#     spl-token-2022 9.1.0 (points at the `*-interface` split) but remains
+#     functional and uses `Pubkey` (matching Anza SDK 4.1.0); the interface
+#     crates use the Anza `Address` type and would force a wider refactor.
+#     Deprecation warnings are acceptable for Phase 4 scope.
+spl-token                    = { workspace = true, features = ["no-entrypoint"] }
+spl-token-2022               = { workspace = true, features = ["no-entrypoint"] }
+spl-associated-token-account = { workspace = true }
+serde                        = { workspace = true }
+serde_json                   = { workspace = true }
+# Phase 1.1 minimum set:
+#   solana-sdk    — umbrella crate; pulls keypair + signer + transaction +
+#                   instruction + message + program transitively at the
+#                   exact-pinned 4.1.0 ABI the v0.1 threat model tests against.
+#   ed25519-bip32 — SLIP-0010 Ed25519 HD derivation (Phantom-compatible path).
+#   bip39         — English wordlist + PBKDF2-HMAC-SHA512 master seed; reused
+#                   from the workspace entry (already has `zeroize` + `rand`).
+#   zeroize       — wraps seed + xprv bytes during derivation so ZeroizeOnDrop
+#                   fires before the Keypair consumes them (F53, U3).
+solana-sdk     = { workspace = true }
+ed25519-bip32  = { workspace = true }
+bip39          = { workspace = true }
+zeroize        = { workspace = true }
+bs58           = { workspace = true }
+# Phase 3 — `system_instruction::transfer` is in `solana-system-interface`
+# in the modern Anza split; `ComputeBudgetInstruction` lives in
+# `solana-compute-budget-interface`. Both declared directly so the
+# builder does not depend on `solana-program` pulling them transitively
+# (`solana-program` 4.1.0 documents ComputeBudgetInstruction but does
+# not declare the dep — see workspace Cargo.toml comment).
+solana-system-interface         = { workspace = true }
+solana-compute-budget-interface = { workspace = true }
+# Phase 5 — thin reqwest JSON-RPC client (Recipe 2 from issue #555;
+# Anza `solana-rpc-client` is dropped from V0.1 dep graph). All 15
+# V0.1 RPC methods route through `chain::client::RpcClient::post()`
+# which builds a JSON-RPC envelope via `serde_json::json!` and POSTs
+# it through this `reqwest::Client` (rustls-tls already enabled in
+# workspace; no Anza transitive deps).
+#
+# - `reqwest`     — HTTP client (workspace entry has `rustls-tls` + `json` features)
+# - `url`         — `RpcClient::new` URL parsing + allowlist check
+# - `base64`      — wire-format encoding for `sendTransaction` / `getAccountInfo`
+#                    bodies (Tier 2 finding #8: bincode wire + base64 envelope)
+reqwest       = { workspace = true }
+url           = "2"
+base64        = "0.22"
+# Anza 4.x ABI split — V0.1 defines local minimal wire structs
+# (`TransactionStatus`, `UiTokenAmount`, `Version`, `EpochInfo`,
+# `RpcPrioritizationFee`) in `chain::account` instead of pulling
+# the 1.18-series siblings (which conflict on `zeroize ^1.0` vs
+# `^1.5`). The 4.1.0 SDK re-exports `solana_message` (which has
+# `Message`) and `solana_account` (which has `Account`).
+solana-account = "=4.4.0"
+solana-commitment-config = { version = "=3.1.1", default-features = false }
+solana-program-pack       = "=3.1.0"
+bincode                   = "=1.3.3"
+tokio                     = { workspace = true }
+
+# Phase 6 — wallet persistence (Argon2id + AES-256-GCM + UUID ids + getrandom).
+argon2     = "=0.5.3"
+aes-gcm    = "=0.10.3"
+getrandom  = "=0.2.15"
+hex        = "=0.4.3"
+uuid       = { version = "1", features = ["v4", "serde"] }
+# Phase 8.1 — panic-scrubber uses Aho-Corasick (linear-time literal
+# matcher; per audit M11 — Regex is ReDoS-prone over user-controlled
+# panic msgs). Mnemonic words (BIP-39 2048-entry wordlist), `xprv...`
+# prefix, 64-byte base58 patterns + 32-byte hex literals matched
+# in O(n+m) without backtracking. See src/panic_scrubber.rs.
+aho-corasick = "1"
+
+[build-dependencies]
+# Phase 8.2 Step 3 — `build.rs` invokes `cbindgen::Builder` to emit
+# `sol_wallet_core.h` at build time. Mobile Dart/Swift/Kotlin consumers
+# bind to this header. See audit Step 11a M15.
+cbindgen = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tempfile = { workspace = true }
+# Phase 3 — `bincode` 1.3.3 is already transitive via `solana-sdk`;
+# declare directly so `tests/tx_serde.rs` can serialize `Message` values
+# without relying on the transitive re-export. Exact-pin matches what
+# Anza 4.1.0 pulls.
+bincode = "=1.3.3"
+# Phase 5 — wiremock for the 15-RPC-method mock server used by
+# `tests/rpc_methods_mock.rs` + the transport-failure tests. Spins up
+# an HTTP server on an ephemeral port and returns canned JSON-RPC
+# envelopes; matches the Anza RPC server wire format.
+wiremock = "0.6"
+# Phase 5 — `#[serial(tokio)]` for the wiremock tests (parallel tokio
+# runtimes + wiremock 0.6 = flaky due to hyper's shared executor).
+# Serializes all `tests/chain_rpc.rs` tests so MockServer instances
+# don't cross-pollute. RUST_TEST_THREADS=1 has the same effect.
+serial_test = { workspace = true }
+# Phase 8.1 — `libloading` for in-process FFI ABI smoke test (Step 13).
+# Loads the cdylib produced by `cargo build` + resolves the 12
+# `sol_wallet_*` symbols + invokes them with documented error inputs.
+# See tests/abi_smoke.rs + audit H17.
+libloading = "0.8"
+# Phase 8.1 — cbindgen for emitting `sol_wallet_core.h` from
+# `cbindgen.toml` (Step 11a — M15). Mobile Dart/Swift/Kotlin consumers
+# bind to this header. See build.rs + cbindgen.toml.
+cbindgen  = { workspace = true }
+
+# Phase 8.1 — release-mobile profile (audit H7, H8, M18). Mobile targets
+# (iOS / Android) consume this profile. Trade-offs vs `release`:
+#   - `panic = "abort"` — Rust unwinder is disabled; FFI panic-scrubber
+#     path (Step 1) is dev-only. Combined with `setrlimit(RLIMIT_CORE, 0)`
+#     in PAL init (planned Phase 8.1 PAL amendment), panic messages do
+#     not surface in iOS unified log / Android logcat.
+#   - `opt-level = "z"` — minimum size; mobile binary size matters.
+#   - `lto = true` — cross-crate inlining reduces the exported symbol
+#     surface (a defense-in-depth complement to `Wl,--exclude-libs,ALL`
+#     in Step 3b).
+#   - `strip = "symbols"` — debug symbols stripped from the cdylib
+#     (saves 5–15 MB on mobile + reduces symbol-based ROP gadget
+#     discovery surface).
+#   - `codegen-units = 1` — required for the symbol-strip + LTO pair
+#     to produce a deterministic symbol table.
+# Build with `--profile release-mobile --target aarch64-apple-ios` etc.
+# See audit H7/H8/M18 + plan Task 8.2 Step 3b.
+[profile.release-mobile]
+inherits      = "release"
+panic         = "abort"
+opt-level     = "z"
+lto           = true
+strip         = "symbols"
+codegen-units = 1
+debug         = false

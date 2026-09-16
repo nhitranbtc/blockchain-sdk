@@ -1,0 +1,15 @@
+{
+  "rpc-endpoint": "https://api.devnet.solana.com",
+  "sender-devnet": "27mt9dL81aHVsBnebBBB3ZZnm7UVSbQ354XcZSUss4cd",
+  "sender-devnet-mnemnoic": "pact possible desk flag lawn antique tumble hip staff draw abuse peasant",
+  "recipient-devnet": "GSKYBnM2NeGT3ckfMAqEDkRxtgD9bZrcMxPwtiNgG6aj",
+  "recipient-devnet-mnemnoic": "lamp primary long tissue october jump icon planet other bag stamp benefit",
+  "tokens": [
+    {
+      "symbol": "USDC",
+      "program": "classic",
+      "mint": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+      "decimals": 6
+    }
+  ]
+}

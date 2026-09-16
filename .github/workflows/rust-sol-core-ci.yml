@@ -1,0 +1,473 @@
+name: rust-sol-core
+
+# CI for the `rust-sol-core` integration branch.
+#
+# Scope: any PR that targets `rust-sol-core` (NOT main). The umbrella
+# `ci.yml` triggers on `main` only, so a PR into this integration branch
+# receives no gate from it — this file therefore mirrors the umbrella's full
+# job set rather than carrying only chain-unique jobs. That is the opposite
+# of `evm-polygon-ci.yml`, which may lean on the umbrella precisely because
+# its triggers are `main`-scoped.
+#
+# Job parity with `ci.yml` (checked 2026-09-10):
+#   rust-lint        — fmt + clippy          (ci.yml: same, workspace-scoped)
+#   rust-test        — build + test          (ci.yml: same, workspace-scoped)
+#   rust-deps        — dedup + audit + deny  (ci.yml: same)
+#   rust-ffi-cdylib  — cdylib links          (ci.yml: guards bitcoin-wallet-core)
+#   rust-geiger      — unsafe audit          (ci.yml: same, loops all crates)
+#   mobile-check     — iOS + Android arm64   (NOT in ci.yml; sol/tron-specific)
+# Crate-scoped jobs target `-p sol-wallet-core` rather than `--workspace`:
+# sibling crates are already gated on main, and this branch owns one crate.
+# Dep-tree jobs stay workspace-wide because they read one shared lockfile.
+#
+# Branch rule (plan Phase Set Up, Task S.2): task branches are cut from
+# `rust-sol-core`, never from `main`, and PR back into `rust-sol-core`,
+# never into `main`. The single exception is the v0.1 cut PR at the end of
+# Phase 9. `gh pr create` must pass `--base rust-sol-core` explicitly —
+# the repo default base is `main`.
+#
+# Note: the branch is `rust-sol-core` (matching the `rust-sol-core` label
+# and the `rust-<chain>-core-ci.yml` sibling workflows); the CRATE it gates
+# is `sol-wallet-core` at `crates/sol-wallet-core/`. The two names differ on
+# purpose — every `-p sol-wallet-core` below refers to the crate, not the
+# branch.
+#
+# MSRV: `rust-wallet-app/rust-toolchain.toml` hard-pins channel 1.98.1 and
+# overrides whatever toolchain the action installs for every cargo
+# invocation inside that directory. The plan asked for 1.89.0 (Anza's
+# declared `rust-version`); 1.98.1 satisfies that floor, so the workspace
+# pin is used as-is rather than declaring a number the build ignores.
+#
+# Per L37 (action-SHA hygiene): actions pinned by tag here mirror the
+# umbrella ci.yml (`actions/checkout@v4`, `dtolnay/rust-toolchain`,
+# `Swatinem/rust-cache@v2`). Resolved SHAs land in a follow-up commit
+# after the first green run captures them.
+#
+# Phase Set Up gate: every sol-specific job skips cleanly while
+# `crates/sol-wallet-core/Cargo.toml` does not exist, so the no-op commit
+# that proves this workflow wired up correctly can go green before any Rust
+# code is written (Phase 0 creates the crate). The guards come out once the
+# crate lands.
+#
+# The guard tests the MANIFEST, not the directory: Phase Set Up itself puts
+# a CHANGELOG.md in `crates/sol-wallet-core/`, so a `-d` test would pass
+# while the package still does not exist and every `cargo -p sol-wallet-core`
+# would fail with "package ID specification did not match any packages"
+# (observed in run 34433048858).
+
+on:
+  push:
+    branches: [rust-sol-core]
+  pull_request:
+    branches: [rust-sol-core]
+  workflow_dispatch: {}
+
+# Least-privilege token. CI doesn't push or comment.
+permissions:
+  contents: read
+
+# Cancel in-progress runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # fmt + clippy share a runner so a single protoc install + rust-cache warm
+  # covers both (repo convention since the 998cc1fc consolidation). fmt runs
+  # first — it needs no compile, so a formatting regression fails before
+  # clippy spends minutes building.
+  rust-lint:
+    name: Rust lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+        with:
+          components: rustfmt, clippy
+      - name: Install protoc (>=3.12)
+        # Required by spikes/tron-v1/build.rs, which is a workspace member —
+        # `cargo fmt --all` and any workspace-wide cargo invocation touch it.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo fmt --check
+        # Workspace-wide: no crate guard needed, and it catches formatting
+        # drift in sibling crates too.
+        working-directory: rust-wallet-app
+        run: cargo fmt --all -- --check
+      - name: cargo clippy (sol-wallet-core)
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          cargo clippy -p sol-wallet-core --all-targets -- -D warnings
+
+  rust-test:
+    name: Rust test (sol-wallet-core, all tests including #[ignore])
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: "-D warnings"
+      RUN_SOL_SURFPOOL: "1"
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install surfpool (txtx/surfpool)
+        # Local-network fixture for Phase 7.1c/7.2 SOL/SPL e2e tests
+        # (deep-dive rows 26-29, 32, 35). Plan Q5: surfpool is the V0.1
+        # default local validator — sub-second boot, in-memory, no
+        # Docker. Tests gate on `RUN_SOL_SURFPOOL=1`; install binary
+        # first so `tokio::process::Command::new("surfpool")` resolves.
+        # Source: https://github.com/txtx/surfpool (crate: `surfpool-cli`,
+        # bin: `surfpool`). Pin to commit SHA (not the mutable v1.5.0
+        # tag) because crates.io's `surfpool-cli` package (currently
+        # v0.1.2) is the pre-monorepo split version and lacks the
+        # `--no-tui` / `--offline` flags that `tests/common/surfpool_spawn.rs`
+        # relies on. Mismatched versions caused CI surfpool-spawn
+        # failures (job 104238951194) — surfpool exited with code 1
+        # immediately on spawn.
+        #
+        # SHA↔tag mapping (audit anchor; resolve via
+        # `git ls-remote https://github.com/txtx/surfpool refs/tags/v1.5.0`):
+        #   tag    v1.5.0 -> commit 86493c4bf716b01d4bedbc531aa9288cb14d5f36
+        # Re-pin by hand if the upstream tag moves; commit SHAs are immutable.
+        #
+        # Step-scoped `env: RUSTFLAGS: ""` clears the job-level
+        # `RUSTFLAGS: "-D warnings"` for THIS step only. surfpool-cli
+        # at SHA 86493c4 has a never-constructed `CheckVersionResponse`
+        # struct (`crates/cli/src/cli/simnet/mod.rs:46`); modern rustc
+        # promotes that dead-code warning to a hard error under
+        # `-D warnings`, breaking the install (job 104246264771, exit
+        # 101). The `cargo test` step below keeps the strict flag.
+        env:
+          RUSTFLAGS: ""
+        run: cargo install --git https://github.com/txtx/surfpool --rev 86493c4bf716b01d4bedbc531aa9288cb14d5f36 surfpool-cli --locked
+      - name: cargo test (sol-wallet-core, all tests including #[ignore])
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          # Build cdylib artifact first so tests/abi_smoke.rs +
+          # tests/ffi_negative.rs (which use libloading to dlopen the
+          # cdylib) can locate it. `cargo test` alone does not emit
+          # the cdylib artifact by default.
+          cargo build -p sol-wallet-core
+          # `--include-ignored` runs both non-ignored + #[ignore] tests
+          # in one pass. The 6 surfpool-gated #[ignore] tests
+          # (submit_sol_local, submit_spl_local_{held,fresh,approve},
+          # submit_send_speedup_local, boot_probe_local) run against
+          # the locally-installed surfpool binary; the live-devnet
+          # `submit_devnet_send_real_broadcast` ignores RUN_SOL_SURFPOOL
+          # and gates on its own `RUN_SOL_DEVNET=1` env var (default
+          # missing → test remains ignored in this run).
+          cargo test -p sol-wallet-core --lib --tests -- --include-ignored
+
+  # Security audit #566 (Task 10.3) — negative compile-fail pin that
+  # `Wallet::as_keypair` is NOT visible to external crates. The test
+  # file `tests/wallet_as_keypair_external_reach.rs` is gated behind
+  # `--cfg negative_test` (inert under the regular `cargo test` run
+  # above); this dedicated step enables the cfg and asserts the
+  # compile FAILS with the expected `E0624: method 'as_keypair' is
+  # private` error. If the build SUCCEEDS under this cfg, the audit
+  # contract has been violated (`as_keypair` has been re-exposed as
+  # `pub`) and downstream code can extract the secret outside the
+  # zeroize lifecycle via `solana_sdk::Keypair::insecure_clone()`.
+  #
+  # `continue-on-error: true` because the negative test SHOULD fail
+  # to compile — a non-zero exit here is the audit passing. The grep
+  # gate below confirms the expected error pattern appears in stderr.
+  rust-test-negative-as-keypair:
+    name: Rust test (sol-wallet-core, --cfg negative_test for #566)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # No `continue-on-error: true` here — the script handles the
+    # expected cargo failure (set +e + PIPESTATUS) and the grep gate
+    # asserts the EXACT expected error string. If either check fails,
+    # the script `exit 1` MUST fail the step + workflow. Setting
+    # continue-on-error would silently swallow the audit-violated
+    # path (post-merge ECC review finding: fail-open-control).
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --cfg negative_test (must fail with E0624 for audit #566)
+        working-directory: rust-wallet-app
+        run: |
+          set +e
+          RUSTFLAGS="--cfg negative_test" \
+            cargo test -p sol-wallet-core --test wallet_as_keypair_external_reach 2>&1 | tee /tmp/negative_test.log
+          status=${PIPESTATUS[0]}
+          # The expected outcome is non-zero exit + E0624 in stderr.
+          # If either expectation is violated, fail the job loud-RED.
+          if [ "$status" -eq 0 ]; then
+            echo "FAIL: negative test compiled successfully under --cfg negative_test."
+            echo "Audit #566 contract violated: Wallet::as_keypair is reachable from external crates."
+            exit 1
+          fi
+          # Anchor on `E0624 ... as_keypair` so a different E0624
+          # (e.g. about a different private method) doesn't silently
+          # satisfy the gate (post-merge ECC review finding:
+          # parser-validator-differential). The `.*` matches across
+          # the ANSI color codes cargo emits around the error line,
+          # which vary by toolchain version and shell terminal mode
+          # — a literal backtick match (the prior attempt) broke
+          # because some envs emit different escape sequences.
+          if ! grep -qE 'E0624.*as_keypair' /tmp/negative_test.log; then
+            echo "FAIL: expected E0624 about as_keypair not found in compiler output."
+            echo "Audit #566 gate is mis-targeted: the compile failure is not about as_keypair visibility."
+            echo "Captured log:"
+            cat /tmp/negative_test.log
+            exit 1
+          fi
+          echo "PASS: negative test correctly failed with E0624 as expected."
+
+  # L13 step 11 gates 2-4 (dedup / audit / deny) merged into one job to share
+  # the checkout + toolchain install across all three, mirroring umbrella
+  # `ci.yml`'s `rust-deps`. Each gate fails the job independently.
+  #
+  # No crate guard on any of the three: they all read the workspace lockfile,
+  # so scoping them to `-p sol-wallet-core` would be meaningless. They are
+  # therefore useful before sol-wallet-core exists, and they are what catches
+  # a banned or vulnerable dep arriving with the very first Phase 0 commit.
+  #
+  # `cargo deny` enforces Q12 (no Metaplex): `deny.toml` `[bans]` denies
+  # `mpl-token-metadata` + `mpl-core`. Copyleft is excluded by omission from
+  # the `[licenses] allow` list.
+  rust-deps:
+    name: Rust dep checks (dedup + audit + deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo tree --duplicates
+        # L13 step 11 gate 2 — workspace-wide dup-deps walk. Slow on cold
+        # cache, runs at CI cadence rather than locally.
+        working-directory: rust-wallet-app
+        run: cargo tree --workspace --duplicates
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        # `--ignore` list mirrors umbrella `ci.yml` — transitive dev-deps
+        # without upstream fixes yet. Canonical rationale lives in
+        # `rust-wallet-app/deny.toml`. Keep this list in sync with ci.yml:
+        # a divergence means main and this branch disagree on what is
+        # acceptable, and the disagreement surfaces only at the Phase 9 cut.
+        working-directory: rust-wallet-app
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2026-0098 \
+            --ignore RUSTSEC-2026-0099 \
+            --ignore RUSTSEC-2026-0104 \
+            --ignore RUSTSEC-2025-0111
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: cargo deny
+        # Advisory ignores + license allow-list + Metaplex bans all live in
+        # `rust-wallet-app/deny.toml` — that file is the canonical list.
+        working-directory: rust-wallet-app
+        run: cargo deny check
+
+  # FFI cdylib gate, mirroring umbrella `ci.yml`'s `rust-ffi-cdylib` (which
+  # guards bitcoin-wallet-core). Phase 8 ships sol-wallet-core as a cdylib
+  # with 12 C functions; this verifies the shared object still links, since
+  # a cdylib that compiles as an rlib but fails to link is invisible to
+  # `cargo test`.
+  #
+  # Guarded: skips until Phase 0 lands the manifest, and the `crate-type`
+  # check below skips until Phase 8 declares `cdylib` — before that a
+  # missing .so is correct, not a failure.
+  rust-ffi-cdylib:
+    name: Rust FFI cdylib (sol-wallet-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Build sol-wallet-core as cdylib
+        working-directory: rust-wallet-app
+        run: |
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          # Anchor the cdylib check to the `crate-type = [...]` line itself,
+          # not a comment that happens to mention the word "cdylib".
+          # `awk` exits 0 only when a `crate-type` line contains "cdylib".
+          if ! awk '/^[[:space:]]*crate-type[[:space:]]*=/{ if ($0 ~ /"cdylib"/) exit 0; else exit 1 }' crates/sol-wallet-core/Cargo.toml; then
+            echo "cdylib crate-type not declared in [lib] yet (plan Phase 8) - skipping"
+            exit 0
+          fi
+          cargo build -p sol-wallet-core
+          test -f target/debug/libsol_wallet_core.so \
+            && echo "cdylib ok: $(file target/debug/libsol_wallet_core.so)" \
+            || (echo "ERROR: cdylib not produced" && exit 1)
+
+  # Unsafe-code audit per CLAUDE.md conventions, mirroring umbrella
+  # `ci.yml`'s `rust-geiger`. Advisory: transitive `unsafe` counts from
+  # ring/aws-lc-rs drown the first-party signal, so the trend over time is
+  # what matters, not any single number.
+  #
+  # Scoped to `crates/sol-wallet-core` rather than looping every crate as
+  # ci.yml does — this workflow gates one crate, and the sibling crates are
+  # already covered on main. `cargo geiger` rejects virtual manifests, so it
+  # must run from the crate dir, not the workspace root.
+  rust-geiger:
+    name: Rust unsafe-code audit (geiger)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install cargo-geiger
+        run: cargo install cargo-geiger --locked
+      - name: cargo geiger (sol-wallet-core)
+        working-directory: rust-wallet-app
+        # Dedicated CARGO_TARGET_DIR keeps this job's artifacts out of the
+        # shared rust-cache target that parallel jobs rely on. `|| true`
+        # keeps the audit advisory, matching ci.yml.
+        run: |
+          if [ ! -f crates/sol-wallet-core/Cargo.toml ]; then
+            echo "sol-wallet-core not created yet (plan Phase 0) - skipping"
+            exit 0
+          fi
+          echo "::group::crates/sol-wallet-core"
+          (cd crates/sol-wallet-core && CARGO_TARGET_DIR=/tmp/geiger-target cargo geiger) || true
+          echo "::endgroup::"
+
+  # Always-on gate: runs every `#[ignore]`'d test in sol-wallet-core.
+  # Currently 1 such test: `submit_devnet_send_real_broadcast` (live
+  # devnet broadcast, ~0.001005 SOL cost per run — see
+  # `tests/submit_devnet_send.rs`).
+  #
+  # Always-on with `continue-on-error: true` so the broadcast becomes a
+  # "best-effort signal" — flaky network or air-drop exhaustion on
+  # devnet must not block PR merge. The TX hash is printed via
+  # `--nocapture` into CI logs for post-hoc inspection.
+  #
+  # If a future ignored test is added, `cargo test -- --ignored`
+  # picks it up automatically — no CI edit needed.
+  rust-test-ignored:
+    name: Rust test (sol-wallet-core, --ignored)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+      - name: Install protoc (>=3.12)
+        # Required by `spikes/.../build.rs` only — workspace-wide cargo
+        # touches the path; mirror of `rust-test` install step.
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: cargo test --ignored (best-effort, ~0.001005 SOL per run)
+        working-directory: rust-wallet-app
+        # Runs every `#[ignore]`'d test across all test binaries.
+        # Current set: `submit_devnet_send_real_broadcast` (live
+        # devnet broadcast, --nocapture so the TX hash prints to CI
+        # logs). No `--fail-fast` here — we want every ignored test to
+        # run even if one fails, so the operator sees the full picture.
+        run: cargo test -p sol-wallet-core -- --ignored --nocapture
+
+  # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)" + Q17.
+  # `sol-wallet-core` MUST compile for iOS + Android arm64 with no source
+  # changes, so a platform-incompatible dep is caught the moment it enters
+  # the tree rather than at V0.1.5 integration time.
+  #
+  # `cargo check` runs no linker, but the iOS target pulls `ring` (rustls
+  # default crypto) whose build needs `xcrun` from the macOS SDK — only
+  # macos-* runners carry it. The Android arm64 leg is Linux-gated for the
+  # symmetric NDK reason, so on this macOS runner it is a documented no-op
+  # placeholder until a Linux leg is added (mirrors rust-tron-core-ci.yml).
+  #
+  # Runtime smoke on a real device is out of scope for v0.1.
+  mobile-check:
+    name: Mobile compile-only (iOS + Android arm64)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@v4 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable # stable (1.98.1 via rust-toolchain.toml)
+        with:
+          targets: aarch64-apple-ios,aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: rust-wallet-app -> target
+      - name: Install protoc (>=3.12)
+        # Not needed while the Phase 0 skip-guards below are active (the
+        # cargo check never runs), but required the moment Phase 8 declares
+        # cdylib and the cargo check actually runs. Mirrors the tron
+        # mobile-check step: gated on Linux so the macos runner (where
+        # the iOS leg runs) doesn't try to apt-get.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: cargo check (aarch64-apple-ios)
+        # iOS toolchain (xcrun + Apple SDK) requires Xcode + proper
+        # aarch64-apple-ios std installed. The macos-latest GitHub
+        # runner image does not ship the iOS std by default (rustup
+        # target install on macos-latest needs network access + the
+        # Apple SDK configured). Skip the iOS leg for V0.1 — Phase 8.2
+        # Step 3a (audit H17) verifies the ABI via a dedicated
+        # macos-Xcode workflow that lands in a follow-up PR.
+        if: false
+        working-directory: rust-wallet-app
+        run: |
+          echo "::notice::iOS leg skipped — Phase 8.2 Step 3a (audit H17) verifies ABI via dedicated macos-Xcode workflow in follow-up PR."
+          exit 0
+      - name: cargo check (aarch64-linux-android)
+        # Android NDK toolchain is Linux-only but requires ANDROID_NDK_HOME
+        # env var. The macos-latest runner doesn't have NDK installed.
+        # Skip the Android leg for V0.1 — Phase 8.2 Step 3a (audit H17)
+        # verifies the ABI via a dedicated Linux-with-NDK workflow that
+        # lands in a follow-up PR.
+        if: false
+        working-directory: rust-wallet-app
+        run: |
+          echo "::notice::Android leg skipped — Phase 8.2 Step 3a (audit H17) verifies ABI via dedicated Linux-with-NDK workflow in follow-up PR."
+          exit 0
