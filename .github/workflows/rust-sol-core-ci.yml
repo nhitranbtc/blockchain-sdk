@@ -42,18 +42,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # sol-wallet-core non-ignored test gate. `ci.yml::rust-test` runs
-  # `cargo test --workspace` which covers the same non-ignored tests
-  # for sol-wallet-core. This job is a delta-over-umbrella equivalent
-  # scoped to `-p sol-wallet-core` for failure attribution: a regression
-  # in sol-wallet-core alone fails here with a clean signal rather
-  # than mixed in with workspace-wide failures.
+  # sol-specific test gate. `ci.yml::rust-test` runs `cargo test --workspace`
+  # which covers non-ignored tests for sol-wallet-core, but skips:
+  #   - #[ignore]'d surfpool-gated tests (submit_sol_local,
+  #     submit_spl_local_{held,fresh,approve}, submit_send_speedup_local,
+  #     boot_probe_local) — gated on `RUN_SOL_SURFPOOL=1`
+  #   - tests/abi_smoke.rs + tests/ffi_negative.rs — use libloading to dlopen
+  #     the cdylib, which `cargo test` alone does not produce.
+  # This job restores that coverage specifically for sol-wallet-core.
   rust-test-sol-wallet-core:
     name: Rust test (sol-wallet-core)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       RUSTFLAGS: "-D warnings"
+      RUN_SOL_SURFPOOL: "1"
     steps:
       - uses: actions/checkout@v4 # v4
         with:
@@ -64,6 +67,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2 # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: cargo build cdylib (sol-wallet-core)
+        # Build cdylib artifact first so tests/abi_smoke.rs +
+        # tests/ffi_negative.rs (libloading to dlopen the cdylib) can
+        # locate it. `cargo test` alone does not emit the cdylib artifact.
+        working-directory: rust-wallet-app
+        run: cargo build -p sol-wallet-core
       - name: cargo test (sol-wallet-core)
         working-directory: rust-wallet-app
         # Scoped to sol-wallet-core rather than `--workspace`. Skips
