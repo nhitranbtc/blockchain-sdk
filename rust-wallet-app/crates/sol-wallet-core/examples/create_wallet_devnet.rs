@@ -31,12 +31,13 @@
 //! file written to `data_dir` with mode 0o600 (Unix).
 
 use sol_wallet_core::{
-    chain::{account::request_airdrop, client::RpcClient},
+    chain::client::RpcClient,
     ffi_mnemonic::{generate_12_word_english, now_unix},
     platform::storage::FileWalletStorage,
     wallet_manager::WalletManager,
     Result,
 };
+use solana_sdk::signature::Signature;
 use std::path::{Path, PathBuf};
 
 // -- Audit controls -----------------------------------------------------------
@@ -139,11 +140,33 @@ fn warn_if_non_devnet_airdrop_target(url: &str) {
         && std::env::var("RUN_SOL_DEVNET_AIRDROP").is_ok()
     {
         eprintln!("WARN: SOL_RPC_URL={url} but RUN_SOL_DEVNET_AIRDROP=1 set.");
-        eprintln!("      request_airdrop enforces the devnet host allowlist:");
-        eprintln!("        api.devnet.solana.com, api.testnet.solana.com, localhost, 127.0.0.1");
-        eprintln!("      Airdrop will fail with Error::Transport. Adjust SOL_RPC_URL or unset");
-        eprintln!("      RUN_SOL_DEVNET_AIRDROP if you do not want airdrop.");
+        eprintln!("      Mainnet rejects requestAirdrop at the RPC layer; this example posts");
+        eprintln!("      the JSON-RPC method directly without the deleted allowlist wrapper.");
+        eprintln!("      Adjust SOL_RPC_URL or unset RUN_SOL_DEVNET_AIRDROP if you do not want");
+        eprintln!("      airdrop to fail.");
     }
+}
+
+/// P9-7: post `requestAirdrop` JSON-RPC directly. Replaces the deleted
+/// `chain::account::request_airdrop` wrapper; example does not enforce
+/// the devnet host allowlist (see warn_if_non_devnet_airdrop_target).
+async fn raw_request_airdrop(
+    rpc: &RpcClient,
+    pubkey: &solana_sdk::pubkey::Pubkey,
+    lamports: u64,
+) -> Result<Signature> {
+    let raw: serde_json::Value = rpc
+        .post(
+            "requestAirdrop",
+            serde_json::json!([pubkey.to_string(), lamports]),
+        )
+        .await?;
+    let sig_str = raw.as_str().ok_or_else(|| {
+        sol_wallet_core::Error::Transport("requestAirdrop: result not a string".to_string())
+    })?;
+    sig_str.parse::<Signature>().map_err(|e| {
+        sol_wallet_core::Error::Transport(format!("requestAirdrop: parse Signature: {e}"))
+    })
 }
 
 // -- Main --------------------------------------------------------------------
@@ -206,7 +229,7 @@ fn main() -> Result<()> {
         let result: Result<()> = runtime.block_on(async {
             let rpc = RpcClient::new(&rpc_url)?;
             // P9-7: 0.5 SOL airdrop (below typical devnet per-request cap)
-            let sig = request_airdrop(&rpc, &pubkey, 500_000_000).await?;
+            let sig = raw_request_airdrop(&rpc, &pubkey, 500_000_000).await?;
             eprintln!("Airdrop tx sig: {}", sig);
             eprintln!(
                 "Verify: https://explorer.solana.com/tx/{}?cluster=devnet",

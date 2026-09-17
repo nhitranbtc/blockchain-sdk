@@ -49,8 +49,7 @@
 use std::time::{Duration, Instant};
 
 use crate::chain::account::{
-    get_balance, get_latest_blockhash, get_signature_status, send_transaction_versioned,
-    TransactionStatus,
+    get_balance, get_signature_status, send_transaction_versioned, TransactionStatus,
 };
 use serde_json::{json, Value};
 use solana_commitment_config::CommitmentConfig;
@@ -90,21 +89,6 @@ pub fn default_send_options() -> Value {
     })
 }
 
-/// Internal helper — single send + confirm-poll path.
-async fn broadcast_one(
-    rpc: &RpcClient,
-    sig: Signature,
-    commitment: CommitmentConfig,
-    timeout: Duration,
-) -> Result<Signature> {
-    // Refetch blockhash for the confirm-poll context (older versions
-    // pre-fetched before send; we send first now to mirror how the
-    // CLI builds messages off the same blockhash it signed against).
-    let (_blockhash, _slot) = get_latest_blockhash(rpc).await?;
-    let _status = wait_for_confirm(rpc, &sig, commitment, timeout).await?;
-    Ok(sig)
-}
-
 /// Send a signed `VersionedTransaction` and poll for confirmation.
 ///
 /// `options` carries `sendTransaction` flags. Per-cluster:
@@ -116,15 +100,25 @@ async fn broadcast_one(
 ///   balanced backends disagree on `recent_blockhash`; the leader must
 ///   substitute a fresh hash and skip preflight simulation.
 ///
-/// On `Rpc { code: -32005, .. }` (Solana "Node is unhealthy"), the call
-/// is retried up to `MAX_UNHEALTHY_RETRIES` times with linear backoff.
-/// Surfpool's local validator can return this transient error during
-/// the first second of a tx pipeline warm-up (observed in job
-/// 104249341528 → `submit_sol_local_round_trip`); Solana validators on
-/// devnet/mainnet can return it under load. Resending the SAME signed
-/// tx is idempotent — Solana dedupes by signature at the leader, so a
-/// retry after a successful send returns the same signature rather than
-/// double-broadcasting.
+/// Retry is split into two phases so confirm-side flakiness does not
+/// cause spurious re-sends:
+///
+/// 1. **Send phase** — `sendTransaction` is retried on `Rpc -32005`
+///    (Solana "Node is unhealthy") and `Transport` errors with
+///    exponential backoff (`SEND_BACKOFF_BASE` → `SEND_BACKOFF_CAP`).
+///    Resending the SAME signed tx is idempotent — Solana dedupes by
+///    signature at the leader, so a retry after a successful send
+///    returns the same signature rather than double-broadcasting.
+///    Surfpool's local validator can transiently fail sends during the
+///    first ~5s of a tx pipeline warm-up (observed in job 104249341528
+///    → `submit_sol_local_round_trip`); Solana validators on devnet/
+///    mainnet can return -32005 under load.
+///
+/// 2. **Confirm phase** — once the signature is known, `wait_for_confirm`
+///    is retried on `ConfirmPending` / `ConfirmTimeout`. Crucially the
+///    SEND is NOT retried here — only the confirmation poll, since the
+///    tx is already in the cluster. Surfpool under parallel test load
+///    can take >15s to commit a tx; without this retry the test flakes.
 pub async fn send_and_confirm(
     rpc: &RpcClient,
     tx: &VersionedTransaction,
@@ -132,37 +126,54 @@ pub async fn send_and_confirm(
     commitment: CommitmentConfig,
     timeout: Duration,
 ) -> Result<Signature> {
-    const MAX_UNHEALTHY_RETRIES: u32 = 5;
-    const RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
+    const SEND_MAX_RETRIES: u32 = 8;
+    const SEND_BACKOFF_BASE: Duration = Duration::from_millis(250);
+    const SEND_BACKOFF_CAP: Duration = Duration::from_secs(2);
 
-    for attempt in 0..MAX_UNHEALTHY_RETRIES {
-        match try_send_and_confirm(rpc, tx, &options, commitment, timeout).await {
-            Ok(sig) => return Ok(sig),
-            Err(Error::Rpc { code: -32005, .. }) | Err(Error::Transport(_)) => {
-                if attempt + 1 < MAX_UNHEALTHY_RETRIES {
-                    tokio::time::sleep(RETRY_BASE_DELAY * (attempt + 1)).await;
+    // Phase 1 — send (retries on send-side errors only).
+    let sig = {
+        let mut attempt: u32 = 0;
+        loop {
+            match send_transaction_versioned(rpc, tx, options.clone()).await {
+                Ok(s) => break s,
+                Err(Error::Rpc { code: -32005, .. }) | Err(Error::Transport(_)) => {
+                    if attempt + 1 >= SEND_MAX_RETRIES {
+                        return Err(Error::Transport(format!(
+                            "send_and_confirm: sendTransaction failed after {SEND_MAX_RETRIES} retries"
+                        )));
+                    }
+                    let backoff =
+                        (SEND_BACKOFF_BASE * 2u32.saturating_pow(attempt)).min(SEND_BACKOFF_CAP);
+                    tokio::time::sleep(backoff).await;
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    };
+
+    // Phase 2 — confirm (re-poll only, no re-send). Bounded by the
+    // caller's `timeout` × `CONFIRM_MAX_RETRIES` so a stalled cluster
+    // surfaces eventually instead of looping forever.
+    const CONFIRM_MAX_RETRIES: u32 = 4;
+    for confirm_attempt in 0..CONFIRM_MAX_RETRIES {
+        match wait_for_confirm(rpc, &sig, commitment, timeout).await {
+            Ok(_) => return Ok(sig),
+            Err(Error::ConfirmPending { .. }) | Err(Error::ConfirmTimeout { .. }) => {
+                if confirm_attempt + 1 < CONFIRM_MAX_RETRIES {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
                     continue;
                 }
-                return Err(Error::Transport(format!(
-                    "send_and_confirm: RPC call failed after {MAX_UNHEALTHY_RETRIES} retries"
-                )));
+                return Err(Error::ConfirmTimeout {
+                    signature: sig.to_string(),
+                    waited_ms: (timeout.as_millis() as u64)
+                        .saturating_mul(CONFIRM_MAX_RETRIES as u64),
+                });
             }
             Err(e) => return Err(e),
         }
     }
-    unreachable!("retry loop must return on each path")
-}
-
-/// Single-attempt helper for `send_and_confirm` (no retry wrapping).
-async fn try_send_and_confirm(
-    rpc: &RpcClient,
-    tx: &VersionedTransaction,
-    options: &Value,
-    commitment: CommitmentConfig,
-    timeout: Duration,
-) -> Result<Signature> {
-    let sig = send_transaction_versioned(rpc, tx, options.clone()).await?;
-    broadcast_one(rpc, sig, commitment, timeout).await
+    unreachable!("confirm retry loop must return on each path")
 }
 
 /// Wait for `signature` to reach the requested commitment, polling

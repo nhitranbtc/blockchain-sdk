@@ -334,8 +334,8 @@ impl RpcClient {
         &self.url
     }
 
-    /// Host portion of the URL (used for devnet allowlist checks in
-    /// `account::request_airdrop`).
+    /// Host portion of the URL (used by the URL-scheme allowlist
+    /// enforced in `RpcClient::new`).
     pub fn host(&self) -> &str {
         &self.host
     }

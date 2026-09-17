@@ -19,6 +19,7 @@ use common::{
     keypair_fixture::throwaway_keypair,
     surfpool_spawn::{spawn_surfpool, SurfpoolError},
 };
+use serial_test::serial;
 use sol_wallet_core::{
     chain::{
         account::{get_balance, get_latest_blockhash},
@@ -38,6 +39,7 @@ use solana_sdk::{pubkey::Pubkey, signer::Signer};
 const TRANSFER_LAMPORTS: u64 = 1_000_000_000; // 1 SOL
 
 #[tokio::test]
+#[serial]
 #[ignore = "RUN_SOL_SURFPOOL=1 required — surfpool-backed e2e; binary not installed in sandbox"]
 async fn submit_sol_local_round_trip() -> Result<()> {
     let _guard = match spawn_surfpool().await {
@@ -113,6 +115,7 @@ async fn submit_sol_local_round_trip() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 #[ignore = "RUN_SOL_SURFPOOL=1 required — surfpool-backed e2e"]
 async fn submit_sol_local_airdrop_waits_for_credit() -> Result<()> {
     let _guard = match spawn_surfpool().await {
@@ -136,6 +139,7 @@ async fn submit_sol_local_airdrop_waits_for_credit() -> Result<()> {
 }
 
 #[tokio::test]
+#[serial]
 #[ignore = "RUN_SOL_SURFPOOL=1 required — surfpool-backed e2e"]
 async fn submit_sol_local_airdrop_faucet_error_surfaces() {
     let kp = throwaway_keypair();
