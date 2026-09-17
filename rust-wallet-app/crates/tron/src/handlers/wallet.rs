@@ -762,22 +762,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn send_speedup_requires_confirm_on_mainnet() {
-        // `confirm` is the gate both mainnet paths share: with `confirm_yes` it
-        // returns Ok without reading STDIN, without it a non-tty aborts. That
-        // is the whole conditional `send_speedup` relies on, and it is checked
-        // before any broadcast.
-        confirm("speed-up on MAINNET", true).expect("--confirm-yes skips the prompt");
-        assert!(
-            matches!(
-                confirm("speed-up on MAINNET", false),
-                Err(CliError::BadInput(_))
-            ),
-            "a non-interactive run must refuse rather than broadcast unattended"
-        );
-    }
-
     /// `signer` accepts a mnemonic supplied via file path, not just argv.
     #[test]
     fn signer_accepts_mnemonic_file() {

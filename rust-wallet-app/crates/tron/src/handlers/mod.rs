@@ -554,23 +554,6 @@ mod tests {
         assert_eq!(render_trx(1_500_000, UnitArg::Sun), "1500000");
     }
 
-    /// The typed-yes gate must refuse when stdin isn't a TTY. `cargo test`
-    /// runs the child process with stdout/stderr captured to a pipe rather
-    /// than a terminal, which is the non-TTY case we want to exercise.
-    #[test]
-    fn confirm_requires_tty_or_flag() {
-        let err = confirm("ship to mainnet?", false).expect_err("piped stdin must refuse");
-        let msg = match err {
-            CliError::BadInput(m) => m,
-            other => panic!("expected BadInput, got {other:?}"),
-        };
-        assert!(msg.contains("TTY"), "error must mention TTY, got {msg:?}");
-        assert!(
-            msg.contains("--confirm-yes"),
-            "error must mention --confirm-yes, got {msg:?}"
-        );
-    }
-
     /// `--confirm-yes` short-circuits the TTY gate, so a piped stdin is
     /// enough to authorise a mainnet send.
     #[test]

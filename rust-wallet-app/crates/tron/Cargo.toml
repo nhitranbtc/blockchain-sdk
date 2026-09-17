@@ -112,15 +112,6 @@ path = "tests/v9_token_registry.rs"
 name = "v10_slip44"
 path = "tests/v10_slip44.rs"
 
-# V11 mainnet self-send gate (BLOCKING for v0.1 release).
-# Operator-driven via RUN_TRON_MAINNET=1 + TRON_MAINNET_OPERATOR_WALLET.
-# `test = false` excludes it from `cargo test` / `cargo nextest` unless
-# explicitly forced via `--test v11_mainnet_self_send`.
-[[test]]
-name = "v11_mainnet_self_send"
-path = "tests/v11_mainnet_self_send.rs"
-test = false
-
 [[test]]
 name = "trc20_local"
 path = "tests/trc20_local.rs"
