@@ -898,8 +898,13 @@ fn scan_disk_into(base_dir: &Path, wallets: &mut HashMap<Uuid, EncryptedBlob>) -
 
 fn locate_wallet(base_dir: &Path, wallet_id: Uuid) -> Option<PathBuf> {
     let name = format!("{wallet_id}.enc");
-    for network_dir in ["mainnet", "sepolia", "anvil"] {
-        let cand = base_dir.join(network_dir).join(&name);
+    // Iterate every Network variant — single source of truth shared with
+    // WalletManager::list_wallets (per #461 fix). Pre-fix this hardcoded
+    // the 3 Ethereum variants so Polygon wallets (polygon_mainnet /
+    // polygon_amoy dirs) silently failed delete_wallet with NotFound,
+    // leaving the encrypted .enc blob on disk past intended lifetime.
+    for network in Network::all() {
+        let cand = base_dir.join(network.as_dir_name()).join(&name);
         if cand.exists() {
             return Some(cand);
         }
@@ -1195,6 +1200,41 @@ mod tests {
         mgr.delete_wallet(w.wallet_id).unwrap();
         assert!(!enc.exists(), ".enc must be removed");
         assert!(!meta.exists(), ".meta.json must be removed");
+    }
+
+    #[test]
+    fn delete_wallet_removes_polygon_amoy_enc_and_meta() {
+        // PR1 regression: locate_wallet must iterate Network::all() so
+        // Polygon wallets delete from disk. Pre-fix this returns NotFound
+        // and the .enc blob persists under polygon_amoy/ — encrypted
+        // material accumulates past intended lifetime.
+        let tmp = tempdir().unwrap();
+        let mgr = WalletManager::open_at(tmp.path().to_path_buf()).unwrap();
+        let w = mgr
+            .create_wallet_for_network(
+                "del-poly-amoy-test",
+                &password(),
+                Network::Polygon(PolygonChain::Amoy),
+            )
+            .unwrap();
+
+        let enc = tmp
+            .path()
+            .join("polygon_amoy")
+            .join(format!("{}.enc", w.wallet_id));
+        let meta = tmp
+            .path()
+            .join("polygon_amoy")
+            .join(format!("{}.meta.json", w.wallet_id));
+        assert!(enc.exists(), "polygon_amoy/.enc must exist before delete");
+        assert!(
+            meta.exists(),
+            "polygon_amoy/.meta.json must exist before delete"
+        );
+
+        mgr.delete_wallet(w.wallet_id).unwrap();
+        assert!(!enc.exists(), "polygon_amoy/.enc must be removed");
+        assert!(!meta.exists(), "polygon_amoy/.meta.json must be removed");
     }
 
     #[test]
