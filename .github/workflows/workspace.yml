@@ -159,7 +159,13 @@ jobs:
   rust-geiger:
     name: Rust unsafe-code audit (geiger)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Bumped 15 → 30 min after run 35177723240 timed out: `cargo geiger`
+    # walks the AST of every test binary in the crate, and the spike→crate
+    # consolidation in `crates/tron/` added 14 `[[test]]` entries
+    # (cli_coverage + v1_compile + … + trc20_local/nile). With every test
+    # binary's deps (assert_cmd, testcontainers, reqwest-blocking, …) now
+    # in scope, the per-crate build exceeds the prior 15-min budget.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4  # v4
         with:
