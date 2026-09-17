@@ -4,9 +4,9 @@
 
 **Goal:** Deliver `rust-wallet-app/crates/evm-wallet-core/` (refactor of `eth-wallet-core` with `Network` enum supporting both Ethereum + Polygon) + thin `rust-wallet-app/crates/polygon-wallet-core/` wrapper + `polygon` CLI binary. Mirrors `bitcoin-wallet-core/` (v0.1) + `eth-wallet-core/` (v0.2) + in-flight `tron-wallet-core/` (v0.1) structure. Resolves the 8 open questions from `docs/wallets/2026-08-27-polygon-rust-sdks-deep-dive.md` and issue #416.
 
-**Drift note (2025-Q4, Issue #474):** Q4 RPC defaults drifted. Originally `polygon-rpc.com` (mainnet) + `polygon-amoy.drpc.org` (Amoy). Per #458 / #474 evidence, `polygon-rpc.com` tightened keyless-tier access (HTTP 401 on `estimate_eip1559_fees` + `get_block_number`). `polygon-amoy.drpc.org` showed similar rate-limit signal in PR #473 smoke. Defaults switched to `https://polygon-bor-rpc.publicnode.com` (mainnet) + `https://polygon-amoy-bor-rpc.publicnode.com` (Amoy). ETH mainnet default also drifted from `cloudflare-eth.com` to `https://ethereum-rpc.publicnode.com` for consistency. The `POLYGON_RPC_URL` / `ETH_RPC_URL` env overrides (L29 / L61) remain as defense-in-depth for operators needing paid-tier (Alchemy/Infura) or alternate vendors. This drift note supersedes **all** RPC URL references throughout this plan (Q4 + §1 / §3 / §4 / §5 / §7 / §T1 / §T2 / §T3 / §T8 / §V5 / §Dependencies); historical URLs retained for context, current defaults live in the §0 drift note + the issue #474 PR body.
+**Drift note (2025-Q4, Issue #474):** Q4 RPC defaults drifted. Originally `polygon-rpc.com` (mainnet) + `polygon-amoy.drpc.org` (Amoy). Per #458 / #474 evidence, `polygon-rpc.com` tightened keyless-tier access (HTTP 401 on `estimate_eip1559_fees` + `get_block_number`). `polygon-amoy.drpc.org` showed similar rate-limit signal in PR #473 smoke. Defaults switched to `https://polygon-bor-rpc.publicnode.com` (mainnet) + `https://polygon-amoy-bor-rpc.publicnode.com` (Amoy). ETH mainnet default also drifted from `cloudflare-eth.com` to `https://ethereum-rpc.publicnode.com` for consistency. The `POLYGON_RPC_URL` / `ETH_RPC_URL` env overrides (L29 / L61) remain as defense-in-depth for operators needing paid-tier (Alchemy/Infura) or alternate vendors. This drift note supersedes **all** RPC URL references throughout this plan (Q4 + §1 / §3 / §4 / §5 / §7 / §T1 / §T2 / §T3 / §T8 / §Verification matrix · Q4 / §Dependencies); historical URLs retained for context, current defaults live in the §0 drift note + the issue #474 PR body.
 
-**Local-testnet strategy (2026-Q3, Issue #492 + [ADR 0002](docs/superpowers/adrs/2026-08-31-adr-0002-polygon-local-testnet.md)):** Tier 1 (now) = Anvil Polygon hardfork via `anvil --fork-url <RPC> --fork-chain-id 137|80002` — already proven in PR #485 V9/use_case `balanceOf` round-trip; CI = L29 `#[ignore]` + `RUN_POLYGON_LOCAL=1` opt-in + manual script, NOT in CI gate. Tier 2 (later, when Bor-specific opcode coverage needed) = Testcontainers `bor` image (NOT `polygon-edge` — wrong framework, Edge ≠ PoS chain). Skip `polygon-edge` (deprioritized, no production parity). Per ADR 0002 acceptance criteria; Tier 1 implementation tracked as follow-up PR.
+**Local-testnet strategy (2026-Q3, Issue #492 + [ADR 0002](docs/superpowers/adrs/2026-08-31-adr-0002-polygon-local-testnet.md)):** Tier 1 (now) = Anvil Polygon hardfork via `anvil --fork-url <RPC> --fork-chain-id 137|80002` — already proven in PR #485 `local_testnet_smoke.rs` `balanceOf` round-trip; CI = L29 `#[ignore]` + `RUN_POLYGON_LOCAL=1` opt-in + manual script, NOT in CI gate. Tier 2 (later, when Bor-specific opcode coverage needed) = Testcontainers `bor` image (NOT `polygon-edge` — wrong framework, Edge ≠ PoS chain). Skip `polygon-edge` (deprioritized, no production parity). Per ADR 0002 acceptance criteria; Tier 1 implementation tracked as follow-up PR.
 
 **Architecture:** Five phases (Phase 0.0 network-selection pre-step + Phases 0–4).
 - **Phase 0** = refactor `eth-wallet-core` → `evm-wallet-core` (extract `Network` enum + chain config) + canonical mnemonic test (mirrors ETH derivation on both chains).
@@ -70,54 +70,13 @@ rust-wallet-app/crates/polygon-wallet-core/    # NEW THIN WRAPPER (Q1)
 rust-wallet-app/crates/polygon/                # CLI binary
 ├── Cargo.toml
 └── src/main.rs                  # clap subcommands: create, import, list, show, send, erc20 send, balance, fee, faucet, config
-
-rust-wallet-app/spikes/polygon-v1/             # verification harness (V1–V10, one per Q)
-├── Cargo.toml                   # workspace member; deps = alloy + reqwest + tokio + bitcoin-wallet-core (SPKI pin reuse)
-├── README.md                    # V1-V10 acceptance + run instructions (mirrors TRON spike README shape)
-├── ROADMAP.md                   # spike purpose + Phase 0.0 network selection + use_case reference
-├── RESULT.md                    # PASS evidence log (filled post-smoke run)
-├── src/
-│   ├── lib.rs                    # re-exports + spike config
-│   ├── config.rs                 # POLYGON_MAINNET_RPC_URL, POLYGON_AMOY_RPC_URL, chain-ids, gas-token labels
-│   ├── address.rs                # EIP-55 checksum helper (wraps alloy_primitives::Address::to_checksum_buffer)
-│   ├── provider.rs               # alloy Provider helpers for polygon-rpc.com + polygon-amoy.drpc.org
-│   ├── tokens.rs                 # bundled token registry loader (mirror eth-wallet-core::tokens)
-│   ├── spki.rs                   # SPKI pin wrapper (reuses bitcoin-wallet-core::chain::spki — Q7)
-│   └── erc20.rs                  # ERC-20 ABI helpers (wraps alloy_sol_types::sol! for transfer/balanceOf/decimals)
-├── tests/
-│   ├── env.example               # RUN_POLYGON_AMOY=1, RUN_POLYGON_MAINNET=1, RUN_POLYGON_ANVIL=1
-│   ├── use_case_alpha_sends_beta_100_usdc.rs  # end-to-end smoke (V8 + V9 combined; 100 USDC native on Polygon)
-│   ├── v1_evm_reuse.rs           # cargo build -p evm-wallet-core -p eth-wallet-core -p polygon-wallet-core clean
-│   ├── v2_chain_id.rs            # get_chain_id() returns 137 (mainnet) + 80002 (amoy)
-│   ├── v3_derivation.rs          # m/44'/60'/0'/0/0 → same address on ETH + Polygon
-│   ├── v4_eip1559_estimates.rs   # estimate_eip1559_fees() — re-estimate cadence proof
-│   ├── v5_rpc_connectivity.rs    # provider.get_block_number() against polygon-rpc.com
-│   ├── v6_token_registry.rs      # mainnet.json + amoy.json load + decimals() verify
-│   ├── v7_amoy_faucet.rs         # request Amoy POL, verify balance update
-│   ├── v8_native_pol_transfer.rs # send 0.01 POL on Amoy, verify balance change
-│   ├── v9_erc20_transfer.rs      # deploy MockERC20 to Anvil (Polygon-fork), transfer, verify
-│   └── v10_eip712_replay.rs      # sign EIP-712 with chain_id 137, verify replay on 1 fails
-└── tokens/
-    ├── mainnet.json              # USDC (0x3c499c...3359), USDT (0xc2132D...e8F), DAI (0x8f3Cf7...63) — 3 entries
-    └── amoy.json                 # USDC Amoy (0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582) — 1 entry
-
-**Spike build dependencies (mirrors TRON plan §"Spike build dependency", with EVM deltas):**
-- `protoc` **NOT needed** — EVM has no protobuf transactions (explicit delta vs TRON spike; drop `build.rs` + `proto/` dirs entirely)
-- `alloy-node-bindings` (dev-dep) for `AnvilInstance::new().spawn()` Polygon-fork mode (`--fork-url https://polygon-rpc.com --fork-block-number 60000000`)
-- `tokio` (workspace) for `#[tokio::test]` async tests
-- `bitcoin-wallet-core` (path dep) for SPKI pin verifier reuse (Q7)
-- `alloy` features added on top of workspace: `transport-http`, `provider`, `network`, `sol-types` (cargo feature unification is additive across members)
-
-**Spike live-testnet gating (per L29, mirrors TRON plan §"Spike live-testnet gating"):**
-- V1/V3/V9/V10 always run (offline — Anvil Polygon-fork + deterministic derivation + EIP-712 fixture)
-- V2/V4/V6/V7/V8 gated behind `RUN_POLYGON_AMOY=1` (live Amoy RPC `https://polygon-amoy.drpc.org`)
-- V5 gated behind `RUN_POLYGON_MAINNET=1` (live mainnet RPC `https://polygon-rpc.com`, operator-driven only)
-- Without env vars, gated tests print `[SKIP — RUN_POLYGON_AMOY=1 required]` and exit 0
-
-**Async test policy:** every test touching async code (RPC via `alloy_provider::Provider`, HTTP via `reqwest`, tokio primitives) MUST be `async fn` + `#[tokio::test]` per eth #333 + plan §"Async test policy". Sync `#[test]` is forbidden for any code path that touches `alloy_provider::Provider`, `reqwest` transport, or any tokio primitive. Mirrors eth-wallet-core v0.3 test policy.
 ```
 
-**Spike live-testnet gating (per L29):** V2/V4/V5/V6/V7/V8 require live RPC access. These gated behind `RUN_POLYGON_AMOY=1` (Amoy) and `RUN_POLYGON_MAINNET=1` (mainnet — operator-driven only). V1/V3/V9/V10 are offline (Anvil) and always run.
+**Async test policy:** every test touching async code (RPC via `alloy_provider::Provider`, HTTP via `reqwest`, tokio primitives) MUST be `async fn` + `#[tokio::test]` per eth #333 + plan §"Async test policy". Sync `#[test]` is forbidden for any code path that touches `alloy_provider::Provider`, `reqwest` transport, or any tokio primitive. Mirrors eth-wallet-core v0.3 test policy.
+
+**Verification lives alongside the code it verifies** — each task's `tests/*.rs` file owns its own Qn coverage. V1-Q1 build-gate in `evm-wallet-core/tests/build_clean.rs`. V2-Q4 chain-id in `evm-wallet-core/tests/network_chain_id.rs`. V3-Q1 derivation in `polygon-wallet-core/tests/derivation_cross_check.rs`. V4-Q5 EIP-1559 cadence in `evm-wallet-core/tests/polygon_rpc.rs`. V5-Q4 RPC connectivity alongside V4 in same file. V6-Q3 decimals in `polygon-wallet-core/tests/token_registry_decimals.rs`. V10-Q7 EIP-712 replay in `polygon-wallet-core/tests/eip712_replay.rs`. No external spike workspace member — `protoc` / `proto/` / `build.rs` are NOT needed (no protobuf on EVM).
+
+**Live-testnet gating (per L29):** tests that hit live RPC are gated behind `RUN_POLYGON_AMOY=1` (Amoy) or `RUN_POLYGON_MAINNET=1` (mainnet — operator-driven only). Offline tests (Anvil Polygon-fork + deterministic derivation + EIP-712 fixture) run on every `cargo test`.
 
 ## Phase 0.0 — Network selection + local-dev testnet (NEW, mirrors TRON §"Phase 0.0")
 
@@ -147,7 +106,7 @@ Per L13 spec + L29, lock in network decisions before any production code lands.
 
 ### 0.0.c — Use case validation (cross-reference ROADMAP)
 
-End-to-end use case: "alpha → beta 100 USDC on Polygon mainnet" (mirrors TRON's `use_case_alpha_sends_beta_100_usdt`). Status: pending — depends on Circle-issued native USDC contract `0x3c499c...3359` (no separate USDC.e address). Tracked as the spike V9 acceptance test.
+End-to-end use case: "alpha → beta 100 USDC on Polygon mainnet" (mirrors TRON's `use_case_alpha_sends_beta_100_usdt`). Status: pending — depends on Circle-issued native USDC contract `0x3c499c...3359` (no separate USDC.e address). Tracked in `polygon/tests/mainnet_smoke.rs` via the operator-driven `RUN_POLYGON_MAINNET=1` flow (gated, not CI).
 
 ## Phase 0 — Refactor `eth-wallet-core` → `evm-wallet-core` (1 task)
 
@@ -347,52 +306,42 @@ End-to-end use case: "alpha → beta 100 USDC on Polygon mainnet" (mirrors TRON'
 - [ ] Step 5: L8 — flip issue #416 checkboxes `[ ]`→`[x]` before squash-merge
 - [ ] Step 6: Final commit + tag push
 
-## Spike closure (V1–V10 acceptance)
+## Verification matrix
 
-After Phase 0–4 ship, the `rust-wallet-app/spikes/polygon-v1/` spike produces PASS evidence for V1–V10 (one per Q + 2 cross-cutting acceptance tests).
+Qn coverage lives inline at each task's `tests/*.rs` (see File Structure footer). Acceptance per task is the local file's `cargo test`. The matrix below crosswalks each Q → inline test path → the operator runbook entry that produces PASS evidence.
 
-| V# | Q | What it verifies | Maps to Phase |
-|---|---|---|---|
-| V1 | Q1 EVM-reuse | `cargo build -p evm-wallet-core -p eth-wallet-core -p polygon-wallet-core` clean | Phase 0 Task 1 |
-| V2 | Q4 RPC connectivity | `provider.get_chain_id()` returns 137 (mainnet) + 80002 (Amoy) | Phase 2 Task 3 |
-| V3 | Q1 derivation | `m/44'/60'/0'/0/0` produces same address on ETH + Polygon | Phase 1 Task 2 |
-| V4 | Q5 EIP-1559 cadence | `estimate_eip1559_fees()` re-estimated twice 3s apart shows different values (proves 2-second-block volatility) | Phase 2 Task 3 |
-| V5 | Q4 RPC connectivity | `provider.get_block_number()` against `polygon-rpc.com` returns sane value | Phase 2 Task 3 |
-| V6 | Q3 token registry | `tokens/mainnet.json` 3 entries load + USDC decimals = 6 + DAI decimals = 18 verified | Phase 3 Task 4 |
-| V7 | Q4 Amoy faucet | Request Amoy POL via `https://faucet.polygon.technology/`, verify receipt via `provider.get_balance()` | Phase 4 Task 7 |
-| V8 | Q5 native POL transfer | Send 0.01 POL on Amoy, verify recipient `get_balance()` reflects change | Phase 4 Task 7 |
-| V9 | Q3 ERC-20 stablecoin transfer | Deploy MockERC20 to Anvil (Polygon-fork), transfer 100 tokens, verify `balanceOf` | Phase 4 Task 7 |
-| V10 | Q7 signature replay protection | Sign EIP-712 typed message on chain-id 137, verify replay attempt on chain-id 1 (Ethereum) fails with `InvalidSignature` | Phase 3 Task 5 |
+| Q  | What it verifies | Inline test path | Phase task |
+|----|------------------|------------------|------------|
+| Q1 | EVM-reuse build clean | `evm-wallet-core/tests/build_clean.rs` | Phase 0 Task 1 |
+| Q1 | ETH + Polygon derivation same address | `polygon-wallet-core/tests/derivation_cross_check.rs` | Phase 1 Task 2 |
+| Q3 | Token registry decimals resolution | `polygon-wallet-core/tests/token_registry_decimals.rs` | Phase 3 Task 4 |
+| Q4 | RPC chain-id (137 mainnet + 80002 Amoy) | `evm-wallet-core/tests/network_chain_id.rs` (offline chain-id table) + `evm-wallet-core/tests/polygon_rpc.rs` (live `RUN_POLYGON_AMOY=1`) | Phase 0 Task 1 + Phase 2 Task 3 |
+| Q4 | RPC connectivity (`get_block_number`) | `evm-wallet-core/tests/polygon_rpc.rs` (live `RUN_POLYGON_MAINNET=1`) | Phase 2 Task 3 |
+| Q5 | EIP-1559 re-estimate cadence (2-second blocks) | `evm-wallet-core/tests/polygon_rpc.rs::re_estimate_cadence` | Phase 2 Task 3 |
+| Q7 | EIP-712 chain_id replay rejection | `polygon-wallet-core/tests/eip712_replay.rs` | Phase 3 Task 5 |
+| Q8 | POL display + MATIC legacy alias | `polygon-wallet-core/tests/pol_display.rs` | Phase 3 Task 5 |
 
-### Per-Vn run protocol
+**Operator runbook (full mainnet acceptance smoke per L29):**
 
 ```bash
-# Offline Vns (always run — Anvil + offline RPC mock)
-cargo test -p polygon-spike-v1 --test v1_evm_reuse
-cargo test -p polygon-spike-v1 --test v3_derivation
-cargo test -p polygon-spike-v1 --test v9_erc20_transfer
-cargo test -p polygon-spike-v1 --test v10_eip712_replay
+# Offline (always run on `cargo test`)
+cargo test -p evm-wallet-core -p polygon-wallet-core -p eth-wallet-core -p polygon
 
-# Gated Vns (require RUN_POLYGON_AMOY=1 or RUN_POLYGON_MAINNET=1 — live RPC access)
-RUN_POLYGON_AMOY=1 cargo test -p polygon-spike-v1 --test v2_chain_id
-RUN_POLYGON_AMOY=1 cargo test -p polygon-spike-v1 --test v4_eip1559_estimates
-RUN_POLYGON_AMOY=1 cargo test -p polygon-spike-v1 --test v7_amoy_faucet
-RUN_POLYGON_AMOY=1 cargo test -p polygon-spike-v1 --test v8_native_pol_transfer
-RUN_POLYGON_MAINNET=1 cargo test -p polygon-spike-v1 --test v5_rpc_connectivity
+# Live Amoy (gated)
+RUN_POLYGON_AMOY=1 cargo test -p evm-wallet-core --test polygon_rpc
+RUN_POLYGON_AMOY=1 cargo test -p polygon --test amoy_smoke
 
-# All Vns at once
-cargo test -p polygon-spike-v1 --test '*'                                # offline only
-RUN_POLYGON_AMOY=1 RUN_POLYGON_MAINNET=1 cargo test -p polygon-spike-v1 --test '*'  # full
+# Live mainnet (operator-driven)
+RUN_POLYGON_MAINNET=1 cargo test -p evm-wallet-core --test polygon_rpc
+RUN_POLYGON_MAINNET=1 cargo test -p polygon --test mainnet_smoke
+
+# All at once (offline + live legs)
+RUN_POLYGON_AMOY=1 RUN_POLYGON_MAINNET=1 cargo test --workspace
 ```
 
-### PASS evidence requirements
+PASS evidence is the `cargo test` stdout/stderr per test, captured against the relevant SHA in the issue #416 acceptance comment. No external spike workspace member, no separate PASS log file.
 
-Each Vn must produce:
-- **Command output:** the `cargo test` stdout/stderr showing test pass.
-- **SHA:** the git SHA of the commit that added/ran the test (per L13 review trail).
-- **Recorded in:** `rust-wallet-app/spikes/polygon-v1/RESULT.md` — one section per Vn.
-
-When all 10 Vns pass, issue #416 acceptance criterion "Open questions resolved before code" flips `[x]` — the deep-dive resolves Q1-Q4 with citations + Q5-Q8 resolved by the spike's PASS evidence.
+When all Qn tests pass, issue #416 acceptance criterion "Open questions resolved before code" flips `[x]` — the deep-dive resolves Q1-Q4 with citations + Q5-Q8 resolved by the inline tests' PASS evidence.
 
 ## Out of scope (deferred per issue #416 body)
 
@@ -410,14 +359,14 @@ When all 10 Vns pass, issue #416 acceptance criterion "Open questions resolved b
 
 ## Dependencies
 
-- **Issue body:** #416 (deep-dive ✓ at `docs/wallets/2026-08-27-polygon-rust-sdks-deep-dive.md`, user-stories ✓ at `docs/wallets/2026-08-27-polygon-wallet-user-stories.md`, plan = this doc, spike = next)
+- **Issue body:** #416 (deep-dive ✓ at `docs/wallets/2026-08-27-polygon-rust-sdks-deep-dive.md`, user-stories ✓ at `docs/wallets/2026-08-27-polygon-wallet-user-stories.md`, plan = this doc)
 - **Prior plans (templates):**
   - `docs/superpowers/plans/2026-08-05-rust-bitcoin-wallet.md` (v0.1 — pattern source)
   - `docs/superpowers/plans/2026-08-23-eth-wallet-core.md` (v0.2 — refactor target + async test pattern)
-  - `docs/superpowers/plans/2026-08-27-tron-wallet-core.md` (v0.1 — sibling non-EVM chain template + spike mapping)
+  - `docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md` (v0.1 — sibling non-EVM chain template, vendored anychain stack)
 - **eth-wallet-core source (refactor input):** `rust-wallet-app/crates/eth-wallet-core/`
 - **Workspace deps to add (Phase 1 Task 2 Step 1):** `alloy-chains` (NEW direct dep for `polygon-wallet-core` only — for `Chain::Polygon` enum). All other deps (alloy, bip32, bip39, reqwest, rustls) reused.
-- **Workspace `members` array (Phase 0 — plan doc only, not actual file):** add `"spikes/polygon-v1"` to `rust-wallet-app/Cargo.toml` `members` (mirrors `"spikes/tron-v1"` entry). Per L25 this is documentation of a future workspace edit, NOT an action — user instruction was to enrich the plan only (per session 2026-08-27 "we only edit plan with polygon-v1 structure in plan, don't execute").
+- **Workspace `members` array:** `evm-wallet-core`, `polygon-wallet-core`, `polygon` (CLI). Each task below records the workspace edit as a checkbox (no separate spike workspace member added).
 - **Bitcoin SPKI pin reuse:** `bitcoin-wallet-core/src/chain/spki.rs` (F20 / Q7)
 - **Alloy version:** `=1.8.3` (matches eth-wallet-core v0.2 — Q1 MSRV parity)
 - **Tokio test policy:** every test that touches async code MUST be `async fn` + `#[tokio::test]` per eth #333.
@@ -430,9 +379,7 @@ When all 10 Vns pass, issue #416 acceptance criterion "Open questions resolved b
 - ETH deep-dive (companion): `docs/wallets/2026-08-23-ethereum-rust-sdks-deep-dive.md`
 - ETH user-stories (template): `docs/wallets/2026-08-23-eth-wallet-user-stories.md`
 - ETH plan (template + refactor target): `docs/superpowers/plans/2026-08-23-eth-wallet-core.md`
-- TRON plan (sibling template + Phase 0.0 pattern): `docs/superpowers/plans/2026-08-27-tron-wallet-core.md`
-- ETH spike (precedent): `rust-wallet-app/spikes/alloy-v1/`
-- TRON spike (precedent): `rust-wallet-app/spikes/tron-v1/`
+- TRON plan (sibling template): `docs/superpowers/plans/2026-09-05-tron-wallet-core-v0.1-anychain.md`
 - Bitcoin SPKI pin source: `bitcoin-wallet-core/src/chain/spki.rs`
 - Polygon docs: https://docs.polygon.technology/
 - Circle USDC contract addresses (canonical): https://developers.circle.com/stablecoins/usdc-contract-addresses
