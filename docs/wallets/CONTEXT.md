@@ -2,17 +2,19 @@
 
 **Date:** 2026-09-05
 **Status:** Living document (update on any new chain or term addition)
-**Scope:** Shared vocabulary across `rust-wallet-app/crates/{bitcoin,eth,polygon,tron}-wallet-core` + their CLI binaries
+**Scope:** Shared vocabulary across `rust-wallet-app/crates/{bitcoin-wallet-core, evm-wallet-core, eth-wallet-core, polygon-wallet-core, tron-wallet-core, sol-wallet-core}` + their CLI binaries (`btc`, `eth`, `polygon`, `tron`, `sol`).
 **Purpose:** Prevent terminology drift between chain-specific research docs. Enforce consistent naming in FFI surface, CLI flags, error enums.
+
+> **EVM shared base (Q1 Option A, Issue #416 Phase 0):** `eth-wallet-core` and `polygon-wallet-core` are thin re-export wrappers (`pub use evm_wallet_core::*;`). All signing/RPC/ABI code lives in `evm-wallet-core` (10 modules). Treat `evm-wallet-core` as the canonical EVM crate; `eth-wallet-core` / `polygon-wallet-core` are import-path shims for historical consumers.
 
 ## Version
 
-| Version label | Meaning (BTC) | Meaning (ETH) | Meaning (Polygon) | Meaning (TRON) |
-|---|---|---|---|---|
-| **V0.1** | `bitcoin-wallet-core` rlib + `btc` CLI | `eth-wallet-core` + `eth` CLI | `polygon-wallet-core` bin + `polygon` CLI | `tron-wallet-core` rlib + cdylib + `tron` CLI |
-| **V0.1.5** | mobile-compatible architecture milestone | (n/a) | (n/a) | mobile-compatible architecture + Stake 2.0 ships |
-| **V0.2** | advanced + operator features | advanced features | advanced features | advanced + operator + thread model |
-| **V0.3** | advanced + upstream changes | (n/a) | (n/a) | advanced + zk-SNARK + multisig |
+| Version label | Meaning (BTC) | Meaning (ETH) | Meaning (Polygon) | Meaning (TRON) | Meaning (SOL) |
+|---|---|---|---|---|---|
+| **V0.1** | `bitcoin-wallet-core` rlib + `btc` CLI | `eth-wallet-core` thin wrapper (delegates to `evm-wallet-core`) + `eth` CLI | `polygon-wallet-core` thin wrapper (delegates to `evm-wallet-core`) + `polygon` CLI | `tron-wallet-core` rlib + cdylib + `tron` CLI | `sol-wallet-core` rlib + cdylib + `sol` CLI |
+| **V0.1.5** | mobile-compatible architecture milestone | (n/a) | (n/a) | mobile-compatible architecture + Stake 2.0 ships | mobile-compatible architecture (post-Phase 8 release-mobile profile) |
+| **V0.2** | advanced + operator features | advanced features | advanced features | advanced + operator + thread model | advanced + Token-2022 disambig |
+| **V0.3** | advanced + upstream changes | (n/a) | (n/a) | advanced + zk-SNARK + multisig | (n/a) |
 
 ## Execution Contexts (cross-chain)
 
@@ -24,14 +26,20 @@
 
 ## Platform Abstraction Layer (PAL) — 4 traits
 
-All chain-specific wallet-core crates implement these 4 traits for cross-platform compilation:
+The 4 PAL traits are defined per chain crate. **Status as of 2026-09-17: NOT yet uniform across chains.**
 
-| Trait | Purpose | Desktop impl | iOS impl | Android impl |
+| Trait | Defined in | Desktop impl | iOS impl | Android impl |
 |---|---|---|---|---|
-| `WalletStorage` | Wallet file persistence | `FileWalletStorage` (atomic write + 0600 perms) | iOS Keychain via Security.framework | Android EncryptedSharedPreferences |
-| `PlatformInfo` | Device/OS metadata | `/etc/os-release` etc. | iOS `UIDevice` via FFI | Android `Build` via FFI |
-| `NetworkClient` | HTTP transport | `reqwest` + `rustls-native-certs` | `reqwest` + `tls_built_in_root_certs(true)` | `reqwest` + `tls_built_in_root_certs(true)` |
-| `Clock` | Time source | `std::time::SystemTime` | monotonic clock | monotonic clock |
+| `WalletStorage` | `tron-wallet-core/src/platform`, `sol-wallet-core/src/platform` | `FileWalletStorage` (atomic write + 0600 perms) | iOS Keychain via Security.framework (not yet impl) | Android EncryptedSharedPreferences (not yet impl) |
+| `PlatformInfo` | `tron-wallet-core/src/platform`, `sol-wallet-core/src/platform` | `/etc/os-release` etc. | iOS `UIDevice` via FFI (not yet impl) | Android `Build` via FFI (not yet impl) |
+| `NetworkClient` | `tron-wallet-core/src/platform` | `reqwest` + `rustls-native-certs` | `reqwest` + `tls_built_in_root_certs(true)` (not yet impl) | `reqwest` + `tls_built_in_root_certs(true)` (not yet impl) |
+| `Clock` | `tron-wallet-core/src/platform` | `std::time::SystemTime` | monotonic clock (not yet impl) | monotonic clock (not yet impl) |
+
+**Gaps (as of 2026-09-17):**
+
+- `bitcoin-wallet-core` does NOT define any of the 4 PAL traits. Storage is via `directories` crate + ad-hoc file I/O.
+- `evm-wallet-core` does NOT define any of the 4 PAL traits. `WalletManager` directly persists via `directories` + `tempfile` (test fixture).
+- `chain-traits/src/lib.rs` defines only a single `ChainWallet` trait (with `chain_id`, `sync`, `next_receive_address`, `balance`) — not the 4 PAL traits. Commented-out `bitcoin-wallet-core` dep at `chain-traits/Cargo.toml:9` indicates the umbrella was deferred to a later phase.
 
 ## Security Primitives — cross-chain invariants
 
@@ -40,7 +48,7 @@ All chain-specific wallet-core crates implement these 4 traits for cross-platfor
 | **Argon2id** wallet-file KDF | ✓ | `argon2 = "0.5"` |
 | **AES-256-GCM** symmetric cipher | ✓ | `aes-gcm = "0.10"` |
 | **Zeroizing\<\_\>** wrap on raw sk | ✓ | `zeroize = "1.x"` |
-| **SPKI pin** RPC endpoint verifier | ✓ | `bitcoin-wallet-core::chain::spki::SpkiPinnedVerifier` (reusable) |
+| **SPKI pin** RPC endpoint verifier | ✓ | 3 parallel impls: `bitcoin-wallet-core::chain::spki`, `evm-wallet-core` (per `tests/spki_pin_localnet.rs`), `tron-wallet-core::chain::SpkiPinnedVerifier`. No shared crate yet. |
 | **Mnemonic at rest never plaintext** | ✓ | Argon2id + AES-GCM + Zeroizing |
 | **Stable exit codes (0/1/2/3/4/5)** | ✓ | `handlers::error::classify` |
 | **`--json` mode on list/show/sync/tx-list/config-show** | ✓ | `serde_json` + clap value-conditional |
@@ -75,7 +83,7 @@ SPKI pins are SHA-256 of SubjectPublicKeyInfo DER. Format: 64 hex chars.
 | `--dry-run` | Simulate without side effects | ✓ |
 | `--sign-only` | Sign but don't broadcast | partial |
 | `--wait` | Wait for confirmation | ✓ |
-| `--fee-limit <sun|wei|matic>` | Max fee | per-chain unit |
+| `--fee-limit <sun/wei/matic>` | Max fee | per-chain unit (see drift note below) |
 | `--mnemonic-file <path>` | Read mnemonic from file (not argv) | ✓ |
 
 ## Common Error Categories (cross-chain)
@@ -89,7 +97,7 @@ SPKI pins are SHA-256 of SubjectPublicKeyInfo DER. Format: 64 hex chars.
 | Signing error | 4 | Wrong password, invalid key |
 | Broadcast error | 5 | Tx REVERTED, node rejected |
 
-(Pattern from `btc/src/main.rs:151-169`.)
+(Pattern implemented in `sol/src/handlers/error.rs:27` `classify()` + `tron/src/handlers/mod.rs:75` `exit_code()`. `btc` deviates — uses bespoke logic that exits 2 only on `LibError::InvalidMnemonic` at `btc/src/main.rs:229`, no general classifier.)
 
 ## Address Encoding — per chain
 
@@ -127,13 +135,16 @@ These mistakes recur across chain research docs. Audit before each new chain add
 
 ## Third-Party SDK Vocabulary — anychain (TRON)
 
-The TRON stack is built on the `0xcregis/anychain` crate family, pulled **direct
-from crates.io at exact versions** (`=X.Y.Z`, never `^`). Vendoring into
-`rust-wallet-app/crates/anychain-vendored/` was considered and **rejected
-2026-09-05** — operational overhead exceeded the benefit at v0.1 scope. The
-bus-factor risk is accepted and mitigated by the exact pin plus regression tests
-that assert known-buggy behaviour (dual-SHA256 txid, `Zeroizing` gap), so a
-silent upstream "fix" fails CI instead of changing signatures unnoticed.
+The TRON stack is built on the `0xcregis/anychain` crate family. **Vendoring was reconsidered and adopted 2026-09-06** (one day after initial rejection) under `rust-wallet-app/crates/anychain-vendored/`, pinned to commit `cf3aa2d59afb2c50dc961919fca011c401238ed6` (subject `build: rustup toolchain update to 1.98.0`, date 2026-09-04). Workspace `Cargo.toml:30-36` uses path deps exclusively so consumer builds never see `crates.io/index` for these names.
+
+**Pin deviation from plan:** Plan reference cites upstream tag `v0.2.14` for `anychain-tron`. Tag does not exist on upstream — `git ls-remote` returned only `0.0.2` and `0.1.5` as of 2026-09-06. Pinned to commit SHA instead. Plan amendment deferred (post-Phase 0).
+
+**Local patches** layered per plan Task 0.7:
+
+1. **Q13 varint fix** — `src/protocol/Tron.rs::Raw::write_to_with_cached_sizes` patched to emit canonical varint for `fee_limit` (strip spurious `0x01` prefix). Issue #540.
+2. **Q2 dual-SHA256 txid fix** — `src/transaction.rs::TronTransaction::to_transaction_id` replaces single `sha256(raw_bytes)` with `sha256(sha256(raw_bytes))`. Issue #399 historical bug.
+
+Bus-factor risk (single author, 3 commits trailing 12 months) accepted and mitigated by exact pin + regression tests that assert known-buggy behaviour, so a silent upstream "fix" fails CI instead of changing signatures unnoticed. Quarterly sync cadence per plan Q3.
 
 | Term | Meaning |
 |---|---|
@@ -152,5 +163,8 @@ the anychain gap).
 - `docs/wallets/2026-08-23-ethereum-rust-sdks-deep-dive.md` — ETH precedent
 - `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md` — TRON primary
 - `docs/wallets/2026-09-05-adr-0001-tron-sdk-anychain-vs-raw-primitives.md` — TRON ADR
-- `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/spki.rs` — SPKI pin verifier (cross-chain reference impl)
-- `btc/src/main.rs:151-169` — exit code pattern
+- `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/spki.rs` — SPKI pin verifier (BTC impl; TRON + EVM have parallel impls, see security-primitive table above)
+- `rust-wallet-app/crates/sol/src/handlers/error.rs:27` — exit code classifier (`fn classify`)
+- `rust-wallet-app/crates/tron/src/handlers/mod.rs:75` — exit code helper (`fn exit_code`)
+- `rust-wallet-app/Cargo.toml:240-247` — `release-mobile` profile (mobile cross-compilation, undocumented elsewhere)
+- `rust-wallet-app/crates/anychain-vendored/*/SOURCE.md` — vendored commit SHA + patch log per crate
