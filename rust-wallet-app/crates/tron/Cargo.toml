@@ -37,4 +37,98 @@ zeroize = { workspace = true }
 rpassword = { workspace = true }
 
 [dev-dependencies]
+# CLI test harness — spawns the shipped `tron` binary and asserts on output.
+assert_cmd = "2"
+predicates = "3"
+# JSON parsing for CLI stdout (TRC-20 matrix rows parse `{balance, txid, ...}`).
+serde_json = { workspace = true }
+# `serde` derive for the nile.json registry deserialization helpers in
+# `tests/cli_coverage.rs`. Already transitively available via serde_json
+# at runtime, but the derive macro needs the direct dep in scope.
+serde = { workspace = true }
+# HTTP client used by trc20_local/nile rows that hit TronBox / Nile directly
+# (CLI also drives those, but a few assertions cross-check the same endpoint
+# to catch CLI/server divergence).
+reqwest = { workspace = true, features = ["blocking"] }
+# Local TRON devnet via testcontainers + tronbox/tre for `RUN_TRON_LOCAL=1`
+# rows in `trc20_local`.
+testcontainers = "0.23"
+# Per-test isolated `XDG_CONFIG_HOME` for wallet + config tests.
+# Each test gets a tempfile::TempDir so the operator's real config is never modified.
 tempfile = "3"
+# Offline helper crates used by CLI-driven test bodies.
+hex = { workspace = true }
+bs58 = { workspace = true }
+sha2 = { workspace = true }
+# SPKI pin derivation from a live TLS handshake.
+x509-parser = { workspace = true }
+# `tests/common/mod.rs::nile_sender_keypair()` returns a `Zeroizing<[u8; 32]>`.
+# Helper return type must be visible at compile time even if test bodies never call it.
+zeroize = { workspace = true }
+
+# Per-test target pins — matches the spike Cargo.toml layout. v11 is gated
+# (test = false) because it requires `RUN_TRON_MAINNET=1` + a funded operator
+# wallet; default `cargo test` only exercises v11's pre-check audit hook via
+# `v11_pre_check_blocks_non_self_recipient`, which is inside v11's file but
+# not the `v11_mainnet_self_send` test target.
+
+[[test]]
+name = "v1_compile"
+path = "tests/v1_compile.rs"
+
+[[test]]
+name = "v2_protobuf_roundtrip"
+path = "tests/v2_protobuf_roundtrip.rs"
+
+[[test]]
+name = "v3_trc20_abi"
+path = "tests/v3_trc20_abi.rs"
+
+[[test]]
+name = "v4_base58check"
+path = "tests/v4_base58check.rs"
+
+[[test]]
+name = "v5_resource"
+path = "tests/v5_resource.rs"
+
+[[test]]
+name = "v6_nile"
+path = "tests/v6_nile.rs"
+
+[[test]]
+name = "v7_spki_pin"
+path = "tests/v7_spki_pin.rs"
+
+[[test]]
+name = "v8_sign_only"
+path = "tests/v8_sign_only.rs"
+
+[[test]]
+name = "v9_token_registry"
+path = "tests/v9_token_registry.rs"
+
+[[test]]
+name = "v10_slip44"
+path = "tests/v10_slip44.rs"
+
+# V11 mainnet self-send gate (BLOCKING for v0.1 release).
+# Operator-driven via RUN_TRON_MAINNET=1 + TRON_MAINNET_OPERATOR_WALLET.
+# `test = false` excludes it from `cargo test` / `cargo nextest` unless
+# explicitly forced via `--test v11_mainnet_self_send`.
+[[test]]
+name = "v11_mainnet_self_send"
+path = "tests/v11_mainnet_self_send.rs"
+test = false
+
+[[test]]
+name = "trc20_local"
+path = "tests/trc20_local.rs"
+
+[[test]]
+name = "trc20_nile"
+path = "tests/trc20_nile.rs"
+
+[[test]]
+name = "cli_coverage"
+path = "tests/cli_coverage.rs"

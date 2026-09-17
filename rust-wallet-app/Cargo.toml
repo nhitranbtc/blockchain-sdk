@@ -16,7 +16,6 @@ members = [
     "crates/anychain-vendored/anychain-core",
     "crates/anychain-vendored/anychain-tron",
     "crates/anychain-vendored/anychain-kms",
-    "spikes/tron-v1",
     "spikes/polygon-v1",
 ]
 

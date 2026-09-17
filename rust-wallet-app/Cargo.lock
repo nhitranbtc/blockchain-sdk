@@ -8588,34 +8588,21 @@ dependencies = [
 name = "tron"
 version = "0.1.0"
 dependencies = [
+ "assert_cmd",
+ "bs58 0.5.1",
  "clap",
  "directories",
  "ethereum-types",
- "rpassword",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tron-wallet-core",
- "zeroize",
-]
-
-[[package]]
-name = "tron-v1-spike"
-version = "0.0.0"
-dependencies = [
- "assert_cmd",
- "bs58 0.5.1",
  "hex",
  "predicates",
  "reqwest 0.12.28",
+ "rpassword",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "testcontainers",
  "tokio",
- "tron",
  "tron-wallet-core",
  "x509-parser",
  "zeroize",
