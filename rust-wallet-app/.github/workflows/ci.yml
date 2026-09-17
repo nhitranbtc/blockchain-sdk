@@ -47,6 +47,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install rust-toolchain
         run: rustup show
+      - name: Install Foundry (anvil)
+        # `polygon_wallet_scenario.rs` (Issue #438, always-on per L13)
+        # spawns Anvil in-process via `alloy-node-bindings`. The sister
+        # `polygon-local-testnet-tests` job in
+        # `.github/workflows/evm-polygon-ci.yml` installs Foundry for the
+        # same reason — mirror here so `cargo test --workspace` keeps
+        # gating the Anvil leg. Foundry step is ~30 s on cold cache.
+        uses: foundry-rs/foundry-toolchain@v1
       - name: cargo test
         # Live testnet test stays #[ignore] per L29; operator-driven, not CI
         run: cargo test --workspace
