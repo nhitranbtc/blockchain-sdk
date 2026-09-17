@@ -46,7 +46,7 @@ jobs:
   # with `--include-ignored` against public TronGrid (Nile + Mainnet).
   # Always fires on push + PR to `rust-tron-core`. rust-test matrix
   # runs in parallel and owns the non-`#[ignore]` coverage for the
-  # other crates (tron-v1-spike) AND for tron-wallet-core non-`#[ignore]`
+  # other crates (tron CLI integration tests) AND for tron-wallet-core non-`#[ignore]`
   # when the live env vars are NOT set. When RUN_TRON_* = 1 here,
   # operator-smoke is the only path that exercises the live Nile +
   # mainnet RPC round-trips — so we keep the full set here to avoid
@@ -188,36 +188,36 @@ jobs:
           workspaces: rust-wallet-app -> target
       - name: cargo build (workspace)
         # Workspace build before `cargo test` so the `tron` binary lands in
-        # `target/debug/` and cargo sets `CARGO_BIN_EXE_tron` in the spike
-        # test process. Without this pre-build, `cargo test -p tron-v1-spike
-        # --tests` can skip building the `tron` bin (it's a workspace
-        # member, but not pulled into the spike test's transitive closure
-        # unless explicitly built first), and every test calling
-        # `assert_cmd::cargo_bin!("tron")` panics with
-        # `CARGO_BIN_EXE_tron is unset`. Reproduced locally with
-        # `cargo clean -p tron && cargo test -p tron-v1-spike --test
-        # cli_coverage` — same failure as run 34214814671. The other
-        # jobs (`rust-test`, `rust-test-operator-smoke`) already have this
-        # pre-build; this one inherited the layout pre-Phase-7 spike and
-        # never gained it. Fixed.
+        # `target/debug/` and cargo sets `CARGO_BIN_EXE_tron` in the test
+        # process. Without this pre-build, `cargo test -p tron --tests`
+        # can skip the CLI binary (it's a workspace member but tests use
+        # `assert_cmd::cargo_bin!("tron")` which needs the env var set),
+        # and every CLI-spawning test panics with `CARGO_BIN_EXE_tron is
+        # unset`. Same root cause as the prior spike-era bug; the move
+        # from `spikes/tron-v1` (workspace member at the time) to the
+        # `tron` crate didn't change
+        # the requirement. The other jobs (`rust-test`,
+        # `rust-test-operator-smoke`) already have this pre-build.
         working-directory: rust-wallet-app
         run: cargo build --workspace
-      - name: cargo test (local spike — TronBox Docker + #[ignore])
+      - name: cargo test (tron CLI integration tests + #[ignore])
         # RUN_TRON_LOCAL=1 flips the gated container tests in
-        # `spikes/tron-v1/tests/trc20_local.rs` from skip-and-return
-        # to actual Docker round-trip. `--tests` (plural) builds and runs
-        # every integration test binary in `tron-v1-spike` — fixes the
-        # prior incomplete `--test` (cargo's singular flag expects a
-        # binary name; bare `--test` was a no-op error). `--include-ignored`
-        # catches any `#[ignore]`-marked cases (none today, but forward-
-        # compatible for any future container-bound slow tests).
-        # `--nocapture` surfaces the operator runbook output in CI logs.
+        # `crates/tron/tests/trc20_local.rs` from skip-and-return to
+        # actual Docker round-trip. `--tests` (plural) builds and runs
+        # every integration test binary in `tron` — these are the spike
+        # tests consolidated into the CLI crate by `chore(tron):
+        # consolidate spike test deps into tron crate` (the test files
+        # themselves were moved separately; this job targets them at
+        # their new home). `--include-ignored` catches any `#[ignore]`-
+        # marked cases (none today, but forward-compatible for any
+        # future container-bound slow tests). `--nocapture` surfaces the
+        # operator runbook output in CI logs.
         working-directory: rust-wallet-app
         env:
           RUN_TRON_LOCAL: "1"
           RUN_TRON_NILE: "1"
         run: |
-          cargo test -p tron-v1-spike --tests -- \
+          cargo test -p tron --tests -- \
             --include-ignored --nocapture
   # Mobile compile-only gate per the deep-dive "Mobile build gate (CI)".
   # `tron-wallet-core` MUST compile for iOS + Android arm64 with no source
