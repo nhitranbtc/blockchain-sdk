@@ -77,6 +77,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2  # v2
         with:
           workspaces: rust-wallet-app -> target
+      - name: Install Foundry (anvil)
+        # `crates/polygon/tests/polygon_wallet_scenario.rs` (Issue #438,
+        # always-on per L13) spawns Anvil in-process via
+        # `alloy-node-bindings::Anvil::new().chain_id(80_002).spawn()`.
+        # Sister `polygon-local-testnet-tests` in `evm-polygon-ci.yml`
+        # installs Foundry for the same reason — mirror here so
+        # `cargo test --workspace` gates the Anvil leg. ~30 s cold cache.
+        uses: foundry-rs/foundry-toolchain@v1
       - name: cargo build
         working-directory: rust-wallet-app
         run: cargo build --workspace
