@@ -18,8 +18,7 @@ use sol_wallet_core::chain::{
     get_account_info, get_balance, get_epoch_info, get_health, get_latest_blockhash,
     get_minimum_balance_for_rent_exemption, get_multiple_accounts, get_recent_prioritization_fees,
     get_signature_status, get_token_account_balance, get_token_accounts_by_owner, get_token_supply,
-    get_transaction, get_version, request_airdrop, ConfirmationStatus, TransactionResponse,
-    TransactionStatus,
+    get_transaction, get_version, ConfirmationStatus, TransactionResponse, TransactionStatus,
 };
 use sol_wallet_core::disambig::TokenProgram;
 use sol_wallet_core::error::Error;
@@ -651,76 +650,6 @@ async fn wait_for_confirm_returns_confirm_pending_at_half_timeout() {
     assert!(
         elapsed < Duration::from_millis(1500),
         "should fire at ~1s, was {elapsed:?}"
-    );
-}
-
-// =============================================================================
-// Task 5.2 — request_airdrop with devnet host allowlist (Tier 3 finding #6)
-// =============================================================================
-
-#[tokio::test]
-#[serial]
-async fn request_airdrop_rejects_mainnet_host() {
-    // Q8 grilled decision: requestAirdrop is a CLUSTER-LEVEL restriction
-    // (mainnet rejects it). The RpcClient doesn't carry a mode flag —
-    // the method enforces its own host policy.
-    let rpc = RpcClient::new("https://api.mainnet-beta.solana.com").unwrap();
-    let err = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
-        .await
-        .unwrap_err();
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("mainnet-beta.solana.com"),
-        "error should mention offending host, got: {msg}"
-    );
-    assert!(
-        msg.contains("devnet allowlist"),
-        "error should mention devnet allowlist, got: {msg}"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn request_airdrop_rejects_unknown_host() {
-    let rpc = RpcClient::new("https://attacker.com").unwrap();
-    let err = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
-        .await
-        .unwrap_err();
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("attacker.com"),
-        "error should mention offending host, got: {msg}"
-    );
-}
-
-#[tokio::test]
-#[serial]
-async fn request_airdrop_accepts_localhost() {
-    let rpc = mock_rpc_with_body(serde_json::json!({
-        "jsonrpc": "2.0", "id": 1,
-        "result": "5".to_string() + &"1".repeat(86)
-    }))
-    .await;
-    let sig = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
-        .await
-        .unwrap();
-    assert!(sig.to_string().len() >= 87);
-}
-
-#[tokio::test]
-#[serial]
-async fn request_airdrop_rejects_non_string_result() {
-    let rpc = mock_rpc_with_body(serde_json::json!({
-        "jsonrpc": "2.0", "id": 1, "result": 42
-    }))
-    .await;
-    let err = request_airdrop(&rpc, &Pubkey::new_unique(), 1_000_000_000)
-        .await
-        .unwrap_err();
-    let msg = format!("{err:?}");
-    assert!(
-        msg.contains("not a string"),
-        "error should mention type mismatch, got: {msg}"
     );
 }
 

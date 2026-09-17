@@ -1,8 +1,16 @@
 //! Test-only airdrop helper against a surfpool RPC endpoint.
+//!
+//! Bypasses the deleted `chain::account::request_airdrop` wrapper and
+//! posts the JSON-RPC `requestAirdrop` method directly. Intended for
+//! local surfpool validators only — caller MUST pin `rpc_url` to a
+//! localhost endpoint; the devnet allowlist guard from the old wrapper
+//! is intentionally not enforced here (this helper is test-only and
+//! surfpool rejects mainnet traffic at the transport level).
 
 use std::time::{Duration, Instant};
 
-use sol_wallet_core::chain::{account::request_airdrop, client::RpcClient};
+use serde_json::{json, Value};
+use sol_wallet_core::chain::client::RpcClient;
 use solana_sdk::{pubkey::Pubkey, signature::Signature};
 
 const AIRDROP_DEADLINE: Duration = Duration::from_secs(15);
@@ -20,7 +28,7 @@ impl std::fmt::Display for FaucetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Client(e) => write!(f, "RpcClient::new failed: {e}"),
-            Self::Airdrop(e) => write!(f, "request_airdrop failed: {e}"),
+            Self::Airdrop(e) => write!(f, "requestAirdrop RPC failed: {e}"),
             Self::Timeout => write!(f, "airdrop did not settle within {AIRDROP_DEADLINE:?}"),
         }
     }
@@ -37,7 +45,7 @@ pub async fn airdrop_to_keypair(
     let rpc = RpcClient::new(rpc_url).map_err(|e| FaucetError::Client(e.to_string()))?;
     let deadline = Instant::now() + AIRDROP_DEADLINE;
     loop {
-        match request_airdrop(&rpc, recipient, lamports).await {
+        match raw_request_airdrop(&rpc, recipient, lamports).await {
             Ok(sig) => return Ok(sig),
             Err(e) if Instant::now() >= deadline => {
                 return Err(FaucetError::Airdrop(format!("{e} (deadline elapsed)")));
@@ -47,6 +55,26 @@ pub async fn airdrop_to_keypair(
             }
         }
     }
+}
+
+/// Post `requestAirdrop` JSON-RPC directly. Replaces the deleted
+/// `chain::account::request_airdrop` wrapper; localhost-only by
+/// convention (see module docs).
+async fn raw_request_airdrop(
+    rpc: &RpcClient,
+    recipient: &Pubkey,
+    lamports: u64,
+) -> Result<Signature, String> {
+    let raw: Value = rpc
+        .post("requestAirdrop", json!([recipient.to_string(), lamports]))
+        .await
+        .map_err(|e| e.to_string())?;
+    let sig_str = raw
+        .as_str()
+        .ok_or_else(|| "requestAirdrop: result not a string".to_string())?;
+    sig_str
+        .parse::<Signature>()
+        .map_err(|e| format!("requestAirdrop: parse Signature: {e}"))
 }
 
 /// Credit `lamports` and wait for the recipient balance to reflect the credit.

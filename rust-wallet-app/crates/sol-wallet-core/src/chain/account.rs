@@ -593,55 +593,7 @@ pub fn map_client_error<E: std::fmt::Display>(_err: E) -> Error {
 }
 
 // =============================================================================
-// 16 — requestAirdrop (Task 5.2 — devnet-only helper)
-// =============================================================================
-//
-// Hosts permitted to receive airdrops. Mainnet rejects `requestAirdrop`;
-// this is a CLUSTER-level restriction (Tier 3 finding #6).
-//
-// Per grilled decision Q8: PER-METHOD host check (not a RpcClient mode
-// flag). `request_airdrop` checks `rpc.host()` against this allowlist;
-// `send` / `sendTransaction` work on any host (mainnet, devnet, testnet,
-// local).
-/// Hosts where `requestAirdrop` is permitted (devnet/testnet + local
-/// devnet). Mainnet rejects airdrops; calling it accidentally is a
-/// loss-of-funds + DoS vector — enforced per-method by
-/// [`request_airdrop`].
-pub const DEVNET_HOST_ALLOWLIST: &[&str] = &[
-    "api.devnet.solana.com",
-    "api.testnet.solana.com",
-    "localhost",
-    "127.0.0.1",
-];
-
-/// Devnet-only airdrop helper. Refuses mainnet / unknown hosts (Tier 3
-/// finding #6 — mainnet rejects airdrops; calling it accidentally is a
-/// loss-of-funds + DoS vector).
-///
-/// Returns the airdrop transaction signature on success. The actual
-/// SOL appears after a few seconds (Anza convention) — callers should
-/// `wait_for_confirm` if they need to know landing time.
-pub async fn request_airdrop(rpc: &RpcClient, pubkey: &Pubkey, lamports: u64) -> Result<Signature> {
-    let host = rpc.host();
-    if !DEVNET_HOST_ALLOWLIST.contains(&host) {
-        return Err(Error::Transport(format!(
-            "requestAirdrop: host '{host}' not in devnet allowlist (mainnet rejects airdrop); allowed: {}",
-            DEVNET_HOST_ALLOWLIST.join(", ")
-        )));
-    }
-    let raw: Value = rpc
-        .post("requestAirdrop", json!([pubkey.to_string(), lamports]))
-        .await?;
-    let sig_str = raw
-        .as_str()
-        .ok_or_else(|| Error::Transport("requestAirdrop: result not a string".to_string()))?;
-    sig_str
-        .parse::<Signature>()
-        .map_err(|e| Error::Transport(format!("requestAirdrop: parse Signature: {e}")))
-}
-
-// =============================================================================
-// 17 — getTransaction (Task 5.3 — full log decode for `sol tx`)
+// 16 — getTransaction (Task 5.3 — full log decode for `sol tx`)
 // =============================================================================
 
 /// Local minimal wire struct for `getTransaction` response (Task 5.3).
