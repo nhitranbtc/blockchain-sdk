@@ -56,7 +56,15 @@ jobs:
   rust-test:
     name: Rust test
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Bumped 40 → 60 min after run 35205307869 timed out: `cargo test
+    # --workspace` now builds `crates/tron/`'s 14 newly-consolidated
+    # `[[test]]` binaries + their dev-deps (assert_cmd, testcontainers,
+    # reqwest-blocking, …) before any test actually runs. The build
+    # closure alone pushes the wall clock past 40 min — `Rust test` on
+    # `f56d5690` cancelled at 40m 18s without completing. Geiger took
+    # 18m 13s on the same commit (now 30-min timeout); this job has
+    # more parallel test binaries to walk, so 60 min.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4  # v4
         with:
