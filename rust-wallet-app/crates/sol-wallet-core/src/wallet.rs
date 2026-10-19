@@ -164,20 +164,36 @@ impl Wallet {
     /// `Error::InvalidBase58Secret(actual_len)` so callers see the
     /// concrete length instead of an opaque `SignatureError`.
     pub fn from_base58(secret: &str) -> Result<Self> {
-        let decoded_len_hint = bs58::decode(secret)
+        // Validate base58 alphabet and length via `bs58::decode(...)?`.
+        // The Ok value is discarded (re-decoded inside the `debug_assert!`
+        // below and inside `Keypair::from_base58_string`), but the `?`
+        // propagates the decode error so callers still see
+        // `InvalidBase58Secret` on bad input.
+        let _ = bs58::decode(secret)
             .into_vec()
             .map(|v| v.len())
             .map_err(|_| Error::InvalidBase58Secret {
                 got: secret.len(),
                 expected: 64,
             })?;
-        let keypair =
-            solana_sdk::signature::Keypair::try_from_base58_string(secret).map_err(|_| {
-                Error::InvalidBase58Secret {
-                    got: decoded_len_hint,
-                    expected: 64,
-                }
-            })?;
+        // Use `from_base58_string` (solana-keypair 3.0.0 API) for
+        // compatibility: `try_from_base58_string` (added in 3.1.0) calls
+        // `SignatureError::from_source` with `five8::DecodeError`, whose
+        // `core::error::Error` impl does not satisfy rustc's
+        // `std::error::Error` bound on stable Rust 1.98.1, breaking
+        // compilation of any crate that pulls solana-keypair 3.1.0+.
+        //
+        // `from_base58_string` is infallible — it PANICS on invalid base58
+        // chars. The `bs58::decode(...).into_vec()` above already validates
+        // the base58 alphabet (returning `Err(InvalidBase58Secret)` on
+        // failure), so a well-formed 64-byte secret cannot reach this
+        // point with invalid chars. The `debug_assert!` below guards the
+        // invariant for future refactors.
+        debug_assert!(
+            bs58::decode(secret).into_vec().map(|v| v.len()) == Ok(64),
+            "from_base58 invariant: 64-byte base58 pre-validated above"
+        );
+        let keypair = solana_sdk::signature::Keypair::from_base58_string(secret);
         Ok(Self(keypair))
     }
 
