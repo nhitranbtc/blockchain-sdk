@@ -1,0 +1,11 @@
+[package]
+name = "wallet-errors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Intentionally empty. The category enum and the exit-code table are the
+# whole crate; a dependency here would put a supply-chain surface into the
+# one crate every CLI depends on.
