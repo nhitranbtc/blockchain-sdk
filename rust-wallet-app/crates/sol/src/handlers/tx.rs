@@ -30,9 +30,9 @@ async fn get_tx(ctx: &AppContext, sig_str: &str, json: bool) -> Result<()> {
         // Chain-preservation rewrite (sister to `wait_tx` lines 67-70):
         // plain `anyhow!("…: {e}")` interpolates the Display string and drops
         // the typed `sol_wallet_core::Error` from `chain()`. `handlers/error.rs`
-        // ::classify()` walks the chain to map e.g. `Error::Transport` → exit 3;
-        // without `.context(e)` the audit gate `classify_exit_code_3_*` falls
-        // through to the anyhow-fallback exit 1.
+        // ::classify()` walks the chain to map e.g. `Error::Transport` → exit 2
+        // (Network); without `.context(e)` the audit gate
+        // `classify_exit_code_2_*` falls through to the anyhow-fallback exit 1.
         .map_err(|e| anyhow::Error::new(e).context("RpcClient::new"))?;
     let response = get_transaction(&rpc, &sig)
         .await
@@ -97,16 +97,16 @@ async fn wait_tx(
             Err(e) => {
                 // Preserve the typed `sol_wallet_core::Error` in the chain so
                 // `handlers/error.rs::classify()` can map e.g. `Error::Transport`
-                // → exit 3. Plain `anyhow!("…: {e}")` interpolates the Display
-                // string and drops the Error from the cause chain (caught by
-                // the classify_exit_code_3 regression guard).
+                // → exit 2 (Network). Plain `anyhow!("…: {e}")` interpolates the
+                // Display string and drops the Error from the cause chain
+                // (caught by the classify_exit_code_2 regression guard).
                 return Err(anyhow::Error::new(e).context("get_signature_status"));
             }
         }
         tokio::time::sleep(poll_dur).await;
     }
     // Same chain-preservation rule: surface a typed `Error::ConfirmTimeout`
-    // so `classify()` maps to exit 3, not anyhow-fallback exit 1.
+    // so `classify()` maps to exit 2 (Network), not anyhow-fallback exit 1.
     Err(anyhow::Error::new(sol_wallet_core::Error::ConfirmTimeout {
         signature: sig_str.to_string(),
         waited_ms: timeout_secs * 1000,

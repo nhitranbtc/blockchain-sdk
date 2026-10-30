@@ -35,7 +35,7 @@ fn address_pubkey_requires_wallet_id() {
         .arg("pubkey")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -53,7 +53,7 @@ fn address_new_does_not_accept_inline_mnemonic_p7_16() {
         .arg("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -70,13 +70,14 @@ fn address_pubkey_does_not_accept_inline_mnemonic_p7_16() {
         .arg("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
 fn address_new_with_both_wallet_id_and_mnemonic_file_rejects() {
     // Handler guard (handlers/address.rs line ~52): specifying both modes is
-    // ambiguous → fail with handler message (NOT clap exit 2).
+    // ambiguous → fail with handler message (NOT a clap usage error, which
+    // now exits 1).
     let tmp = TempDir::new().expect("tempdir");
     sol_bin()
         .arg("--data-dir")

@@ -5,7 +5,12 @@
 //! pattern replaced.
 //!
 //! Per Phase 7 audit `P5-1` corrected mapping: `handlers::error::classify`
-//! uses deep-dive §L L2738–2744 + output-conventions L2843 (NOT §J L1825).
+//! maps `sol_wallet_core::Error` onto the shared `wallet_errors::ErrorCategory`
+//! set; the exit code comes from `wallet-errors`, the one exit-code table.
+//!
+//! A clap usage error is a `User` error (exit 1), not clap's own exit 2 — the
+//! shared table assigns 2 to `Network`, so a bad command line must not report
+//! as "network error, retry later". `--help` / `--version` keep exit 0.
 //!
 //! Per background security review (#1, #2, #4): SolanaConfig persisted
 //! rpc_url/cluster + spki_pin ARE read (background review #2 wire-up);
@@ -37,12 +42,28 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // A clap usage error is a user error (exit 1), not a network error
+            // (exit 2). `--help` and `--version` keep clap's exit 0.
+            let code = e.exit_code();
+            // clap writes `--help` / `--version` to stdout and a usage error
+            // to stderr. The write result is dropped: the process exits
+            // either way, and a failed write is not actionable.
+            let _ = e.print();
+            std::process::exit(if code == 0 {
+                0
+            } else {
+                wallet_errors::ErrorCategory::User.exit_code()
+            });
+        }
+    };
     let ctx = build_context(&cli).await?;
 
     // P5-3 fix: borrow &cli — `cli.into()` would consume `cli` before dispatch call.
     if let Err(e) = handlers::dispatch(&ctx, &cli).await {
-        let exit_code = handlers::error::classify(&e);
+        let exit_code = handlers::error::classify(&e).exit_code();
         // Background review #4 / P7-5: scrub Debug chain for secrets (mnemonic,
         // 64-byte base58 secret key, xprv prefix) before printing to STDERR.
         eprintln!("{}", scrub_error(&e));

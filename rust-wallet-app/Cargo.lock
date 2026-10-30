@@ -6204,6 +6204,7 @@ dependencies = [
  "bincode",
  "bs58 0.5.1",
  "clap",
+ "getrandom 0.2.15",
  "predicates",
  "serde",
  "serde_json",
@@ -6215,6 +6216,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wallet-errors",
  "zeroize",
 ]
 

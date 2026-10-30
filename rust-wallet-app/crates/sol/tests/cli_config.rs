@@ -33,7 +33,7 @@ fn config_set_rpc_requires_url() {
         .arg("set-rpc")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -46,5 +46,5 @@ fn config_set_cluster_requires_cluster_arg() {
         .arg("set-cluster")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }

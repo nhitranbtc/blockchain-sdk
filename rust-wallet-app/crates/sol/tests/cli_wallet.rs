@@ -114,7 +114,7 @@ fn wallet_import_inline_mnemonic_rejects_p7_1() {
         .arg("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -216,13 +216,14 @@ fn wallet_import_pk_file_mode_0644_refuses_p7_19() {
         .arg("--yes")
         .assert()
         .failure()
-        .code(4) // exit 4 per P5-1 corrected mapping (wallet/balance errors)
+        .code(1) // exit 1 — `InsecureSourceFile` is a User error under the shared table
         .stderr(predicates::str::contains("insecure source file"));
 }
 
 #[test]
 fn wallet_send_dry_run_and_sign_only_mutually_exclusive_p7_13() {
-    // P7-13: clap-level mutual exclusion — bare CLI must reject with exit 2.
+    // P7-13: clap-level mutual exclusion — bare CLI must reject with exit 1
+    // (a clap usage error is a `User` error).
     let tmp = TempDir::new().expect("tempdir");
     sol_bin()
         .arg("--data-dir")
@@ -237,7 +238,7 @@ fn wallet_send_dry_run_and_sign_only_mutually_exclusive_p7_13() {
         .arg("--sign-only")
         .assert()
         .failure()
-        .code(2); // clap-level reject — not a panic
+        .code(1); // clap-level reject — not a panic
 }
 
 #[test]
@@ -257,7 +258,7 @@ fn wallet_send_wait_and_wait_finalized_mutually_exclusive_p5_3() {
         .arg("--wait-finalized")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -275,7 +276,7 @@ fn tx_wait_timeout_above_600_rejects_p7_11() {
         .arg("999999999")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -292,7 +293,7 @@ fn tx_wait_timeout_zero_rejects_p7_11() {
         .arg("0")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -309,15 +310,17 @@ fn address_new_does_not_accept_inline_mnemonic_p7_16() {
         .arg("word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
 fn wallet_send_confirm_mainnet_bare_flag_rejects_p7_7() {
     // P7-7: `wallet send` to mainnet requires `--confirm-mainnet yes`
-    // (exact string match). Bare flag `--confirm-mainnet` (no arg) → exit 2.
-    // After PR #560 review fix: handler returns `Error::DerivationFailed`
-    // (exit 2 per P5-1 corrected mapping), not anyhow unclassified.
+    // (exact string match). Bare flag `--confirm-mainnet` (no arg) → "yes" via
+    // `default_missing_value`, so the command proceeds and is then rejected
+    // for the missing `--wallet-id`. That is a CLI-level input error, so the
+    // handler raises an anyhow error and `classify()` maps it to `User`
+    // → exit 1.
     let tmp = TempDir::new().expect("tempdir");
     sol_bin()
         .arg("--data-dir")
@@ -331,7 +334,56 @@ fn wallet_send_confirm_mainnet_bare_flag_rejects_p7_7() {
         .arg("--confirm-mainnet") // bare flag = "yes" via default_missing_value
         .assert()
         .failure()
-        .code(2);
+        .code(1);
+}
+
+#[test]
+fn wallet_send_mainnet_gate_rejects_non_yes_confirm_value_p7_7() {
+    // P7-7: on the mainnet cluster `--confirm-mainnet` must be exactly
+    // "yes". Any other value is a CLI-level input error → `User` → exit 1.
+    // The gate fires before any RPC call, so no cluster is needed.
+    let tmp = TempDir::new().expect("tempdir");
+    sol_bin()
+        .env_remove("SOL_CONFIRM_MAINNET")
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("--cluster")
+        .arg("mainnet-beta")
+        .arg("wallet")
+        .arg("send")
+        .arg("--confirm-mainnet")
+        .arg("maybe")
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "--confirm-mainnet must equal \"yes\"",
+        ));
+}
+
+#[test]
+fn wallet_send_mainnet_gate_requires_confirm_mainnet_p7_7() {
+    // P7-7: on the mainnet cluster, omitting `--confirm-mainnet` entirely is
+    // rejected the same way. Also fires before any RPC call.
+    //
+    // The stderr pin is what distinguishes this from the `--wallet-id
+    // required` check that follows it — both exit 1, but only the gate says
+    // so.
+    let tmp = TempDir::new().expect("tempdir");
+    sol_bin()
+        .env_remove("SOL_CONFIRM_MAINNET")
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("--cluster")
+        .arg("mainnet-beta")
+        .arg("wallet")
+        .arg("send")
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains(
+            "mainnet send requires --confirm-mainnet yes",
+        ));
 }
 
 #[test]

@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 sol-wallet-core = { workspace = true }
+wallet-errors    = { workspace = true }
 clap            = { workspace = true }
 tokio           = { workspace = true }
 anyhow          = { workspace = true }
@@ -31,3 +32,6 @@ zeroize         = { workspace = true }
 assert_cmd = "2"
 predicates = "3"
 tempfile   = { workspace = true }
+# Same pin `sol-wallet-core` uses — the `OsRngFailed` variant carries a
+# `getrandom::Error`, and the classifier table test needs to construct one.
+getrandom  = "=0.2.15"

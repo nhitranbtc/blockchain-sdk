@@ -26,6 +26,14 @@ This plan implements **Phase 1 only**. It does not implement Phase 2 (`wallet-fa
 
 - **The category set is exactly six** — `Success`, `User`, `Network`, `InsufficientFunds`, `Signing`, `Broadcast`. This is fixed to `docs/wallets/CONTEXT.md:91-98`. Do not add `Storage` or `Crypto`; the spec explicitly rejected an eight-category set because it would contradict the document this phase promotes to the tested spec.
 - **The exit-code table is exactly** `Success=0, User=1, Network=2, InsufficientFunds=3, Signing=4, Broadcast=5`.
+- **A clap usage error exits 1 (`User`), not 2.** Every CLI uses clap, and clap's default exit code for a usage error is 2 — which this table assigns to `Network`. Left alone, every CLI would report "network error, retry later" for a bad command line, and an automation rule keying on 2 could loop on a usage error. Each CLI therefore parses with `Cli::try_parse()`, prints clap's error, and exits `ErrorCategory::User.exit_code()` (1); `--help` and `--version` keep clap's exit 0.
+
+  Migrating a CLI's assertions to the new codes touches three distinct classes, and they need different handling — read all three:
+
+  1. **Assertions on a clap usage error** (the CLI rejected the arguments) become `.code(1)`.
+  2. **Assertions on a handler-level bad-input error** also move 2→1, because bad input is now `User` — but these were never clap assertions, so identify them by what they exercise, not by their old exit code.
+  3. **`assert_ne!(code, Some(2))` "lock-down" guards** — written to catch *clap* rejecting the arguments — become **vacuous**, not renumbered: a clap rejection now exits 1, so the guard can never fire. They also stop meaning what they said, because a genuine Network failure now exits 2. Rewrite them to assert clap's `Usage:` banner on stderr, the way `sol` does — **not** to `assert_ne!(code, Some(1))`, which would replace one dead guard with another, since a handler-level bad input also exits 1.
+  4. **Any other `assert_ne!(code, Some(N))` "lock-down" guard** keyed on an old code for a non-clap condition must be re-keyed on the **new** code for the condition it names, or dropped as redundant if the test's own final assertion already covers it. Leaving it in place leaves a guard that no longer detects what its message claims.
 - **`wallet-errors` has zero dependencies** — not even `thiserror`. This keeps `Cargo.lock` stable after Task 1 (no merge conflicts across the eight sub-task branches) and adds no supply-chain surface.
 - **No engine crate changes behaviour.** `bitcoin-wallet-core`, `evm-wallet-core`, `eth-wallet-core`, `polygon-wallet-core`, `tron-wallet-core` and `sol-wallet-core` are untouched except for the **deletion** of `evm_wallet_core::Error::exit_code()` in Task 4, which the spec sanctions ("Phase 1 deletes or delegates it"). Delegation is not an option: it would require an engine → `wallet-errors` edge, which the spec forbids ("no engine edge changes"), and a retained shim would be the *second competing table* that finding F5 is about.
 - **No engine gains a `wallet-errors` dependency.** The mapping lives in the CLI layer.
@@ -34,7 +42,8 @@ This plan implements **Phase 1 only**. It does not implement Phase 2 (`wallet-fa
 - **`cargo test -p <crate>` only** in the local verify gate. Never `--workspace` (L55: the workspace-wide run crosses the 300 s Bash timeout on `bitcoin-wallet-core`'s integration tests).
 - **Rust edition / toolchain:** workspace `edition = "2021"`, `rust-toolchain.toml` pins 1.98.1. Do not bump `rust-version` — the declared MSRV 1.85 is already unachievable because the vendored anychain stack needs 1.98.1; that is a separate, pre-existing issue.
 - **Error enums marked `#[non_exhaustive]`** (`bitcoin-wallet-core/src/error.rs:28`, `evm-wallet-core/src/error.rs:26`, `tron-wallet-core/src/error.rs:10`) force a wildcard arm in a downstream match. The wildcard maps to `ErrorCategory::Signing` in every case; every currently-existing variant is pinned by a table-driven test, and Task 8's CI job closes the loop on future variants. `sol_wallet_core::Error` is **not** `#[non_exhaustive]`, so the Solana classifier is exhaustive — a new Solana variant is a compile error until classified.
-- **L24 doc set travels with every sub-task PR** — a `CHANGELOG.md` `[Unreleased]` bullet (Keep a Changelog; `### Changed` with a `**BREAKING**:` prefix for the exit-code change) plus a User Stories row flip where a story completes.
+- **L24 doc set travels with every sub-task PR** — one `CHANGELOG.md` `[Unreleased]` bullet, with a `**BREAKING**:` prefix where the change is user-visible. The `[Unreleased]` section is a **flat, newest-first bullet list**: the new entry goes immediately after the `## [Unreleased]` heading, with the `[internal]` / `[user-facing]` tag carrying the classification. Do **not** add a `### Added` / `### Changed` heading — those belong to the *versioned* sections and are applied at release cut, and a heading here would reclassify every existing flat bullet. **No User Stories row is flipped in Phase 1** — there is no User Stories table inside `[Unreleased]` (the tables live under the released version sections), and no Phase-1 task completes a user story; these tasks change how errors are *reported*, not what the software can do.
+- **Every per-chain `CHANGELOG.md` bullet in this plan must be verified against that CLI's pre-migration classifier before it is used.** The bullet text in each task below is written by hand and has been wrong — the Solana bullet mis-stated two old→new arrows, and the TRON bullet mis-stated three. Read the CLI's old classifier out of git — e.g. `git show <task-base>:rust-wallet-app/crates/<cli>/src/handlers/error.rs` — and check every arrow in the bullet against it. A bullet that has not been checked is not ready to ship.
 - **Never auto-commit** (house rule). Every task ends at a PAUSE step; the commit happens only after the maintainer approves.
 - **L25 sub-task workflow** applies — eight sub-tasks, so a parent branch `task/<N>-wallet-errors` is the integration point; each sub-task branches from the parent, PRs to the parent, and merges in order with `--no-ff`.
 
@@ -189,6 +198,7 @@ This is a **breaking change to the CLI exit-code contract**, in every chain. It 
 | Condition | Old (varies by chain) | New (all chains) |
 |---|---|---|
 | success | 0 | 0 |
+| clap usage error (bad flag, missing argument) | 2 | 1 |
 | invalid input / bad mnemonic | 1 or 2 | 1 |
 | wallet not found | 4 or 1 | 1 |
 | empty passphrase | 2 | 1 |
@@ -474,7 +484,7 @@ Expected: fmt clean, clippy clean, 2 tests pass. (L55: `-p` only.)
 
 - [ ] **Step 7: L24 doc set**
 
-`CHANGELOG.md` `[Unreleased]` → `### Added`:
+`CHANGELOG.md` `[Unreleased]` — a flat bullet immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
 - **`[internal]`** `rust-wallet-app/crates/wallet-errors/` — new shared crate owning the cross-chain `ErrorCategory` enum and the single `ErrorCategory -> i32` exit-code table (`Success=0, User=1, Network=2, InsufficientFunds=3, Signing=4, Broadcast=5`). Zero dependencies. The table is asserted against `docs/wallets/CONTEXT.md` by `wallet-errors/tests/context_doc_parity.rs`. Refs the design spec `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1 and ADR 0003.
@@ -768,7 +778,7 @@ cargo test -p sol
 
 - [ ] **Step 7: L24 doc set**
 
-`CHANGELOG.md` `[Unreleased]` → `### Changed`:
+`CHANGELOG.md` `[Unreleased]` — a flat bullet immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
 - **`[user-facing]`** `rust-wallet-app/crates/sol/` — **BREAKING:** the `sol` CLI now uses the shared cross-chain exit-code table. Exit codes change: invalid input and missing wallet 2→1, transport/RPC/timeout 3→2, insufficient funds 3→3 (was reported as a transport error, now distinct), wallet errors 4→1, sign/persistence/config/internal 5→4, cluster rejection 3→5. Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
@@ -925,10 +935,10 @@ cargo test -p tron
 
 - [ ] **Step 7: L24 doc set**
 
-`CHANGELOG.md` `[Unreleased]` → `### Changed`:
+`CHANGELOG.md` `[Unreleased]` — a flat bullet immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/tron/` — **BREAKING:** the `tron` CLI now uses the shared cross-chain exit-code table. Exit codes change: operator input 2→1, wallet lookup 4→1, node unreachable 3→2, signing/encryption 5→4, declined confirmation 1→1 (unchanged). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/tron/` — **BREAKING:** the `tron` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; declined confirmation 1→1 (unchanged); bad mnemonic, address, config, SPKI pin and cross-network guard 2→1; wallet lookup 4→1; node unreachable 3→2; malformed node response 5→2; key derivation 2→4; signing and transaction construction 5→4; wrong passphrase and at-rest encryption failures 4→4 (unchanged). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 ```
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
@@ -1156,10 +1166,10 @@ cargo test -p eth -p eth-wallet-core
 
 - [ ] **Step 7: L24 doc set**
 
-`CHANGELOG.md` `[Unreleased]` → two bullets, one under `### Changed` and one under `### Removed`:
+`CHANGELOG.md` `[Unreleased]` — a flat bullet immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: invalid input 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, insufficient funds 4→3, wallet-corrupt/decryption 5→4, broadcast failure 5→5 (unchanged). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, insufficient funds 4→3, wallet-corrupt/decryption 5→4, broadcast failure 5→5 (unchanged). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 - **`[internal]`** `rust-wallet-app/crates/evm-wallet-core/` — **BREAKING:** removed `Error::exit_code()` (and the `eth-wallet-core` / `polygon-wallet-core` re-exports of it). The exit-code table now lives in the `wallet-errors` crate and the variant→category mapping lives in each CLI, so the engines gain no `wallet-errors` edge. Callers of `evm_wallet_core::Error::exit_code()` must call `wallet_errors::ErrorCategory::exit_code()` with the category their CLI derives.
 ```
 
@@ -1244,10 +1254,10 @@ cargo test -p polygon
 
 - [ ] **Step 7: L24 doc set**
 
-`CHANGELOG.md` `[Unreleased]` → `### Changed`:
+`CHANGELOG.md` `[Unreleased]` — a flat bullet immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/polygon/` — **BREAKING:** the `polygon` CLI now uses the shared cross-chain exit-code table instead of mapping every error to exit 1. Exit codes now distinguish invalid input (1), node unreachable (2), insufficient funds (3), signing/credential failure (4), and node rejection (5). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/polygon/` — **BREAKING:** the `polygon` CLI now uses the shared cross-chain exit-code table instead of mapping every error to exit 1. Exit codes now distinguish clap usage errors (bad flag, missing argument) 2→1; invalid input (1), node unreachable (2), insufficient funds (3), signing/credential failure (4), and node rejection (5). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 ```
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
@@ -1451,10 +1461,10 @@ cargo test -p btc
 
 - [ ] **Step 7: L24 doc set**
 
-`CHANGELOG.md` `[Unreleased]` → `### Changed`:
+`CHANGELOG.md` `[Unreleased]` — a flat bullet immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/btc/` — **BREAKING:** the `btc` CLI now uses the shared cross-chain exit-code table. Exit codes change: invalid mnemonic 2→1, backend unreachable 1→2, insufficient funds 1→3, signing/wallet-store failure 1→4. Note that `btc` reports "wallet not found" as exit 4, not 1, because `bitcoin-wallet-core`'s `WalletStore` variant deliberately collapses not-found with wrong-password and corrupt-blob to close the file-existence oracle. Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/btc/` — **BREAKING:** the `btc` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid mnemonic 2→1, backend unreachable 1→2, insufficient funds 1→3, signing/wallet-store failure 1→4. Note that `btc` reports "wallet not found" as exit 4, not 1, because `bitcoin-wallet-core`'s `WalletStore` variant deliberately collapses not-found with wrong-password and corrupt-blob to close the file-existence oracle. Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 ```
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
@@ -1693,7 +1703,7 @@ CI-only change — the Rust cargo gates are N/A (trivial tier for the Rust works
 
 - [ ] **Step 7: L24 doc set**
 
-`CHANGELOG.md` `[Unreleased]` → `### Added`:
+`CHANGELOG.md` `[Unreleased]` — a flat bullet immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
 - **`[internal]`** `.github/workflows/workspace.yml` — new `error-mapping-parity` CI job. Fails the build when a chain engine's error enum grows a variant that its CLI has not classified, and when the `eth` and `polygon` classifiers drift apart. Closes the silent-divergence path that finding F5 (four taxonomies that disagree) describes. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.

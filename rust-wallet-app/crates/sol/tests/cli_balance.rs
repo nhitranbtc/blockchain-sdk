@@ -20,7 +20,7 @@ fn balance_sol_requires_address() {
         .arg("sol")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn balance_spl_requires_address_and_token() {
         .arg("spl")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
