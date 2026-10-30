@@ -131,20 +131,23 @@ surfpool_row!(row_22_mainnet_smoke, "Mainnet smoke — deferred to Phase 9.1 per
 
 // ─── classify() exit-code audit gates (Plan 7.3 NEW Step 15) ─────────────
 //
-// Per `handlers/error.rs::classify()`:
-//   exit 3 = Transport | Rpc | InsufficientFunds | BroadcastFailed
-//          | ConfirmTimeout | ComputeBudgetExceeded | ConfirmPending
-//   exit 5 = OsRngFailed | FileIo | KdfFailed | CipherInit
-//          | RecordCorrupt | Unimplemented
+// Per `handlers/error.rs::classify()` — the variant→category mapping is
+// Solana's own; the category→exit-code table is the shared `wallet-errors` one:
+//   exit 1 = User           — FileIo | InvalidMnemonic | InvalidAddress | ...
+//   exit 2 = Network        — Transport | Rpc | ConfirmTimeout | ConfirmPending
+//   exit 3 = InsufficientFunds
+//   exit 4 = Signing        — OsRngFailed | KdfFailed | CipherInit | RecordCorrupt
+//                            | Unimplemented | ...
+//   exit 5 = Broadcast      — BroadcastFailed
 //
 // Both tests gated on `RUN_SOL_SURFPOOL=1` so `tx wait` has a reachable RPC
-// endpoint. The exit-5 path (`wallet send` without --dry-run/--sign-only)
-// returns Unimplemented before any RPC call; surfpool not strictly required
+// endpoint. The `FileIo` path (`wallet create` with an unreadable
+// `--mnemonic-file`) needs no RPC call at all; surfpool not strictly required
 // but kept co-located for regression-guard grouping.
 
 /// `tx wait` against a closed-port RPC must surface as `Error::Transport`
 /// (per `chain/client.rs:267` — all RpcClient POST failures wrap as
-/// `Error::Transport(...)`) → exit code 3.
+/// `Error::Transport(...)`) → exit code 2 (Network).
 ///
 /// We bind a `TcpListener` on `127.0.0.1:0` (OS-assigned port), capture the
 /// port, drop the listener, then point `--rpc` at it — guaranteed
@@ -153,12 +156,11 @@ surfpool_row!(row_22_mainnet_smoke, "Mainnet smoke — deferred to Phase 9.1 per
 ///
 /// The stderr substring assertion anchors on the exact
 /// `chain/client.rs:267` path (`"RPC POST getSignatureStatuses"`), so a
-/// regression to `Error::Rpc` / `Error::BroadcastFailed` (both also exit 3
-/// per `classify()`) would still pass the exit-code check but fail this
-/// specific-fragment pin.
+/// regression to `Error::Rpc` (also exit 2 per `classify()`) would still pass
+/// the exit-code check but fail this specific-fragment pin.
 #[test]
 #[ignore = "RUN_SOL_SURFPOOL=1 required for surfpool-audit co-location grouping (this test does not contact surfpool)."]
-fn classify_exit_code_3_tx_wait_transport_audit_p7_3() {
+fn classify_exit_code_2_tx_wait_transport_audit_p7_3() {
     // 87-char base58 placeholder signature — valid format, never confirms.
     let sig: String = "5".repeat(87);
     let closed_port = {
@@ -188,8 +190,8 @@ fn classify_exit_code_3_tx_wait_transport_audit_p7_3() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         got,
-        Some(3),
-        "expected exit 3 (Error::Transport per handlers/error.rs::classify); got {got:?}; stderr=\n{stderr}"
+        Some(2),
+        "expected exit 2 (Error::Transport per handlers/error.rs::classify); got {got:?}; stderr=\n{stderr}"
     );
     assert!(
         stderr.contains("RPC POST getSignatureStatuses"),
@@ -201,18 +203,19 @@ fn classify_exit_code_3_tx_wait_transport_audit_p7_3() {
 /// `wallet create --name x --mnemonic-file /no/such/path` with
 /// `SOL_WALLET_PASSWORD` set hits the `std::fs::read_to_string` →
 /// `Error::FileIo { path, source }` mapping in `wallet.rs:153-156` →
-/// exit code 5. Password env var is required by
+/// exit code 1 (User). Password env var is required by
 /// `read_password_from_cli_pub()` (`wallet.rs:695-701`) which fires
 /// BEFORE the FileIo mapping; without it the test would short-circuit
-/// to exit 1 (anyhow fallback).
+/// to the anyhow fallback — which is also exit 1 under the shared table.
 ///
-/// The stderr substring assertion anchors on the exact `FileIo` Display
-/// fragment (`"file I/O error"`) so a regression to one of the seven other
-/// exit-5 variants (`OsRngFailed`, `KdfFailed`, `CipherInit`, `RecordCorrupt`,
-/// `Unimplemented`, etc.) cannot silently pass this gate.
+/// The stderr substring assertion is therefore the load-bearing one here: it
+/// anchors on the exact `FileIo` Display fragment (`"file I/O error"`) so a
+/// regression to one of the exit-4 signing variants (`OsRngFailed`,
+/// `KdfFailed`, `CipherInit`, `RecordCorrupt`, `Unimplemented`, etc.), or to
+/// the anyhow fallback, cannot silently pass this gate.
 #[test]
 #[ignore = "RUN_SOL_SURFPOOL=1 required for surfpool-audit co-location grouping (this test does not contact surfpool)."]
-fn classify_exit_code_5_wallet_create_file_io_audit_p7_3() {
+fn classify_exit_code_1_wallet_create_file_io_audit_p7_3() {
     let mut cmd = sol_bin();
     cmd.env("RUN_SOL_SURFPOOL", "1")
         .env("SOL_WALLET_PASSWORD", "test-password-for-fileio-path-only")
@@ -231,8 +234,8 @@ fn classify_exit_code_5_wallet_create_file_io_audit_p7_3() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(
         got,
-        Some(5),
-        "expected exit 5 (Error::FileIo per handlers/error.rs::classify); got {got:?}; stderr=\n{stderr}"
+        Some(1),
+        "expected exit 1 (Error::FileIo per handlers/error.rs::classify); got {got:?}; stderr=\n{stderr}"
     );
     assert!(
         stderr.contains("file I/O error"),

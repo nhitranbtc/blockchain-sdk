@@ -121,7 +121,7 @@ fn spl_approve_missing_token_rejects() {
         .arg("100")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn spl_balance_missing_address_rejects() {
         .arg("USDC")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -155,5 +155,5 @@ fn spl_allowance_missing_delegate_rejects() {
         .arg("11111111111111111111111111111111")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }

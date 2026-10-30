@@ -11,7 +11,7 @@
 //!   - `rename`  — P7-10: validates name (1..=64 chars, no forbidden chars, no Windows-reserved)
 //!
 //! Phase 7.1c implements `send` (P7-2 + P7-7 + P7-13) + `send-speedup` (P7-2):
-//!   - `send` validates flags + P7-7 mainnet confirmation gate (exit 2 if missing),
+//!   - `send` validates flags + P7-7 mainnet confirmation gate (exit 1 if missing),
 //!     resolves keypair via WalletManager::unlock → OwnedLock<Zeroizing<Keypair>>,
 //!     builds signed tx. Actual RPC broadcast pending Phase 7.2 surfpool integration.
 //!   - `send-speedup` re-signs the same transfer with higher priority fee (P7-2:
@@ -391,33 +391,33 @@ async fn send(
 ) -> Result<()> {
     // P7-7: mainnet confirmation gate. Bare flag `--confirm-mainnet` becomes
     // `Some("yes")` via clap `default_missing_value`; explicit non-yes values
-    // or missing flag on mainnet → reject. CRITICAL fix (PR #560 review):
-    // use typed `DerivationFailed` (exit 2) instead of `anyhow!` (exit 1).
+    // or missing flag on mainnet → reject.
+    //
+    // These are CLI-level *input* errors, so they raise an `anyhow` error and
+    // `classify()` maps them to `User` (exit 1). The typed
+    // `Error::DerivationFailed` variant is reserved for a genuine derivation
+    // failure (unusable seed bytes) and classifies as `Signing` (exit 4).
     if matches!(ctx.cluster, crate::cli::Cluster::MainnetBeta) {
         match confirm_mainnet {
             Some("yes") => {} // approved
             Some(s) => {
-                return Err(Error::DerivationFailed(format!(
+                return Err(anyhow!(
                     "--confirm-mainnet must equal \"yes\" (got \"{s}\")"
-                ))
-                .into());
+                ));
             }
             None => {
-                return Err(Error::DerivationFailed(
+                return Err(anyhow!(
                     "mainnet send requires --confirm-mainnet yes (or SOL_CONFIRM_MAINNET=yes)"
-                        .to_string(),
-                )
-                .into());
+                ));
             }
         }
     }
 
-    // CRITICAL fix (PR #560 review): use typed errors (exit 2) instead of
-    // anyhow! (exit 1) so the P5-1 corrected mapping lights up for input errors.
-    let wallet_id_str = wallet_id
-        .ok_or_else(|| Error::DerivationFailed("--wallet-id required for send".to_string()))?;
-    let amount_str =
-        amount.ok_or_else(|| Error::DerivationFailed("--amount required".to_string()))?;
+    // CLI-level input errors → `User` (exit 1) via the `anyhow` fallback; a
+    // typed `Error::DerivationFailed` would classify as `Signing` (exit 4),
+    // which is wrong for a missing or malformed flag.
+    let wallet_id_str = wallet_id.ok_or_else(|| anyhow!("--wallet-id required for send"))?;
+    let amount_str = amount.ok_or_else(|| anyhow!("--amount required"))?;
 
     // P7-2: resolve keypair via OwnedLock<Zeroizing<Keypair>>. The OwnedLock
     // zeroizes the secret bytes on Drop (RAII); scoped binding handles it.
@@ -438,17 +438,13 @@ async fn send(
             .list()?
             .into_iter()
             .find(|w| w.name == name)
-            .ok_or_else(|| {
-                Error::DerivationFailed(format!(
-                    "--to-wallet '{name}' not found in local wallet store"
-                ))
-            })?;
+            .ok_or_else(|| anyhow!("--to-wallet '{name}' not found in local wallet store"))?;
         summary.pubkey
     } else if let Some(addr) = to {
         addr.parse()
             .map_err(|e| anyhow!("invalid --to base58 pubkey: {e}"))?
     } else {
-        return Err(Error::DerivationFailed("--to or --to-wallet required".to_string()).into());
+        return Err(anyhow!("--to or --to-wallet required"));
     };
     let _ = to; // suppress unused warning (consumed in branch above)
 

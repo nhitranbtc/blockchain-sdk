@@ -6,8 +6,10 @@
 //! tests are the gate that catches regressions in the boundary. Surfpool-gated
 //! poll-for-confirm e2e lives in `cli_integration_surfpool.rs`.
 
+use std::net::TcpListener;
+
 use assert_cmd::Command;
-use predicates::prelude::predicate;
+use predicates::prelude::{predicate, PredicateBooleanExt};
 use predicates::str::contains;
 use tempfile::TempDir;
 
@@ -15,9 +17,12 @@ fn sol_bin() -> Command {
     Command::cargo_bin("sol").expect("sol binary not built — run `cargo build -p sol` first")
 }
 
-// 88-char base58 Solana signature fixture — all `5`s decode cleanly so it
-// reaches the runtime layer (no RPC) rather than failing clap parse. Used to
-// verify a subcommand *accepts* the flag set without tripping clap.
+// A 94-character base58 string — long enough to pass clap's argument
+// parsing. It is NOT a parseable Solana signature (those are 64 bytes, ~87
+// base58 characters), so it stops at the signature parse rather than
+// reaching the RPC. That is the point for the tests that use it: they assert
+// only that clap accepted the flag set. Tests that must reach the RPC need a
+// parseable signature, e.g. `"5".repeat(87)`.
 const VALID_BASE58_SIG: &str =
     "5555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
 
@@ -31,7 +36,7 @@ fn tx_get_requires_signature() {
         .arg("get")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -53,7 +58,13 @@ fn tx_get_invalid_signature_base58_rejects() {
 fn tx_get_with_json_flag_passes_clap() {
     // `--json` is a real flag on `tx get`. Clap should accept it; runtime
     // will then fail (no RPC configured in tmpdir), but the failure must NOT
-    // be clap exit 2.
+    // be a clap usage error. The exit code cannot carry that signal — clap's
+    // usage error is 2 and the shared `wallet-errors` table also maps
+    // `Network` to 2 — so clap's `Usage:` banner on stderr is the check.
+    //
+    // This test therefore asserts exactly one thing: clap did not reject the
+    // arguments. It deliberately does NOT pin the exit code — a change to the
+    // command's exit code is not caught here.
     let tmp = TempDir::new().expect("tempdir");
     sol_bin()
         .arg("--data-dir")
@@ -65,7 +76,7 @@ fn tx_get_with_json_flag_passes_clap() {
         .arg("--json")
         .assert()
         .failure()
-        .code(predicate::ne(2));
+        .stderr(predicate::str::contains("Usage:").not());
 }
 
 #[test]
@@ -78,7 +89,7 @@ fn tx_wait_requires_signature() {
         .arg("wait")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -99,7 +110,8 @@ fn tx_wait_invalid_signature_base58_rejects() {
 #[test]
 fn tx_wait_timeout_zero_rejects_p7_11() {
     // P7-11: timeout bound is `1..=600` enforced by clap `value_parser`.
-    // Anything below 1 must exit 2 before any process startup.
+    // Anything below 1 must exit 1 (a clap usage error is a `User` error)
+    // before any process startup.
     let tmp = TempDir::new().expect("tempdir");
     sol_bin()
         .arg("--data-dir")
@@ -112,7 +124,7 @@ fn tx_wait_timeout_zero_rejects_p7_11() {
         .arg("0")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
@@ -130,13 +142,20 @@ fn tx_wait_timeout_above_max_rejects_p7_11() {
         .arg("601")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
 }
 
 #[test]
 fn tx_wait_timeout_boundary_max_passes_clap_p7_11() {
     // P7-11 inclusive upper bound: 600s accepted by clap. Runtime then fails
-    // (no RPC) but the failure must NOT be clap exit 2.
+    // (no RPC) but the failure must NOT be a clap usage error. The exit code
+    // cannot carry that signal — clap's usage error is 2 and the shared
+    // `wallet-errors` table also maps `Network` to 2 — so clap's `Usage:`
+    // banner on stderr is the check.
+    //
+    // This test therefore asserts exactly one thing: clap did not reject the
+    // arguments. It deliberately does NOT pin the exit code — a change to the
+    // command's exit code is not caught here.
     let tmp = TempDir::new().expect("tempdir");
     sol_bin()
         .arg("--data-dir")
@@ -149,7 +168,7 @@ fn tx_wait_timeout_boundary_max_passes_clap_p7_11() {
         .arg("600")
         .assert()
         .failure()
-        .code(predicate::ne(2));
+        .stderr(predicate::str::contains("Usage:").not());
 }
 
 #[test]
@@ -167,5 +186,47 @@ fn tx_wait_timeout_negative_rejects_p7_11() {
         .arg("-1")
         .assert()
         .failure()
-        .code(2);
+        .code(1);
+}
+
+/// Exit 2 is `Network` — the code an automation rule retries on — so the
+/// *default* suite must pin it. After the `ne(2)` lock-down guards were
+/// replaced with clap's `Usage:` banner, the only assertion of exit 2 left
+/// was the `#[ignore]`d surfpool gate, which does not run by default.
+///
+/// `tx wait` against a closed port surfaces `Error::Transport` (per
+/// `chain/client.rs:267` — all RpcClient POST failures wrap as
+/// `Error::Transport(...)`), which the classifier maps to `Network` → exit 2.
+/// The connection is refused immediately, so the test fails fast.
+///
+/// The port is obtained by binding an ephemeral port and dropping the
+/// listener, so the refusal is guaranteed on any OS — `127.0.0.1:1` is
+/// `tcpmux` and may be bound on hardened CI images.
+#[test]
+fn tx_wait_unreachable_rpc_exits_network_two() {
+    let closed_port = {
+        let l = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = l.local_addr().expect("local_addr").port();
+        drop(l);
+        port
+    };
+    let tmp = TempDir::new().expect("tempdir");
+    sol_bin()
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("tx")
+        .arg("wait")
+        .arg("--sig")
+        // 87 chars of `5` decode to a 64-byte signature (the same fixture
+        // the surfpool gate uses). `VALID_BASE58_SIG` is 94 chars and is
+        // rejected by the base58 length check before the RPC is reached.
+        .arg("5".repeat(87).as_str())
+        .arg("--timeout")
+        .arg("1")
+        .arg("--rpc")
+        .arg(format!("http://127.0.0.1:{closed_port}"))
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(contains("RPC POST getSignatureStatuses"));
 }

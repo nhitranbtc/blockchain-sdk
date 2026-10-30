@@ -7,9 +7,14 @@
 //!   wiring + clap surface, surfpool e2e lives in `cli_integration_surfpool.rs`.
 //! - Row 22 (`cli_json_output`): every command that *carries* `--json` accepts
 //!   it at clap level; every command that does *not* carry it rejects it at
-//!   clap level (exit 2). Per `clap`, unknown long flags always exit 2
-//!   before any process startup, so these are pure parse tests, fast and
-//!   deterministic — no RPC required.
+//!   clap level (exit 1 — a clap usage error is a `User` error, since the
+//!   shared exit-code table assigns 2 to `Network`). Unknown long flags are
+//!   rejected before any process startup, so these are pure parse tests, fast
+//!   and deterministic — no RPC required.
+//!
+//! - Row 23 (`clap_usage_error`): a clap usage error exits 1 (`User`), and
+//!   `--help` keeps clap's exit 0. The shared exit-code table assigns 2 to
+//!   `Network`, so exit 2 must mean exactly one thing.
 //!
 //! The six commands carrying `--json` per `crates/sol/src/cli.rs`:
 //! `wallet show`, `wallet list`, `wallet balance`, `tx get`, `tx wait`,
@@ -17,7 +22,7 @@
 //! tx_get_with_json_flag_passes_clap`; not duplicated here.
 
 use assert_cmd::Command;
-use predicates::prelude::predicate;
+use predicates::prelude::{predicate, PredicateBooleanExt};
 use tempfile::TempDir;
 
 fn sol_bin() -> Command {
@@ -36,10 +41,20 @@ macro_rules! parse_check {
     }};
 }
 
-/// Wrap a parse check + assert clap did NOT reject (exit != 2). Runtime may
-/// still fail (Unimplemented / no RPC) OR succeed if the handler is already
-/// landed (e.g. `config show`, `wallet list`, `wallet balance`). Only the
-/// clap layer is under test.
+/// Wrap a parse check + assert clap did NOT reject. Runtime may still fail
+/// (Unimplemented / no RPC) OR succeed if the handler is already landed
+/// (e.g. `config show`, `wallet list`, `wallet balance`). Only the clap
+/// layer is under test.
+///
+/// The exit code is NOT the signal for "clap accepted these arguments".
+/// Clap's own usage error is 2, and under the shared `wallet-errors` table
+/// 2 is also `Network` — a command that reaches the RPC layer and times out
+/// exits 2 even though clap accepted every argument. Clap's usage banner
+/// (`Usage:`) on stderr is the signal that distinguishes the two.
+///
+/// So this macro asserts exactly one thing: clap did not reject the
+/// arguments. It deliberately does NOT pin the exit code — a change to a
+/// command's exit code is not caught here.
 macro_rules! clap_accepts {
     ($($arg:expr),* $(,)?) => {{
         let mut cmd = sol_bin();
@@ -47,12 +62,12 @@ macro_rules! clap_accepts {
         cmd.arg("--data-dir")
             .arg(tmp().path())
             .assert()
-            .code(predicate::ne(2));
+            .stderr(predicate::str::contains("Usage:").not());
     }};
 }
 
-/// Wrap a parse check + assert clap DID reject (exit 2). Used for `--json`
-/// on commands that do not declare it.
+/// Wrap a parse check + assert clap DID reject (exit 1 — a clap usage error
+/// is a `User` error). Used for `--json` on commands that do not declare it.
 macro_rules! clap_rejects {
     ($($arg:expr),* $(,)?) => {{
         let mut cmd = sol_bin();
@@ -61,7 +76,7 @@ macro_rules! clap_rejects {
             .arg(tmp().path())
             .assert()
             .failure()
-            .code(2);
+            .code(1);
     }};
 }
 
@@ -302,7 +317,7 @@ fn config_set_cluster_parses() {
 //
 // Per `crates/sol/src/cli.rs`, exactly six command variants declare
 // `json: bool`. Every other variant must reject `--json` at clap level
-// (unknown long flag → exit 2).
+// (unknown long flag → exit 1, a `User` error).
 // =========================================================================
 
 // --- Positive: commands that DO carry `--json` and must accept it ---
@@ -448,4 +463,55 @@ fn json_spl_send_rejected() {
         "11111111111111111111111111111111",
         "--json"
     );
+}
+
+// =========================================================================
+// Row 23 — clap usage-error exit code.
+//
+// A clap usage error is a `User` error, so it exits 1 (the shared
+// exit-code table assigns 2 to `Network`, and a bad command line must
+// not report as "network error, retry later"). `--help` / `--version`
+// keep clap's exit 0.
+// =========================================================================
+
+#[test]
+fn clap_usage_error_exits_one() {
+    // Unknown long flag — rejected by clap before any process startup.
+    let tmp = TempDir::new().expect("tempdir");
+    sol_bin()
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("wallet")
+        .arg("list")
+        .arg("--no-such-flag")
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn clap_missing_required_argument_exits_one() {
+    // Missing required argument — also a clap usage error.
+    let tmp = TempDir::new().expect("tempdir");
+    sol_bin()
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("wallet")
+        .arg("show")
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn help_exits_zero() {
+    // `--help` is not a usage error — clap keeps its exit 0.
+    let tmp = TempDir::new().expect("tempdir");
+    sol_bin()
+        .arg("--data-dir")
+        .arg(tmp.path())
+        .arg("--help")
+        .assert()
+        .success()
+        .code(0);
 }
