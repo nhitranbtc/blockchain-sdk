@@ -101,6 +101,7 @@ The umbrella `chain-traits` crate defines the cross-chain `ChainWallet` trait, `
 ├── rust-wallet-app/                       # Cargo workspace (the implementation)
 │   ├── Cargo.toml
 │   ├── crates/
+│   │   ├── wallet-errors/                  # shared error categories + exit-code table
 │   │   ├── chain-traits/
 │   │   ├── bitcoin-wallet-core/
 │   │   ├── btc/                            # CLI binary
