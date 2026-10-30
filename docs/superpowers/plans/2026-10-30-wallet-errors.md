@@ -40,6 +40,7 @@ This plan implements **Phase 1 only**. It does not implement Phase 2 (`wallet-fa
 - **The per-chain error enums stay.** Their granularity is a security feature (`bitcoin-wallet-core/src/error.rs:109-120` keeps `WalletStore` separate from `Storage` to preserve a file-existence oracle closure). This phase unifies the *category*, never the enum.
 - **Wrong password and corrupt blob stay indistinguishable** — both map to `Signing` (exit 4) in every chain, and must not be distinguishable by exit code.
 - **`cargo test -p <crate>` only** in the local verify gate. Never `--workspace` (L55: the workspace-wide run crosses the 300 s Bash timeout on `bitcoin-wallet-core`'s integration tests).
+- **`rust-wallet-app/Cargo.lock` is part of every CLI task's commit.** Each task adds a `wallet-errors = { workspace = true }` dependency to a crate manifest, and a manifest change without the lock desyncs it and breaks `--locked` builds. Stage the lock file with the manifest in the same commit.
 - **Rust edition / toolchain:** workspace `edition = "2021"`, `rust-toolchain.toml` pins 1.98.1. Do not bump `rust-version` — the declared MSRV 1.85 is already unachievable because the vendored anychain stack needs 1.98.1; that is a separate, pre-existing issue.
 - **Error enums marked `#[non_exhaustive]`** (`bitcoin-wallet-core/src/error.rs:28`, `evm-wallet-core/src/error.rs:26`, `tron-wallet-core/src/error.rs:10`) force a wildcard arm in a downstream match. The wildcard maps to `ErrorCategory::Signing` in every case; every currently-existing variant is pinned by a table-driven test, and Task 8's CI job closes the loop on future variants. `sol_wallet_core::Error` is **not** `#[non_exhaustive]`, so the Solana classifier is exhaustive — a new Solana variant is a compile error until classified.
 - **L24 doc set travels with every sub-task PR** — one `CHANGELOG.md` `[Unreleased]` bullet **per changed CLI** — a task that changes two crates carries two bullets, both in the same flat list — with a `**BREAKING**:` prefix where the change is user-visible. The `[Unreleased]` section is a **flat, newest-first bullet list**: the new entry goes immediately after the `## [Unreleased]` heading, with the `[internal]` / `[user-facing]` tag carrying the classification. Do **not** add a `### Added` / `### Changed` heading — those belong to the *versioned* sections and are applied at release cut, and a heading here would reclassify every existing flat bullet. **No User Stories row is flipped in Phase 1** — there is no User Stories table inside `[Unreleased]` (the tables live under the released version sections), and no Phase-1 task completes a user story; these tasks change how errors are *reported*, not what the software can do.
@@ -809,13 +810,16 @@ cargo test -p sol
 **Files:**
 - Modify: `rust-wallet-app/crates/tron/src/handlers/mod.rs`
 - Modify: `rust-wallet-app/crates/tron/src/main.rs`
-- Modify: `rust-wallet-app/crates/tron/src/handlers/tx.rs`
-- Modify: `rust-wallet-app/crates/tron/src/handlers/wallet.rs`
+- Modify: `rust-wallet-app/crates/tron/src/handlers/tx.rs` (classifier + a stale exit-code comment)
+- Modify: `rust-wallet-app/crates/tron/src/handlers/wallet.rs` (classifier + a stale exit-code comment)
+- Modify: `rust-wallet-app/crates/tron/src/cli.rs` (stale exit-code comment only)
+- Modify: `rust-wallet-app/crates/tron/tests/cli.rs` (stale exit-code comment only)
 - Modify: `rust-wallet-app/crates/tron/Cargo.toml`
+- Modify: `rust-wallet-app/crates/tron-wallet-core/src/tx/submit.rs` (comment-only: a reference to the removed `handlers::exit_code` and the old exit 2; no behaviour change)
 
 **Interfaces:**
 - Consumes: `wallet_errors::ErrorCategory` from Task 1.
-- Produces: `tron::handlers::classify(err: &CliError) -> ErrorCategory` and `tron::handlers::classify_core(err: &CoreError) -> ErrorCategory`. `tron` has a `lib.rs`, so these are public API of the `tron` library target.
+- Produces: `classify(err: &CliError) -> ErrorCategory` and `classify_core(err: &CoreError) -> ErrorCategory` in `tron/src/handlers/mod.rs`. **Note:** `tron/src/lib.rs` exposes only `pub mod cli;` — `handlers` is a private module of the **binary** target, so neither function is reachable from the library target or from integration tests. The classifier is exercised by the in-crate unit test in `handlers/mod.rs`.
 
 - [ ] **Step 1: Write the failing test**
 

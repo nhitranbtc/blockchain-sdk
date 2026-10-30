@@ -548,15 +548,17 @@ fn signer(data_dir: &Path, args: &SendArgs) -> Result<(String, Zeroizing<[u8; SE
     }
 }
 
-/// Print a broadcast result, and turn a node-side rejection into exit 3.
+/// Print a broadcast result, and turn a node-side rejection into a network
+/// error.
 ///
 /// A rejected transaction is not a success with a warning: a script reading
 /// exit 0 as "sent" would ship goods for a transfer the chain refused.
 ///
 /// [`CoreError::Node`] rather than `TransactionBuild`: the envelope was built
 /// and signed correctly, and the refusal is the *node's* answer about chain
-/// state (insufficient balance, bandwidth). Exit 3 sends operators to the chain
-/// and their funding, where the fix is; exit 5 would send them to this code.
+/// state (insufficient balance, bandwidth). The `Network` category sends
+/// operators to the chain and their funding, where the fix is; the signing
+/// category would send them to this code.
 pub(crate) fn report_broadcast(
     txid: &str,
     receipt: &tron_wallet_core::tx::broadcast::BroadcastReceipt,
@@ -587,7 +589,7 @@ pub(crate) fn report_broadcast(
 ///
 /// The interval is validated through the core helper so `wallet send --wait`
 /// and `tx wait` cannot disagree about what a zero interval means; the core
-/// returns [`tron_wallet_core::Error::Config`], which maps to exit 2.
+/// returns [`tron_wallet_core::Error::Config`], which maps to a user error.
 pub(crate) async fn wait_and_report(
     client: &tron_wallet_core::chain::TronGridClient,
     txid: &str,
@@ -735,13 +737,17 @@ mod tests {
             error: None,
         };
         let err = report_broadcast("deadbeef", &receipt, true).expect_err("rejection is an error");
-        // The envelope was fine; the chain refused it. Exit 3 points the
-        // operator at the node and their funding, not at this code (exit 5).
+        // The envelope was fine; the chain refused it. The `Network` category
+        // (exit 2) points the operator at the node and their funding, not at
+        // this code.
         assert!(matches!(
             err,
             CliError::Core(tron_wallet_core::Error::Node(_))
         ));
-        assert_eq!(super::super::exit_code(&err), 3);
+        assert_eq!(
+            super::super::classify(&err),
+            wallet_errors::ErrorCategory::Network
+        );
     }
 
     #[test]

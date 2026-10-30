@@ -65,8 +65,9 @@ pub async fn get(
 
 /// `tron tx wait --txid [--timeout] [--poll-interval]`.
 ///
-/// A timeout is a failure (exit 3), not a success with an empty result: a
-/// script that reads "not yet confirmed" as "confirmed" ships goods unpaid.
+/// A timeout is a failure (a network error), not a success with an empty
+/// result: a script that reads "not yet confirmed" as "confirmed" ships goods
+/// unpaid.
 #[allow(clippy::too_many_arguments)]
 pub async fn wait(
     data_dir: &Path,
@@ -80,8 +81,8 @@ pub async fn wait(
     let interval = Duration::from_secs(poll_interval_secs);
     // Validated through the core helper so `tx wait` and `wallet send --wait`
     // cannot disagree about what a zero interval means. The core answers with
-    // `Error::Config`, which `exit_code` maps to 2 (operator input) — the same
-    // class as the `BadInput` this used to return.
+    // `Error::Config`, which `classify` maps to `User` (operator input) — the
+    // same class as the `BadInput` this used to return.
     submit::validate_poll_interval(interval)?;
     let client = open_client(data_dir, network, rpc_url)?;
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -137,13 +138,16 @@ mod tests {
         )
         .await
         .expect_err("zero interval must be rejected before any network call");
-        // Now sourced from the core helper: `Config` maps to exit 2, the same
+        // Now sourced from the core helper: `Config` maps to `User`, the same
         // operator-input class as the `BadInput` this used to return.
         assert!(matches!(
             err,
             CliError::Core(tron_wallet_core::Error::Config(_))
         ));
-        assert_eq!(super::super::exit_code(&err), 2);
+        assert_eq!(
+            super::super::classify(&err),
+            wallet_errors::ErrorCategory::User
+        );
     }
 }
 

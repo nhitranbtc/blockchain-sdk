@@ -8546,6 +8546,7 @@ dependencies = [
  "testcontainers",
  "tokio",
  "tron-wallet-core",
+ "wallet-errors",
  "x509-parser",
  "zeroize",
 ]

@@ -64,9 +64,9 @@ fn wallet_send_accepts_mnemonic_file() {
 
 #[test]
 fn wallet_send_conflicts_mnemonic_with_mnemonic_file() {
-    // clap rejects both at parse time (exit 2) — surfacing the contradiction
-    // before any RPC call. A missing conflict annotation would let a script
-    // set both and silently pick one.
+    // clap rejects both at parse time (a user error) — surfacing the
+    // contradiction before any RPC call. A missing conflict annotation would
+    // let a script set both and silently pick one.
     let err = Cli::try_parse_from([
         "tron",
         "wallet",
