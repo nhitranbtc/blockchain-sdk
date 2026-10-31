@@ -264,7 +264,8 @@ pub enum MessageActionKind {
         /// Message text to sign. Quoted on the command line.
         message: String,
     },
-    /// Verify a BIP-137 signature. Exits 0 if valid, 1 if invalid.
+    /// Verify a BIP-137 signature. Prints `true` or `false` and exits 0;
+    /// a malformed signature exits 4.
     Verify {
         /// Bitcoin address that allegedly signed the message.
         #[arg(long)]
@@ -1170,7 +1171,7 @@ mod tests {
         ]);
         assert!(
             cli.is_err(),
-            "invalid --type value must fail at parse (exit 2)"
+            "invalid --type value must fail at parse (exit 1)"
         );
     }
 
@@ -2374,7 +2375,7 @@ mod tests {
         ]);
         assert!(
             cli.is_err(),
-            "invalid --coin-selection value must fail to parse (exit 2 per Story 15 AC)"
+            "invalid --coin-selection value must fail to parse (exit 1 per Story 15 AC)"
         );
     }
 

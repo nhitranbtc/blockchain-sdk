@@ -7,17 +7,18 @@
 //! **L28 / F49**: mnemonic is routed to STDERR; wallet_id to STDOUT.
 
 use anyhow::{Context, Result};
-use bitcoin_wallet_core::error::Error as LibError;
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 mod cli;
+mod error;
 mod handlers;
 
 use cli::{
     Cli, Commands, ConfigAction, ConfigActionKind, DecryptAction, EncryptAction,
     FeeEstimatesAction, MessageAction, TxListAction, WalletAction, WalletActionKind,
 };
+use error::classify_anyhow;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,13 +31,38 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // A clap usage error is a user error (exit 1), not a network error
+            // (exit 2). `--help` and `--version` keep clap's exit 0.
+            let code = e.exit_code();
+            // `print()` returns `io::Result<()>` and `Result` is `#[must_use]` —
+            // the write result is dropped deliberately: the process exits either way.
+            let _ = e.print();
+            std::process::exit(if code == 0 {
+                0
+            } else {
+                wallet_errors::ErrorCategory::User.exit_code()
+            });
+        }
+    };
     let data_dir =
-        handlers::resolve_data_dir(cli.data_dir).context("failed to resolve data dir")?;
+        match handlers::resolve_data_dir(cli.data_dir).context("failed to resolve data dir") {
+            Ok(dir) => dir,
+            Err(e) => {
+                // Same stderr shape and the same classification as the dispatch
+                // path below, so no error path keeps Rust's `Error: ` prefix.
+                // The exit code does not move: this chain holds no typed
+                // `bitcoin_wallet_core::Error`, so `classify_anyhow` falls back
+                // to `User` (1) -- the same code `Termination` gave it before.
+                eprintln!("{e:?}");
+                std::process::exit(classify_anyhow(&e).exit_code());
+            }
+        };
 
-    // Run the command dispatch in an async block so we can intercept the
-    // error chain for Story 2 AC compliance: invalid mnemonic → exit code 2
-    // (not anyhow's default exit 1).
+    // Run the command dispatch in an async block so the error chain can be
+    // classified into a cross-chain exit code (see `error::classify_anyhow`).
     let dispatch_result: Result<()> = async {
         match cli.command {
             Commands::Wallet(WalletAction { action }) => match action {
@@ -214,21 +240,12 @@ async fn main() -> Result<()> {
     }
     .await;
 
-    // Per Story 2 AC: invalid mnemonic → exit code 2 (not anyhow default 1).
-    // Walk the error chain looking for the lib-level InvalidMnemonic variant
-    // (wrapped by handle_import's .context(...)? call).
+    // Map the failure onto the shared cross-chain exit-code table
+    // (`wallet_errors::ErrorCategory::exit_code()`). An error that never
+    // reached the core is a CLI-level rejection and classifies as `User`.
     if let Err(e) = dispatch_result {
-        let is_invalid_mnemonic = e.chain().any(|c| {
-            matches!(
-                c.downcast_ref::<LibError>(),
-                Some(LibError::InvalidMnemonic(_))
-            )
-        });
-        if is_invalid_mnemonic {
-            eprintln!("{e:?}");
-            std::process::exit(2);
-        }
-        return Err(e);
+        eprintln!("{e:?}");
+        std::process::exit(classify_anyhow(&e).exit_code());
     }
     Ok(())
 }
