@@ -1898,14 +1898,22 @@ Four intentional divergences from the categories above:
   finding**: closing them means changing `eth` and `polygon` together, against
   the already-merged ETH migration, with both `CHANGELOG.md` bullets
   corrected.
-- **A chain reaches only the categories its engine can express. Solana reaches
-  all six; `eth`, `polygon`, `btc` and `tron` each reach four** — 0, 1, 2 and 4.
-  None of the EVM, Bitcoin or TRON engines constructs an insufficient-funds or
-  a broadcast-rejection error outside its own variant-coverage tests, so **3
-  and 5 are unreachable in all four**; a node-side transaction rejection is
-  reported as `Network` (2), the same code as an unreachable node. This is a
-  property of the engines, not of the taxonomy — the table above is the
-  specification for every chain that *can* reach a category.
+- **A chain reaches only the categories its engine can express, and no CLI in
+  this workspace reaches the insufficient-funds (3) or broadcast-rejection (5)
+  code.** Every CLI's classifier maps all six categories — the mapping is
+  tested — but no CLI can produce the variants that produce those two.
+  `tron-wallet-core` has neither variant; `evm-wallet-core` and
+  `bitcoin-wallet-core` construct theirs only inside their own
+  variant-coverage tests; `sol-wallet-core` declares both, but its
+  `BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has no construction
+  site anywhere and its `InsufficientFunds` is built only by
+  `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:48`),
+  whose only callers are two integration tests — the `sol` CLI's send paths
+  do no balance check. So **all five CLIs reach exactly four of the six: 0,
+  1, 2 and 4**. A node-side transaction rejection is reported as `Network`
+  (2), the same code as an unreachable node. This is a property of the
+  engines, not of the taxonomy — the table above is the specification for
+  every chain that *can* reach a category.
 - **The `polygon` CLI translates the wallet library's errors the same way `eth`
   does.** Its `map_wallet_err` maps the library's errors into `Rpc`,
   `WalletCorrupt`, `DecryptionFailed`, `InvalidMnemonic`, `InvalidPrivateKey`,
@@ -2115,3 +2123,4 @@ These fall out of this phase and must be filed as backlog issues (`backlog` + `p
 6. **`btc` accepts an empty passphrase where the other three chains (`eth`, `polygon`, `tron`) refuse it.** On a TTY, a blank response yields an empty password, and argon2 0.5.3 derives a key from it (`bitcoin-wallet-core/src/crypto/argon2.rs:104` calls `Argon2::hash_password_into`, whose `verify_inputs` check rejects only passwords *longer than* `u32::MAX`), so `btc wallet create` **succeeds with exit 0** and stores a wallet encrypted under an empty passphrase — anyone holding the file can decrypt it, and a wallet created that way re-opens with the same empty passphrase. Pre-existing and unchanged by this migration (it is not an exit-code defect; the operation succeeds), but it is a security-relevant divergence from `eth`, `polygon` and `tron`, which all refuse an empty passphrase at the CLI boundary. **File it with the security label, not `backlog` alone.**
 7. **`sol` accepts an empty passphrase too.** `sol/src/handlers/wallet.rs:740-745` reads `SOL_WALLET_PASSWORD` and returns `Ok("")` for an empty env var, and nothing downstream checks emptiness (`sol-wallet-core/src/crypto.rs`'s `derive_key` calls `a2.hash_password_into(password, salt, …)` with no length guard). Measured: `SOL_WALLET_PASSWORD="" sol wallet create …` → **exit 0**, wallet written. Same security shape as item 6 and the same remedy — refuse the empty passphrase at the CLI boundary, as `eth`, `polygon` and `tron` already do. **File it with the security label too.**
 8. **Documents under `docs/wallets/` outside `CONTEXT.md` still state the pre-migration exit codes.** Task 7 owns `CONTEXT.md` only. The rest were found by the Task 6 review: `docs/wallets/2026-08-05-btc-wallet-user-stories.md:122` ("Invalid checksum returns exit code 2") and the per-story acceptance claims around it, and `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md:1430`/`:1853`/`:2110` and `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md:1021`, which describe a "matches `btc/src/main.rs:151-169` exit-2 pattern" that no longer exists. **Task 7's survey found three more, and they are the most stale of all: `docs/wallets/2026-08-23-eth-wallet-user-stories.md:129` and `:148`, `docs/wallets/2026-08-27-tron-wallet-user-stories.md:155` and `:175`, and `docs/wallets/2026-08-27-polygon-wallet-user-stories.md:137` each state that an existing wallet "fails with exit code 2" (now **1**) — the first two also state "Invalid checksum returns exit code 2" (now **1**) — and each of the three reproduces the whole pre-migration taxonomy in prose: `2026-08-23-eth-wallet-user-stories.md:615`, `2026-08-27-tron-wallet-user-stories.md:610` and `2026-08-27-polygon-wallet-user-stories.md:560` spell out "0 = success, 1 = user abort, 2 = bad input, 3 = upstream/RPC transport failure, 4 = wallet/balance issue, 5 = signing/RPC/broadcast error", which shares no category with the shared table but the six numbers.** The deep-dive files are historical research records and arguably stand on their own; the four user-stories files are live spec documents and are genuinely stale.
+9. **The `sol` CLI cannot report an insufficient balance, and it reports a rejected transaction as confirmed.** Two pre-existing engine gaps, both unchanged by this migration (the migration faithfully classifies whatever the engine produces): (a) `sol-wallet-core`'s `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:37`) is the only producer of `Error::InsufficientFunds`, and its only callers are two integration tests in `sol-wallet-core/tests/chain_rpc.rs` — so the `sol` CLI's send paths (`sol/src/handlers/wallet.rs`, `sol/src/handlers/spl.rs`) send without checking the balance, and an insufficient balance surfaces as a node-side RPC error (`Error::Rpc` → `Network`, exit **2**) rather than as exit 3; and (b) `sol-wallet-core`'s `Error::BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has **no** construction site anywhere, and `wait_for_confirm` (`sol-wallet-core/src/tx/broadcast.rs:188`) never inspects `status.err` — so a transaction the cluster rejected is reported as **confirmed**, exit **0**, not as a broadcast failure. Closing either changes the `sol` CLI's observable behaviour and its `CHANGELOG.md` bullet, so it is a separate task rather than a Task 2 fix. **File it with the `security` label too** — an automation rule keying on exit 0 would treat a rejected transaction as sent.
