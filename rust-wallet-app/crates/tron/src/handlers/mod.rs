@@ -49,8 +49,8 @@ use crate::cli::UnitArg;
 
 /// CLI-level error. Wraps the core error so the category mapping lives in
 /// exactly one place, and adds the two cases the core has no variant for:
-/// a declined confirmation, and an argument shape rejected before the core is
-/// reached.
+/// a declined confirmation, and the CLI's own rejection — operator input, or
+/// a missing runtime fixture.
 #[derive(Debug)]
 pub enum CliError {
     /// Propagated from `tron-wallet-core`.
