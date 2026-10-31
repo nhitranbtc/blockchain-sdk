@@ -1339,7 +1339,7 @@ cargo test -p eth -p eth-wallet-core
 `CHANGELOG.md` `[Unreleased]` — one flat bullet per changed CLI, each immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 2→1, ABI decode failure 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, insufficient funds 4→3, wallet-corrupt/decryption/encryption-failure 5→4, broadcast failure 5→5 (unchanged). Automation that keys on exit codes must be updated. The ETH integration tests whose names encoded an exit code were renamed to match the code they now assert; historical entries above still quote the old names. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 2→1, ABI decode failure 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, wallet-corrupt/decryption/encryption-failure 5→4. **The `eth` CLI classifies all six categories, but it constructs no insufficient-funds and no broadcast-rejection error — neither `evm-wallet-core` nor `eth/src/` has a production construction site for either, only the engine's variant-coverage tests — so the insufficient-funds (3) and broadcast-rejection (5) codes are classified but not yet reachable in this CLI.** Automation that keys on exit codes must be updated. The ETH integration tests whose names encoded an exit code were renamed to match the code they now assert; historical entries above still quote the old names. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 - **`[internal]`** `rust-wallet-app/crates/evm-wallet-core/` — **BREAKING:** removed `Error::exit_code()` (and the `eth-wallet-core` / `polygon-wallet-core` re-exports of it). The exit-code table now lives in the `wallet-errors` crate and the variant→category mapping lives in each CLI, so the engines gain no `wallet-errors` edge. Callers of `evm_wallet_core::Error::exit_code()` must call `wallet_errors::ErrorCategory::exit_code()` with the category their CLI derives.
 ```
 
@@ -1806,13 +1806,13 @@ The matrix below was produced by building all five CLIs and crawling `--help` ac
 | `--max-fee-gwei` | — | ✓ | ✓ | — | — |
 | `--fee-rate` | ✓ | — | — | — | — |
 | `--priority-fee` | — | — | — | — | ✓ |
-| endpoint override | `--esplora-url` | `--rpc-url` | `--rpc-url` | `--rpc-url`, `--rpc` | `--url` |
+| endpoint override | `--esplora-url` | `--rpc-url` | `--rpc-url` | `--rpc-url`, `--rpc` | `--rpc`, `--url` |
 | SPKI pin override | `--pin-spki`, `--esplora-spki-pin` | — | — | — | `--spki-pin` |
 
 Notes that must accompany the table:
 
 - **Seven flags are common to all five CLIs:** `--address`, `--data-dir`, `--dry-run`, `--id`, `--json`, `--mnemonic`, `--to`. (The grilling of the recommendations document recorded **six** and omitted `--mnemonic`; measuring against the built binaries gives seven. Solana has both `--mnemonic` and `--mnemonic-file`.)
-- **The endpoint override has four different spellings** across the five CLIs and means something slightly different on each — this is genuinely per-chain and is *not* unified by this phase.
+- **The endpoint override has four different spellings** across the five CLIs and means something slightly different on each — this is genuinely per-chain and is *not* unified by this phase. On `sol` the two are genuinely different things: `--rpc` is the **global runtime override** (present on every subcommand's `--help`), while `--url` is the argument of **`sol config set-rpc`**, which writes the endpoint into the config instead of overriding it for one invocation.
 - **The SPKI pin has three names over two chains.** `eth`, `polygon` and `tron` take their pin from configuration, not from a flag.
 - `--network` is not universal: Solana selects a `--cluster`.
 - `--mnemonic-file` exists on three CLIs, not all five; Bitcoin uses `--password-file` / `--password-stdin`, and `eth` has no mnemonic-file flag.
@@ -1898,26 +1898,33 @@ Four intentional divergences from the categories above:
   finding**: closing them means changing `eth` and `polygon` together, against
   the already-merged ETH migration, with both `CHANGELOG.md` bullets
   corrected.
-- **A chain reaches only the categories its engine can express, and TRON
-  reaches four of the six.** `tron-wallet-core`'s `Error` has **no**
-  insufficient-funds variant and **no** broadcast-rejection variant, so the
-  `tron` CLI never returns 3 or 5: a node-side transaction rejection is
-  reported as `Network` (2), the same code as an unreachable node. Solana
-  reaches all six. This is a property of the engine, not of the taxonomy —
-  the table above is the specification for every chain that *can* reach a
-  category.
-- **The `polygon` CLI reaches only three of the six in practice.** Its
-  `map_wallet_err` translates the wallet library's errors into `Rpc`,
+- **A chain reaches only the categories its engine can express, and no CLI in
+  this workspace reaches the insufficient-funds (3) or broadcast-rejection (5)
+  code.** Each CLI's classifier maps into the shared six-category taxonomy —
+  the mapping is tested — but no CLI can produce the variants that produce
+  those two. `tron-wallet-core` has neither variant; `evm-wallet-core`
+  declares both, and every construction of them anywhere in the workspace is
+  inside test code; `bitcoin-wallet-core` declares only the
+  insufficient-funds variant, and every construction of it anywhere in the
+  workspace is inside test code; `sol-wallet-core` declares both, but its
+  `BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has no production
+  construction site and its `InsufficientFunds` is built only by
+  `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:48`),
+  whose only callers are two integration tests — the `sol` CLI's send paths
+  do no balance check. So **all five CLIs reach exactly four of the six: 0,
+  1, 2 and 4**. A node-side transaction rejection is reported as `Network`
+  (2), the same code as an unreachable node. This is a property of the
+  engines, not of the taxonomy — the table above is the specification for
+  every chain that *can* reach a category.
+- **The `polygon` CLI translates the wallet library's errors the same way `eth`
+  does.** Its `map_wallet_err` maps the library's errors into `Rpc`,
   `WalletCorrupt`, `DecryptionFailed`, `InvalidMnemonic`, `InvalidPrivateKey`,
   `WalletNotFound`, `WalletNotFoundByName` and `WalletExists`, and the CLI
-  itself raises `InvalidInput` and `InvalidPassword`, so in practice it exits
-  **1** (operator input), **2** (node unreachable, RPC failure, local I/O) or
-  **4** (a wrong passphrase or a corrupt wallet file). The insufficient-funds
-  (3) and broadcast-rejection (5) codes are **classified but not yet
-  constructed** by the CLI; they become observable when its error construction
-  is extended. A wrong passphrase exits 4 rather than 1 so that it stays
-  indistinguishable from a corrupt wallet file, exactly as in the other four
-  chains.
+  itself raises `InvalidInput` and `InvalidPassword` — so it exits **1**
+  (operator input), **2** (node unreachable, RPC failure, local I/O) or **4**
+  (a wrong passphrase or a corrupt wallet file), exactly as `eth` does. A
+  wrong passphrase exits 4 rather than 1 so that it stays indistinguishable
+  from a corrupt wallet file, exactly as in the other four chains.
 
 **This changed the exit codes of all five CLIs.** Automation that keys on exit
 codes must be updated — see the `**BREAKING**` entries in `CHANGELOG.md`.
@@ -1935,7 +1942,7 @@ but it is the cell a reader consults:
 | User error | 1 | Invalid args, missing file, unknown wallet, invalid mnemonic or address, ABI decode failure |
 | Network error | 2 | RPC unreachable, gas estimate failed, receipt timeout |
 | Insufficient funds | 3 | Balance below amount + fee |
-| Signing error | 4 | Wrong password, invalid key, corrupt or tampered wallet file, encryption or KDF failure, transaction construction failure, internal machinery failure, feature not yet implemented |
+| Signing error | 4 | Wrong password, key derivation failure, corrupt or tampered wallet file, encryption or KDF failure, transaction construction failure, internal machinery failure, feature not yet implemented |
 | Broadcast error | 5 | Tx REVERTED, node rejected |
 
 The `Signing` row is the one that needs extending: "Wrong password, invalid
@@ -2117,4 +2124,6 @@ These fall out of this phase and must be filed as backlog issues (`backlog` + `p
 5. **The two EVM CLIs disagree with each other about an empty passphrase on the wallet-open paths.** `polygon` refuses it on its native-send and speed-up paths (**1**) but not on ERC-20 send and approve (**4**), while `eth` refuses it nowhere but create and import — so `eth`'s native send, ERC-20 send and speed-up all exit **4**. ETH's ERC-20 *approve*, sign-message and sign-typed are deferred stubs that never reach a wallet and exit **2**. Closing the gap means changing `eth` and `polygon` together, against the already-merged ETH migration, with both `CHANGELOG.md` bullets corrected — so it is a separate cross-chain task, not a Task 5 fix.
 6. **`btc` accepts an empty passphrase where the other three chains (`eth`, `polygon`, `tron`) refuse it.** On a TTY, a blank response yields an empty password, and argon2 0.5.3 derives a key from it (`bitcoin-wallet-core/src/crypto/argon2.rs:104` calls `Argon2::hash_password_into`, whose `verify_inputs` check rejects only passwords *longer than* `u32::MAX`), so `btc wallet create` **succeeds with exit 0** and stores a wallet encrypted under an empty passphrase — anyone holding the file can decrypt it, and a wallet created that way re-opens with the same empty passphrase. Pre-existing and unchanged by this migration (it is not an exit-code defect; the operation succeeds), but it is a security-relevant divergence from `eth`, `polygon` and `tron`, which all refuse an empty passphrase at the CLI boundary. **File it with the security label, not `backlog` alone.**
 7. **`sol` accepts an empty passphrase too.** `sol/src/handlers/wallet.rs:740-745` reads `SOL_WALLET_PASSWORD` and returns `Ok("")` for an empty env var, and nothing downstream checks emptiness (`sol-wallet-core/src/crypto.rs`'s `derive_key` calls `a2.hash_password_into(password, salt, …)` with no length guard). Measured: `SOL_WALLET_PASSWORD="" sol wallet create …` → **exit 0**, wallet written. Same security shape as item 6 and the same remedy — refuse the empty passphrase at the CLI boundary, as `eth`, `polygon` and `tron` already do. **File it with the security label too.**
-8. **Documents under `docs/wallets/` outside `CONTEXT.md` still state the pre-migration exit codes.** Task 7 owns `CONTEXT.md` only. The rest were found by the Task 6 review: `docs/wallets/2026-08-05-btc-wallet-user-stories.md:122` ("Invalid checksum returns exit code 2") and the per-story acceptance claims around it, and `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md:1430`/`:1853`/`:2110` and `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md:1021`, which describe a "matches `btc/src/main.rs:151-169` exit-2 pattern" that no longer exists. The deep-dive files are historical research records and arguably stand on their own; the user-stories file is a live spec document and is genuinely stale.
+8. **Documents under `docs/wallets/` outside `CONTEXT.md` still state the pre-migration exit codes.** Task 7 owns `CONTEXT.md` only. The rest were found by the Task 6 review: `docs/wallets/2026-08-05-btc-wallet-user-stories.md:122` ("Invalid checksum returns exit code 2") and the per-story acceptance claims around it, and `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md:1430`/`:1853`/`:2110` and `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md:1021`, which describe a "matches `btc/src/main.rs:151-169` exit-2 pattern" that no longer exists. **Task 7's survey found three more, and they are the most stale of all: `docs/wallets/2026-08-23-eth-wallet-user-stories.md:129` and `:148`, `docs/wallets/2026-08-27-tron-wallet-user-stories.md:155` and `:175`, and `docs/wallets/2026-08-27-polygon-wallet-user-stories.md:137` each state that an existing wallet "fails with exit code 2" (now **1**) — the first two also state "Invalid checksum returns exit code 2" (now **1**) — and each of the three reproduces the whole pre-migration taxonomy in prose: `2026-08-23-eth-wallet-user-stories.md:615`, `2026-08-27-tron-wallet-user-stories.md:610` and `2026-08-27-polygon-wallet-user-stories.md:560` spell out "0 = success, 1 = user abort, 2 = bad input, 3 = upstream/RPC transport failure, 4 = wallet/balance issue, 5 = signing/RPC/broadcast error", which shares no category with the shared table but the six numbers.** The deep-dive files are historical research records and arguably stand on their own; the four user-stories files are live spec documents and are genuinely stale.
+9. **The `sol` CLI cannot report an insufficient balance, and it reports a rejected transaction as confirmed.** Two pre-existing engine gaps, both unchanged by this migration (the migration faithfully classifies whatever the engine produces): (a) `sol-wallet-core`'s `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:37`) is the only producer of `Error::InsufficientFunds`, and its only callers are two integration tests in `sol-wallet-core/tests/chain_rpc.rs` — so the `sol` CLI's send paths (`sol/src/handlers/wallet.rs`, `sol/src/handlers/spl.rs`) send without checking the balance, and an insufficient balance surfaces as a node-side RPC error (`Error::Rpc` → `Network`, exit **2**) rather than as exit 3; and (b) `sol-wallet-core`'s `Error::BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has **no** construction site anywhere, and `wait_for_confirm` (`sol-wallet-core/src/tx/broadcast.rs:188`) never inspects `status.err` — so a transaction the cluster rejected is reported as **confirmed**, exit **0**, not as a broadcast failure. Closing either changes the `sol` CLI's observable behaviour and its `CHANGELOG.md` bullet, so it is a separate task rather than a Task 2 fix. **File it with the `security` label too** — an automation rule keying on exit 0 would treat a rejected transaction as sent. (`sol-wallet-core/src/chain/preflight.rs:6-17`'s module doc is aspirational rather than descriptive, and the same fix should correct it: it claims `| sol send <addr> <amount> | check_native_balance only |` and "Phase 7 CLI handlers" run preflight, but `check_native_balance` and `check_ata_exists` are called only from `sol-wallet-core/tests/chain_rpc.rs`, `check_token_balance` has no caller outside its own definition, and `resolve_mint_decimals` *is* reached in production (`sol-wallet-core/src/ffi.rs:998`); the doc also names a `tests/preflight.rs` of "5 unit tests against wiremock" that does not exist.)
+10. **Three `sol` CLI error paths drop the core error from the `anyhow` chain, so a node failure exits 1 instead of 2.** `sol/src/handlers/wallet.rs:579` (`speedup_transfer`), `:608` (`getTransaction RPC`) and `:653` (`get_balance`) format the `sol_wallet_core::Error` into a string with `anyhow!("...: {e}")`, so `sol/src/handlers/error.rs`'s `classify` finds no typed core error in the chain and falls back to `User` (**1**) instead of the category the error carries (`Network`, **2**). The send path is unaffected — it wraps the error with `anyhow::Error::new(e).context(...)` (`sol/src/handlers/wallet.rs:501`, `:504`, `:525`, `:535`), which preserves the source — so the "sol reaches 2" claim holds for sends, but `sol balance` and `sol wallet send-speedup` report a node failure as operator input. Pre-existing: the same three calls are in the pre-migration tree at `19764a0~1` (`:583`, `:612`, `:657`). Fixing them changes the `sol` CLI's observable exit code for those two commands, so the fix needs its own `CHANGELOG.md` note.
