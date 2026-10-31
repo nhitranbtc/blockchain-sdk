@@ -1740,7 +1740,7 @@ cargo test -p btc
 `CHANGELOG.md` `[Unreleased]` — one flat bullet per changed CLI, each immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/btc/` — **BREAKING:** the `btc` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid mnemonic 2→1, backend unreachable 1→2, insufficient funds 1→3, signing/wallet-store failure 1→4. Note that `btc` reports "wallet not found" as exit 4, not 1, because `bitcoin-wallet-core`'s `WalletStore` variant deliberately collapses not-found with wrong-password and corrupt-blob to close the file-existence oracle. Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/btc/` — **BREAKING:** the `btc` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid mnemonic 2→1, backend unreachable 1→2, insufficient funds 1→4, signing/wallet-store failure 1→4. Note that `btc` reports "wallet not found" as exit 4, not 1, because `bitcoin-wallet-core`'s `WalletStore` variant deliberately collapses not-found with wrong-password and corrupt-blob to close the file-existence oracle. **The `btc` CLI classifies all six categories, but it constructs no insufficient-funds and no broadcast-rejection error, so the insufficient-funds (3) and broadcast-rejection (5) codes are classified but not yet reachable in this CLI: the Bitcoin engine surfaces a funds shortage as `Error::TxBuild` (there is no `Error::InsufficientFunds` construction site outside the engine's own tests), which is `Signing` (4).** **Error output no longer carries Rust's `Error: ` prefix on stderr; automation that greps stderr for `Error: ` must be updated.** Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 ```
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
@@ -1877,6 +1877,22 @@ Four intentional divergences from the categories above:
     rejects an empty passphrase centrally, from argv, the env var and the TTY
     prompt — so it exits **1** everywhere, sign included. That is TRON being
     stricter, not a different taxonomy.
+  - **`btc` accepts one where the other three chains refuse it.** Its
+    `password_or_prompt` (`btc/src/handlers.rs:84`) treats an empty
+    `--password` argv as "not supplied" and falls through to the TTY prompt,
+    and argon2 0.5.3 derives a key from an empty password without complaint
+    (`bitcoin-wallet-core/src/crypto/argon2.rs:104` calls
+    `Argon2::hash_password_into`, whose `verify_inputs` check rejects only
+    passwords *longer than* `u32::MAX`) — so `btc wallet create` **succeeds
+    with exit 0** and stores a wallet encrypted under an empty passphrase. On
+    the paths that open a wallet **created with a non-empty passphrase** the
+    empty passphrase derives a *different* key, so the **AES-GCM tag check**
+    fails and the error lands on `WalletStore` → **4**, like a wrong
+    passphrase; a wallet that was itself created under an empty passphrase
+    re-derives the *same* key and opens. **`sol` accepts one the same way**
+    — its only password source is the `SOL_WALLET_PASSWORD` env var, and
+    nothing downstream checks emptiness. This is pre-existing, unchanged by
+    the migration, and recorded as a deferred finding.
 
   The EVM CLIs' differences on the wallet-open paths are a **recorded deferred
   finding**: closing them means changing `eth` and `polygon` together, against
@@ -2098,3 +2114,7 @@ These fall out of this phase and must be filed as backlog issues (`backlog` + `p
 2. **Bitcoin's "wallet not found" exits 4 while the other four chains exit 1.** Deliberate and documented — but a caller keying on "wallet missing" across chains needs to know. If a future `wallet-storage` trait introduces a shared `WalletId`, revisit it.
 3. **The `rust-wallet-app` workspace version is `0.2.0` while `CHANGELOG.md` already documents `v0.3.0`.** A pre-existing inconsistency, not introduced here. Task 4 removes public API from three library crates, so the next release needs a version bump to `0.3.0` — a release decision, not a task in this plan.
 4. **The declared MSRV `rust-version = "1.85"` is unachievable** — the vendored anychain stack requires 1.98.1. Pre-existing; fix separately.
+5. **The two EVM CLIs disagree with each other about an empty passphrase on the wallet-open paths.** `polygon` refuses it on its native-send and speed-up paths (**1**) but not on ERC-20 send and approve (**4**), while `eth` refuses it nowhere but create and import — so `eth`'s native send, ERC-20 send and speed-up all exit **4**. ETH's ERC-20 *approve*, sign-message and sign-typed are deferred stubs that never reach a wallet and exit **2**. Closing the gap means changing `eth` and `polygon` together, against the already-merged ETH migration, with both `CHANGELOG.md` bullets corrected — so it is a separate cross-chain task, not a Task 5 fix.
+6. **`btc` accepts an empty passphrase where the other three chains (`eth`, `polygon`, `tron`) refuse it.** On a TTY, a blank response yields an empty password, and argon2 0.5.3 derives a key from it (`bitcoin-wallet-core/src/crypto/argon2.rs:104` calls `Argon2::hash_password_into`, whose `verify_inputs` check rejects only passwords *longer than* `u32::MAX`), so `btc wallet create` **succeeds with exit 0** and stores a wallet encrypted under an empty passphrase — anyone holding the file can decrypt it, and a wallet created that way re-opens with the same empty passphrase. Pre-existing and unchanged by this migration (it is not an exit-code defect; the operation succeeds), but it is a security-relevant divergence from `eth`, `polygon` and `tron`, which all refuse an empty passphrase at the CLI boundary. **File it with the security label, not `backlog` alone.**
+7. **`sol` accepts an empty passphrase too.** `sol/src/handlers/wallet.rs:740-745` reads `SOL_WALLET_PASSWORD` and returns `Ok("")` for an empty env var, and nothing downstream checks emptiness (`sol-wallet-core/src/crypto.rs`'s `derive_key` calls `a2.hash_password_into(password, salt, …)` with no length guard). Measured: `SOL_WALLET_PASSWORD="" sol wallet create …` → **exit 0**, wallet written. Same security shape as item 6 and the same remedy — refuse the empty passphrase at the CLI boundary, as `eth`, `polygon` and `tron` already do. **File it with the security label too.**
+8. **Documents under `docs/wallets/` outside `CONTEXT.md` still state the pre-migration exit codes.** Task 7 owns `CONTEXT.md` only. The rest were found by the Task 6 review: `docs/wallets/2026-08-05-btc-wallet-user-stories.md:122` ("Invalid checksum returns exit code 2") and the per-story acceptance claims around it, and `docs/wallets/2026-09-08-solana-rust-sdks-deep-dive.md:1430`/`:1853`/`:2110` and `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md:1021`, which describe a "matches `btc/src/main.rs:151-169` exit-2 pattern" that no longer exists. The deep-dive files are historical research records and arguably stand on their own; the user-stories file is a live spec document and is genuinely stale.
