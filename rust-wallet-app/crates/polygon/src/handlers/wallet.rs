@@ -338,7 +338,7 @@ pub async fn wallet_sync(
 ///
 /// Thin wrapper over `WalletManager::create_wallet_for_network`:
 ///   1. Validate `name` via `handlers::validate_wallet_name`
-///      (1..=32 chars, `[A-Za-z0-9 _-]` charset; exit 2 on violation).
+///      (1..=32 chars, `[A-Za-z0-9 _-]` charset; exit 1 on violation).
 ///   2. Open a `WalletManager` rooted at `data_dir`. `open_at` creates
 ///      the directory tree + tightens perms to `0o700` per #337 H-1.
 ///   3. Delegate to `create_wallet_for_network`. Lib generates a
@@ -346,12 +346,17 @@ pub async fn wallet_sync(
 ///      Argon2id-derives the AES key, AES-256-GCM-encrypts the
 ///      mnemonic blob, writes `0o600` `<uuid>.enc` + `<uuid>.meta.json`.
 ///   4. Map `WalletError` → `polygon_wallet_core::Error` via
-///      `handlers::map_wallet_err` so the CLI's exit-code table
-///      (cryptic internal errors → `Error::InvalidInput` exit 2)
+///      `handlers::map_wallet_err` so the CLI's shared category table
+///      applies (the exit codes live in `wallet-errors`).
 ///
-/// Empty password → `WalletError::Crypto(Argon2("password must be
-/// non-empty"))` → `Error::InvalidInput`. Duplicate name →
-/// `AlreadyExists` → `Error::InvalidInput`. Both exit 2.
+/// Empty password → refused up front at the handler boundary →
+/// `Error::InvalidPassword` (User, exit 1). ON THIS PATH the lib never
+/// sees it, so it never raises the `Crypto` error that would map to
+/// `Signing`. (The paths that open an existing wallet are different —
+/// there an empty passphrase reaches the library and surfaces as
+/// `DecryptionFailed`, exit 4.)
+/// Duplicate name → `AlreadyExists` → `Error::WalletExists` (User,
+/// exit 1).
 #[allow(dead_code)] // wired into main.rs::run() dispatch (separate sub-task)
 pub fn wallet_create(
     data_dir: &std::path::Path,
@@ -360,6 +365,16 @@ pub fn wallet_create(
     network: polygon_wallet_core::Network,
 ) -> Result<WalletCreated> {
     crate::handlers::validate_wallet_name(name)?;
+    // Empty passphrase is refused up front, before the lib call: it is
+    // operator input the CLI can reject (`InvalidPassword` → `User`,
+    // exit 1), NOT a credential failure (`Signing`, exit 4). Mirrors the
+    // `eth` CLI's guard (`eth/src/handlers.rs:127`), so on THIS path an
+    // empty passphrase and a wrong passphrase stay DISTINGUISHABLE.
+    if password.is_empty() {
+        return Err(polygon_wallet_core::Error::InvalidPassword(
+            "password must be non-empty".into(),
+        ));
+    }
     let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.to_path_buf())
         .map_err(crate::handlers::map_wallet_err)?;
     mgr.create_wallet_for_network(name, password.as_slice(), network)
@@ -393,6 +408,14 @@ pub fn wallet_import(
     phrase: &SecretMnemonic,
 ) -> Result<WalletCreated> {
     crate::handlers::validate_wallet_name(name)?;
+    // Empty passphrase is refused up front, before the lib call — on THIS
+    // path the lib never sees it. See the sister guard in
+    // `wallet_create` above and `eth/src/handlers.rs:145`.
+    if password.is_empty() {
+        return Err(polygon_wallet_core::Error::InvalidPassword(
+            "password must be non-empty".into(),
+        ));
+    }
     let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.to_path_buf())
         .map_err(crate::handlers::map_wallet_err)?;
     // Bounded lifetime: the `&str` lives only for the synchronous
@@ -432,7 +455,7 @@ pub fn wallet_import(
 ///
 /// Invariants enforced (per #469 AC + L12 H-1 sister finding from
 /// PR #456):
-/// - File must exist; missing → `Error::InvalidInput` (exit 2).
+/// - File must exist; missing → `Error::InvalidInput` (exit 1).
 /// - File mode must be `0o600` (owner-only); any other mode on Unix →
 ///   `Error::InvalidInput` naming the actual mode so the operator
 ///   can `chmod 600` without re-reading the source. On non-Unix
@@ -523,7 +546,7 @@ pub(crate) fn read_pk_file(path: &Path) -> Result<Zeroizing<Vec<u8>>> {
 /// `SecretMnemonic` wrapper.
 ///
 /// Sister invariant to `read_pk_file` above (Issue #469 / PR #470):
-/// - File must exist; missing → `Error::InvalidInput` (exit 2).
+/// - File must exist; missing → `Error::InvalidInput` (exit 1).
 /// - File mode must be `0o600` (owner-only); any other mode on Unix →
 ///   `Error::InvalidInput` naming the actual mode so the operator can
 ///   `chmod 600` without re-reading the source. On non-Unix (Windows)
@@ -602,9 +625,10 @@ pub(crate) fn read_mnemonic_file(path: &Path) -> Result<SecretMnemonic> {
 /// Per L13 Q4 critical-tier: key material + signing surface.
 /// Sister invariants to `wallet_import`:
 /// - Name validated via `handlers::validate_wallet_name`.
-/// - Empty-password defense-in-depth: lib rejects via
-///   `WalletError::Crypto(Argon2)` (mapped to `Error::InvalidInput` by
-///   `handlers::map_wallet_err`).
+/// - Empty-password defense-in-depth: refused up front at the handler
+///   boundary → `Error::InvalidPassword` (User, exit 1), the same guard
+///   the `eth` CLI applies to its import path
+///   (`eth/src/handlers.rs:145`).
 /// - Duplicate-name defense: lib rejects via `WalletError::AlreadyExists`.
 /// - Disk perms: lib writes 0o600 blob (sister test in
 ///   evm-wallet-core pins this; handler-level test re-pins it for
@@ -617,6 +641,15 @@ pub fn wallet_import_private_key_for_network(
     pk_bytes: &Zeroizing<Vec<u8>>,
 ) -> Result<WalletCreated> {
     crate::handlers::validate_wallet_name(name)?;
+    // Empty passphrase is refused up front, before the lib call — on THIS
+    // path the lib never sees it. Sister to the guards in
+    // `wallet_create` / `wallet_import`. The `eth` CLI covers both
+    // import shapes behind one guard (`eth/src/handlers.rs:145`).
+    if password.is_empty() {
+        return Err(polygon_wallet_core::Error::InvalidPassword(
+            "password must be non-empty".into(),
+        ));
+    }
     let mgr = polygon_wallet_core::WalletManager::open_at(data_dir.to_path_buf())
         .map_err(crate::handlers::map_wallet_err)?;
     mgr.import_private_key_for_network(name, pk_bytes.as_slice(), password.as_slice(), network)
@@ -665,11 +698,16 @@ fn parse_send_amount(s: &str) -> Result<U256> {
         .map_err(|e| Error::InvalidInput(format!("invalid --amount (wei): {e}")))
 }
 
-/// Reject empty passwords at the handler boundary. The lib-level
-/// `wallet_create` rejects empty pw with a "crypto" message (test
-/// `wallet_create_rejects_empty_password` above). This handler-
+/// Reject empty passwords at the handler boundary. This handler-
 /// boundary check fails fast BEFORE the wallet-unlock work so the
-/// operator sees exit-2 immediately on TTY.
+/// operator sees the `User` error (exit 1) immediately on TTY — on the
+/// SEND paths an empty passphrase is operator input, never a credential
+/// failure. (The paths that open an existing wallet are not guarded
+/// here: `sign-message` / `sign-typed` / `erc20 send` / `erc20 approve`
+/// let an empty passphrase reach the library, which surfaces as
+/// `DecryptionFailed`, exit 4.)
+/// Sister of the empty-passphrase guards in `wallet_create` /
+/// `wallet_import` (test `wallet_create_rejects_empty_password` above).
 #[allow(dead_code)] // wired in T6c5 follow-up alongside main.rs dispatch
 fn assert_send_password(p: &Zeroizing<Vec<u8>>) -> Result<()> {
     if p.is_empty() {
@@ -719,14 +757,14 @@ pub async fn wallet_send_native_v2(
     wait: bool,
 ) -> Result<SendOutcome> {
     // Step 1: validators (pure, no I/O, no provider). Close the
-    // S1 / S2 / S4 / S7 / S6 paths at exit 2 before any wallet
+    // S1 / S2 / S4 / S7 / S6 paths at exit 1 before any wallet
     // unlock or RPC call.
     let to_addr = parse_send_address(to)?;
     let amount_wei = parse_send_amount(amount)?;
     assert_send_password(password)?;
     let fee_tier = crate::handlers::fee::parse_fee_tier(fee)?;
     // Parse + validate RPC URL once at the validators stage (fail fast
-    // at exit 2 BEFORE wallet unlock); reuse the parsed `Url` in
+    // at exit 1 BEFORE wallet unlock); reuse the parsed `Url` in
     // step 3 below to avoid a second parse + scheme check.
     let parsed_rpc_url: Option<url::Url> = match rpc_url {
         Some(url_str) => {
@@ -790,7 +828,7 @@ pub async fn wallet_send_native_v2(
     // Step 6: gas. Either explicit gwei overrides for BOTH max_fee
     // AND priority_fee, or omit both and use the per-tier multiplier
     // over `estimate_eip1559_fees()`. Partial override is a user
-    // error → exit 2 (mirrors ETH `resolve_overrides` at
+    // error → exit 1 (mirrors ETH `resolve_overrides` at
     // `eth/src/handlers.rs:1047-1068`).
     let (max_fee_per_gas, max_priority_fee_per_gas) = match (max_fee_gwei, priority_fee_gwei) {
         (Some(_), None) | (None, Some(_)) => {
@@ -1070,7 +1108,7 @@ mod tests {
     }
 
     /// T6c1 test: invalid address must surface as `Error::InvalidInput`
-    /// (exit 2). Live RPC test deferred to T7 (operator-driven per L29).
+    /// (exit 1). Live RPC test deferred to T7 (operator-driven per L29).
     /// Wraps `wallet_balance` in `tokio::runtime::Runtime::block_on`
     /// since the production fn is `async` (no separate runtime dep).
     #[test]
@@ -1306,7 +1344,7 @@ mod tests {
         SecretMnemonic::new(BAD_WORD_COUNT.to_string())
     }
     /// 12 words but the last 10 are not on the BIP-39 English wordlist.
-    /// bip39 returns error + lib surfaces `Error::InvalidInput`.
+    /// bip39 returns error + lib surfaces `Error::InvalidMnemonic`.
     const BAD_WORDS: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon zzzqx";
     fn bad_words() -> SecretMnemonic {
         SecretMnemonic::new(BAD_WORDS.to_string())
@@ -1332,19 +1370,28 @@ mod tests {
         assert!(meta.exists(), ".meta.json missing at {}", meta.display());
     }
 
+    /// `wallet_create` rejects an empty password UP FRONT, at the CLI
+    /// boundary — `Error::InvalidPassword` (`User`, exit 1), not a
+    /// credential failure. On THIS path an empty passphrase is operator
+    /// input the CLI can refuse; a *wrong* passphrase surfaces as
+    /// `Error::DecryptionFailed` (`Signing`, exit 4) from `map_wallet_err`.
+    /// The two are deliberately DISTINGUISHABLE: the `eth` CLI makes the
+    /// same distinction on its create path (`eth/src/handlers.rs:127`),
+    /// and an empty passphrase must not be reported as "retry with a
+    /// different credential".
     #[test]
     fn wallet_create_rejects_empty_password() {
         let tmp = tempdir().expect("tempdir");
         let empty = Zeroizing::new(Vec::<u8>::new());
         let r = super::wallet_create(tmp.path(), "alpha", &empty, amoy());
         match r {
-            Err(Error::InvalidInput(msg)) => {
+            Err(Error::InvalidPassword(msg)) => {
                 assert!(
-                    msg.contains("crypto") || msg.contains("password"),
-                    "InvalidInput must mention crypto/password; got: {msg}"
+                    msg.contains("password") || msg.contains("non-empty"),
+                    "InvalidPassword must mention password/non-empty; got: {msg}"
                 );
             }
-            other => panic!("expected Error::InvalidInput, got {other:?}"),
+            other => panic!("expected Error::InvalidPassword (exit 1), got {other:?}"),
         }
         // No files written on rejection.
         let amoy_dir = tmp.path().join(amoy().as_dir_name());
@@ -1361,13 +1408,13 @@ mod tests {
         let pwd2 = Zeroizing::new(b"different password 1234567".to_vec());
         let r = super::wallet_create(tmp.path(), "alpha", &pwd2, amoy());
         match r {
-            Err(Error::InvalidInput(msg)) => {
+            Err(Error::WalletExists { name, .. }) => {
                 assert!(
-                    msg.contains("already exists") && msg.contains("alpha"),
-                    "InvalidInput must mention duplicate + name; got: {msg}"
+                    name.contains("alpha"),
+                    "WalletExists must carry the duplicate name; got: {name}"
                 );
             }
-            other => panic!("expected Error::InvalidInput, got {other:?}"),
+            other => panic!("expected Error::WalletExists, got {other:?}"),
         }
     }
 
@@ -1464,14 +1511,18 @@ mod tests {
             .exists());
     }
 
+    /// `wallet_import` rejects an empty password up front —
+    /// `Error::InvalidPassword` (`User`, exit 1), the same guard the
+    /// `eth` CLI applies to its import path (`eth/src/handlers.rs:145`).
+    /// On THIS path the lib never sees the empty passphrase.
     #[test]
     fn wallet_import_rejects_empty_password() {
         let tmp = tempdir().expect("tempdir");
         let empty = Zeroizing::new(Vec::<u8>::new());
         let r = super::wallet_import(tmp.path(), "beta", &empty, 0, amoy(), &good_mnemonic());
         match r {
-            Err(Error::InvalidInput(_)) => {}
-            other => panic!("expected Error::InvalidInput, got {other:?}"),
+            Err(Error::InvalidPassword(_)) => {}
+            other => panic!("expected Error::InvalidPassword (exit 1), got {other:?}"),
         }
     }
 
@@ -1481,13 +1532,13 @@ mod tests {
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad_word_count());
         match r {
-            Err(Error::InvalidInput(msg)) => {
+            Err(Error::InvalidMnemonic(msg)) => {
                 assert!(
                     msg.contains("mnemonic") || msg.contains("word"),
-                    "InvalidInput must mention mnemonic/word; got: {msg}"
+                    "InvalidMnemonic must mention mnemonic/word; got: {msg}"
                 );
             }
-            other => panic!("expected Error::InvalidInput, got {other:?}"),
+            other => panic!("expected Error::InvalidMnemonic, got {other:?}"),
         }
     }
 
@@ -1497,8 +1548,8 @@ mod tests {
         let pwd = Zeroizing::new(b"correct horse battery staple".to_vec());
         let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad_words());
         match r {
-            Err(Error::InvalidInput(_)) => {}
-            other => panic!("expected Error::InvalidInput, got {other:?}"),
+            Err(Error::InvalidMnemonic(_)) => {}
+            other => panic!("expected Error::InvalidMnemonic, got {other:?}"),
         }
     }
 
@@ -1511,13 +1562,13 @@ mod tests {
         let pwd2 = Zeroizing::new(b"different password 1234567".to_vec());
         let r = super::wallet_import(tmp.path(), "dupe", &pwd2, 0, amoy(), &good_mnemonic());
         match r {
-            Err(Error::InvalidInput(msg)) => {
+            Err(Error::WalletExists { name, .. }) => {
                 assert!(
-                    msg.contains("already exists") && msg.contains("dupe"),
-                    "InvalidInput must mention duplicate + name; got: {msg}"
+                    name.contains("dupe"),
+                    "WalletExists must carry the duplicate name; got: {name}"
                 );
             }
-            other => panic!("expected Error::InvalidInput, got {other:?}"),
+            other => panic!("expected Error::WalletExists, got {other:?}"),
         }
     }
 
@@ -1571,53 +1622,66 @@ mod tests {
 
     // ----- map_wallet_err tests -----
 
+    /// `WalletError::AlreadyExists` → `Error::WalletExists` (User, exit 1)
+    /// — the same variant the `eth` CLI produces (`eth/src/handlers.rs:84`),
+    /// so the two CLIs agree on both the variant and the message.
     #[test]
-    fn map_wallet_err_already_exists_to_invalid_input() {
+    fn map_wallet_err_already_exists_to_wallet_exists() {
         let wallet_err = WalletError::AlreadyExists {
             name: "alpha".into(),
             network: amoy(),
         };
         let mapped = crate::handlers::map_wallet_err(wallet_err);
         match mapped {
-            Error::InvalidInput(msg) => {
+            Error::WalletExists { name, network } => {
+                assert_eq!(name, "alpha", "WalletExists must carry the wallet name");
                 assert!(
-                    msg.contains("alpha") && msg.contains("exists"),
-                    "msg must mention alpha + exists; got: {msg}"
+                    network.contains("amoy"),
+                    "WalletExists must carry the network; got: {network}"
                 );
             }
-            other => panic!("expected Error::InvalidInput, got {other:?}"),
+            other => panic!("expected Error::WalletExists, got {other:?}"),
         }
     }
 
-    /// H-1 from L13 step 10a — `Corrupt` is the ONLY `WalletError`
-    /// variant that maps to `Error::Rpc` (not `InvalidInput`), so the
-    /// exit code differs. A future refactor that "normalizes" Corrupt
-    /// into `InvalidInput` would silently change the CLI's exit-code
-    /// contract. Locked here. Reachable via `WalletManager::unlock`
-    /// (UTF-8 decode failure / mnemonic parse / `0x` prefix detection).
+    /// H-1 from L13 step 10a — `Corrupt` maps to `Error::WalletCorrupt`
+    /// (Signing, exit 4) — NOT `Error::Rpc` and NOT `Error::InvalidInput`.
+    /// A corrupt wallet blob is a permanently broken local file, never a
+    /// transient network fault, so it must not report under `Network`
+    /// (exit 2): an automation rule that retries on 2 would loop forever
+    /// on a file that can never recover. Identical to the `eth` CLI's
+    /// mapping (`eth/src/handlers.rs:72`), so a wrong passphrase
+    /// (`Crypto` → `DecryptionFailed`) and a corrupt blob (`Corrupt` →
+    /// `WalletCorrupt`) are indistinguishable by exit code in BOTH
+    /// chains — both `Signing`, exit 4.
     #[test]
-    fn map_wallet_err_corrupt_to_rpc() {
+    fn map_wallet_err_corrupt_to_wallet_corrupt() {
         let wallet_err = WalletError::Corrupt {
             reason: "mnemonic parse: bad entropy".into(),
         };
         let mapped = crate::handlers::map_wallet_err(wallet_err);
         match mapped {
-            Error::Rpc(msg) => {
+            Error::WalletCorrupt { path, reason } => {
                 assert!(
-                    msg.contains("corrupt"),
-                    "Rpc msg must mention 'corrupt'; got: {msg}"
+                    reason.contains("corrupt"),
+                    "WalletCorrupt reason must mention 'corrupt'; got: {reason}"
+                );
+                assert_eq!(
+                    path, "<unknown>",
+                    "WalletError::Corrupt carries no path — the CLI records '<unknown>'"
                 );
             }
-            other => panic!("expected Error::Rpc (different exit code!), got {other:?}"),
+            other => panic!("expected Error::WalletCorrupt (Signing, exit 4), got {other:?}"),
         }
     }
 
-    /// H-2 from L13 step 10a — Io/Json/Path all zero coverage. These
-    /// are the only `Error::Rpc`-encoding variants besides `Corrupt`;
-    /// they cover fs permission errors, back-meta deserialize failure,
-    /// and the lib's `RwLock` poisoning defense. Pinning each unit
-    /// here means future handler additions that DO touch fs can trust
-    /// the translation table.
+    /// H-2 from L13 step 10a — Io/Path map to `Error::Rpc` (Network, exit
+    /// 2). These cover fs permission errors and the lib's `RwLock`
+    /// poisoning defense; the engine has no I/O-specific error variant,
+    /// so `Network` is the closest category (the known deferral, and the
+    /// `eth` CLI behaves the same way — `eth/src/handlers.rs:71`).
+    /// Pinning each unit here means future handler additions that DO
+    /// touch fs can trust the translation.
     #[test]
     fn map_wallet_err_io_to_rpc() {
         let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "x");
@@ -1630,18 +1694,25 @@ mod tests {
         }
     }
 
+    /// `WalletError::Json` — a wallet file that does not parse IS a
+    /// corrupt blob — maps to `Error::WalletCorrupt` (Signing, exit 4),
+    /// the same mapping the `eth` CLI uses (`eth/src/handlers.rs:72`).
     #[test]
-    fn map_wallet_err_json_to_rpc() {
+    fn map_wallet_err_json_to_wallet_corrupt() {
         let json_err = serde_json::from_str::<u8>("{").unwrap_err();
         let mapped = crate::handlers::map_wallet_err(WalletError::Json(json_err));
         match mapped {
-            Error::Rpc(msg) => {
+            Error::WalletCorrupt { path, reason } => {
                 assert!(
-                    msg.contains("json"),
-                    "Rpc msg must mention 'json'; got: {msg}"
+                    reason.contains("json"),
+                    "WalletCorrupt reason must mention 'json'; got: {reason}"
+                );
+                assert_eq!(
+                    path, "<unknown>",
+                    "WalletError::Json carries no path — the CLI records '<unknown>'"
                 );
             }
-            other => panic!("expected Error::Rpc, got {other:?}"),
+            other => panic!("expected Error::WalletCorrupt (Signing, exit 4), got {other:?}"),
         }
     }
 
@@ -2042,7 +2113,7 @@ mod tests {
 
     /// `wallet_import` rejects an empty phrase. Pins the lib's
     /// BIP-39 parse-in contract at the CLI boundary — empty mnemonic
-    /// is `Error::InvalidInput`, not a panic.
+    /// is `Error::InvalidMnemonic`, not a panic.
     #[test]
     fn wallet_import_rejects_empty_phrase() {
         let tmp = tempdir().expect("tempdir");
@@ -2050,8 +2121,8 @@ mod tests {
         let empty = SecretMnemonic::new(String::new());
         let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &empty);
         match r {
-            Err(Error::InvalidInput(_)) => {}
-            other => panic!("expected Error::InvalidInput for empty phrase, got {other:?}"),
+            Err(Error::InvalidMnemonic(_)) => {}
+            other => panic!("expected Error::InvalidMnemonic for empty phrase, got {other:?}"),
         }
     }
 
@@ -2066,8 +2137,8 @@ mod tests {
         let ws = SecretMnemonic::new("   \t  ".to_string());
         let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &ws);
         match r {
-            Err(Error::InvalidInput(_)) => {}
-            other => panic!("expected Error::InvalidInput for whitespace-only, got {other:?}"),
+            Err(Error::InvalidMnemonic(_)) => {}
+            other => panic!("expected Error::InvalidMnemonic for whitespace-only, got {other:?}"),
         }
     }
 
@@ -2087,8 +2158,8 @@ mod tests {
         );
         let r = super::wallet_import(tmp.path(), "beta", &pwd, 0, amoy(), &bad);
         match r {
-            Err(Error::InvalidInput(_)) => {}
-            other => panic!("expected Error::InvalidInput for bad checksum, got {other:?}"),
+            Err(Error::InvalidMnemonic(_)) => {}
+            other => panic!("expected Error::InvalidMnemonic for bad checksum, got {other:?}"),
         }
     }
 

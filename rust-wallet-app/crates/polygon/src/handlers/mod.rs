@@ -50,46 +50,70 @@ pub(super) fn validate_rpc_scheme(url: &url::Url) -> polygon_wallet_core::Result
 
 /// Map `WalletError` (lib-level) onto `polygon_wallet_core::Error`
 /// (CLI-canonical). Called by every handler that touches `WalletManager`
-/// so the CLI's own classification applies (design §3.5 cross-cutting
-/// line 293). Localities:
+/// so the CLI's shared category table applies (design §3.5 cross-cutting
+/// line 293). The mapping is identical to the `eth` CLI's
+/// (`eth/src/handlers.rs:69`) — the two CLIs share one error type, so a
+/// divergent mapping between them is exactly the drift this phase
+/// removes:
 ///
-///   `InvalidInput` (exit 2) for caller-side errors (password, name,
-///       mnemonic, duplicate name, missing wallet).
-///   `Rpc` for filesystem + serialization + corruption — a distinct
-///       exit code, per the canonical variant classification.
+///   `Io`/`Path` → `Rpc` (Network, exit 2)
+///   `Json`/`Corrupt` → `WalletCorrupt` (Signing, exit 4)
+///   `Crypto` → `DecryptionFailed` (Signing, exit 4)
+///   `Mnemonic` → `InvalidMnemonic` (User, exit 1)
+///   `PrivateKey` → `InvalidPrivateKey` (User, exit 1)
+///   `NotFound` → `WalletNotFound` (User, exit 1)
+///   `NotFoundByName` → `WalletNotFoundByName` (User, exit 1)
+///   `AlreadyExists` → `WalletExists` (User, exit 1)
+///
+/// A wrong passphrase (`Crypto`) and a corrupt wallet blob (`Corrupt`)
+/// therefore land on the SAME category — `Signing`, exit 4 — in every
+/// chain, and must not be distinguishable by exit code.
+///
+/// An EMPTY passphrase is a DIFFERENT condition, and how it reaches this
+/// function depends on the PATH:
+/// - On the CREATE and IMPORT paths the handlers refuse it up front with
+///   `Error::InvalidPassword` (`User`, exit 1), so the lib never raises
+///   the `Crypto` error for it. Mirrors the `eth` CLI
+///   (`eth/src/handlers.rs:127` / `:145`).
+/// - On the paths that OPEN AN EXISTING WALLET (`sign-message`,
+///   `sign-typed`, `erc20 send`, `erc20 approve`) there is no such
+///   guard: an empty passphrase DOES reach the library and surfaces
+///   here as `Crypto` → `DecryptionFailed` (`Signing`, exit 4) —
+///   exactly as a wrong passphrase does.
 ///
 /// T6c4: required because `WalletError` is the lib-canonical error
 /// type (per Drift §2.5 + re-export added in
 /// `polygon-wallet-core/src/lib.rs`). Centralizing the translation
-/// here keeps per-handler code small + the exit-code table
+/// here keeps per-handler code small + the shared `wallet-errors` table
 /// authoritative.
 pub(crate) fn map_wallet_err(e: polygon_wallet_core::WalletError) -> polygon_wallet_core::Error {
     use polygon_wallet_core::WalletError;
     match e {
-        WalletError::Crypto(c) => {
-            polygon_wallet_core::Error::InvalidInput(format!("wallet crypto error: {c}"))
+        WalletError::Io(_) | WalletError::Path(_) => {
+            polygon_wallet_core::Error::rpc(format!("wallet: {e}"))
         }
-        WalletError::AlreadyExists { name, network } => polygon_wallet_core::Error::InvalidInput(
-            format!("wallet '{name}' already exists on {network:?}"),
-        ),
-        WalletError::Mnemonic(s) => {
-            polygon_wallet_core::Error::InvalidInput(format!("invalid mnemonic: {s}"))
+        WalletError::Json(_) | WalletError::Corrupt { .. } => {
+            polygon_wallet_core::Error::WalletCorrupt {
+                path: "<unknown>".to_string(),
+                reason: e.to_string(),
+            }
         }
-        WalletError::PrivateKey(s) => {
-            polygon_wallet_core::Error::InvalidInput(format!("invalid private key: {s}"))
-        }
+        WalletError::Crypto(_) => polygon_wallet_core::Error::DecryptionFailed(e.to_string()),
+        WalletError::Mnemonic(_) => polygon_wallet_core::Error::InvalidMnemonic(e.to_string()),
+        WalletError::PrivateKey(_) => polygon_wallet_core::Error::InvalidPrivateKey(e.to_string()),
         WalletError::NotFound { wallet_id } => {
-            polygon_wallet_core::Error::InvalidInput(format!("wallet not found: {wallet_id}"))
+            polygon_wallet_core::Error::WalletNotFound { wallet_id }
         }
-        WalletError::NotFoundByName { name, network } => polygon_wallet_core::Error::InvalidInput(
-            format!("wallet '{name}' not found on {network:?}"),
-        ),
-        WalletError::Corrupt { reason } => {
-            polygon_wallet_core::Error::Rpc(format!("wallet file corrupt: {reason}"))
+        WalletError::NotFoundByName { name, network } => {
+            polygon_wallet_core::Error::WalletNotFoundByName {
+                name,
+                network: format!("{network:?}").to_lowercase(),
+            }
         }
-        WalletError::Io(io) => polygon_wallet_core::Error::Rpc(format!("io: {io}")),
-        WalletError::Json(j) => polygon_wallet_core::Error::Rpc(format!("json: {j}")),
-        WalletError::Path(s) => polygon_wallet_core::Error::Rpc(format!("path: {s}")),
+        WalletError::AlreadyExists { name, network } => polygon_wallet_core::Error::WalletExists {
+            name,
+            network: format!("{network:?}").to_lowercase(),
+        },
     }
 }
 
@@ -101,7 +125,7 @@ pub(crate) fn map_wallet_err(e: polygon_wallet_core::WalletError) -> polygon_wal
 /// would be invisible in `wallet list`. Length 1..=32 chars
 /// (byte length, ASCII-only by construction). Separate error messages
 /// per violation: empty / too-long / bad-charset / all-whitespace.
-/// Returns `Error::InvalidInput` (exit 2) on any violation.
+/// Returns `Error::InvalidInput` (exit 1) on any violation.
 pub(crate) fn validate_wallet_name(name: &str) -> polygon_wallet_core::Result<()> {
     if name.is_empty() {
         return Err(polygon_wallet_core::Error::InvalidInput(

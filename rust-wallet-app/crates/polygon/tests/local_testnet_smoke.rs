@@ -56,13 +56,13 @@
 //! | 23  | `local_testnet_wallet_send_explicit_gas_limit_happy_path` | `polygon wallet send --gas-limit 21000` (overrides default at `handlers/wallet.rs:624`) |
 //! | 24  | `local_testnet_wallet_send_fee_tier_fastest_happy_path` | `polygon wallet send --fee fastest` (sister to default `half_hour`; multiplier at `handlers/fee.rs:267` = 1.20) |
 //! | 25  | `local_testnet_wallet_send_eip1559_overrides_happy_path` | `polygon wallet send --max-fee-gwei 50 --priority-fee-gwei 40` (both set → live overrides at `handlers/wallet.rs:603-611`) |
-//! | 25b | `local_testnet_wallet_send_eip1559_partial_override_rejected` | `polygon wallet send --max-fee-gwei 50` (only ONE → exit 2 at `handlers/wallet.rs:604-610`) |
+//! | 25b | `local_testnet_wallet_send_eip1559_partial_override_rejected` | `polygon wallet send --max-fee-gwei 50` (only ONE → `Error::InvalidInput`, User, exit 1, at `handlers/wallet.rs:604-610`) |
 //! | 26  | `local_testnet_wallet_send_dry_run_returns_synthetic_hash` | `polygon wallet send --dry-run` (short-circuits before broadcast at `handlers/wallet.rs:641-651`, returns `keccak256(encoded_envelope)`) |
 //! | 27  | `local_testnet_wallet_send_wait_blocks_for_receipt` | `polygon wallet send --wait` (blocks until receipt at `handlers/wallet.rs:663-668`) |
-//! | 28  | `local_testnet_wallet_send_empty_name_rejected` | `polygon wallet send --name ""` (handler-level reject at `handlers/mod.rs:106` `validate_wallet_name`, `Error::InvalidInput` — `main.rs:111` hardcodes `ExitCode::from(1)` for all errors routed through `run()`) |
+//! | 28  | `local_testnet_wallet_send_empty_name_rejected` | `polygon wallet send --name ""` (handler-level reject at `handlers/mod.rs:106` `validate_wallet_name`, `Error::InvalidInput` — User, exit 1 under the shared `wallet-errors` table) |
 //! | 29  | `local_testnet_wallet_send_empty_to_rejected` | `polygon wallet send --to ""` (clap-level reject via `parse_address` at `cli.rs:21`; Address type fails on empty input) |
 //! | 30  | `local_testnet_wallet_send_missing_args_rejected` | `polygon wallet send --name <w>` (no `--to` AND no `--amount`) + `--name <w> --amount 1` (no `--to`) — dual-assert, clap-level required-arg enforcement at `cli.rs:280-283` |
-//! | 31  | `local_testnet_wallet_send_wrong_network_rejected` | `polygon wallet send --network notachain` (handler-level reject at `handlers/mod.rs:145` `parse_network` — `Error::InvalidInput`, `main.rs:111` ExitCode 1) |
+//! | 31  | `local_testnet_wallet_send_wrong_network_rejected` | `polygon wallet send --network notachain` (handler-level reject at `handlers/mod.rs:145` `parse_network` — `Error::InvalidInput`, User, exit 1) |
 //! | R1 | `local_testnet_sign_message_accepts_address_flag` | `polygon sign-message --address` (regress guard, PR `432210c`/`a775af7`) |
 //! | R2 | `local_testnet_sign_message_verify_round_trips_positive` | `polygon sign-message --verify` (positive, G12 sister) |
 //! | R3 | `local_testnet_tx_list_with_address_reaches_handler` | `polygon tx list --address` (regress guard, live-RPC stubbed) |
@@ -2021,7 +2021,7 @@ fn local_testnet_fee_text_mode_human_readable() {
 // 19 + 19b instead pin the TWO gate layers that DO run today, each with a
 // distinct failure classification:
 //   19  — chain_id 80002 PASSES the Q7 gate, then dies in the lib layer
-//         (`Error::Rpc`, exit 3). SKIP-accepts exit 0 once eip712 lands.
+//         (`Error::Rpc`, Network, exit 2). SKIP-accepts exit 0 once eip712 lands.
 // Password: env-only via `POLYGON_PASSWORD` (injected by `run_polygon`), NOT
 // `--password` on argv — argv is `/proc/<pid>/cmdline`-visible and the
 // dispatcher emits its own insecurity warning for it (`main.rs:39-42`).
@@ -2029,7 +2029,7 @@ fn local_testnet_fee_text_mode_human_readable() {
 //
 //   19b — typed-data `domain.chainId` disagreeing with `--chain-id` is
 //         rejected by `assert_domain_chain_id_consistency` (#463 replay
-//         guard) BEFORE the lib call (`Error::InvalidInput`, exit 2).
+//         guard) BEFORE the lib call (`Error::InvalidInput`, User, exit 1).
 // =============================================================================
 
 /// Row 18 (G12 negative) — `polygon sign-message --verify <other-addr>`.
@@ -2588,7 +2588,7 @@ async fn local_testnet_wallet_send_eip1559_overrides_happy_path() {
 // Phase 6 G14 row 25b — EIP-1559 partial override rejected.
 // Setting ONLY `--max-fee-gwei` (without `--priority-fee-gwei`)
 // triggers the user-error guard at `handlers/wallet.rs:604-610`:
-// exit 2 with the canonical error message.
+// exit 1 with the canonical error message.
 // Sister to the Phase 2 G1 mode-0600 dual-assert pattern.
 // =============================================================================
 
@@ -2751,9 +2751,9 @@ async fn local_testnet_wallet_send_wait_blocks_for_receipt() {
 // `polygon wallet send --name ""` passes clap (no `min_length` validator on
 // `--name` at `cli.rs:160-175`) and reaches `validate_wallet_name` at
 // `handlers/mod.rs:106`, which returns `Error::InvalidInput("wallet name
-// must not be empty")`. `main.rs:111` hardcodes `ExitCode::from(1)`
-// for all errors routed through `run()` — the per-variant exit-code
-// mapping is not yet applied.
+// must not be empty")`. `main.rs` maps the variant through
+// `src/error.rs::classify` and the shared `wallet-errors` table, so this
+// path is a `User` error — exit 1.
 //
 // Drift from Phase 7 plan (issue #495 comment 5503844662): validator is
 // handler-level (`handlers/mod.rs:106`), NOT clap-level as the original plan
@@ -2876,10 +2876,9 @@ async fn local_testnet_wallet_send_empty_to_rejected() {
 //
 // `polygon wallet send --name <w>` (NO `--to`, NO `--amount`) → clap
 // required-arg check at `cli.rs:280-283` (`--to: Address` and
-// `--amount: String` both required) → exit non-zero (`main.rs:111`
-// hardcodes `ExitCode::from(1)` for any error path; clap-level
-// required-arg rejects route through `run()` and follow the same
-// mapping).
+// `--amount: String` both required) → exit non-zero (a clap usage error
+// is a `User` error — exit 1 — under the shared `wallet-errors` table;
+// `main()` catches it in `Cli::try_parse()` before `run()` is reached).
 // `polygon wallet send --name <w> --amount 1` (NO `--to`) → same layer,
 // single missing arg → exit non-zero (same path).
 //
@@ -2958,8 +2957,8 @@ async fn local_testnet_wallet_send_missing_args_rejected() {
 // and reaches `handlers::parse_network` at `main.rs:595`, which returns
 // `Error::InvalidInput("unknown polygon network: ...")` (sister to the
 // `anvil` / `mumbai` / `fakenet` reject tests at `handlers/mod.rs:179-207`).
-// `main.rs:111` hardcodes `ExitCode::from(1)` for all errors routed
-// through `run()` — the per-variant exit-code mapping is not yet applied.
+// `main.rs` maps the variant through `src/error.rs::classify` and the
+// shared `wallet-errors` table, so this path is a `User` error — exit 1.
 //
 // Dispatch order (verified by L12 review 2026-09-02): `parse_network` runs
 // at `main.rs:595` BEFORE `validate_wallet_name` (line 596) and BEFORE

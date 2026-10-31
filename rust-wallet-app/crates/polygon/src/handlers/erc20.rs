@@ -42,7 +42,7 @@ pub fn guard_usdc_e(token: Address) -> polygon_wallet_core::Result<()> {
 /// (1) NaN/Inf → bad u128 cast (NaN→0 stuck-tx, Inf→u128::MAX absurd-fee).
 /// (2) Negative → wraps to huge u128.
 /// (3) Priority > Max → opaque alloy error at sign time; should fail
-///     fast at exit 2 with the canonical "priority must be <= max" message
+///     fast at exit 1 with the canonical "priority must be <= max" message
 ///     (mirrors `eth/src/handlers.rs:1047-1068 resolve_overrides`).
 fn validate_fees(max_fee_gwei: f64, priority_fee_gwei: f64) -> Result<(u128, u128)> {
     for (label, v) in [
@@ -76,7 +76,7 @@ fn validate_fees(max_fee_gwei: f64, priority_fee_gwei: f64) -> Result<(u128, u12
 /// canonical `Address`. Looks up symbol in the bundled polygon-wallet-core
 /// registry (mainnet or amoy per `network`). Hex addresses parsed
 /// directly. Returns `Error::InvalidInput` for unknown symbols / bad hex
-/// (exit 2 — operator sees the fix).
+/// (exit 1 — operator sees the fix).
 pub fn resolve_token_address(symbol: &str, network: Network) -> Result<Address> {
     let trimmed = symbol.trim();
     if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
