@@ -70,7 +70,7 @@ This plan implements **Phase 1 only**. It does not implement Phase 2 (`wallet-fa
 Five input classes the spec implies that no task's happy-path test exercises. Each names the input and the behaviour a reasonable person would expect; the owning task pins it with a test.
 
 1. **A wallet file that is corrupt on disk.** The operator must see exit 4 (`Signing`) and the *same* message a wrong password produces — not a distinguishable error. Bitcoin's `WalletStore` deliberately collapses not-found, wrong-password, wrong-network and corrupt-blob into one variant (`bitcoin-wallet-core/src/error.rs:110-120`); EVM's `WalletCorrupt` and `DecryptionFailed` must land on the same category. Owned by Tasks 2, 4, 5, 6.
-2. **An empty passphrase.** Exit 1 (`User`) — the operator supplied something unusable — and *distinct* from a wrong passphrase's exit 4 (`Signing`). These are different conditions (`eth/src/handlers.rs:127` constructs `InvalidPassword("password must be non-empty")`; a wrong passphrase surfaces as `DecryptionFailed`), so they get different codes on purpose. A regression here re-opens exactly the ambiguity `CONTEXT.md:96` records. Owned by Task 4.
+2. **An empty passphrase.** Exit 1 (`User`) — the operator supplied something unusable — and *distinct* from a wrong passphrase's exit 4 (`Signing`). These are different conditions (`eth/src/handlers.rs:127` constructs `InvalidPassword("password must be non-empty")`; a wrong passphrase surfaces as `DecryptionFailed`), so they get different codes on purpose. A regression here re-opens exactly the ambiguity `CONTEXT.md:96` records. Owned by Task 4. **Scope: the paths where the CLI refuses the passphrase before the library call — create and import. Where the passphrase opens an *existing* wallet, an empty passphrase is indistinguishable from a wrong one and exits 4; the per-chain shape is set out in Task 7's divergences.**
 3. **A node that is unreachable.** Exit 2 (`Network`) on every chain — Bitcoin's `Network`/`Esplora`/`Electrum`, Solana's `Transport`/`Rpc`, TRON's `Node`, EVM's `Rpc` — so one automation rule can retry on a single code across all five CLIs. Owned by Tasks 2, 3, 4, 5, 6.
 4. **A transfer the balance cannot cover.** Exit 3 (`InsufficientFunds`) on every chain. Solana today reports this as a *transport* error (`sol/src/handlers/error.rs` maps `InsufficientFunds` to the same code as `Transport`), which under the old taxonomy collided with the network bucket; the new taxonomy separates them. Owned by Task 2.
 5. **A transaction the node rejects.** Exit 5 (`Broadcast`), distinct from a network failure, so automation does not retry a transaction that will never be accepted. Owned by Tasks 2 and 4.
@@ -217,7 +217,7 @@ This is a **breaking change to the CLI exit-code contract**, in every chain. It 
 | clap usage error (bad flag, missing argument) | 2 | 1 |
 | invalid input / bad mnemonic | 1 or 2 | 1 |
 | wallet not found | 4 or 1 | 1 |
-| empty passphrase | 2 | 1 |
+| empty passphrase | 2 | 1 on create/import; 4 where the passphrase opens an existing wallet |
 | wrong passphrase | 2 or 5 | 4 |
 | corrupt wallet file | 5 | 4 |
 | insufficient funds | 4 or 3 | 3 |
@@ -1314,7 +1314,7 @@ let cli = match Cli::try_parse() {
 
 13. Fix two ETH doc comments that name a **category the code does not produce**:
     - `rust-wallet-app/crates/eth/src/error.rs:11` — the module doc lists "missing file" as a `User` (1) example, carried over verbatim from Solana's module doc where it is accurate. **For ETH it is wrong**: `eth/src/handlers.rs:61-62` folds `WalletError::Io` and `WalletError::Path` into `Error::rpc(...)`, which is `Network` (2). That behaviour is a known deferral (it needs an engine variant for I/O), so the **doc** is what must change — replace "missing file" with an example ETH actually produces, e.g. "invalid input, unknown wallet, empty passphrase".
-    - `rust-wallet-app/crates/eth/src/handlers.rs:63` — "Crypto/Mnemonic → InvalidMnemonic (User)" is wrong for **Crypto**: the code at `eth/src/handlers.rs:75` maps `WalletError::Crypto(_)` to `Error::DecryptionFailed(...)`, which is `Signing` (4). Split the line: `Crypto → DecryptionFailed (Signing)` and `Mnemonic → InvalidMnemonic (User)`. **Note the divergence to carry forward:** Polygon's `map_wallet_err` maps `WalletError::Crypto` to `Error::InvalidInput` (`polygon/src/handlers/mod.rs:69-71`), *not* to `InvalidMnemonic` — so Task 5 must describe **Polygon's** mapping, not Ethereum's.
+    - `rust-wallet-app/crates/eth/src/handlers.rs:63` — "Crypto/Mnemonic → InvalidMnemonic (User)" is wrong for **Crypto**: the code at `eth/src/handlers.rs:75` maps `WalletError::Crypto(_)` to `Error::DecryptionFailed(...)`, which is `Signing` (4). Split the line: `Crypto → DecryptionFailed (Signing)` and `Mnemonic → InvalidMnemonic (User)`. **Note the divergence to carry forward (resolved in Task 5):** when this plan was written, Polygon's `map_wallet_err` mapped `WalletError::Crypto` to `Error::InvalidInput`, *not* to `InvalidMnemonic` — so Task 5 was told to describe **Polygon's** mapping, not Ethereum's. Task 5 then found that divergence to be the defect itself and **aligned Polygon's mapping with ETH's, arm for arm**; the `Crypto` arm is now `Error::DecryptionFailed` (`polygon/src/handlers/mod.rs:101`).
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1387,7 +1387,7 @@ Expected: FAIL to compile — `cannot find function classify in this scope`.
 
 Add the same 19-variant classifier as Task 4's, with `polygon_wallet_core::Error` in place of `eth_wallet_core::Error`. Then:
 
-1. Add `mod error;` to `rust-wallet-app/crates/polygon/src/main.rs` and `use error::classify;` plus `use wallet_errors::ErrorCategory;`.
+1. Add `mod error;` to `rust-wallet-app/crates/polygon/src/main.rs` and `use error::classify;`. **Do not add `use wallet_errors::ErrorCategory;`** — the code block below uses the fully-qualified `wallet_errors::ErrorCategory::User.exit_code()`, so the import would be unused and would fail `clippy -D warnings`. This matches `sol/src/main.rs:58` and `tron/src/main.rs:36`, which use the fully-qualified form with no such import.
 2. Replace `rust-wallet-app/crates/polygon/src/main.rs:104-113`:
 
 ```rust
@@ -1423,7 +1423,7 @@ with:
    ///       distinct exit code per the shared `wallet-errors` table.
    ```
 
-4. Update to the new table **every exit-code reference in the `polygon` CLI crate and its tests.** By one consistent grep (`grep -cE "exit [0-9]|exit_code|exit code \([0-9]\)|\(exit [0-9]\)|→ [A-Za-z]+ \([0-9]\)"`), the Polygon crate names an exit code in **78 places** across 12 files: `src/main.rs` 11, `src/handlers/wallet.rs` 9, `src/handlers/sign.rs` 9, `tests/local_testnet_smoke.rs` 25, `tests/amoy_sign_only.rs` 7, `tests/amoy_p9_pk_import.rs` 6, `src/handlers/mod.rs` 4, `src/handlers/fee.rs` 2, `src/handlers/erc20.rs` 2, `src/handlers/tx.rs` 1, `tests/polygon_wallet_scenario.rs` 1, `tests/amoy_error_paths.rs` 1. **Most of them name the *engine's* old table** (`InvalidInput` → 2, `Rpc` → 3, `WalletCorrupt` → 5), which this migration replaces. Key each one on the condition it names, using the same per-condition mapping as Task 4's Step 3 item 7:
+4. Update to the new table **every exit-code reference in the `polygon` CLI crate and its tests.** By one consistent grep (`grep -cE "exit [0-9]|exit_code|exit code \([0-9]\)|\(exit [0-9]\)|→ [A-Za-z]+ \([0-9]\)"`), the Polygon crate named an exit code in **78 places** at the base of this task — but Task 4 removed five of them (two in `src/handlers/mod.rs`, two in `tests/local_testnet_smoke.rs`, one in `src/main.rs`), so **73 remain to re-key**. The grep also cannot match `ExitCode::from(1)`, `ExitCode 1`, or a phrase like "exit code from 2 to 3" — **at least eight more real sites exist that the pattern misses**, including the pre-migration-behaviour claims at `tests/local_testnet_smoke.rs:62/65/2754/2879/2961` and `src/main.rs:229/1509` that this change would otherwise falsify. **Sweep for the condition, not for the pattern.** The per-file figures (before Task 4): `src/main.rs` 11, `src/handlers/wallet.rs` 9, `src/handlers/sign.rs` 9, `tests/local_testnet_smoke.rs` 25, `tests/amoy_sign_only.rs` 7, `tests/amoy_p9_pk_import.rs` 6, `src/handlers/mod.rs` 4, `src/handlers/fee.rs` 2, `src/handlers/erc20.rs` 2, `src/handlers/tx.rs` 1, `tests/polygon_wallet_scenario.rs` 1, `tests/amoy_error_paths.rs` 1. **Most of them name the *engine's* old table** (`InvalidInput` → 2, `Rpc` → 3, `WalletCorrupt` → 5), which this migration replaces. Key each one on the condition it names, using the same per-condition mapping as Task 4's Step 3 item 7:
 
    | condition named by the text | old | new |
    |---|---|---|
@@ -1492,7 +1492,7 @@ cargo test -p polygon
 `CHANGELOG.md` `[Unreleased]` — one flat bullet per changed CLI, each immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/polygon/` — **BREAKING:** the `polygon` CLI now uses the shared cross-chain exit-code table instead of mapping every error to exit 1. Exit codes now distinguish: clap usage errors (bad flag, missing argument) 2→1; invalid input 1→1 (unchanged); node unreachable 1→2; insufficient funds 1→3; signing or credential failure 1→4; node rejection 1→5. Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/polygon/` — **BREAKING:** the `polygon` CLI now uses the shared cross-chain exit-code table instead of mapping every error to exit 1. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 1→1 (unchanged); node unreachable, RPC failure and local I/O 1→2; a wrong passphrase or a corrupt wallet file 1→4. **The `polygon` CLI classifies all six categories, but it constructs no insufficient-funds and no broadcast-rejection error, so the insufficient-funds (3) and broadcast-rejection (5) codes are classified but not yet reachable in this CLI; they become observable when the CLI's own error construction is extended.** Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 ```
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
@@ -1847,7 +1847,7 @@ is a security feature and is deliberately not unified):
 | `tron` | `crates/tron/src/handlers/mod.rs::classify` |
 | `sol` | `crates/sol/src/handlers/error.rs::classify` |
 
-Three intentional divergences from the categories above:
+Four intentional divergences from the categories above:
 
 - **Bitcoin's "wallet not found" exits 4, not 1.** `bitcoin-wallet-core`'s
   `WalletStore` variant deliberately collapses not-found, wrong-password,
@@ -1855,10 +1855,33 @@ Three intentional divergences from the categories above:
   file-existence oracle (`crates/bitcoin-wallet-core/src/error.rs:110-120`).
   Because not-found and wrong-password share the variant, they must share the
   code.
-- **An empty passphrase exits 1, a wrong passphrase exits 4.** The first is
-  operator input (`eth/src/handlers.rs:127` raises
-  `InvalidPassword("password must be non-empty")`); the second is a credential
-  failure (`DecryptionFailed`).
+- **An empty passphrase exits 1 where the CLI refuses it up front, and 4 on
+  the paths that open an existing wallet.** The library cannot tell an empty
+  passphrase from a wrong one — both are a failed KDF, both surface as
+  `WalletError::Crypto` — so only the CLI can make the distinction, and the
+  CLIs draw that line at different points:
+  - **`eth` and `polygon`** refuse it on **create and import**
+    (`eth/src/handlers.rs:127`, `polygon/src/handlers/wallet.rs:373` →
+    `InvalidPassword` → **1**). On the paths that **open an existing wallet**
+    the passphrase is a credential for a wallet that already exists, so an
+    empty one is indistinguishable from a wrong one and exits **4**, exactly
+    as a wrong one does. Which paths those are differs per CLI: in `eth`
+    they are native send, ERC-20 send and speed-up; in `polygon` they are
+    sign-message, sign-typed, ERC-20 send and ERC-20 approve. `polygon`
+    additionally refuses it on its **native-send** and **speed-up** paths
+    (**1**), where `eth` does not.
+  - **`eth`'s sign-message, sign-typed and ERC-20 approve are deferred stubs**
+    that return `Error::Rpc` (**2**) without touching the wallet, so on those
+    commands the question does not arise.
+  - **`tron`** refuses it **on every path** — `tron/src/handlers/mod.rs:302`
+    rejects an empty passphrase centrally, from argv, the env var and the TTY
+    prompt — so it exits **1** everywhere, sign included. That is TRON being
+    stricter, not a different taxonomy.
+
+  The EVM CLIs' differences on the wallet-open paths are a **recorded deferred
+  finding**: closing them means changing `eth` and `polygon` together, against
+  the already-merged ETH migration, with both `CHANGELOG.md` bullets
+  corrected.
 - **A chain reaches only the categories its engine can express, and TRON
   reaches four of the six.** `tron-wallet-core`'s `Error` has **no**
   insufficient-funds variant and **no** broadcast-rejection variant, so the
@@ -1867,6 +1890,18 @@ Three intentional divergences from the categories above:
   reaches all six. This is a property of the engine, not of the taxonomy —
   the table above is the specification for every chain that *can* reach a
   category.
+- **The `polygon` CLI reaches only three of the six in practice.** Its
+  `map_wallet_err` translates the wallet library's errors into `Rpc`,
+  `WalletCorrupt`, `DecryptionFailed`, `InvalidMnemonic`, `InvalidPrivateKey`,
+  `WalletNotFound`, `WalletNotFoundByName` and `WalletExists`, and the CLI
+  itself raises `InvalidInput` and `InvalidPassword`, so in practice it exits
+  **1** (operator input), **2** (node unreachable, RPC failure, local I/O) or
+  **4** (a wrong passphrase or a corrupt wallet file). The insufficient-funds
+  (3) and broadcast-rejection (5) codes are **classified but not yet
+  constructed** by the CLI; they become observable when its error construction
+  is extended. A wrong passphrase exits 4 rather than 1 so that it stays
+  indistinguishable from a corrupt wallet file, exactly as in the other four
+  chains.
 
 **This changed the exit codes of all five CLIs.** Automation that keys on exit
 codes must be updated — see the `**BREAKING**` entries in `CHANGELOG.md`.
