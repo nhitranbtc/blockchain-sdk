@@ -2436,9 +2436,12 @@ mod password_source_tests {
 ///
 /// Exits:
 ///  - 0: broadcast succeeded (txid printed on STDOUT)
-///  - 1: build/sign/broadcast failure
-///  - 4: new fee rate does not exceed original fee rate
-///  - 5: signing failure (bdk `SignerError` propagate)
+///  - 1: CLI-level rejection or operator input (e.g. mainnet without
+///    `--confirm-yes yes`, an invalid mnemonic or an invalid fee rate)
+///  - 2: broadcast failure (the backend rejected the transaction or could
+///    not be reached)
+///  - 4: build or signing failure, and a new fee rate that does not exceed
+///    the original fee rate
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_wallet_bump_fee(
     mnemonic_phrase: String,
