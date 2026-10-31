@@ -1339,7 +1339,7 @@ cargo test -p eth -p eth-wallet-core
 `CHANGELOG.md` `[Unreleased]` — one flat bullet per changed CLI, each immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 2→1, ABI decode failure 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, insufficient funds 4→3, wallet-corrupt/decryption/encryption-failure 5→4, broadcast failure 5→5 (unchanged). Automation that keys on exit codes must be updated. The ETH integration tests whose names encoded an exit code were renamed to match the code they now assert; historical entries above still quote the old names. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 2→1, ABI decode failure 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, wallet-corrupt/decryption/encryption-failure 5→4. **The `eth` CLI classifies all six categories, but it constructs no insufficient-funds and no broadcast-rejection error — neither `evm-wallet-core` nor `eth/src/` has a production construction site for either, only the engine's variant-coverage tests — so the insufficient-funds (3) and broadcast-rejection (5) codes are classified but not yet reachable in this CLI.** Automation that keys on exit codes must be updated. The ETH integration tests whose names encoded an exit code were renamed to match the code they now assert; historical entries above still quote the old names. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 - **`[internal]`** `rust-wallet-app/crates/evm-wallet-core/` — **BREAKING:** removed `Error::exit_code()` (and the `eth-wallet-core` / `polygon-wallet-core` re-exports of it). The exit-code table now lives in the `wallet-errors` crate and the variant→category mapping lives in each CLI, so the engines gain no `wallet-errors` edge. Callers of `evm_wallet_core::Error::exit_code()` must call `wallet_errors::ErrorCategory::exit_code()` with the category their CLI derives.
 ```
 
@@ -1898,26 +1898,23 @@ Four intentional divergences from the categories above:
   finding**: closing them means changing `eth` and `polygon` together, against
   the already-merged ETH migration, with both `CHANGELOG.md` bullets
   corrected.
-- **A chain reaches only the categories its engine can express, and TRON
-  reaches four of the six.** `tron-wallet-core`'s `Error` has **no**
-  insufficient-funds variant and **no** broadcast-rejection variant, so the
-  `tron` CLI never returns 3 or 5: a node-side transaction rejection is
-  reported as `Network` (2), the same code as an unreachable node. Solana
-  reaches all six. This is a property of the engine, not of the taxonomy —
-  the table above is the specification for every chain that *can* reach a
-  category.
-- **The `polygon` CLI reaches only three of the six in practice.** Its
-  `map_wallet_err` translates the wallet library's errors into `Rpc`,
+- **A chain reaches only the categories its engine can express. Solana reaches
+  all six; `eth`, `polygon`, `btc` and `tron` each reach four** — 0, 1, 2 and 4.
+  None of the EVM, Bitcoin or TRON engines constructs an insufficient-funds or
+  a broadcast-rejection error outside its own variant-coverage tests, so **3
+  and 5 are unreachable in all four**; a node-side transaction rejection is
+  reported as `Network` (2), the same code as an unreachable node. This is a
+  property of the engines, not of the taxonomy — the table above is the
+  specification for every chain that *can* reach a category.
+- **The `polygon` CLI translates the wallet library's errors the same way `eth`
+  does.** Its `map_wallet_err` maps the library's errors into `Rpc`,
   `WalletCorrupt`, `DecryptionFailed`, `InvalidMnemonic`, `InvalidPrivateKey`,
   `WalletNotFound`, `WalletNotFoundByName` and `WalletExists`, and the CLI
-  itself raises `InvalidInput` and `InvalidPassword`, so in practice it exits
-  **1** (operator input), **2** (node unreachable, RPC failure, local I/O) or
-  **4** (a wrong passphrase or a corrupt wallet file). The insufficient-funds
-  (3) and broadcast-rejection (5) codes are **classified but not yet
-  constructed** by the CLI; they become observable when its error construction
-  is extended. A wrong passphrase exits 4 rather than 1 so that it stays
-  indistinguishable from a corrupt wallet file, exactly as in the other four
-  chains.
+  itself raises `InvalidInput` and `InvalidPassword` — so it exits **1**
+  (operator input), **2** (node unreachable, RPC failure, local I/O) or **4**
+  (a wrong passphrase or a corrupt wallet file), exactly as `eth` does. A
+  wrong passphrase exits 4 rather than 1 so that it stays indistinguishable
+  from a corrupt wallet file, exactly as in the other four chains.
 
 **This changed the exit codes of all five CLIs.** Automation that keys on exit
 codes must be updated — see the `**BREAKING**` entries in `CHANGELOG.md`.
@@ -1935,7 +1932,7 @@ but it is the cell a reader consults:
 | User error | 1 | Invalid args, missing file, unknown wallet, invalid mnemonic or address, ABI decode failure |
 | Network error | 2 | RPC unreachable, gas estimate failed, receipt timeout |
 | Insufficient funds | 3 | Balance below amount + fee |
-| Signing error | 4 | Wrong password, invalid key, corrupt or tampered wallet file, encryption or KDF failure, transaction construction failure, internal machinery failure, feature not yet implemented |
+| Signing error | 4 | Wrong password, key derivation failure, corrupt or tampered wallet file, encryption or KDF failure, transaction construction failure, internal machinery failure, feature not yet implemented |
 | Broadcast error | 5 | Tx REVERTED, node rejected |
 
 The `Signing` row is the one that needs extending: "Wrong password, invalid
