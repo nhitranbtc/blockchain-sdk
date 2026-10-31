@@ -57,7 +57,7 @@ pub enum CliError {
     Core(CoreError),
     /// Operator declined a confirmation prompt.
     Abort,
-    /// Argument shape the CLI rejects before reaching the core.
+    /// The CLI's own rejection — operator input, or a missing runtime fixture.
     BadInput(String),
 }
 
@@ -89,7 +89,7 @@ pub fn classify(err: &CliError) -> wallet_errors::ErrorCategory {
     match err {
         // Operator declined a confirmation prompt.
         CliError::Abort => ErrorCategory::User,
-        // Argument shape the CLI rejects before reaching the core.
+        // The CLI's own rejection — operator input, or a missing runtime fixture.
         CliError::BadInput(_) => ErrorCategory::User,
         CliError::Core(e) => classify_core(e),
     }
