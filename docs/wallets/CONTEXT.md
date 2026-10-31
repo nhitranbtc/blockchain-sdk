@@ -216,13 +216,13 @@ Four intentional divergences from the categories above:
   this workspace reaches the insufficient-funds (3) or broadcast-rejection (5)
   code.** Each CLI's classifier maps into the shared six-category taxonomy —
   the mapping is tested — but no CLI can produce the variants that produce
-  those two. `tron-wallet-core` has neither variant; `evm-wallet-core` has
-  both and constructs them only inside its own variant-coverage tests;
-  `bitcoin-wallet-core` has only the insufficient-funds variant, built only
-  inside its own variant-coverage test
-  (`bitcoin-wallet-core/src/error.rs:138`); `sol-wallet-core` declares both,
-  but its `BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has no
-  construction site anywhere and its `InsufficientFunds` is built only by
+  those two. `tron-wallet-core` has neither variant; `evm-wallet-core`
+  declares both, and every construction of them anywhere in the workspace is
+  inside test code; `bitcoin-wallet-core` declares only the
+  insufficient-funds variant, and every construction of it anywhere in the
+  workspace is inside test code; `sol-wallet-core` declares both, but its
+  `BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has no production
+  construction site and its `InsufficientFunds` is built only by
   `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:48`),
   whose only callers are two integration tests — the `sol` CLI's send paths
   do no balance check. So **all five CLIs reach exactly four of the six: 0,
