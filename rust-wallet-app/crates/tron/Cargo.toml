@@ -28,6 +28,9 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# Shared cross-chain error categories + the one exit-code table.
+wallet-errors = { workspace = true }
+
 # Default data-dir resolution (XDG on Linux, platform equivalent elsewhere).
 directories = { workspace = true }
 

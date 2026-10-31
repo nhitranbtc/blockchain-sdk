@@ -39,7 +39,9 @@ This plan implements **Phase 1 only**. It does not implement Phase 2 (`wallet-fa
 - **No engine gains a `wallet-errors` dependency.** The mapping lives in the CLI layer.
 - **The per-chain error enums stay.** Their granularity is a security feature (`bitcoin-wallet-core/src/error.rs:109-120` keeps `WalletStore` separate from `Storage` to preserve a file-existence oracle closure). This phase unifies the *category*, never the enum.
 - **Wrong password and corrupt blob stay indistinguishable** — both map to `Signing` (exit 4) in every chain, and must not be distinguishable by exit code.
+- **The `Signing` bucket covers credential failures *and* internal-machinery failures.** A variant meaning *the machine could not do its job* — an OS RNG failure, a KDF failure, a cipher-init failure, a transaction-construction failure, a runtime that could not be built, a feature that is not implemented — is `Signing` (4). `User` (1) means the **operator** supplied something unusable. That is why Solana's `Unimplemented` and TRON's async-runtime-construction failure are both 4. The `Examples` cell in `docs/wallets/CONTEXT.md` names this scope (Task 7); the parity test asserts only the label and the exit code, so that cell is free text.
 - **`cargo test -p <crate>` only** in the local verify gate. Never `--workspace` (L55: the workspace-wide run crosses the 300 s Bash timeout on `bitcoin-wallet-core`'s integration tests).
+- **`rust-wallet-app/Cargo.lock` is part of every CLI task's commit.** Each task adds a `wallet-errors = { workspace = true }` dependency to a crate manifest, and a manifest change without the lock desyncs it and breaks `--locked` builds. Stage the lock file with the manifest in the same commit.
 - **Rust edition / toolchain:** workspace `edition = "2021"`, `rust-toolchain.toml` pins 1.98.1. Do not bump `rust-version` — the declared MSRV 1.85 is already unachievable because the vendored anychain stack needs 1.98.1; that is a separate, pre-existing issue.
 - **Error enums marked `#[non_exhaustive]`** (`bitcoin-wallet-core/src/error.rs:28`, `evm-wallet-core/src/error.rs:26`, `tron-wallet-core/src/error.rs:10`) force a wildcard arm in a downstream match. The wildcard maps to `ErrorCategory::Signing` in every case; every currently-existing variant is pinned by a table-driven test, and Task 8's CI job closes the loop on future variants. `sol_wallet_core::Error` is **not** `#[non_exhaustive]`, so the Solana classifier is exhaustive — a new Solana variant is a compile error until classified.
 - **L24 doc set travels with every sub-task PR** — one `CHANGELOG.md` `[Unreleased]` bullet **per changed CLI** — a task that changes two crates carries two bullets, both in the same flat list — with a `**BREAKING**:` prefix where the change is user-visible. The `[Unreleased]` section is a **flat, newest-first bullet list**: the new entry goes immediately after the `## [Unreleased]` heading, with the `[internal]` / `[user-facing]` tag carrying the classification. Do **not** add a `### Added` / `### Changed` heading — those belong to the *versioned* sections and are applied at release cut, and a heading here would reclassify every existing flat bullet. **No User Stories row is flipped in Phase 1** — there is no User Stories table inside `[Unreleased]` (the tables live under the released version sections), and no Phase-1 task completes a user story; these tasks change how errors are *reported*, not what the software can do.
@@ -517,8 +519,8 @@ git add rust-wallet-app/Cargo.toml rust-wallet-app/crates/wallet-errors CHANGELO
 git commit -m "feat(errors): add wallet-errors crate with the shared category and exit-code table
 
 Co-Authored-By: Claude Code <noreply@anthropic.com>"
-git push -u origin task/1a-wallet-errors-crate
-gh pr create --base task/1-wallet-errors --head task/1a-wallet-errors-crate \
+git push -u origin task/581a-wallet-errors-crate
+gh pr create --base task/581-wallet-errors --head task/581a-wallet-errors-crate \
   --title "feat(errors): add wallet-errors crate with the shared category and exit-code table" \
   --body-file /tmp/pr-body-1a.md
 ```
@@ -528,8 +530,8 @@ The PR body carries: Context, the six-category table, the verification output, a
 Merge into the parent when the PR is approved:
 
 ```bash
-git checkout task/1-wallet-errors
-git merge task/1a-wallet-errors-crate --no-ff -m "Merge PR #<N> (task/1a-wallet-errors-crate): wallet-errors crate"
+git checkout task/581-wallet-errors
+git merge task/581a-wallet-errors-crate --no-ff -m "Merge PR #<N> (task/581a-wallet-errors-crate): wallet-errors crate"
 ```
 
 ---
@@ -595,7 +597,7 @@ mod tests {
             (CoreError::InvalidTransaction("x".into()), ErrorCategory::Signing),
             (CoreError::Unimplemented("x"), ErrorCategory::Signing),
         ];
-        assert_eq!(cases.len(), 29, "the Solana error enum has 29 variants");
+        assert_eq!(cases.len(), 29, "this table pins 29 Solana variants — a new variant must add a row here");
         for (err, expected) in cases {
             assert_eq!(classify_core(&err), expected, "wrong category for {err:?}");
         }
@@ -800,7 +802,7 @@ cargo test -p sol
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
 
-- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/1b-sol-migration` off `task/1-wallet-errors`. Same commit/PAUSE/PR/`--no-ff`-merge shape as Task 1 Step 9.
+- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/581b-sol-migration` off `task/581-wallet-errors`. Same commit/PAUSE/PR/`--no-ff`-merge shape as Task 1 Step 9.
 
 ---
 
@@ -809,13 +811,16 @@ cargo test -p sol
 **Files:**
 - Modify: `rust-wallet-app/crates/tron/src/handlers/mod.rs`
 - Modify: `rust-wallet-app/crates/tron/src/main.rs`
-- Modify: `rust-wallet-app/crates/tron/src/handlers/tx.rs`
-- Modify: `rust-wallet-app/crates/tron/src/handlers/wallet.rs`
+- Modify: `rust-wallet-app/crates/tron/src/handlers/tx.rs` (classifier + a stale exit-code comment)
+- Modify: `rust-wallet-app/crates/tron/src/handlers/wallet.rs` (classifier + a stale exit-code comment)
+- Modify: `rust-wallet-app/crates/tron/src/cli.rs` (stale exit-code comment only)
+- Modify: `rust-wallet-app/crates/tron/tests/cli.rs` (stale exit-code comment only)
 - Modify: `rust-wallet-app/crates/tron/Cargo.toml`
+- Modify: `rust-wallet-app/crates/tron-wallet-core/src/tx/submit.rs` (comment-only: a reference to the removed `handlers::exit_code` and the old exit 2; no behaviour change)
 
 **Interfaces:**
 - Consumes: `wallet_errors::ErrorCategory` from Task 1.
-- Produces: `tron::handlers::classify(err: &CliError) -> ErrorCategory` and `tron::handlers::classify_core(err: &CoreError) -> ErrorCategory`. `tron` has a `lib.rs`, so these are public API of the `tron` library target.
+- Produces: `classify(err: &CliError) -> ErrorCategory` and `classify_core(err: &CoreError) -> ErrorCategory` in `tron/src/handlers/mod.rs`. **Note:** `tron/src/lib.rs` exposes only `pub mod cli;` — `handlers` is a private module of the **binary** target, so neither function is reachable from the library target or from integration tests. The classifier is exercised by the in-crate unit test in `handlers/mod.rs`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -840,7 +845,7 @@ In `rust-wallet-app/crates/tron/src/handlers/mod.rs`, replace the existing `exit
             (CoreError::TransactionBuild("bad".into()), ErrorCategory::Signing),
             (CoreError::Encryption("bad pw".into()), ErrorCategory::Signing),
         ];
-        assert_eq!(cases.len(), 12, "the TRON core error enum has 12 variants");
+        assert_eq!(cases.len(), 12, "this table pins 12 TRON variants — the enum is #[non_exhaustive], so a new variant must add a row here");
         for (err, expected) in cases {
             assert_eq!(classify(&CliError::Core(err)), expected, "wrong category");
         }
@@ -857,6 +862,13 @@ In `rust-wallet-app/crates/tron/src/handlers/mod.rs`, replace the existing `exit
         use wallet_errors::ErrorCategory;
         // Review Focus #1: a wrong passphrase and a corrupt blob must land
         // on the same category, so the two cannot be told apart by exit code.
+        //
+        // What this pins: TRON's engine produces the *same* `Error::Encryption`
+        // variant for a GCM-tag mismatch (wrong passphrase) and for a
+        // truncated blob (`tron-wallet-core/src/crypto/mod.rs`), so the two
+        // conditions are indistinguishable **by construction** and this test
+        // pins the exit code they share. It does not — and cannot — compare
+        // two distinct errors, because the engine never produces two.
         let wrong_pw = classify(&CliError::Core(CoreError::Encryption("bad pw".into())));
         assert_eq!(wrong_pw, ErrorCategory::Signing);
         assert_eq!(wrong_pw.exit_code(), 4);
@@ -915,6 +927,17 @@ pub fn classify_core(e: &CoreError) -> wallet_errors::ErrorCategory {
 ```
 
 `tron_wallet_core::Error` is `#[non_exhaustive]` (`tron-wallet-core/src/error.rs:10`), so the wildcard arm is required by the compiler.
+
+In the module doc at the top of `rust-wallet-app/crates/tron/src/handlers/mod.rs` (the shared exit-code table), add a clause after the table — the table itself is the shared one and is accurate, but rows 3 and 5 are **unreachable from this CLI**, and a reader of this module would otherwise assume the CLI can produce them:
+
+```
+//! Rows 3 and 5 are **unreachable from this CLI**: `tron-wallet-core`'s
+//! `Error` has no insufficient-funds and no broadcast-rejection variant, so
+//! a node-side transaction rejection is reported as `Network` (2), the same
+//! code as an unreachable node.
+```
+
+The same fact is stated for operators in `docs/wallets/CONTEXT.md` by Task 7.
 
 Update `rust-wallet-app/crates/tron/src/main.rs`:
 - line 16: `use handlers::{classify, Result};`
@@ -980,7 +1003,7 @@ cargo test -p tron
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
 
-- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/1c-tron-migration`.
+- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/581c-tron-migration`.
 
 ---
 
@@ -988,11 +1011,17 @@ cargo test -p tron
 
 **Files:**
 - Create: `rust-wallet-app/crates/eth/src/error.rs`
-- Modify: `rust-wallet-app/crates/eth/src/main.rs`
-- Modify: `rust-wallet-app/crates/eth/src/handlers.rs` (doc comment only)
-- Modify: `rust-wallet-app/crates/evm-wallet-core/src/error.rs` (delete `exit_code()` + its doc block; delete the two `exit_code()` assertions in that crate's own test module)
+- Modify: `rust-wallet-app/crates/eth/src/main.rs` (the exit path, the clap path, and the stale exit-code comments at `:19`, `:166`, `:219`, `:224`, `:379`, `:413`, `:773`)
+- Modify: `rust-wallet-app/crates/eth/src/handlers.rs` (doc comments only — `:5`, `:59-67`, `:93`, `:313`, `:349-351`, `:568`, `:648`, `:768-786`, `:1041`, `:1049`)
+- Modify: `rust-wallet-app/crates/evm-wallet-core/src/error.rs` (delete `exit_code()` + its doc block; delete the five exit-code test functions and the three `exit_code()` lines in the sixth; correct the doc comments at `:5-6`, `:24`, `:118`, `:218`)
 - Modify: `rust-wallet-app/crates/eth/Cargo.toml`
-- Modify: rust-wallet-app/crates/eth/tests/ (cli_localnet.rs, cli_sepolia.rs, wallet_send_speedup.rs — 60 `.status.code()` call sites, most of them inside `#[ignore]`d operator-driven tests that CI never runs, so a missed update can pass CI silently)
+- Modify: `rust-wallet-app/crates/eth/tests/cli_localnet.rs` (24 non-zero `assert_eq!` assertions, 5 `assert_ne!` guards, and 66 stale exit-code references)
+- Modify: `rust-wallet-app/crates/eth/tests/wallet_send_speedup.rs` (2 non-zero `assert_eq!` assertions, 10 stale exit-code references — both assertions sit inside `#[ignore]`d operator-driven tests)
+- Modify: `rust-wallet-app/crates/polygon/src/handlers/mod.rs` (doc comments only — `:53`, `:59` name the method this task deletes)
+- Modify: `rust-wallet-app/crates/polygon/tests/local_testnet_smoke.rs` (doc comments only — `:2755`, `:2962`)
+- Modify: `rust-wallet-app/Cargo.lock`
+- **Unchanged:** `rust-wallet-app/crates/eth/tests/cli_sepolia.rs` — all six of its `.status.code()` call sites assert `Some(0)`, so it needs no edit. Do not touch it.
+- **Unchanged:** `rust-wallet-app/crates/eth-wallet-core/` and `rust-wallet-app/crates/polygon-wallet-core/` — their `lib.rs` files re-export the `Error` type by glob and by name; they contain no `exit_code` reference of their own, so deleting the method needs no edit there.
 
 **Interfaces:**
 - Consumes: `wallet_errors::ErrorCategory` from Task 1.
@@ -1039,7 +1068,7 @@ mod tests {
             (Error::DecryptionFailed("x".into()), ErrorCategory::Signing),
             (Error::TxBroadcastFailed("x".into()), ErrorCategory::Broadcast),
         ];
-        assert_eq!(cases.len(), 19, "the EVM error enum has 19 variants");
+        assert_eq!(cases.len(), 19, "this table pins 19 EVM variants — the enum is #[non_exhaustive], so a new variant must add a row here");
         for (err, expected) in cases {
             assert_eq!(classify(&err), expected, "wrong category for {err:?}");
         }
@@ -1161,30 +1190,102 @@ with:
 ```
 
 4. Delete `pub fn exit_code(&self) -> i32` and its doc block (beginning `/// Stable exit-code mapping per #297 M11.`) from `rust-wallet-app/crates/evm-wallet-core/src/error.rs`.
-5. In that file's own `#[cfg(test)] mod tests`, the assertions `assert_eq!(Error::InvalidPassword("x".into()).exit_code(), 2);` and `assert_eq!(Error::DecryptionFailed("x".into()).exit_code(), 5);` no longer compile — delete them, and replace the two exit-code assertions with one that pins the *variant set* rather than the code:
+5. In that file's own `#[cfg(test)] mod tests`, **21** assertions call the deleted method and will no longer compile. They are not two — they are five whole tests plus three assertions inside a sixth:
 
-```rust
-    #[test]
-    fn exit_code_table_lives_in_wallet_errors() {
-        // The per-variant exit-code table moved to the `wallet-errors` crate
-        // (design spec §Components 1). `evm-wallet-core` no longer exposes
-        // `Error::exit_code()` — the mapping lives in the CLI layer so the
-        // engines gain no `wallet-errors` edge.
-        let _ = Error::InvalidPassword("x".into());
-    }
-```
+   | test | `.exit_code()` sites | what it does now |
+   |---|---|---|
+   | `rpc_variants_map_to_exit_3` | 2 | asserts the deleted table's code for `Rpc` / `GasEstimateFailed` — **delete the whole test** |
+   | `invalid_input_variants_map_to_exit_2` | 5 | same, for the seven bad-input variants — **delete the whole test** |
+   | `wallet_balance_variants_map_to_exit_4` | 4 | same, for the wallet/balance variants — **delete the whole test** |
+   | `signing_rpc_variants_map_to_exit_5` | 5 | same, for the signing/broadcast/timeout variants — **delete the whole test** |
+   | `abidecode_failed_maps_to_exit_2` | 1 | same, for `AbiDecodeFailed` — **delete the whole test** |
+   | `external_error_conversions_map_to_expected_variants` | 3 | tests the `From` impls, **not** the exit table — **keep the three `matches!` assertions and delete only the three `assert_eq!(err.exit_code(), N)` lines** |
 
-6. Update the doc comments that point at the deleted method:
-   - `rust-wallet-app/crates/eth/src/main.rs:19` — "Forwarded from `eth_wallet_core::error::Error::exit_code()` per #297 M11." → "Categories come from `wallet_errors::ErrorCategory`; the exit-code table is shared across all five CLIs."
-   - `rust-wallet-app/crates/eth/src/handlers.rs:5` and `:59` — same correction.
-   - `rust-wallet-app/crates/eth-wallet-core/src/error.rs`, if it carries a copy of the doc block.
-7. Add to `rust-wallet-app/crates/eth/Cargo.toml`:
+   **Keep `all_19_variants_exist_at_compile_time` unchanged** — it is the compile-time witness that every variant is constructible, it does not call `exit_code()`, and it is the *variant-set* pin the deleted tests were standing in for. **Do not add a replacement test.** A test whose body is `let _ = Error::InvalidPassword("x".into());` asserts nothing and is a defect, not a replacement — the coverage those five tests provided now lives in the CLI's table-driven classifier test (Step 1) and in the `wallet-errors` parity test.
+
+6. Update the doc comments that name the deleted method — **every one of them, across the workspace**, because the method is gone:
+
+   | file:line | current text | replacement |
+   |---|---|---|
+   | `evm-wallet-core/src/error.rs:5-6` | module doc: "Stable exit-code mapping per #297 M11: 0/1/2/3/4/5 …" | drop the exit-code bullet; state that the variant→category mapping lives in each CLI and the category→exit-code table in `wallet-errors` |
+   | `evm-wallet-core/src/error.rs:24` | "In-crate callers (e.g. `exit_code()` itself) still see all variants." | "In-crate callers still see all variants." |
+   | `evm-wallet-core/src/error.rs:118` | "its own parse failures through the same `exit_code()` table." | "its own parse failures through the same canonical error type." |
+   | `evm-wallet-core/src/error.rs:218` | "CLI surfaces exit_code() either way." | "the CLI classifies the variant either way." |
+   | `eth/src/main.rs:19` | "Forwarded from `eth_wallet_core::error::Error::exit_code()` per #297 M11." | "Categories come from `wallet_errors::ErrorCategory`; the exit-code table is shared across all five CLIs." |
+   | `eth/src/handlers.rs:5` and `:59` | "so all error→exit-code mapping flows through `Error::exit_code()` per …" | "so all error→exit-code mapping flows through the shared `wallet_errors::ErrorCategory` table …" |
+   | `polygon/src/handlers/mod.rs:53` and `:59` | "so the CLI's `Error::exit_code()` table applies" / "distinct exit code per the canonical `evm-wallet-core::Error::exit_code()` table" | drop the exit-code-specific claims; polygon's own classification is Task 5's scope, so say the classification is the CLI's own and leave the numbers to Task 5 |
+   | `polygon/tests/local_testnet_smoke.rs:2755` and `:2962` | "the `Error::exit_code()` mapping is not yet applied" | "the per-variant exit-code mapping is not yet applied" |
+
+   **All of these are comment-only.** The two `polygon` entries are the only non-`eth`/`evm` files in this task, and they are here because Task 4 deletes the method they name — the same reason TRON's engine comment was corrected in Task 3. Do not change polygon's classification, exit numbers, or behaviour: that is Task 5.
+
+7. Update to the new table **every exit-code reference in the `eth` CLI crate and its tests.** By one consistent grep (`grep -cE "exit [0-9]|exit_code|exit code \([0-9]\)|\(exit [0-9]\)|→ [A-Za-z]+ \([0-9]\)"`), the ETH crate names an exit code in **111 places**: `src/main.rs` 10, `src/handlers.rs` 22, `tests/cli_localnet.rs` 66, `tests/wallet_send_speedup.rs` 10, `tests/cli_sepolia.rs` 3. Two of the ten in `src/main.rs` are a legitimate *variable* named `exit_code`; the three in `cli_sepolia.rs` all say "exit 0" and are **correct as they stand**. The remaining **106** name a code that changes, so they are all wrong after this migration.
+
+   **Do not find-and-replace the numbers.** The old→new mapping is *not* uniform — old 5 maps to 2, 4 **or** 5 depending on the variant, and old 4 maps to 1 **or** 3 — so key each reference on the condition it names:
+
+   | condition named by the text | old | new |
+   |---|---|---|
+   | a clap usage error (bad flag, missing argument) | 2 | 1 |
+   | `Error::InvalidInput` / `InvalidMnemonic` / `InvalidPrivateKey` / `InvalidPassword` / `NonceMismatch` / `FeeTooLow` / `AbiDecodeFailed` | 2 | 1 |
+   | `Error::WalletNotFound` / `WalletNotFoundByName` / `WalletExists` | 4 | 1 |
+   | `Error::InsufficientFunds` / `InsufficientTokenBalance` | 4 | 3 |
+   | `Error::Rpc` / `GasEstimateFailed` (unreachable node, gas estimate failed) | 3 | 2 |
+   | `Error::ReceiptTimeout` | 5 | 2 |
+   | `Error::WalletCorrupt` / `EncryptionFailed` / `DecryptionFailed` | 5 | 4 |
+   | `Error::TxBroadcastFailed` | 5 | 5 |
+   | the CLI's own `.env` parse failure (`main.rs:385`) | 2 | 1 |
+   | success | 0 | 0 |
+
+   The **14 assertion-message strings** are the load-bearing part — they print on failure, so a message that says "must yield exit 4" while the assertion says `Some(1)` is a self-contradicting diagnostic. Update each message together with its assertion.
+
+   `eth/src/handlers.rs:59-67` is a whole doc block listing the old per-variant codes (`Rpc (3)`, `WalletCorrupt (5)`, `InvalidMnemonic (2)`, `InvalidPrivateKey (2)`, `WalletNotFound (4)`, `WalletExists (4)`). Rewrite it to name the **category** rather than the number, so the doc does not restate a table that lives in `wallet-errors` and is tested there:
+
+   ```
+   /// Map `WalletError` → canonical `Error` so the CLI's shared category
+   /// table applies (the exit codes are `wallet-errors`'):
+   /// - Io/Path → Rpc (Network)
+   /// - Json/Corrupt → WalletCorrupt (Signing)
+   /// - Crypto/Mnemonic → InvalidMnemonic (User)
+   /// - PrivateKey → InvalidPrivateKey (User)
+   /// - NotFound → WalletNotFound (User)
+   /// - NotFoundByName → WalletNotFound (User) + tracing event with the name
+   /// - AlreadyExists → WalletExists (User)
+   ```
+
+8. Re-key the ETH test suite. `eth/tests/` carries **24** non-zero `assert_eq!` exit-code assertions and **5** `assert_ne!` lock-down guards. `cli_sepolia.rs` has **none** — all six of its call sites assert `Some(0)`, so that file needs no change.
+
+   **The 24 equality assertions** — keyed on the condition each one exercises:
+
+   | site | old | condition | new |
+   |---|---|---|---|
+   | `cli_localnet.rs` 263, 357, 385, 516, 616, 886, 931, 973, 1009, 2024, 2061, 2090, 2991, 3058, 3128, 3185 | 2 | handler-level bad input | **1** |
+   | `cli_localnet.rs` 290, 322, 2126 | 4 | wallet lookup (`WalletNotFoundByName` / `WalletExists` / `WalletNotFound`) | **1** |
+   | `cli_localnet.rs` 731, 2415 | 3 | unreachable node (`Error::Rpc`) | **2** |
+   | `cli_localnet.rs` 2178 | 5 | wrong password (`Error::DecryptionFailed`) | **4** |
+   | `wallet_send_speedup.rs` 339, 482 | 2 | `Error::FeeTooLow` | **1** |
+
+   **None of the 24 is a clap usage error** — every old-2 site is a handler-level rejection. So none of them becomes a banner check; they are class 2 of the four assertion classes, not class 1.
+
+   **The 5 guards** — `assert_ne!` on an exit code:
+
+   | site | old | condition named | resolution |
+   |---|---|---|---|
+   | `cli_localnet.rs:559` | `Some(2)` | "clap rejected `--token`" | **drop it.** The clap-marker check immediately below it (`:565-570`: no `"unexpected argument"`, no `"Usage:"`, no `"unrecognized"`) already asserts clap accepted the flag. The block's own final assertion then becomes `Some(2)` (see below), so keeping `ne(2)` would contradict it |
+   | `cli_localnet.rs:671` | `Some(2)` | "clap rejected `--all`" | **drop it** — same, with the clap-marker check at `:678-683` |
+   | `cli_localnet.rs:1959` | `Some(2)` | "parsing rejected / must reach the network layer" | **replace it with the clap-marker stderr check** in the file's own idiom (`!stderr.contains("unexpected argument") && !stderr.contains("Usage:") && !stderr.contains("unrecognized")`). This block has no marker check today, and its first guard would contradict the block's final assertion once that becomes `Some(2)` |
+   | `cli_localnet.rs:1964` | `Some(4)` | "wallet lookup rejected" | **re-key to `Some(1)`** — wallet lookup is now `User` (class 4: re-key on the new code for the condition it names) |
+   | `cli_localnet.rs:1969` | `Some(5)` | "signer unlock rejected / wrong password" | **re-key to `Some(4)`** — a wrong password is now `Signing` |
+
+   The block at `cli_localnet.rs:1955-1985` ends with `assert_eq!(code, Some(3), "erc20 send should reach send_raw_transaction and report RPC error")` — `Error::Rpc` is now `Network`, so that becomes `Some(2)`. The same change applies to the final assertions of the two blocks at `:559` and `:671`, whose `Some(3)` becomes `Some(2)`.
+
+   `eth` does **not** depend on `assert_cmd` or `predicates` — its tests use `Command::new(env!("CARGO_BIN_EXE_eth"))` → `std::process::Output`, with `run_eth(data_dir, args)` as the harness helper (`cli_localnet.rs:156`). Use that existing style: `String::from_utf8_lossy(&out.stderr).contains("Usage:")`. **Do not add a dev-dependency to do this.**
+
+9. Add to `rust-wallet-app/crates/eth/Cargo.toml`:
 
 ```toml
 wallet-errors = { workspace = true }
 ```
 
-8. In `rust-wallet-app/crates/eth/src/main.rs`, replace the plain `Cli::parse()` with one that maps a clap usage error to `User`:
+10. In `rust-wallet-app/crates/eth/src/main.rs`, replace the plain `Cli::parse()` with one that maps a clap usage error to `User`:
 
 ```rust
 let cli = match Cli::try_parse() {
@@ -1210,7 +1311,7 @@ let cli = match Cli::try_parse() {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p eth`
-Expected: PASS — the three new tests pass and the existing `eth` suite passes **after its exit-code assertions are updated to the new table. That suite carries 60 `.status.code()` call sites across three files, and every equality assertion on a non-zero code keys on an old code, so it cannot pass as written. **Note that most of those sites sit inside `#[ignore]`d operator-driven tests (`RUN_ANVIL_E2E=1` / `SEPOLIA_E2E=1`); CI never runs them, so a missed update can pass CI silently. The always-on assertions do break.** See the Global Constraints for the four assertion classes and how each is handled.** `cargo build -p eth-wallet-core -p polygon-wallet-core` must also succeed: nothing else called the deleted method.
+Expected: PASS — the three new tests pass and the existing `eth` suite passes **after its exit-code assertions are updated to the new table. That suite carries 62 `.status.code()` call sites — 60 of them assertions, the other two repeated inside `assert_eq!` message arguments — of which 24 assert a non-zero code, and every one of those keys on an old code, so the suite cannot pass as written. 20 of the 24 are in always-on tests, so the suite breaks loudly; the other 4 sit inside `#[ignore]`d operator-driven tests (`RUN_ANVIL_E2E=1` / `SEPOLIA_E2E=1`) that CI never runs, so a missed update there can pass CI silently. `cli_sepolia.rs` asserts only `Some(0)` and needs no change. See Step 3 item 8 for the per-site table and the Global Constraints for the four assertion classes.** `cargo build -p eth-wallet-core -p polygon-wallet-core` must also succeed: nothing else called the deleted method.
 
 - [ ] **Step 5: L12 review pair + fmt re-check + test-coverage gap analysis.**
 
@@ -1236,7 +1337,7 @@ cargo test -p eth -p eth-wallet-core
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
 
-- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/1d-eth-migration`.
+- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/581d-eth-migration`.
 
 ---
 
@@ -1244,10 +1345,21 @@ cargo test -p eth -p eth-wallet-core
 
 **Files:**
 - Create: `rust-wallet-app/crates/polygon/src/error.rs`
-- Modify: `rust-wallet-app/crates/polygon/src/main.rs`
+- Modify: `rust-wallet-app/crates/polygon/src/main.rs` (the exit path, the clap path, and 11 stale exit-code references — including two inside `panic!` messages in its own unit tests)
 - Modify: `rust-wallet-app/crates/polygon/src/handlers/mod.rs` (doc comment only)
+- Modify: `rust-wallet-app/crates/polygon/src/handlers/wallet.rs` (doc comments only — 9 stale exit-code references)
+- Modify: `rust-wallet-app/crates/polygon/src/handlers/sign.rs` (doc comments only — 9 stale exit-code references)
+- Modify: `rust-wallet-app/crates/polygon/src/handlers/fee.rs` (doc comments only — 2)
+- Modify: `rust-wallet-app/crates/polygon/src/handlers/erc20.rs` (doc comments only — 2)
+- Modify: `rust-wallet-app/crates/polygon/src/handlers/tx.rs` (doc comments only — 1)
+- Modify: `rust-wallet-app/crates/polygon/tests/local_testnet_smoke.rs` (doc comments only — 25 stale exit-code references; **no assertion in it asserts a non-zero exit code**, so none can break)
+- Modify: `rust-wallet-app/crates/polygon/tests/amoy_sign_only.rs` (doc comments only — 7)
+- Modify: `rust-wallet-app/crates/polygon/tests/amoy_p9_pk_import.rs` (doc comments only — 6)
+- Modify: `rust-wallet-app/crates/polygon/tests/polygon_wallet_scenario.rs` (doc comments only — 1)
+- Modify: `rust-wallet-app/crates/polygon/tests/amoy_error_paths.rs` (doc comments only — 1)
 - Modify: `rust-wallet-app/crates/polygon/Cargo.toml`
-- Test: rust-wallet-app/crates/polygon/tests/ (unchanged — the suite asserts only zero versus non-zero, so no assertion in it can break across this migration; do not "fix" exit codes it does not assert)
+- Modify: `rust-wallet-app/Cargo.lock`
+- Test: rust-wallet-app/crates/polygon/tests/ — **no exit-code assertion in the suite asserts a non-zero code**, so none of them can break across this migration; do not "fix" exit codes it does not assert. The files above are touched for their *comments* only.
 
 **Interfaces:**
 - Consumes: `wallet_errors::ErrorCategory` from Task 1.
@@ -1289,14 +1401,44 @@ with:
         }
 ```
 
-3. Update the doc comment at `rust-wallet-app/crates/polygon/src/handlers/mod.rs:53-59` — it describes the old per-chain `Error::exit_code()` table; it now describes the shared table.
-4. Add to `rust-wallet-app/crates/polygon/Cargo.toml`:
+3. Update the doc comment at `rust-wallet-app/crates/polygon/src/handlers/mod.rs:53-59` — it describes the old per-chain `Error::exit_code()` table; it now describes the shared table. **Note:** Task 4 already removed the references to the deleted `exit_code()` method from these lines, because Task 4 is what deletes it; Task 5 adds the *new* numbers back, so it is the same lines twice, not a conflict. Rewrite the whole block to name the shared categories and their codes:
+
+   ```
+   /// Map `WalletError` (lib-level) onto `polygon_wallet_core::Error`
+   /// (CLI-canonical). Called by every handler that touches `WalletManager`
+   /// so the CLI's shared category table applies (design §3.5 cross-cutting
+   /// line 293). Localities:
+   ///
+   ///   `InvalidInput` (User, exit 1) for caller-side errors (password, name,
+   ///       mnemonic, duplicate name, missing wallet).
+   ///   `Rpc` (Network, exit 2) for filesystem + serialization + corruption —
+   ///       distinct exit code per the shared `wallet-errors` table.
+   ```
+
+4. Update to the new table **every exit-code reference in the `polygon` CLI crate and its tests.** By one consistent grep (`grep -cE "exit [0-9]|exit_code|exit code \([0-9]\)|\(exit [0-9]\)|→ [A-Za-z]+ \([0-9]\)"`), the Polygon crate names an exit code in **78 places** across 12 files: `src/main.rs` 11, `src/handlers/wallet.rs` 9, `src/handlers/sign.rs` 9, `tests/local_testnet_smoke.rs` 25, `tests/amoy_sign_only.rs` 7, `tests/amoy_p9_pk_import.rs` 6, `src/handlers/mod.rs` 4, `src/handlers/fee.rs` 2, `src/handlers/erc20.rs` 2, `src/handlers/tx.rs` 1, `tests/polygon_wallet_scenario.rs` 1, `tests/amoy_error_paths.rs` 1. **Most of them name the *engine's* old table** (`InvalidInput` → 2, `Rpc` → 3, `WalletCorrupt` → 5), which this migration replaces. Key each one on the condition it names, using the same per-condition mapping as Task 4's Step 3 item 7:
+
+   | condition named by the text | old | new |
+   |---|---|---|
+   | a clap usage error | 2 | 1 |
+   | `Error::InvalidInput` / `InvalidMnemonic` / `InvalidPrivateKey` / `InvalidPassword` / `NonceMismatch` / `FeeTooLow` / `AbiDecodeFailed` | 2 | 1 |
+   | `Error::WalletNotFound` / `WalletNotFoundByName` / `WalletExists` | 4 | 1 |
+   | `Error::InsufficientFunds` / `InsufficientTokenBalance` | 4 | 3 |
+   | `Error::Rpc` / `GasEstimateFailed` | 3 | 2 |
+   | `Error::ReceiptTimeout` | 5 | 2 |
+   | `Error::WalletCorrupt` / `EncryptionFailed` / `DecryptionFailed` | 5 | 4 |
+   | `Error::TxBroadcastFailed` | 5 | 5 |
+
+   Two of them are inside `panic!` messages in Polygon's own unit tests (`src/main.rs:1322` and `:1501` — "wrong password must surface as InvalidInput (exit 2)"), which print on failure; update them with the code they now assert. **Do not find-and-replace the numbers** — old 5 maps to 2, 4 **or** 5 and old 4 maps to 1 **or** 3, so a blind replace would corrupt them.
+
+   Note the same rule Task 4 applied: `polygon/tests/local_testnet_smoke.rs:2755` and `:2962` were already corrected by Task 4 because they named the deleted method; the remaining references in that file are ordinary exit-code claims and are this item's work.
+
+5. Add to `rust-wallet-app/crates/polygon/Cargo.toml`:
 
 ```toml
 wallet-errors = { workspace = true }
 ```
 
-5. In `rust-wallet-app/crates/polygon/src/main.rs`, replace the plain `Cli::parse()` with one that maps a clap usage error to `User`:
+6. In `rust-wallet-app/crates/polygon/src/main.rs`, replace the plain `Cli::parse()` with one that maps a clap usage error to `User`:
 
 ```rust
 let cli = match Cli::try_parse() {
@@ -1347,7 +1489,7 @@ cargo test -p polygon
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
 
-- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/1e-polygon-migration`.
+- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/581e-polygon-migration`.
 
 ---
 
@@ -1355,9 +1497,11 @@ cargo test -p polygon
 
 **Files:**
 - Create: `rust-wallet-app/crates/btc/src/error.rs`
-- Modify: `rust-wallet-app/crates/btc/src/main.rs`
+- Modify: `rust-wallet-app/crates/btc/src/main.rs` (the invalid-mnemonic special case, the clap path, and the comment at `:39` that the special case makes obsolete)
+- Modify: `rust-wallet-app/crates/btc/src/cli.rs` (two stale exit-code claims in test-message strings — `:1173`, `:2377`)
 - Modify: `rust-wallet-app/crates/btc/Cargo.toml`
-- Modify: rust-wallet-app/crates/btc/tests/ (cli.rs — the invalid-mnemonic assertion at cli.rs:305-324 still expects exit 2)
+- Modify: `rust-wallet-app/crates/btc/tests/cli.rs` (the invalid-mnemonic assertion at `:305-324` still expects exit 2; the seven "exit 0" assertions in the file are correct as they stand and must not change)
+- Modify: `rust-wallet-app/Cargo.lock`
 
 **Interfaces:**
 - Consumes: `wallet_errors::ErrorCategory` from Task 1.
@@ -1408,7 +1552,7 @@ mod tests {
             (Error::MnemonicCipher("x".into()), ErrorCategory::Signing),
             (Error::WalletStore("x".into()), ErrorCategory::Signing),
         ];
-        assert_eq!(cases.len(), 21, "the Bitcoin error enum has 21 variants");
+        assert_eq!(cases.len(), 21, "this table pins 21 Bitcoin variants — the enum is #[non_exhaustive], so a new variant must add a row here");
         for (err, expected) in cases {
             assert_eq!(classify(&err), expected, "wrong category for {err:?}");
         }
@@ -1552,6 +1696,21 @@ let cli = match Cli::try_parse() {
 
 **The BTC suite's invalid-mnemonic assertion must be updated to exit 1 in the same change.**
 
+6. Update the remaining stale exit-code references in the `btc` crate. The Bitcoin crate names an exit code in **12** places, and only **four** of them are wrong:
+
+   | site | current | new | why |
+   |---|---|---|---|
+   | `btc/tests/cli.rs:314` | `Some(2)` | **`Some(1)`** | `Error::InvalidMnemonic` is `User` (1) — the assertion itself, and its message string |
+   | `btc/src/cli.rs:1173` | "exit 2" | "exit 1" | a clap parse rejection is now `User` |
+   | `btc/src/cli.rs:2377` | "exit 2" | "exit 1" | a clap parse rejection is now `User` |
+   | `btc/src/main.rs:37-40` | "invalid mnemonic → exit code 2 (not anyhow's default exit 1)" | *removed* | the special case it describes is replaced by `classify_anyhow` in item 2 |
+
+   The other eight are "exit 0" claims — in `btc/src/handlers.rs:428`, `btc/src/cli.rs` and six assertion messages in `btc/tests/cli.rs` — and **exit 0 does not change**. Leave them alone.
+
+   `btc/src/cli.rs:408` says a fee-rate that does not exceed the original's effective rate "exit 4 otherwise". That stays 4: the path surfaces `Error::TxBuild`, which is `Signing` (4) under the new table. Leave it alone.
+
+   **The "classified vs fell through" distinction is lost by design.** Once `InvalidMnemonic` maps to `User` (1), it shares its code with the anyhow fallback. The stderr pin — `stderr.contains("checksum mismatch")` at `btc/tests/cli.rs:320-324` — is what still proves the error was *classified* as an invalid mnemonic rather than falling through, so that assertion must survive the change.
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p btc`
@@ -1578,7 +1737,7 @@ cargo test -p btc
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
 
-- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/1f-btc-migration`.
+- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/581f-btc-migration`.
 
 ---
 
@@ -1680,7 +1839,7 @@ is a security feature and is deliberately not unified):
 | `tron` | `crates/tron/src/handlers/mod.rs::classify` |
 | `sol` | `crates/sol/src/handlers/error.rs::classify` |
 
-Two intentional divergences from the categories above:
+Three intentional divergences from the categories above:
 
 - **Bitcoin's "wallet not found" exits 4, not 1.** `bitcoin-wallet-core`'s
   `WalletStore` variant deliberately collapses not-found, wrong-password,
@@ -1692,10 +1851,43 @@ Two intentional divergences from the categories above:
   operator input (`eth/src/handlers.rs:127` raises
   `InvalidPassword("password must be non-empty")`); the second is a credential
   failure (`DecryptionFailed`).
+- **A chain reaches only the categories its engine can express, and TRON
+  reaches four of the six.** `tron-wallet-core`'s `Error` has **no**
+  insufficient-funds variant and **no** broadcast-rejection variant, so the
+  `tron` CLI never returns 3 or 5: a node-side transaction rejection is
+  reported as `Network` (2), the same code as an unreachable node. Solana
+  reaches all six. This is a property of the engine, not of the taxonomy —
+  the table above is the specification for every chain that *can* reach a
+  category.
 
 **This changed the exit codes of all five CLIs.** Automation that keys on exit
 codes must be updated — see the `**BREAKING**` entries in `CHANGELOG.md`.
 ```
+
+Also extend the **Examples** column of the error table itself
+(`docs/wallets/CONTEXT.md:91-98`), because the categories now cover more
+conditions than the two-word examples name. The parity test reads only the
+**label** and the **exit-code** columns, so the Examples cell is free text —
+but it is the cell a reader consults:
+
+| Category | Exit code | Examples |
+|---|---|---|
+| Success | 0 | OK |
+| User error | 1 | Invalid args, missing file, unknown wallet, invalid mnemonic or address, ABI decode failure |
+| Network error | 2 | RPC unreachable, gas estimate failed, receipt timeout |
+| Insufficient funds | 3 | Balance below amount + fee |
+| Signing error | 4 | Wrong password, invalid key, corrupt or tampered wallet file, encryption or KDF failure, transaction construction failure, internal machinery failure, feature not yet implemented |
+| Broadcast error | 5 | Tx REVERTED, node rejected |
+
+The `Signing` row is the one that needs extending: "Wrong password, invalid
+key" does not mention a corrupt blob, and under this taxonomy a corrupt blob
+**must** be indistinguishable from a wrong password by exit code. The
+`Broadcast error` row already reads "Tx REVERTED, node rejected" and needs no
+change.
+
+**Do not change the label or the exit-code cells.** `wallet-errors/tests/context_doc_parity.rs`
+asserts them row-for-row against `ErrorCategory::ALL`, and changing either
+breaks that test.
 
 - [ ] **Step 4: Run the parity test to verify it still passes**
 
@@ -1721,7 +1913,7 @@ This task *is* the doc set. No CHANGELOG bullet is needed for a correction to an
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
 
-- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/1g-context-doc`.
+- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/581g-context-doc`.
 
 ---
 
@@ -1762,7 +1954,13 @@ The check does not exist yet, so it is written as a script the job runs. Add thi
             fi
             missing=0
             for variant in $variants; do
-              if ! grep -q "Error::$variant" "$cli"; then
+              # The boundary matters: without it `Error::Node` matches
+              # `Error::NodeResponse` and `Error::WalletNotFound` matches
+              # `Error::WalletNotFoundByName`, so an unclassified variant can
+              # be masked by a longer sibling that *is* classified. Both of
+              # those pairs exist today (tron `Node`/`NodeResponse`, evm
+              # `WalletNotFound`/`WalletNotFoundByName`).
+              if ! grep -qE "Error::${variant}([^A-Za-z0-9_]|$)" "$cli"; then
                 echo "::error file=$cli::unclassified engine variant Error::$variant"
                 missing=1
               fi
@@ -1787,7 +1985,20 @@ The check does not exist yet, so it is written as a script the job runs. Add thi
 
 Run the two shell bodies locally from `rust-wallet-app/crates`.
 
-Expected for the first check: it passes if Tasks 2–6 classified every variant. **Verify the check can fail** — add a dummy variant to a *copy* of an engine error file and confirm the check reports it, then discard the copy. A check that cannot fail is not a check.
+Expected for the first check: it passes if Tasks 2–6 classified every variant. **Verify the check can fail** — add a dummy variant to a real engine error file, run the check, confirm it reports that variant as unclassified, then restore the file and confirm it is clean:
+
+```bash
+cd rust-wallet-app/crates
+# 1. add a variant, e.g. `DummyUnclassified(String),` inside the enum in
+#    tron-wallet-core/src/error.rs
+# 2. run the check body → it must report
+#    "::error file=tron/src/handlers/mod.rs::unclassified engine variant Error::DummyUnclassified"
+# 3. restore:
+git checkout -- tron-wallet-core/src/error.rs
+git status --short rust-wallet-app/crates/tron-wallet-core/src/error.rs   # must be empty
+```
+
+A check that cannot fail is not a check.
 
 Expected for the second check: `diff` produces no output and exits 0. If it reports a difference, fix the table (a real drift) rather than the check.
 
@@ -1800,7 +2011,7 @@ Insert the `error-mapping-parity` job into `.github/workflows/workspace.yml` alo
 Run: `python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/workspace.yml'))"`
 Expected: exits 0 with no output (valid YAML).
 
-- [ ] **Step 5: L12 review pair + fmt re-check.** The reviewer must confirm the `sed` range `/pub enum Error {/,/^}/p` extraction is correct for all five engine files, and that the check fails loudly when the extraction yields zero variants (a vacuous pass is worse than no check).
+- [ ] **Step 5: L12 review pair + fmt re-check.** The reviewer must confirm the `sed` range `/pub enum Error {/,/^}/p` extraction is correct for the **four** engine files that declare their own enum (`bitcoin-wallet-core`, `evm-wallet-core`, `tron-wallet-core`, `sol-wallet-core` — `eth-wallet-core` and `polygon-wallet-core` only re-export it), and that the check fails loudly when the extraction yields zero variants (a vacuous pass is worse than no check). The controller has already run the extraction against all four and it yields **21 / 19 / 12 / 29** variants respectively — matching the four per-chain tables in this plan.
 
 - [ ] **Step 6: Verify gate**
 
@@ -1820,17 +2031,17 @@ CI-only change — the Rust cargo gates are N/A (trivial tier for the Rust works
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.
 
-- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/1h-ci-parity`.
+- [ ] **Step 9: Commit, push, PR to the parent, merge into the parent.** Branch `task/581h-ci-parity`.
 
 ---
 
 ## Completion
 
-When all eight sub-tasks are merged into `task/1-wallet-errors`:
+When all eight sub-tasks are merged into `task/581-wallet-errors`:
 
 ```bash
 git checkout main
-git merge task/1-wallet-errors --no-ff -m "Task 1: wallet-errors — unified CLI error categories and exit codes"
+git merge task/581-wallet-errors --no-ff -m "Task 1: wallet-errors — unified CLI error categories and exit codes"
 git push origin main
 ```
 

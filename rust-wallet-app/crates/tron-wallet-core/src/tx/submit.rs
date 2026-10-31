@@ -417,7 +417,7 @@ fn verify_owner(secret: &Zeroizing<[u8; SECRET_KEY_LEN]>, owner: &str) -> Result
 /// Single source of truth for the check so the CLI can refuse the flag before
 /// opening a client and [`wait_for_confirm`] still cannot be entered with a
 /// zero interval by an FFI caller. Always [`Error::Config`] — the CLI maps that
-/// to exit 2 (operator input) via `handlers::exit_code`.
+/// to `User` (exit 1, operator input) via `handlers::classify`.
 pub fn validate_poll_interval(poll_interval: Duration) -> Result<()> {
     if poll_interval.is_zero() {
         return Err(Error::Config("poll interval must be non-zero".into()));

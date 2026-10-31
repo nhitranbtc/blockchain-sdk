@@ -1,9 +1,14 @@
 //! `tron` — TRON wallet CLI binary. Plan §Phase 6.
 //!
 //! `main` does three things and nothing else: parse, dispatch, map the error
-//! to an exit code. Every behaviour lives in `handlers`, so the exit-code
-//! contract in `handlers::exit_code` is the single place a script's
-//! expectations can break.
+//! to an exit code. Every behaviour lives in `handlers`, so the error-category
+//! contract in `handlers::classify` is the single place a script's
+//! expectations can break; the category→exit-code table itself lives in the
+//! shared `wallet-errors` crate.
+//!
+//! A clap usage error is a `User` error (exit 1), not clap's own exit 2 — the
+//! shared table assigns 2 to `Network`, so a bad command line must not report
+//! as "network error, retry later". `--help` / `--version` keep exit 0.
 
 mod cli;
 mod handlers;
@@ -13,10 +18,25 @@ use clap::Parser;
 use cli::{
     AddressAction, BalanceArgs, Cli, Commands, ConfigAction, Trc20Action, TxAction, WalletAction,
 };
-use handlers::{exit_code, Result};
+use handlers::{classify, Result};
 
 fn main() {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // A clap usage error is a user error (exit 1), not a network error
+            // (exit 2). `--help` and `--version` keep clap's exit 0.
+            let code = e.exit_code();
+            // `print()` returns `io::Result<()>` and `Result` is `#[must_use]` —
+            // the write result is dropped deliberately: the process exits either way.
+            let _ = e.print();
+            std::process::exit(if code == 0 {
+                0
+            } else {
+                wallet_errors::ErrorCategory::User.exit_code()
+            });
+        }
+    };
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -24,14 +44,14 @@ fn main() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("error: cannot start async runtime: {e}");
-            std::process::exit(5);
+            std::process::exit(wallet_errors::ErrorCategory::Signing.exit_code());
         }
     };
 
     if let Err(err) = runtime.block_on(run(cli)) {
         // Diagnostics on STDERR so `--json` consumers never see them on STDOUT.
         eprintln!("error: {err}");
-        std::process::exit(exit_code(&err));
+        std::process::exit(classify(&err).exit_code());
     }
 }
 

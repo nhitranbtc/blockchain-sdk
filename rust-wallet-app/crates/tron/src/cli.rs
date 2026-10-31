@@ -57,8 +57,8 @@ pub enum UnitArg {
     Sun,
 }
 
-/// `--words 12|24`. Rejects anything else at parse time (exit 2) rather than
-/// letting BIP-39 reject it after the passphrase prompt.
+/// `--words 12|24`. Rejects anything else at parse time (a user error) rather
+/// than letting BIP-39 reject it after the passphrase prompt.
 fn word_count_parser() -> impl TypedValueParser<Value = u8> {
     PossibleValuesParser::new(["12", "24"]).map(|s| s.parse::<u8>().expect("possible value is u8"))
 }

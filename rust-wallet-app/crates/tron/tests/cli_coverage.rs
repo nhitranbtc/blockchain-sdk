@@ -636,3 +636,55 @@ fn config_set_network_resets_rpc_url() {
         "config show must not pair nile network with mainnet RPC; got: {show_stdout}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// clap usage errors → exit 1 (User)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A clap usage error is a `User` error, so it exits 1. The shared exit-code
+// table assigns 2 to `Network`, so leaving clap's own exit 2 in place would
+// report a bad command line as "network error, retry later" — and an
+// automation rule keying on 2 could loop on it. `--help` / `--version` are
+// not usage errors and keep clap's exit 0.
+//
+// These assertions exist because the `tron` suite carried no exit-code
+// assertion at all: the behaviour was verified by hand against the built
+// binary, so nothing in CI would have caught a regression and the
+// CHANGELOG's "clap usage errors 2→1" claim could have gone silently
+// false. Mirrors `sol`'s `cli_completeness.rs` Row-23 assertions.
+
+#[test]
+fn clap_usage_error_exits_one() {
+    // Unknown long flag — rejected by clap before any process startup.
+    let _cfg = isolated_config_home();
+    common::tron()
+        .args(["wallet", "list", "--no-such-flag"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn clap_missing_required_argument_exits_one() {
+    // Missing required argument — also a clap usage error.
+    let _cfg = isolated_config_home();
+    common::tron()
+        .args(["wallet", "show"])
+        .assert()
+        .failure()
+        .code(1);
+}
+
+#[test]
+fn help_exits_zero() {
+    // `--help` is not a usage error — clap keeps its exit 0.
+    let _cfg = isolated_config_home();
+    common::tron().arg("--help").assert().success().code(0);
+}
+
+#[test]
+fn version_exits_zero() {
+    // `--version` is not a usage error either — clap keeps its exit 0.
+    let _cfg = isolated_config_home();
+    common::tron().arg("--version").assert().success().code(0);
+}

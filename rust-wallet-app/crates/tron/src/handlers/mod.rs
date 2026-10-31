@@ -6,16 +6,25 @@
 //! - STDERR carries diagnostics, warnings, prompts, and secrets that must not
 //!   be captured by `$(...)` — the mnemonic on `wallet create` above all.
 //!
-//! Exit codes (plan §Task 5.1, mirroring `btc/src/main.rs`):
+//! Exit codes come from the shared `wallet-errors` table:
 //!
-//! | code | meaning                            |
-//! |------|------------------------------------|
-//! | 0    | success                            |
-//! | 1    | user abort (declined confirmation) |
-//! | 2    | bad input / unsupported request    |
-//! | 3    | upstream RPC transport failure     |
-//! | 4    | wallet or balance issue            |
-//! | 5    | signing / broadcast error          |
+//! | code | meaning              |
+//! |------|----------------------|
+//! | 0    | Success              |
+//! | 1    | User error           |
+//! | 2    | Network error        |
+//! | 3    | Insufficient funds   |
+//! | 4    | Signing error        |
+//! | 5    | Broadcast error      |
+//!
+//! Rows 3 and 5 are **unreachable from this CLI**: `tron-wallet-core`'s
+//! `Error` has no insufficient-funds and no broadcast-rejection variant, so
+//! a node-side transaction rejection is reported as `Network` (2), the same
+//! code as an unreachable node.
+//!
+//! This module owns only the TRON-specific variant→category mapping
+//! ([`classify`]); the category→exit-code table lives in `wallet-errors` and
+//! is the only one in the workspace.
 
 pub mod address;
 pub mod balance;
@@ -38,7 +47,7 @@ use zeroize::Zeroizing;
 
 use crate::cli::UnitArg;
 
-/// CLI-level error. Wraps the core error so the exit-code mapping lives in
+/// CLI-level error. Wraps the core error so the category mapping lives in
 /// exactly one place, and adds the two cases the core has no variant for:
 /// a declined confirmation, and an argument shape rejected before the core is
 /// reached.
@@ -71,24 +80,43 @@ impl std::fmt::Display for CliError {
 /// Result alias for handlers.
 pub type Result<T> = core::result::Result<T, CliError>;
 
-/// Maps an error to the plan's process exit code.
-pub fn exit_code(err: &CliError) -> i32 {
+/// Maps an error to its cross-chain category.
+///
+/// The category set and the exit-code table live in `wallet-errors`; this
+/// function owns only the TRON-specific variant→category mapping.
+pub fn classify(err: &CliError) -> wallet_errors::ErrorCategory {
+    use wallet_errors::ErrorCategory;
     match err {
-        CliError::Abort => 1,
-        CliError::BadInput(_) => 2,
-        CliError::Core(e) => match e {
-            // Transport / node reachability.
-            CoreError::Node(_) => 3,
-            // Wallet lookup, storage, or wrong passphrase.
-            CoreError::Wallet(_) | CoreError::Encryption(_) => 4,
-            // Signing, envelope construction, malformed node payload.
-            CoreError::Signing(_) | CoreError::TransactionBuild(_) | CoreError::NodeResponse(_) => {
-                5
-            }
-            // Everything else is operator input: bad mnemonic, bad address,
-            // bad path, cross-network guard, bad config, bad pin.
-            _ => 2,
-        },
+        // Operator declined a confirmation prompt.
+        CliError::Abort => ErrorCategory::User,
+        // Argument shape the CLI rejects before reaching the core.
+        CliError::BadInput(_) => ErrorCategory::User,
+        CliError::Core(e) => classify_core(e),
+    }
+}
+
+/// Maps a `tron-wallet-core` error to its cross-chain category.
+pub fn classify_core(e: &CoreError) -> wallet_errors::ErrorCategory {
+    use wallet_errors::ErrorCategory;
+    match e {
+        // Transport / node reachability.
+        CoreError::Node(_) | CoreError::NodeResponse(_) => ErrorCategory::Network,
+        // Operator input: bad mnemonic, bad address, bad config, bad pin,
+        // cross-network guard, wallet lookup.
+        CoreError::Mnemonic(_)
+        | CoreError::Address(_)
+        | CoreError::Config(_)
+        | CoreError::SpkiPin(_)
+        | CoreError::Disambiguation(_)
+        | CoreError::Wallet(_) => ErrorCategory::User,
+        // Signing, envelope construction, at-rest encryption.
+        CoreError::Derivation(_)
+        | CoreError::Signing(_)
+        | CoreError::TransactionBuild(_)
+        | CoreError::Encryption(_) => ErrorCategory::Signing,
+        // Future variants are treated as internal failures, never as
+        // operator input, so automation does not loop on a bad command line.
+        _ => ErrorCategory::Signing,
     }
 }
 
@@ -121,7 +149,7 @@ pub fn open_storage(data_dir: &Path) -> Result<FileWalletStorage> {
     Ok(FileWalletStorage::with_dir(data_dir.join("wallets"))?)
 }
 
-/// Parses a `WalletId` from its hex form, mapping a bad id to exit 2.
+/// Parses a `WalletId` from its hex form, mapping a bad id to a user error.
 pub fn parse_wallet_id(raw: &str) -> Result<WalletId> {
     WalletId::from_str(raw).map_err(CliError::Core)
 }
@@ -523,29 +551,63 @@ mod tests {
     }
 
     #[test]
-    fn exit_codes_match_the_plan_table() {
-        assert_eq!(exit_code(&CliError::Abort), 1);
-        assert_eq!(exit_code(&CliError::BadInput("x".into())), 2);
+    fn every_tron_variant_maps_to_its_documented_category() {
+        use wallet_errors::ErrorCategory;
+
+        let cases: Vec<(CoreError, ErrorCategory)> = vec![
+            (CoreError::Node("down".into()), ErrorCategory::Network),
+            (
+                CoreError::NodeResponse("bad".into()),
+                ErrorCategory::Network,
+            ),
+            (CoreError::Mnemonic("bad".into()), ErrorCategory::User),
+            (CoreError::Address("bad".into()), ErrorCategory::User),
+            (CoreError::Config("bad".into()), ErrorCategory::User),
+            (CoreError::SpkiPin("bad".into()), ErrorCategory::User),
+            (CoreError::Disambiguation("bad".into()), ErrorCategory::User),
+            (CoreError::Wallet("missing".into()), ErrorCategory::User),
+            (CoreError::Derivation("bad".into()), ErrorCategory::Signing),
+            (CoreError::Signing("bad".into()), ErrorCategory::Signing),
+            (
+                CoreError::TransactionBuild("bad".into()),
+                ErrorCategory::Signing,
+            ),
+            (
+                CoreError::Encryption("bad pw".into()),
+                ErrorCategory::Signing,
+            ),
+        ];
         assert_eq!(
-            exit_code(&CliError::Core(CoreError::Node("down".into()))),
-            3
+            cases.len(),
+            12,
+            "this table pins 12 TRON variants — the enum is #[non_exhaustive], so a new variant must add a row here"
         );
+        for (err, expected) in cases {
+            assert_eq!(classify(&CliError::Core(err)), expected, "wrong category");
+        }
+
+        assert_eq!(classify(&CliError::Abort), ErrorCategory::User);
         assert_eq!(
-            exit_code(&CliError::Core(CoreError::Wallet("missing".into()))),
-            4
+            classify(&CliError::BadInput("x".into())),
+            ErrorCategory::User
         );
-        assert_eq!(
-            exit_code(&CliError::Core(CoreError::Encryption("bad pw".into()))),
-            4
-        );
-        assert_eq!(
-            exit_code(&CliError::Core(CoreError::Signing("nope".into()))),
-            5
-        );
-        assert_eq!(
-            exit_code(&CliError::Core(CoreError::Mnemonic("bad".into()))),
-            2
-        );
+    }
+
+    #[test]
+    fn wrong_password_and_corrupt_blob_are_indistinguishable() {
+        use wallet_errors::ErrorCategory;
+        // Review Focus #1: a wrong passphrase and a corrupt blob must land
+        // on the same category, so the two cannot be told apart by exit code.
+        //
+        // What this pins: TRON's engine produces the *same* `Error::Encryption`
+        // variant for a GCM-tag mismatch (wrong passphrase) and for a
+        // truncated blob (`tron-wallet-core/src/crypto/mod.rs`), so the two
+        // conditions are indistinguishable **by construction** and this test
+        // pins the exit code they share. It does not — and cannot — compare
+        // two distinct errors, because the engine never produces two.
+        let wrong_pw = classify(&CliError::Core(CoreError::Encryption("bad pw".into())));
+        assert_eq!(wrong_pw, ErrorCategory::Signing);
+        assert_eq!(wrong_pw.exit_code(), 4);
     }
 
     #[test]
