@@ -212,14 +212,22 @@ Four intentional divergences from the categories above:
   finding**: closing them means changing `eth` and `polygon` together, against
   the already-merged ETH migration, with both `CHANGELOG.md` bullets
   corrected.
-- **A chain reaches only the categories its engine can express. Solana reaches
-  all six; `eth`, `polygon`, `btc` and `tron` each reach four** — 0, 1, 2 and 4.
-  None of the EVM, Bitcoin or TRON engines constructs an insufficient-funds or
-  a broadcast-rejection error outside its own variant-coverage tests, so **3
-  and 5 are unreachable in all four**; a node-side transaction rejection is
-  reported as `Network` (2), the same code as an unreachable node. This is a
-  property of the engines, not of the taxonomy — the table above is the
-  specification for every chain that *can* reach a category.
+- **A chain reaches only the categories its engine can express, and no CLI in
+  this workspace reaches the insufficient-funds (3) or broadcast-rejection (5)
+  code.** Every CLI's classifier maps all six categories — the mapping is
+  tested — but no CLI can produce the variants that produce those two.
+  `tron-wallet-core` has neither variant; `evm-wallet-core` and
+  `bitcoin-wallet-core` construct theirs only inside their own
+  variant-coverage tests; `sol-wallet-core` declares both, but its
+  `BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has no construction
+  site anywhere and its `InsufficientFunds` is built only by
+  `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:48`),
+  whose only callers are two integration tests — the `sol` CLI's send paths
+  do no balance check. So **all five CLIs reach exactly four of the six: 0,
+  1, 2 and 4**. A node-side transaction rejection is reported as `Network`
+  (2), the same code as an unreachable node. This is a property of the
+  engines, not of the taxonomy — the table above is the specification for
+  every chain that *can* reach a category.
 - **The `polygon` CLI translates the wallet library's errors the same way `eth`
   does.** Its `map_wallet_err` maps the library's errors into `Rpc`,
   `WalletCorrupt`, `DecryptionFailed`, `InvalidMnemonic`, `InvalidPrivateKey`,
