@@ -2898,6 +2898,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wallet-errors",
 ]
 
 [[package]]

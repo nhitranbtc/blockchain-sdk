@@ -1190,7 +1190,7 @@ with:
 ```
 
 4. Delete `pub fn exit_code(&self) -> i32` and its doc block (beginning `/// Stable exit-code mapping per #297 M11.`) from `rust-wallet-app/crates/evm-wallet-core/src/error.rs`.
-5. In that file's own `#[cfg(test)] mod tests`, **21** assertions call the deleted method and will no longer compile. They are not two — they are five whole tests plus three assertions inside a sixth:
+5. In that file's own `#[cfg(test)] mod tests`, **20** assertions call the deleted method and will no longer compile. They are not two — they are five whole tests plus three assertions inside a sixth:
 
    | test | `.exit_code()` sites | what it does now |
    |---|---|---|
@@ -1235,7 +1235,7 @@ with:
    | the CLI's own `.env` parse failure (`main.rs:385`) | 2 | 1 |
    | success | 0 | 0 |
 
-   The **14 assertion-message strings** are the load-bearing part — they print on failure, so a message that says "must yield exit 4" while the assertion says `Some(1)` is a self-contradicting diagnostic. Update each message together with its assertion.
+   The **29 assertion-message strings** are the load-bearing part — 24 equality-assertion messages plus the 5 guard messages. They print on failure, so a message that says "must yield exit 4" while the assertion says `Some(1)` is a self-contradicting diagnostic. Update each message together with its assertion.
 
    `eth/src/handlers.rs:59-67` is a whole doc block listing the old per-variant codes (`Rpc (3)`, `WalletCorrupt (5)`, `InvalidMnemonic (2)`, `InvalidPrivateKey (2)`, `WalletNotFound (4)`, `WalletExists (4)`). Rewrite it to name the **category** rather than the number, so the doc does not restate a table that lives in `wallet-errors` and is tested there:
 
@@ -1263,7 +1263,7 @@ with:
    | `cli_localnet.rs` 2178 | 5 | wrong password (`Error::DecryptionFailed`) | **4** |
    | `wallet_send_speedup.rs` 339, 482 | 2 | `Error::FeeTooLow` | **1** |
 
-   **None of the 24 is a clap usage error** — every old-2 site is a handler-level rejection. So none of them becomes a banner check; they are class 2 of the four assertion classes, not class 1.
+   **Three of the 24 are clap usage errors** — `cli_localnet.rs:616` and `:931` (clap's `value_parser` on `--token`) and `:3128` (clap's `u128` parse on `--max-fee-per-gas`). All three land on 1 either way, so the renumbering is the same; only their *class* differs (class 1, a clap rejection, rather than class 2, a handler-level rejection). The other 21 are handler-level bad input. **None of the 24 becomes a banner check** — the banner replaces a lock-down *guard*, not an equality assertion.
 
    **The 5 guards** — `assert_ne!` on an exit code:
 
@@ -1308,6 +1308,14 @@ let cli = match Cli::try_parse() {
 
 **The ETH suite's exit-code equality assertions will fail loudly until this is done — that is the forcing function, and it is what stops you adjusting them back to the old codes. Note that ETH's clap lock-down guards (`assert_ne!(code, Some(2))` and the `Some(4)` / `Some(5)` ones) will NOT fail: they go vacuous, because a clap rejection now exits 1 and a wrong password now exits 4. Re-key those guards per the Global Constraints' assertion classes.**
 
+11. Rename the ETH integration tests whose **names** encode a pre-migration exit code. **Twenty** `fn` names state a code the test no longer asserts — nineteen end in `_yields_exit_2` / `_yields_exit_4` / `_yields_exit_5` and one is `wallet_balance_all_flag_against_unreachable_rpc_exits_3_with_balanceof` — e.g. `send_command_with_wrong_password_yields_exit_5`, which now asserts `Some(4)`. A test whose name states a code it does not assert lies in its identifier, and it is the same defect class as the 106 stale comment references above. Rename each to the code it now asserts, keeping the house `..._yields_exit_N` convention. **Verify each new suffix against the `Some(N)` assertion inside its own test body** rather than against a table — a rename to the wrong number is invisible to the compiler. The names are distinct after renaming — no two collide. **Historical `CHANGELOG.md` entries quote some of the old names; leave those entries alone** — they describe what shipped in a past release and stand on their own — but add one clause to the `eth` `[user-facing]` CHANGELOG bullet below noting that the ETH test names were renamed, so a reader who greps for an old name is not left guessing.
+
+12. Fix the one remaining reference to the deleted method that Task 4 leaves behind: `rust-wallet-app/crates/polygon/src/main.rs:108-109` — the comment above `std::process::ExitCode::from(1)` reads "T6b: all errors map to exit 1. Per-error mapping via `Error::exit_code()` lands in T6c when the error table becomes meaningful (currently every error is `Error::Rpc`)." It names the method this task deletes. **Comment-only.** Task 5 replaces that whole block, so this is a one-line correction that closes the gap for the length of one PR.
+
+13. Fix two ETH doc comments that name a **category the code does not produce**:
+    - `rust-wallet-app/crates/eth/src/error.rs:11` — the module doc lists "missing file" as a `User` (1) example, carried over verbatim from Solana's module doc where it is accurate. **For ETH it is wrong**: `eth/src/handlers.rs:61-62` folds `WalletError::Io` and `WalletError::Path` into `Error::rpc(...)`, which is `Network` (2). That behaviour is a known deferral (it needs an engine variant for I/O), so the **doc** is what must change — replace "missing file" with an example ETH actually produces, e.g. "invalid input, unknown wallet, empty passphrase".
+    - `rust-wallet-app/crates/eth/src/handlers.rs:63` — "Crypto/Mnemonic → InvalidMnemonic (User)" is wrong for **Crypto**: the code at `eth/src/handlers.rs:75` maps `WalletError::Crypto(_)` to `Error::DecryptionFailed(...)`, which is `Signing` (4). Split the line: `Crypto → DecryptionFailed (Signing)` and `Mnemonic → InvalidMnemonic (User)`. **Note the divergence to carry forward:** Polygon's `map_wallet_err` maps `WalletError::Crypto` to `Error::InvalidInput` (`polygon/src/handlers/mod.rs:69-71`), *not* to `InvalidMnemonic` — so Task 5 must describe **Polygon's** mapping, not Ethereum's.
+
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cargo test -p eth`
@@ -1331,7 +1339,7 @@ cargo test -p eth -p eth-wallet-core
 `CHANGELOG.md` `[Unreleased]` — one flat bullet per changed CLI, each immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, insufficient funds 4→3, wallet-corrupt/decryption 5→4, broadcast failure 5→5 (unchanged). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/eth/` — **BREAKING:** the `eth` CLI now uses the shared cross-chain exit-code table. Exit codes change: clap usage errors (bad flag, missing argument) 2→1; invalid input 2→1, ABI decode failure 2→1, wallet lookup 4→1, empty passphrase 2→1, RPC/gas-estimate 3→2, receipt timeout 5→2, insufficient funds 4→3, wallet-corrupt/decryption/encryption-failure 5→4, broadcast failure 5→5 (unchanged). Automation that keys on exit codes must be updated. The ETH integration tests whose names encoded an exit code were renamed to match the code they now assert; historical entries above still quote the old names. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 - **`[internal]`** `rust-wallet-app/crates/evm-wallet-core/` — **BREAKING:** removed `Error::exit_code()` (and the `eth-wallet-core` / `polygon-wallet-core` re-exports of it). The exit-code table now lives in the `wallet-errors` crate and the variant→category mapping lives in each CLI, so the engines gain no `wallet-errors` edge. Callers of `evm_wallet_core::Error::exit_code()` must call `wallet_errors::ErrorCategory::exit_code()` with the category their CLI derives.
 ```
 
@@ -1484,7 +1492,7 @@ cargo test -p polygon
 `CHANGELOG.md` `[Unreleased]` — one flat bullet per changed CLI, each immediately after the `## [Unreleased]` heading, with no `###` heading and no User Stories row (see the Global Constraints for the full L24 doc-set rule):
 
 ```
-- **`[user-facing]`** `rust-wallet-app/crates/polygon/` — **BREAKING:** the `polygon` CLI now uses the shared cross-chain exit-code table instead of mapping every error to exit 1. Exit codes now distinguish clap usage errors (bad flag, missing argument) 2→1; invalid input (1), node unreachable (2), insufficient funds (3), signing/credential failure (4), and node rejection (5). Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
+- **`[user-facing]`** `rust-wallet-app/crates/polygon/` — **BREAKING:** the `polygon` CLI now uses the shared cross-chain exit-code table instead of mapping every error to exit 1. Exit codes now distinguish: clap usage errors (bad flag, missing argument) 2→1; invalid input 1→1 (unchanged); node unreachable 1→2; insufficient funds 1→3; signing or credential failure 1→4; node rejection 1→5. Automation that keys on exit codes must be updated. Refs `docs/superpowers/specs/2026-10-30-cross-chain-abstraction-design.md` §Components 1.
 ```
 
 - [ ] **Step 8: PAUSE — request approval.** Do not commit until approved.

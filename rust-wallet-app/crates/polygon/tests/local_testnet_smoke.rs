@@ -2752,7 +2752,7 @@ async fn local_testnet_wallet_send_wait_blocks_for_receipt() {
 // `--name` at `cli.rs:160-175`) and reaches `validate_wallet_name` at
 // `handlers/mod.rs:106`, which returns `Error::InvalidInput("wallet name
 // must not be empty")`. `main.rs:111` hardcodes `ExitCode::from(1)`
-// for all errors routed through `run()` — the `Error::exit_code()`
+// for all errors routed through `run()` — the per-variant exit-code
 // mapping is not yet applied.
 //
 // Drift from Phase 7 plan (issue #495 comment 5503844662): validator is
@@ -2959,7 +2959,7 @@ async fn local_testnet_wallet_send_missing_args_rejected() {
 // `Error::InvalidInput("unknown polygon network: ...")` (sister to the
 // `anvil` / `mumbai` / `fakenet` reject tests at `handlers/mod.rs:179-207`).
 // `main.rs:111` hardcodes `ExitCode::from(1)` for all errors routed
-// through `run()` — the `Error::exit_code()` mapping is not yet applied.
+// through `run()` — the per-variant exit-code mapping is not yet applied.
 //
 // Dispatch order (verified by L12 review 2026-09-02): `parse_network` runs
 // at `main.rs:595` BEFORE `validate_wallet_name` (line 596) and BEFORE

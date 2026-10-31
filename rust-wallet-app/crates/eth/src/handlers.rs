@@ -2,8 +2,8 @@
 //!
 //! `main.rs::run` parses CLI args via clap and dispatches each subcommand to
 //! a fn in this module. Handlers return `Result<(), eth_wallet_core::Error>`
-//! so all error→exit-code mapping flows through `Error::exit_code()` per
-//! #297 M11 (the stable 0..=5 exit code table).
+//! so all error→exit-code mapping flows through the shared
+//! `wallet_errors::ErrorCategory` table (the stable 0..=5 exit code table).
 //!
 //! Handlers that need RPC use `eth_wallet_core::new_http(url)` so the
 //! library façade decides whether to use pinned vs default-TLS transport
@@ -56,15 +56,16 @@ pub fn open_provider(rpc_url: &str) -> Result<RootProvider<Ethereum>> {
     new_http(url)
 }
 
-/// Map `WalletError` → canonical `Error` so the CLI's `exit_code()` table
-/// still applies. Category mapping per #297 M11:
-/// - Io/Path → Rpc (3)
-/// - Json/Corrupt → WalletCorrupt (5)
-/// - Crypto/Mnemonic → InvalidMnemonic (2)
-/// - PrivateKey → InvalidPrivateKey (2)
-/// - NotFound → WalletNotFound (4)
-/// - NotFoundByName → WalletNotFound + tracing event with the name
-/// - AlreadyExists → WalletExists (4)
+/// Map `WalletError` → canonical `Error` so the CLI's shared category
+/// table applies (the exit codes are `wallet-errors`'):
+/// - Io/Path → Rpc (Network)
+/// - Json/Corrupt → WalletCorrupt (Signing)
+/// - Crypto → DecryptionFailed (Signing)
+/// - Mnemonic → InvalidMnemonic (User)
+/// - PrivateKey → InvalidPrivateKey (User)
+/// - NotFound → WalletNotFound (User)
+/// - NotFoundByName → WalletNotFound (User) + tracing event with the name
+/// - AlreadyExists → WalletExists (User)
 pub(crate) fn map_wallet_err(e: WalletError) -> Error {
     match e {
         WalletError::Io(_) | WalletError::Path(_) => Error::rpc(format!("wallet: {e}")),
@@ -90,7 +91,7 @@ pub(crate) fn map_wallet_err(e: WalletError) -> Error {
 /// Validate a user-supplied wallet name against the L12 review M-3 rule:
 /// 1..=32 chars, charset `[A-Za-z0-9 _-]`. Hand-rolled byte check (no
 /// regex crate) — short, allocation-free on the happy path. Returns
-/// `Error::InvalidInput` (exit 2) on violation so the operator sees the
+/// `Error::InvalidInput` (exit 1) on violation so the operator sees the
 /// exact failure reason in stderr.
 pub(crate) fn validate_wallet_name(name: &str) -> Result<()> {
     if name.is_empty() {
@@ -310,7 +311,7 @@ pub async fn wallet_balance(
             //   3. symbol fallback to lowercase address on RPC failure;
             //      decimals error bubbles as `Error::AbiDecodeFailed` / `Rpc`
             //      so the lock-down tests added in PR #362 (Issue #366)
-            //      still classify non-ERC-20 targets as exit 2 / 3.
+            //      still classify non-ERC-20 targets as exit 1 / 2.
             //
             // The network string from `--network` drives registry lookup;
             // unknown networks → Anvil chain_id 31337, no registry entries,
@@ -348,7 +349,7 @@ pub async fn wallet_balance(
 /// `query_decimals` for non-registry overrides) failures are logged to
 /// stderr + skipped. When at least one token succeeded → exit 0. When ALL
 /// tokens failed (e.g. unreachable RPC) → return the first error so the
-/// dominant failure category wins (AC #7: exit 3 + stderr carries
+/// dominant failure category wins (AC #7: exit 2 + stderr carries
 /// `balanceOf` from the first `erc20::token_balance` call).
 ///
 /// `--decimals <N>` (AC #6): when set, applies to every token in the batch
@@ -565,7 +566,7 @@ async fn resolve_token_metadata(
 }
 
 /// Look up a transaction by hash. Returns `Error::Rpc("transaction not
-/// found: ...")` (exit 3) when the node has no record.
+/// found: ...")` (exit 2) when the node has no record.
 pub async fn tx_get(provider: &RootProvider<Ethereum>, tx_hash: &str) -> Result<()> {
     let hash = B256::from_str(tx_hash)
         .map_err(|e| Error::InvalidInput(format!("invalid tx hash: {e}")))?;
@@ -645,7 +646,7 @@ pub async fn wallet_send_native(
     let from = signer.address();
     // Step 1: validate overrides (pure, no RPC) — fail fast on partial
     // override OR fee-ordering violation BEFORE any network call. This
-    // preserves the L28 Gate C "partial override → exit 2 without RPC"
+    // preserves the L28 Gate C "partial override → exit 1 without RPC"
     // contract that the prior round-1 reorder broke.
     let overrides = resolve_overrides(max_fee_per_gas, max_priority_fee_per_gas)?;
     // Step 2: chain_id trust-boundary check (per L12 security L-1 + L-4):
@@ -765,25 +766,25 @@ pub async fn wallet_send_erc20(
 ///
 /// 1. **Fee ordering (pure, no RPC)**: `max_fee_per_gas > 0`,
 ///    `max_priority_fee_per_gas > 0`, `priority <= max_fee`. Otherwise
-///    `Error::FeeTooLow` (exit 2). Mirrors `resolve_overrides` pattern in
+///    `Error::FeeTooLow` (exit 1). Mirrors `resolve_overrides` pattern in
 ///    `wallet_send_native` / `wallet_send_erc20`.
 /// 2. **Chain-id trust-boundary check** (L12 security L-1 + L-4): the
 ///    provider's `chain_id` must match the wallet's network. An
 ///    attacker-controlled RPC must not return a pending-tx lookup we sign
 ///    against a legitimate chain.
 /// 3. **Pending-tx existence**: `get_transaction_by_hash` returns Some.
-///    Otherwise `Error::InvalidInput` (exit 2).
+///    Otherwise `Error::InvalidInput` (exit 1).
 /// 4. **Pending-tx not mined**: `block_number` is None. A mined tx cannot
-///    be sped up. Otherwise `Error::InvalidInput` (exit 2).
+///    be sped up. Otherwise `Error::InvalidInput` (exit 1).
 /// 5. **Pending-tx from == wallet**: wallet must own the pending tx.
-///    Otherwise `Error::NonceMismatch` (exit 2).
+///    Otherwise `Error::NonceMismatch` (exit 1).
 /// 6. **Nonce drift check**: wallet's `get_transaction_count` must equal
 ///    the pending tx's nonce. If wallet nonce has advanced, the pending
-///    tx was already replaced/abandoned. `Error::NonceMismatch` (exit 2).
+///    tx was already replaced/abandoned. `Error::NonceMismatch` (exit 1).
 /// 7. **Fee-bumping invariant**: `new_max_fee_per_gas > pending.max_fee_per_gas`
 ///    AND `new_max_priority_fee_per_gas >= pending.max_priority_fee_per_gas`.
 ///    EIP-1559 invariant: lower-fee replacement is rejected at the RPC
-///    layer, so surface it client-side as `Error::FeeTooLow` (exit 2)
+///    layer, so surface it client-side as `Error::FeeTooLow` (exit 1)
 ///    before signing.
 #[allow(clippy::too_many_arguments)]
 pub async fn wallet_speedup(
@@ -1038,7 +1039,7 @@ pub fn config_show(rpc_url: &str, data_dir: Option<&PathBuf>, json: bool) -> Res
 // Precedence: explicit CLI/env overrides > provider.estimate_eip1559_fees().
 // A partial override (only one of max_fee / max_prio set) is a user error:
 // EIP-1559 requires BOTH or NEITHER; otherwise the tx envelope is malformed.
-// Returning `Err(InvalidInput)` here maps to exit 2 per #297 M11, matching
+// Returning `Err(InvalidInput)` here maps to exit 1 per #297 M11, matching
 // the "missing required argument" exit-code contract.
 // ---------------------------------------------------------------------------
 
@@ -1046,7 +1047,7 @@ pub fn config_show(rpc_url: &str, data_dir: Option<&PathBuf>, json: bool) -> Res
 ///
 /// - `(Some(f), Some(p))` → `Ok(Some((f, p)))` — caller uses these verbatim.
 /// - `(None, None)` → `Ok(None)` — caller falls through to `provider.estimate_eip1559_fees()`.
-/// - partial override (only one set) → `Err(InvalidInput)` — exit 2 per #297 M11.
+/// - partial override (only one set) → `Err(InvalidInput)` — exit 1 per #297 M11.
 fn resolve_overrides(
     max_fee_per_gas: Option<u128>,
     max_priority_fee_per_gas: Option<u128>,
