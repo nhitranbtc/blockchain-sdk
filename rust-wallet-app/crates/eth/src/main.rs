@@ -16,10 +16,12 @@
 //!
 //! ## Exit codes
 //!
-//! Forwarded from `eth_wallet_core::error::Error::exit_code()` per #297 M11.
-//! Stable 0..=5: success / user-abort / bad-input / rpc / wallet-balance /
-//! signing-broadcast. `std::process::exit` carries the code to the shell.
+//! Categories come from `wallet_errors::ErrorCategory`; the exit-code table is
+//! shared across all five CLIs. Stable 0..=5: success / user / network /
+//! insufficient-funds / signing / broadcast. `std::process::exit` carries the
+//! code to the shell.
 
+mod error;
 mod handlers;
 
 use std::path::PathBuf;
@@ -28,7 +30,9 @@ use std::str::FromStr;
 use alloy_primitives::{Address, B256, U256};
 use alloy_signer_local::PrivateKeySigner;
 use clap::{Parser, Subcommand};
+use wallet_errors::ErrorCategory;
 
+use crate::error::classify;
 use crate::handlers::{
     config_show, open_manager, open_provider, print_wallet_created, tx_get, tx_list,
     wallet_balance, wallet_balance_all, wallet_create, wallet_delete, wallet_import, wallet_list,
@@ -163,7 +167,7 @@ enum WalletAction {
         /// registry iteration in CLI order (Issue #358 AC #2).
         ///
         /// Issue #379: parsed by clap via `value_parser = parse_address`,
-        /// so bad addresses are rejected at parse time (exit 2, clap
+        /// so bad addresses are rejected at parse time (exit 1, clap
         /// `invalid value` error) instead of inside the handler.
         #[arg(long, value_parser = parse_address)]
         token: Vec<Address>,
@@ -216,12 +220,12 @@ enum WalletAction {
         #[arg(long)]
         speedup: String,
         /// New `max_fee_per_gas` (wei) — must exceed in-pool
-        /// `max_fee_per_gas` (else `Error::FeeTooLow`, exit 2).
+        /// `max_fee_per_gas` (else `Error::FeeTooLow`, exit 1).
         #[arg(long)]
         max_fee_per_gas: u128,
         /// New `max_priority_fee_per_gas` (wei) — must satisfy
         /// `priority <= max_fee` AND `priority >= in_pool_priority`
-        /// (else `Error::FeeTooLow`, exit 2).
+        /// (else `Error::FeeTooLow`, exit 1).
         #[arg(long)]
         max_priority_fee_per_gas: u128,
         #[arg(long)]
@@ -376,24 +380,40 @@ fn main() {
     // ETH_RPC_URL, ETH_DATA_DIR etc. flow through `env = "..."` attrs.
     // Missing file is silent (CI/clean checkouts stay green); a malformed
     // `.env` is an operator mistake (typo, missing `=`) — surface as a hard
-    // error with exit 2 (bad input) per code-reviewer finding #6.
+    // error with exit 1 (user error) per code-reviewer finding #6.
     match dotenvy::dotenv() {
         Ok(_) => {}
         Err(dotenvy::Error::Io(ref io)) if io.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
             eprintln!("error: .env parse failed: {e}");
-            std::process::exit(2);
+            std::process::exit(ErrorCategory::User.exit_code());
         }
     }
 
     tracing_subscriber::fmt::init();
 
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // A clap usage error is a user error (exit 1), not a network error
+            // (exit 2). `--help` and `--version` keep clap's exit 0.
+            let code = e.exit_code();
+            // `print()` returns `io::Result<()>` and `Result` is `#[must_use]`
+            // — the write result is dropped deliberately: the process exits
+            // either way.
+            let _ = e.print();
+            std::process::exit(if code == 0 {
+                0
+            } else {
+                ErrorCategory::User.exit_code()
+            });
+        }
+    };
     let exit_code = match run(cli) {
-        Ok(()) => 0,
+        Ok(()) => ErrorCategory::Success.exit_code(),
         Err(e) => {
             eprintln!("error: {e}");
-            e.exit_code()
+            classify(&e).exit_code()
         }
     };
     std::process::exit(exit_code);
@@ -410,7 +430,7 @@ fn main() {
 /// with an empty password is unrecoverable, so we refuse it at resolution
 /// time rather than silently accepting it.
 ///
-/// Returns `Error::InvalidInput` (exit 2) when every source fails. Per
+/// Returns `Error::InvalidInput` (exit 1) when every source fails. Per
 /// Issue #351 cycle 8b: argv + env stay supported for backward compat +
 /// script-friendliness; TTY prompt is the new *primary* path for
 /// interactive operators. Non-TTY environments (CI runners without
@@ -770,7 +790,7 @@ mod password_resolution_tests {
     //! Issue #351 (cycle 8b, C-1 from #339) — TTY prompt as primary
     //! password source. Priority chain:
     //!   --password argv (with stderr warning) → ETH_PASSWORD env →
-    //!   TTY prompt → Error::InvalidInput (exit 2).
+    //!   TTY prompt → Error::InvalidInput (exit 1).
     //!
     //! Empty argv (`Some("")`) falls through to the next source to
     //! match the btc CLI pattern — a wallet created with an empty

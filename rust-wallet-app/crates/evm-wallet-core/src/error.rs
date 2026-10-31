@@ -3,8 +3,8 @@
 //! Per Issue #303 Task 4 acceptance:
 //! - 17-variant Error enum mirroring the BTC `bitcoin-wallet-core::error::Error` schema
 //! - `thiserror` impl with `Display + Error + From<...>` for the 5 external-error sources
-//! - Stable exit-code mapping per #297 M11: 0/1/2/3/4/5 (success / user abort /
-//!   bad input / upstream-RPC / wallet-balance / signing-RPC-broadcast)
+//! - The variant→category mapping lives in each CLI; the category→exit-code
+//!   table lives in the `wallet-errors` crate
 //! - `pub type Result<T> = std::result::Result<T, Error>;` alias used across the crate
 //!
 //! Module-local error types (`crypto::CryptoError`, `wallet::WalletError`,
@@ -15,68 +15,72 @@ use thiserror::Error;
 
 /// Canonical `eth-wallet-core` error type.
 ///
-/// Each variant maps to a stable exit code via [`crate::error::Error::exit_code`]
-/// per the #297 M11 taxonomy. CLI consumers (Task 10) translate exit codes
-/// 0..=5 directly into `std::process::ExitCode`.
+/// Each variant is classified by the CLI that consumes it: the
+/// variant→category mapping lives in each CLI, and the category→exit-code
+/// table lives in the `wallet-errors` crate. CLI consumers (Task 10)
+/// translate the resulting exit code 0..=5 directly into
+/// `std::process::ExitCode`.
 ///
 /// `#[non_exhaustive]` added per Issue #357 — downstream code matching
 /// exhaustively on `Error` must add a wildcard arm. In-crate callers
-/// (e.g. `exit_code()` itself) still see all variants.
+/// still see all variants.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
     /// Upstream RPC error: connection refused, HTTP failure, chain-id mismatch,
-    /// malformed response. Exit 3.
+    /// malformed response. Category: Network.
     #[error("rpc: {0}")]
     Rpc(String),
 
     /// Mnemonic parse failure: invalid checksum, wrong word count, unexpected
-    /// characters. Exit 2.
+    /// characters. Category: User.
     #[error("invalid mnemonic: {0}")]
     InvalidMnemonic(String),
 
     /// Raw private key parse failure: not 32 bytes, scalar out of range,
-    /// hex decode error. Exit 2.
+    /// hex decode error. Category: User.
     #[error("invalid private key: {0}")]
     InvalidPrivateKey(String),
 
     /// Operation references a `wallet_id` that doesn't exist on disk.
-    /// Exit 4 (wallet/balance issue).
+    /// Category: User.
     #[error("wallet {wallet_id} not found")]
     WalletNotFound { wallet_id: uuid::Uuid },
 
     /// `create_wallet` or `import_wallet` collisions with an existing
-    /// (name, network) pair. Exit 4.
+    /// (name, network) pair. Category: User.
     #[error("wallet '{name}' already exists on {network}")]
     WalletExists { name: String, network: String },
 
     /// Encrypted blob file exists but decrypt failed or JSON malformed.
-    /// Exit 5 (signing/RPC/broadcast error — chosen for "post-on-disk tamper").
+    /// Category: Signing (chosen for "post-on-disk tamper" — the blob was
+    /// written to disk, so the failure is not operator input).
     #[error("corrupt wallet file at {path}: {reason}")]
     WalletCorrupt { path: String, reason: String },
 
-    /// Empty password or otherwise unusable passphrase. Exit 2.
+    /// Empty password or otherwise unusable passphrase. Category: User.
     #[error("invalid password: {0}")]
     InvalidPassword(String),
 
     /// Argon2id KDF failure (rare; typically means params out of range).
-    /// Exit 5.
+    /// Category: Signing.
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
 
     /// AES-GCM decrypt failed (AEAD tag mismatch = wrong password OR tampered blob).
-    /// Exit 5.
+    /// Category: Signing.
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
 
-    /// Native-ETH transfer amount > sender balance minus gas. Exit 4.
+    /// Native-ETH transfer amount > sender balance minus gas.
+    /// Category: InsufficientFunds.
     #[error("insufficient ETH for amount + gas: need {needed_wei} wei, have {have_wei} wei")]
     InsufficientFunds {
         needed_wei: String,
         have_wei: String,
     },
 
-    /// ERC-20 transfer amount > token balance. Exit 4.
+    /// ERC-20 transfer amount > token balance. Category: InsufficientFunds.
     #[error("insufficient token balance for {token_symbol}: need {needed_base_units}, have {have_base_units}")]
     InsufficientTokenBalance {
         token_symbol: String,
@@ -84,12 +88,12 @@ pub enum Error {
         have_base_units: String,
     },
 
-    /// Manual nonce submitted is < current on-chain nonce. Exit 2.
+    /// Manual nonce submitted is < current on-chain nonce. Category: User.
     #[error("nonce mismatch: submitted {submitted}, current {current}")]
     NonceMismatch { submitted: u64, current: u64 },
 
     /// Submitted EIP-1559 fee cap doesn't meet the network minimum or doesn't
-    /// satisfy `max_priority_fee_per_gas <= max_fee_per_gas`. Exit 2.
+    /// satisfy `max_priority_fee_per_gas <= max_fee_per_gas`. Category: User.
     #[error("fee too low: max_fee_per_gas={max_fee_per_gas}, min_required={min_required}")]
     FeeTooLow {
         max_fee_per_gas: u128,
@@ -97,31 +101,31 @@ pub enum Error {
     },
 
     /// `provider.estimate_gas` failed (contract reverts, gas-limit too low
-    /// relative to introspection query, etc). Exit 3.
+    /// relative to introspection query, etc). Category: Network.
     #[error("gas estimation failed: {0}")]
     GasEstimateFailed(String),
 
     /// `Provider::send_transaction` rejected the broadcast (nonce taken,
-    /// replacement-underpriced, etc.). Exit 5.
+    /// replacement-underpriced, etc.). Category: Broadcast.
     #[error("tx broadcast failed: {0}")]
     TxBroadcastFailed(String),
 
     /// `pending.get_receipt()` polled past the deadline without inclusion.
-    /// Exit 5.
+    /// Category: Network.
     #[error("receipt timeout after {secs}s for tx_hash {tx_hash}")]
     ReceiptTimeout { secs: u64, tx_hash: String },
 
     /// CLI input failed to parse: bad address hex, bad tx-hash, bad unit,
     /// missing/incompatible flag combos. Distinct from `InvalidMnemonic` /
-    /// `InvalidPrivateKey` which are library-domain-specific. Exit 2.
+    /// `InvalidPrivateKey` which are library-domain-specific. Category: User.
     /// Added in #337 (Task 13 follow-up to #309) so the CLI can surface
-    /// its own parse failures through the same `exit_code()` table.
+    /// its own parse failures through the same canonical error type.
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
     /// Wallet lookup by `(name, network)` failed. Distinct from
-    /// `WalletNotFound` (which carries a `wallet_id`). Exit 4 — same as
-    /// `WalletNotFound` per M11 wallet/balance category.
+    /// `WalletNotFound` (which carries a `wallet_id`). Category: User — the
+    /// same category as `WalletNotFound`.
     /// Added in #337 fix for type-design CRITICAL: the previous
     /// `WalletNotFound { wallet_id: uuid::Uuid::nil() }` sentinel lost
     /// the user-supplied name.
@@ -134,8 +138,8 @@ pub enum Error {
     /// the RPC answered `200 OK` with bytes that don't decode into the
     /// expected Solidity return type — typically because the target
     /// contract is not actually ERC-20 (or the function being queried
-    /// doesn't match the selector). Exit 2 (bad input category — operator
-    /// passed a token address that isn't what they thought).
+    /// doesn't match the selector). Category: User (operator passed a token
+    /// address that isn't what they thought).
     /// Added in Issue #357 (follow-up to #356) so operators can tell
     /// "contract doesn't speak ERC-20" apart from "RPC unreachable".
     #[error("ABI decode failed for {context}: {reason}")]
@@ -169,54 +173,14 @@ impl Error {
     }
 }
 
-impl Error {
-    /// Stable exit-code mapping per #297 M11.
-    ///
-    /// | Variant                            | Exit |
-    /// |------------------------------------|-----:|
-    /// | Rpc / GasEstimateFailed            |   3  |
-    /// | InvalidMnemonic / InvalidPrivateKey / InvalidPassword / NonceMismatch / FeeTooLow | 2 |
-    /// | WalletNotFound / WalletExists / InsufficientFunds / InsufficientTokenBalance | 4 |
-    /// | WalletCorrupt / EncryptionFailed / DecryptionFailed / TxBroadcastFailed / ReceiptTimeout | 5 |
-    ///
-    /// User abort (exit 1) is generated by the CLI when `confirm_prompt`
-    /// declines — never from this enum. Success (exit 0) likewise.
-    pub fn exit_code(&self) -> i32 {
-        match self {
-            Error::Rpc(_) | Error::GasEstimateFailed(_) => 3,
-
-            Error::InvalidMnemonic(_)
-            | Error::InvalidPrivateKey(_)
-            | Error::InvalidPassword(_)
-            | Error::NonceMismatch { .. }
-            | Error::FeeTooLow { .. }
-            | Error::InvalidInput(_)
-            | Error::AbiDecodeFailed { .. } => 2,
-
-            Error::WalletNotFound { .. }
-            | Error::WalletNotFoundByName { .. }
-            | Error::WalletExists { .. }
-            | Error::InsufficientFunds { .. }
-            | Error::InsufficientTokenBalance { .. } => 4,
-
-            Error::WalletCorrupt { .. }
-            | Error::EncryptionFailed(_)
-            | Error::DecryptionFailed(_)
-            | Error::TxBroadcastFailed(_)
-            | Error::ReceiptTimeout { .. } => 5,
-        }
-    }
-}
-
 /// Crate-wide Result alias — every Task uses `Result<T>` rather than the
 /// module-local aliases so error-conversion ergonomics stay uniform.
 pub type Result<T> = std::result::Result<T, Error>;
 
 // ===========================================================================
 // Auto-generated `From` impls for the 5 external error sources (per Plan).
-// Each conversion maps to the variant whose exit-code-correct category the
-// external error most naturally falls under; CLI surfaces exit_code() either
-// way.
+// Each conversion maps to the variant whose category the external error most
+// naturally falls under; the CLI classifies the variant either way.
 // ===========================================================================
 
 impl From<std::io::Error> for Error {
@@ -256,12 +220,6 @@ impl From<reqwest::Error> for Error {
 mod tests {
     use super::*;
 
-    #[test]
-    fn rpc_variants_map_to_exit_3() {
-        assert_eq!(Error::Rpc("x".into()).exit_code(), 3);
-        assert_eq!(Error::GasEstimateFailed("x".into()).exit_code(), 3);
-    }
-
     // Issue #365 AC #1 — `Error::rpc(impl Display)` constructor centralizes
     // redaction. Without it, `Error::rpc(format!("...{url}..."))` would
     // embed the RPC URL in the error string. This test fails to compile
@@ -293,113 +251,21 @@ mod tests {
     }
 
     #[test]
-    fn invalid_input_variants_map_to_exit_2() {
-        assert_eq!(Error::InvalidMnemonic("x".into()).exit_code(), 2);
-        assert_eq!(Error::InvalidPrivateKey("x".into()).exit_code(), 2);
-        assert_eq!(Error::InvalidPassword("x".into()).exit_code(), 2);
-        assert_eq!(
-            Error::NonceMismatch {
-                submitted: 1,
-                current: 2
-            }
-            .exit_code(),
-            2
-        );
-        assert_eq!(
-            Error::FeeTooLow {
-                max_fee_per_gas: 1,
-                min_required: 2
-            }
-            .exit_code(),
-            2
-        );
-    }
-
-    #[test]
-    fn wallet_balance_variants_map_to_exit_4() {
-        let id = uuid::Uuid::new_v4();
-        assert_eq!(Error::WalletNotFound { wallet_id: id }.exit_code(), 4);
-        assert_eq!(
-            Error::WalletExists {
-                name: "x".into(),
-                network: "sepolia".into()
-            }
-            .exit_code(),
-            4
-        );
-        assert_eq!(
-            Error::InsufficientFunds {
-                needed_wei: "1".into(),
-                have_wei: "0".into()
-            }
-            .exit_code(),
-            4
-        );
-        assert_eq!(
-            Error::InsufficientTokenBalance {
-                token_symbol: "USDC".into(),
-                needed_base_units: "1".into(),
-                have_base_units: "0".into()
-            }
-            .exit_code(),
-            4
-        );
-    }
-
-    #[test]
-    fn signing_rpc_variants_map_to_exit_5() {
-        assert_eq!(
-            Error::WalletCorrupt {
-                path: "/x".into(),
-                reason: "y".into()
-            }
-            .exit_code(),
-            5
-        );
-        assert_eq!(Error::EncryptionFailed("x".into()).exit_code(), 5);
-        assert_eq!(Error::DecryptionFailed("x".into()).exit_code(), 5);
-        assert_eq!(Error::TxBroadcastFailed("x".into()).exit_code(), 5);
-        assert_eq!(
-            Error::ReceiptTimeout {
-                secs: 1,
-                tx_hash: "0x".into()
-            }
-            .exit_code(),
-            5
-        );
-    }
-
-    #[test]
     fn external_error_conversions_map_to_expected_variants() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing");
         let err: Error = io_err.into();
         assert!(matches!(err, Error::Rpc(_)), "got: {err:?}");
-        assert_eq!(err.exit_code(), 3);
 
         let json_err: serde_json::Error =
             serde_json::from_slice::<serde_json::Value>(b"not-json").unwrap_err();
         let err: Error = json_err.into();
         assert!(matches!(err, Error::WalletCorrupt { .. }), "got: {err:?}");
-        assert_eq!(err.exit_code(), 5);
 
         let bip_err = "not a real mnemonic phrase at all".parse::<bip39::Mnemonic>();
         assert!(bip_err.is_err());
         let bip_err = bip_err.unwrap_err();
         let err: Error = bip_err.into();
         assert!(matches!(err, Error::InvalidMnemonic(_)), "got: {err:?}");
-        assert_eq!(err.exit_code(), 2);
-    }
-
-    #[test]
-    fn abidecode_failed_maps_to_exit_2() {
-        assert_eq!(
-            Error::AbiDecodeFailed {
-                context: "balanceOf".into(),
-                reason: "decode err".into(),
-            }
-            .exit_code(),
-            2
-        );
     }
 
     #[test]

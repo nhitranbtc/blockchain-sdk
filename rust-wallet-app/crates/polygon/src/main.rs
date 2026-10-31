@@ -105,9 +105,9 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
-            // T6b: all errors map to exit 1. Per-error mapping via
-            // `Error::exit_code()` lands in T6c when the error table
-            // becomes meaningful (currently every error is `Error::Rpc`).
+            // T6b: all errors map to exit 1. Per-error mapping lands in
+            // T6c when the error table becomes meaningful (currently every
+            // error is `Error::Rpc`).
             std::process::ExitCode::from(1)
         }
     }

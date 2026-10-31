@@ -102,10 +102,10 @@ fn assert_success(out: &std::process::Output, needle: &str) {
 //    AND `max_priority_fee_per_gas >= original.max_priority_fee_per_gas`
 //    AND same nonce → new tx hash, same nonce, higher effective tip.
 // 2. Lower fee rejection: speedup with max_fee_per_gas <= in-pool
-//    max_fee_per_gas → `Error::FeeTooLow` (exit 2). EIP-1559 invariant.
+//    max_fee_per_gas → `Error::FeeTooLow` (exit 1). EIP-1559 invariant.
 // 3. Mismatched nonce rejection: speedup against a tx_hash whose on-chain
 //    nonce doesn't match the wallet's current nonce → `Error::NonceMismatch`
-//    (exit 2).
+//    (exit 1).
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run. Speedup CLI wired (Issue #381); test asserts happy-path replacement end-to-end against Anvil."]
@@ -240,8 +240,8 @@ async fn wallet_speedup_replaces_pending_tx_with_higher_fee_and_same_nonce() {
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run. Speedup CLI wired (Issue #381); test asserts lower-fee rejection path."]
 async fn wallet_speedup_with_lower_max_fee_rejected_as_fee_too_low() {
     // Issue #381 AC #3 gate 7: speedup with `max_fee_per_gas <= in-pool`
-    // → `Error::FeeTooLow` (exit 2). Mirrors
-    // `send_command_with_only_max_fee_per_gas_yields_exit_2` (cli_localnet.rs).
+    // → `Error::FeeTooLow` (exit 1). Mirrors
+    // `send_command_with_only_max_fee_per_gas_yields_exit_1` (cli_localnet.rs).
     anvil_or_skip!();
 
     let anvil = alloy_node_bindings::Anvil::new().block_time(60).spawn();
@@ -312,7 +312,7 @@ async fn wallet_speedup_with_lower_max_fee_rejected_as_fee_too_low() {
         .to_string();
 
     // Speedup at the SAME 2 gwei (NOT strictly greater) → gate 7
-    // rejects → exit 2 + stderr contains "fee too low".
+    // rejects → exit 1 + stderr contains "fee too low".
     let speedup = run_eth(
         &data_dir,
         &[
@@ -337,8 +337,8 @@ async fn wallet_speedup_with_lower_max_fee_rejected_as_fee_too_low() {
     let stderr = String::from_utf8_lossy(&speedup.stderr);
     assert_eq!(
         speedup.status.code(),
-        Some(2),
-        "lower-or-equal max_fee_per_gas must yield exit 2 (FeeTooLow); stderr: {stderr}",
+        Some(1),
+        "lower-or-equal max_fee_per_gas must yield exit 1 (FeeTooLow); stderr: {stderr}",
     );
     assert!(
         stderr.contains("fee too low"),
@@ -350,7 +350,7 @@ async fn wallet_speedup_with_lower_max_fee_rejected_as_fee_too_low() {
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run. Speedup CLI wired (Issue #381); test asserts mismatched-nonce rejection path."]
 async fn wallet_speedup_with_mismatched_nonce_rejected() {
     // Issue #381 AC #3 gate 6: speedup against a tx whose on-chain nonce
-    // != wallet's current nonce → `Error::NonceMismatch` (exit 2).
+    // != wallet's current nonce → `Error::NonceMismatch` (exit 1).
     // Setup: send 2 txs back-to-back (advance wallet nonce), then attempt
     // to speedup the FIRST tx (now stale, wallet nonce has moved past it).
     anvil_or_skip!();
@@ -454,7 +454,7 @@ async fn wallet_speedup_with_mismatched_nonce_rejected() {
     );
 
     // Speedup attempt on tx #1 — wallet nonce is now 2, tx #1 nonce was
-    // 0 → gate 6 (nonce drift) rejects → exit 2 + stderr contains
+    // 0 → gate 6 (nonce drift) rejects → exit 1 + stderr contains
     // "nonce mismatch".
     let speedup = run_eth(
         &data_dir,
@@ -480,8 +480,8 @@ async fn wallet_speedup_with_mismatched_nonce_rejected() {
     let stderr = String::from_utf8_lossy(&speedup.stderr);
     assert_eq!(
         speedup.status.code(),
-        Some(2),
-        "mismatched nonce must yield exit 2 (NonceMismatch); stderr: {stderr}",
+        Some(1),
+        "mismatched nonce must yield exit 1 (NonceMismatch); stderr: {stderr}",
     );
     assert!(
         stderr.contains("nonce mismatch"),

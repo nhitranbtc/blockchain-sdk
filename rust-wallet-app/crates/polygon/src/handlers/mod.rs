@@ -50,14 +50,13 @@ pub(super) fn validate_rpc_scheme(url: &url::Url) -> polygon_wallet_core::Result
 
 /// Map `WalletError` (lib-level) onto `polygon_wallet_core::Error`
 /// (CLI-canonical). Called by every handler that touches `WalletManager`
-/// so the CLI's `Error::exit_code()` table applies (design §3.5 cross-
-/// cutting line 293). Localities:
+/// so the CLI's own classification applies (design §3.5 cross-cutting
+/// line 293). Localities:
 ///
 ///   `InvalidInput` (exit 2) for caller-side errors (password, name,
 ///       mnemonic, duplicate name, missing wallet).
-///   `Rpc` for filesystem + serialization + corruption — distinct
-///       exit code per the canonical `evm-wallet-core::Error::exit_code()`
-///       table.
+///   `Rpc` for filesystem + serialization + corruption — a distinct
+///       exit code, per the canonical variant classification.
 ///
 /// T6c4: required because `WalletError` is the lib-canonical error
 /// type (per Drift §2.5 + re-export added in

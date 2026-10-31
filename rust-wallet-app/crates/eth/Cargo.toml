@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { workspace = true }
 eth-wallet-core = { path = "../eth-wallet-core" }
+wallet-errors = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 hex = { workspace = true }

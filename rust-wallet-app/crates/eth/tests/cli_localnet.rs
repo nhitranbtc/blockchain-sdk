@@ -239,10 +239,10 @@ fn wallet_import_then_show_resolves_by_name() {
 }
 
 #[test]
-fn wallet_create_with_unknown_network_yields_exit_2() {
+fn wallet_create_with_unknown_network_yields_exit_1() {
     // Regression test for type-design CRITICAL: `Network::parse_cli`
     // previously returned WalletError::Path which mapped to Error::Rpc
-    // (exit 3). It now returns Error::InvalidInput (exit 2).
+    // (exit 2). It now returns Error::InvalidInput (exit 1).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -261,8 +261,8 @@ fn wallet_create_with_unknown_network_yields_exit_2() {
     );
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "unknown network must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "unknown network must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -278,7 +278,7 @@ fn wallet_show_with_unknown_name_preserves_name_in_error() {
     // Regression test for type-design + code-reviewer + security H-3
     // CRITICAL: `NotFoundByName` previously became WalletNotFound { wallet_id: nil }
     // dropping the user-supplied name. New variant WalletNotFoundByName
-    // preserves it (exit 4 — wallet/balance category).
+    // preserves it (exit 1 — user category).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -288,8 +288,8 @@ fn wallet_show_with_unknown_name_preserves_name_in_error() {
     );
     assert_eq!(
         out.status.code(),
-        Some(4),
-        "unknown wallet name must yield exit 4\nstdout: {}\nstderr: {}",
+        Some(1),
+        "unknown wallet name must yield exit 1\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -301,7 +301,7 @@ fn wallet_show_with_unknown_name_preserves_name_in_error() {
 }
 
 #[test]
-fn wallet_create_with_duplicate_name_yields_exit_4() {
+fn wallet_create_with_duplicate_name_yields_exit_1() {
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -320,8 +320,8 @@ fn wallet_create_with_duplicate_name_yields_exit_4() {
 
     assert_eq!(
         dup.status.code(),
-        Some(4),
-        "duplicate wallet name must yield wallet/balance exit code (4)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "duplicate wallet name must yield user exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&dup.stdout),
         String::from_utf8_lossy(&dup.stderr),
     );
@@ -333,10 +333,10 @@ fn wallet_create_with_duplicate_name_yields_exit_4() {
 }
 
 #[test]
-fn wallet_create_with_name_too_long_yields_exit_2() {
+fn wallet_create_with_name_too_long_yields_exit_1() {
     // L12 review finding M-3 (code-reviewer): wallet name accepted any
     // string, including 1MB blobs and shell-meta names. RED: 33-char name
-    // accepted (no validation). GREEN: rejected with InvalidInput (exit 2)
+    // accepted (no validation). GREEN: rejected with InvalidInput (exit 1)
     // because name exceeds 32-char regex bound.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
@@ -355,8 +355,8 @@ fn wallet_create_with_name_too_long_yields_exit_2() {
 
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "33-char name must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "33-char name must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -368,7 +368,7 @@ fn wallet_create_with_name_too_long_yields_exit_2() {
 }
 
 #[test]
-fn wallet_create_with_name_invalid_chars_yields_exit_2() {
+fn wallet_create_with_name_invalid_chars_yields_exit_1() {
     // L12 review finding M-3 (code-reviewer): wallet name accepted any
     // string including shell metacharacters (`;`, `&`, `|`, `$`, etc).
     // RED: `foo;bar` accepted (no validation). GREEN: rejected because
@@ -383,8 +383,8 @@ fn wallet_create_with_name_invalid_chars_yields_exit_2() {
 
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "name with shell metachar must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "name with shell metachar must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -437,7 +437,7 @@ fn wallet_create_with_password_argv_emits_security_warning() {
 fn send_command_uses_eth_password_env_var_when_argv_missing() {
     // L12 review finding C-1 (security-auditor): prefer ETH_PASSWORD env
     // over argv when --password not provided. RED: cycle 7 returns
-    // `--name and --password required` (exit 2). GREEN: env path
+    // `--name and --password required` (exit 1). GREEN: env path
     // triggers, proceeds past unlock (fails later at unreachable RPC,
     // but NOT at the password-arg check).
     let tmp = TempDir::new().expect("tempdir");
@@ -489,10 +489,10 @@ fn send_command_uses_eth_password_env_var_when_argv_missing() {
 }
 
 #[test]
-fn erc20_send_command_without_token_yields_exit_2() {
+fn erc20_send_command_without_token_yields_exit_1() {
     // L28 Gate C checklist (code-reviewer IMPORTANT): missing --token
     // branch was uncovered. RED: neither --token nor --token-address
-    // provided → real impl rejects with InvalidInput (exit 2).
+    // provided → real impl rejects with InvalidInput (exit 1).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -514,8 +514,8 @@ fn erc20_send_command_without_token_yields_exit_2() {
 
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "missing --token must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "missing --token must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -529,9 +529,9 @@ fn erc20_send_command_without_token_yields_exit_2() {
 #[test]
 fn wallet_balance_with_token_flag_is_accepted_by_clap() {
     // Issue #356 — extend `wallet balance` with `--token <ADDR>` for ERC-20
-    // balance view. RED: clap rejects unknown `--token` flag (exit 2 + "Usage:"
+    // balance view. RED: clap rejects unknown `--token` flag (exit 1 + "Usage:"
     // or "unexpected argument" leaks into stderr). GREEN: clap accepts the
-    // flag, handler reaches the RPC layer. Unreachable RPC → exit 3 with
+    // flag, handler reaches the RPC layer. Unreachable RPC → exit 2 with
     // "error sending request" — same lock-down shape as
     // `erc20_send_command_against_unreachable_rpc_is_not_a_stub`.
     let tmp = TempDir::new().expect("tempdir");
@@ -555,12 +555,6 @@ fn wallet_balance_with_token_flag_is_accepted_by_clap() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let code = out.status.code();
 
-    // Lock-down: clap rejected the flag → must NOT be exit 2 from clap.
-    assert_ne!(
-        code,
-        Some(2),
-        "lock-down: --token flag was rejected by clap (exit 2); not yet wired\nstdout: {stdout}\nstderr: {stderr}",
-    );
     assert!(
         !stderr.contains("unexpected argument")
             && !stderr.contains("Usage:")
@@ -568,10 +562,10 @@ fn wallet_balance_with_token_flag_is_accepted_by_clap() {
         "stderr must not contain clap rejection markers:\nstderr: {stderr}",
     );
     // Real impl against unreachable RPC: Error::Rpc from provider.call
-    // (exit 3) — same shape as the erc20-send lock-down test.
+    // (exit 2) — same shape as the erc20-send lock-down test.
     assert_eq!(
         code,
-        Some(3),
+        Some(2),
         "wallet balance --token should reach eth_call and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
     );
     // Lock-down against stub regression: the real impl emits either
@@ -592,11 +586,11 @@ fn wallet_balance_with_token_flag_is_accepted_by_clap() {
 }
 
 #[test]
-fn wallet_balance_with_invalid_token_address_yields_exit_2() {
+fn wallet_balance_with_invalid_token_address_yields_exit_1() {
     // L28 Gate C checklist (code-reviewer IMPORTANT): invalid --token
     // branch was uncovered by #356 design sketch. RED: clap accepts garbage
     // address, handler exits at provider.call with confusing RPC error.
-    // GREEN: rejected with InvalidInput (exit 2) at parse.
+    // GREEN: rejected with InvalidInput (exit 1) at parse.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -614,8 +608,8 @@ fn wallet_balance_with_invalid_token_address_yields_exit_2() {
 
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "invalid --token must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "invalid --token must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -627,24 +621,24 @@ fn wallet_balance_with_invalid_token_address_yields_exit_2() {
 }
 
 #[test]
-fn wallet_balance_all_flag_against_unreachable_rpc_exits_3_with_balanceof() {
+fn wallet_balance_all_flag_against_unreachable_rpc_exits_2_with_balanceof() {
     // Issue #358 — `eth wallet balance --all` iterates the bundled token
     // registry + any --token overrides, printing one line per token. AC #7
     // requires a lock-down always-on test: --all against an unreachable
-    // RPC must reach the per-token balanceOf call (exit 3, stderr carries
+    // RPC must reach the per-token balanceOf call (exit 2, stderr carries
     // the `balanceOf` substring from `erc20::token_balance`).
     //
-    // RED: --all flag absent → clap rejects → exit 2 + "unexpected
+    // RED: --all flag absent → clap rejects → exit 1 + "unexpected
     // argument" / "Usage:" leaks to stderr.
     // GREEN: clap accepts the flag, handler reaches `erc20::token_balance`,
     // unreachable RPC yields `Error::Rpc("eth_call balanceOf: ...")` →
-    // exit 3 + stderr contains `balanceOf` (proves the per-token iteration
+    // exit 2 + stderr contains `balanceOf` (proves the per-token iteration
     // fired; a stub regression returning Error::Rpc from handler entry
     // would not contain the function selector substring).
     //
     // Failure isolation (AC #4) is exercised separately by the L29
     // operator-smoke test below — the unreachable-RPC case dominates with
-    // the first RPC error per AC #7's exit-3 contract.
+    // the first RPC error per AC #7's exit-2 contract.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -667,12 +661,6 @@ fn wallet_balance_all_flag_against_unreachable_rpc_exits_3_with_balanceof() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let code = out.status.code();
 
-    // Lock-down: clap rejected --all → must NOT be exit 2.
-    assert_ne!(
-        code,
-        Some(2),
-        "lock-down: --all flag was rejected by clap (exit 2); not yet wired\nstdout: {stdout}\nstderr: {stderr}",
-    );
     assert!(
         !stderr.contains("unexpected argument")
             && !stderr.contains("Usage:")
@@ -680,10 +668,10 @@ fn wallet_balance_all_flag_against_unreachable_rpc_exits_3_with_balanceof() {
         "stderr must not contain clap rejection markers:\nstderr: {stderr}",
     );
     // Real impl against unreachable RPC: Error::Rpc from the first
-    // per-token `eth_call balanceOf` (exit 3).
+    // per-token `eth_call balanceOf` (exit 2).
     assert_eq!(
         code,
-        Some(3),
+        Some(2),
         "wallet balance --all should reach per-token balanceOf and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
     );
     // Lock-down against stub regression: the real impl emits
@@ -726,11 +714,11 @@ fn wallet_balance_all_json_against_unreachable_rpc_emits_error_rows() {
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // AC contract: unreachable RPC → exit 3 (Error::Rpc from first failed call).
+    // AC contract: unreachable RPC → exit 2 (Error::Rpc from first failed call).
     assert_eq!(
         out.status.code(),
-        Some(3),
-        "wallet balance --all --json against unreachable RPC must exit 3\nstdout: {stdout}\nstderr: {stderr}",
+        Some(2),
+        "wallet balance --all --json against unreachable RPC must exit 2\nstdout: {stdout}\nstderr: {stderr}",
     );
     // Per-token stderr must be suppressed in --json mode — the JSON row
     // carries the failure (Issue #380). The outer one-line `error: {e}`
@@ -856,12 +844,12 @@ fn wallet_balance_all_json_override_without_decimals_forces_query_decimals_failu
 }
 
 #[test]
-fn wallet_balance_all_with_anvil_network_and_no_token_overrides_yields_exit_2() {
+fn wallet_balance_all_with_anvil_network_and_no_token_overrides_yields_exit_1() {
     // L12 coverage G1 — `--network anvil --all` with no `--token`
     // override finds zero entries (Anvil registry is the empty v0.2
     // stub per `load_anvil_returns_empty_list_for_v0_2_stub`). The
     // handler must surface the `entries.is_empty()` guard as
-    // `InvalidInput` (exit 2) before any RPC call — proves the empty-
+    // `InvalidInput` (exit 1) before any RPC call — proves the empty-
     // registry branch is wired (currently silent dead code).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
@@ -884,8 +872,8 @@ fn wallet_balance_all_with_anvil_network_and_no_token_overrides_yields_exit_2() 
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "empty-registry --all must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+        Some(1),
+        "empty-registry --all must yield bad-input exit code (1)\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert!(
         stderr.contains("chain_id=31337"),
@@ -898,7 +886,7 @@ fn wallet_balance_all_with_anvil_network_and_no_token_overrides_yields_exit_2() 
 }
 
 #[test]
-fn wallet_balance_all_with_invalid_token_override_yields_exit_2() {
+fn wallet_balance_all_with_invalid_token_override_yields_exit_1() {
     // L12 coverage G4 + Issue #379 — `--all --token 0xnot-an-address`
     // exercises the clap-level address validation. After #379 the
     // `--token` field is parsed by clap's `value_parser = parse_address`,
@@ -929,8 +917,8 @@ fn wallet_balance_all_with_invalid_token_override_yields_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "invalid --token inside --all must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+        Some(1),
+        "invalid --token inside --all must yield bad-input exit code (1)\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert!(
         stderr.contains("--token"),
@@ -948,7 +936,7 @@ fn wallet_balance_all_with_invalid_token_override_yields_exit_2() {
 }
 
 #[test]
-fn wallet_balance_with_decimals_without_token_or_all_yields_exit_2() {
+fn wallet_balance_with_decimals_without_token_or_all_yields_exit_1() {
     // L12 coverage G5 — manual `--decimals` validation in `main.rs`
     // replaces the removed `requires = "token"` (clap has no OR).
     // Without --token or --all the override is meaningless.
@@ -971,8 +959,8 @@ fn wallet_balance_with_decimals_without_token_or_all_yields_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "--decimals alone (no --token / --all) must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+        Some(1),
+        "--decimals alone (no --token / --all) must yield bad-input exit code (1)\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert!(
         stderr.contains("--decimals requires --token or --all"),
@@ -981,7 +969,7 @@ fn wallet_balance_with_decimals_without_token_or_all_yields_exit_2() {
 }
 
 #[test]
-fn wallet_balance_with_multiple_token_without_all_yields_exit_2() {
+fn wallet_balance_with_multiple_token_without_all_yields_exit_1() {
     // L12 coverage G6 — multi-`--token` without `--all` would silently
     // drop all but the first token (L12 review H-3). The guard
     // surfaces as `InvalidInput` so the operator adds `--all` (or
@@ -1007,8 +995,8 @@ fn wallet_balance_with_multiple_token_without_all_yields_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "multiple --token without --all must yield bad-input exit code (2)\nstdout: {stdout}\nstderr: {stderr}",
+        Some(1),
+        "multiple --token without --all must yield bad-input exit code (1)\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert!(
         stderr.contains("multiple --token values require --all"),
@@ -1145,7 +1133,7 @@ async fn wallet_balance_all_failure_isolation_logs_per_token_errors_and_exits_0(
     // Issue #358 AC #2, #4 — `--all` + `--token <STOP-only-bytecode-addr>`
     // exercises both ad-hoc-override (AC #2) and failure isolation (AC
     // #4). The override target returns empty bytes from `eth_call` →
-    // `AbiDecodeFailed` (exit 2) per-token. Pre-funded USDT/DAI registry
+    // `AbiDecodeFailed` (exit 1) per-token. Pre-funded USDT/DAI registry
     // entries still succeed, so the batch exits 0 with the override
     // error logged to stderr.
     anvil_or_skip!();
@@ -1898,7 +1886,7 @@ fn tx_list_command_against_unreachable_rpc_is_not_a_stub() {
 fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
     // Lock-down for MINOR #5 (code-reviewer): the original weak version
     // of this test omitted `--name` + `--password`, so the handler exited
-    // at `--name required` (InvalidInput, exit 2) before reaching the
+    // at `--name required` (InvalidInput, exit 1) before reaching the
     // broadcast path. The assertion (`stderr does not contain
     // "PR-B follow-up"`) passed trivially even if the impl regressed
     // to the stub, because the stub error never had a chance to appear.
@@ -1908,9 +1896,9 @@ fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
     // GREEN: pre-create a wallet + pass --name / --password so the path
     // reaches `wallet_send_erc20` → `send_raw_transaction`. Against an
     // unreachable RPC, the real impl yields Error::Rpc from the network
-    // layer (exit 3); a stub regression yields Error::Rpc from handler
+    // layer (exit 2); a stub regression yields Error::Rpc from handler
     // entry with "wired in PR-B follow-up" text. Asserting both the
-    // exit code (3, not 2/4/5) and the absent stub string proves the
+    // exit code (2, not 1/3/4/5) and the absent stub string proves the
     // network path was exercised.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
@@ -1954,28 +1942,29 @@ fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     let code = out.status.code();
 
-    // Lock-down guard: must reach the network layer. Earlier exits prove
-    // the test never exercised the impl path it claims to verify.
-    assert_ne!(
-        code,
-        Some(2),
-        "lock-down failed: --name / --password / --token parsing rejected\nstdout: {stdout}\nstderr: {stderr}",
+    // Lock-down guard: must reach the network layer. A clap usage error
+    // would stop the run before the impl path this test claims to verify.
+    assert!(
+        !stderr.contains("unexpected argument")
+            && !stderr.contains("Usage:")
+            && !stderr.contains("unrecognized"),
+        "lock-down failed: clap rejected the arguments\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert_ne!(
         code,
-        Some(4),
+        Some(1),
         "lock-down failed: wallet lookup rejected — pre-create step did not run\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert_ne!(
         code,
-        Some(5),
+        Some(4),
         "lock-down failed: signer unlock rejected — wrong password or pre-create step did not run\nstdout: {stdout}\nstderr: {stderr}",
     );
     // Real impl against unreachable RPC: Error::Rpc from send_raw_transaction
-    // (exit 3). Stub regression also exits 3 but with different stderr.
+    // (exit 2). Stub regression also exits 2 but with different stderr.
     assert_eq!(
         code,
-        Some(3),
+        Some(2),
         "erc20 send should reach send_raw_transaction and report RPC error\nstdout: {stdout}\nstderr: {stderr}",
     );
     // Bind the assertion to the impl path. Reviewer LOW #1: a stub
@@ -1997,11 +1986,11 @@ fn erc20_send_command_against_unreachable_rpc_is_not_a_stub() {
 }
 
 #[test]
-fn send_command_without_to_address_yields_exit_2() {
+fn send_command_without_to_address_yields_exit_1() {
     // L12 review finding (CRITICAL): missing --to defaulted to the zero
     // address — silent ETH burn. Per code-reviewer + type-design both
     // flagged this. RED: missing --to was accepted and broadcast to
-    // 0x000…000. GREEN: rejected with InvalidInput (exit 2).
+    // 0x000…000. GREEN: rejected with InvalidInput (exit 1).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -2022,8 +2011,8 @@ fn send_command_without_to_address_yields_exit_2() {
 
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "missing --to must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "missing --to must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -2035,10 +2024,10 @@ fn send_command_without_to_address_yields_exit_2() {
 }
 
 #[test]
-fn send_command_with_invalid_to_yields_exit_2() {
+fn send_command_with_invalid_to_yields_exit_1() {
     // L28 Gate C checklist (code-reviewer IMPORTANT): invalid --to
     // address branch was uncovered. RED: garbage address passed parse.
-    // GREEN: rejected with InvalidInput (exit 2).
+    // GREEN: rejected with InvalidInput (exit 1).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -2059,15 +2048,15 @@ fn send_command_with_invalid_to_yields_exit_2() {
 
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "invalid --to must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "invalid --to must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
 }
 
 #[test]
-fn send_command_with_invalid_amount_yields_exit_2() {
+fn send_command_with_invalid_amount_yields_exit_1() {
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -2088,8 +2077,8 @@ fn send_command_with_invalid_amount_yields_exit_2() {
 
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "invalid --amount must yield bad-input exit code (2)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "invalid --amount must yield bad-input exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -2101,9 +2090,9 @@ fn send_command_with_invalid_amount_yields_exit_2() {
 }
 
 #[test]
-fn send_command_with_unknown_wallet_yields_exit_4() {
+fn send_command_with_unknown_wallet_yields_exit_1() {
     // L28 Gate C checklist (code-reviewer IMPORTANT): unknown wallet
-    // name branch (WalletNotFoundByName → exit 4) was uncovered.
+    // name branch (WalletNotFoundByName → exit 1) was uncovered.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -2124,8 +2113,8 @@ fn send_command_with_unknown_wallet_yields_exit_4() {
 
     assert_eq!(
         out.status.code(),
-        Some(4),
-        "unknown wallet must yield wallet/balance exit code (4)\nstdout: {}\nstderr: {}",
+        Some(1),
+        "unknown wallet must yield user exit code (1)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -2137,12 +2126,12 @@ fn send_command_with_unknown_wallet_yields_exit_4() {
 }
 
 #[test]
-fn send_command_with_wrong_password_yields_exit_5() {
+fn send_command_with_wrong_password_yields_exit_4() {
     // L28 Gate C checklist (code-reviewer IMPORTANT): wrong-password
-    // branch (DecryptionFailed → exit 5) was uncovered. RED: cycle-2
+    // branch (DecryptionFailed → exit 4) was uncovered. RED: cycle-2
     // code returned generic DecryptionFailed regardless of underlying
     // WalletError variant. GREEN: map_wallet_err preserves variant → exit
-    // 5 for actual Crypto failure (wrong password = AES-GCM auth tag
+    // 4 for actual Crypto failure (wrong password = AES-GCM auth tag
     // mismatch).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
@@ -2176,8 +2165,8 @@ fn send_command_with_wrong_password_yields_exit_5() {
 
     assert_eq!(
         out.status.code(),
-        Some(5),
-        "wrong password must yield signing-broadcast exit code (5)\nstdout: {}\nstderr: {}",
+        Some(4),
+        "wrong password must yield signing exit code (4)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -2410,11 +2399,11 @@ async fn tx_get_returns_not_found_for_unknown_hash() {
         ],
     );
 
-    // Unknown hash on a live node: returns RPC error → exit 3 per M11.
+    // Unknown hash on a live node: returns RPC error → exit 2.
     assert_eq!(
         out.status.code(),
-        Some(3),
-        "unknown tx hash must yield rpc-error exit code (3)\nstdout: {}\nstderr: {}",
+        Some(2),
+        "unknown tx hash must yield rpc-error exit code (2)\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
@@ -2904,7 +2893,7 @@ async fn alpha_send_beta_100_dai_against_anvil_fork_mainnet() {
 
 // ---------------------------------------------------------------------------
 // Issue #357 box 7 (deferred follow-up): 2 lock-down tests for the
-// `Error::AbiDecodeFailed` exit-2 path on ERC-20 decode failures.
+// `Error::AbiDecodeFailed` exit-1 path on ERC-20 decode failures.
 //
 // Strategy: install STOP-only bytecode (`0x00`) at a deterministic
 // non-ERC-20 address via `anvil_set_code`. The EVM responds to
@@ -2912,9 +2901,9 @@ async fn alpha_send_beta_100_dai_against_anvil_fork_mainnet() {
 // `*Call::abi_decode_returns(&[])` calls fail with buffer-too-short —
 // the new wrap sites (PR #361, commit `a0d59f6`) return
 // `Error::AbiDecodeFailed { context: "balanceOf" | "decimals", reason }`,
-// and `exit_code()` maps to 2. Distinguishing decode-fail (exit 2) from
-// RPC-fail (exit 3) is the whole point of #357 — operators scripting
-// around exit codes can now tell the two failure modes apart.
+// which the CLI classifies as `User` (exit 1). Distinguishing decode-fail
+// (exit 1) from RPC-fail (exit 2) is the whole point of #357 — operators
+// scripting around exit codes can now tell the two failure modes apart.
 //
 // These tests stay `#[ignore]` per L29 (operator-driven). Box 7 flips
 // `[x]` after an operator runs `RUN_ANVIL_E2E=1 cargo test -p eth
@@ -2934,15 +2923,15 @@ const STOP_BYTECODE: &[u8] = &[0x00];
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
-async fn wallet_balance_token_non_erc20_with_decimals_override_yields_exit_2() {
+async fn wallet_balance_token_non_erc20_with_decimals_override_yields_exit_1() {
     // Issue #357 box 7 lock-down: `Error::AbiDecodeFailed { context: "balanceOf" }`.
     // RED: with `--decimals 18` override, `query_decimals` is skipped, so
     // the only decode path exercised is `balanceOfCall::abi_decode_returns`
     // in `erc20::token_balance`. If `0x...beef` had valid ERC-20 bytecode
     // the decode would succeed (exit 0). STOP-only bytecode forces empty
-    // `eth_call` response → decode fails → `Error::AbiDecodeFailed` → exit 2.
+    // `eth_call` response → decode fails → `Error::AbiDecodeFailed` → exit 1.
     //
-    // GREEN: exit code = 2 (NOT 3 — distinguishes decode-fail from RPC-fail)
+    // GREEN: exit code = 1 (NOT 2 — distinguishes decode-fail from RPC-fail)
     // + stderr contains the "balanceOf" context string + does NOT contain
     // the `Error::Rpc` "rpc:" prefix (lock-down for "decode-fail path
     // exercised, not RPC-fail path").
@@ -2989,8 +2978,8 @@ async fn wallet_balance_token_non_erc20_with_decimals_override_yields_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "non-ERC-20 token (decode-fail on balanceOf) must yield bad-input exit code (2), NOT RPC exit 3\nstdout: {stdout}\nstderr: {stderr}",
+        Some(1),
+        "non-ERC-20 token (decode-fail on balanceOf) must yield bad-input exit code (1), NOT RPC exit 2\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert!(
         stderr.contains("balanceOf"),
@@ -3007,13 +2996,13 @@ async fn wallet_balance_token_non_erc20_with_decimals_override_yields_exit_2() {
 
 #[tokio::test]
 #[ignore = "operator-driven per L29 — set RUN_ANVIL_E2E=1 to run"]
-async fn wallet_balance_token_non_erc20_auto_detect_yields_exit_2() {
+async fn wallet_balance_token_non_erc20_auto_detect_yields_exit_1() {
     // Issue #357 box 7 lock-down: `Error::AbiDecodeFailed { context: "decimals" }`.
     // RED: no `--decimals` override, so `query_decimals` runs first (auto-detect).
     // STOP-only bytecode forces empty `eth_call decimals` response → decode fails
-    // → `Error::AbiDecodeFailed { context: "decimals", reason }` → exit 2.
+    // → `Error::AbiDecodeFailed { context: "decimals", reason }` → exit 1.
     //
-    // GREEN: exit code = 2 + stderr contains "decimals" context string + does
+    // GREEN: exit code = 1 + stderr contains "decimals" context string + does
     // NOT contain the `Error::Rpc` "rpc:" prefix.
     anvil_or_skip!();
 
@@ -3056,8 +3045,8 @@ async fn wallet_balance_token_non_erc20_auto_detect_yields_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "non-ERC-20 token decode-fail (auto-detect path on decimals) must yield exit 2\nstdout: {stdout}\nstderr: {stderr}",
+        Some(1),
+        "non-ERC-20 token decode-fail (auto-detect path on decimals) must yield exit 1\nstdout: {stdout}\nstderr: {stderr}",
     );
     assert!(
         stderr.contains("decimals"),
@@ -3073,16 +3062,16 @@ async fn wallet_balance_token_non_erc20_auto_detect_yields_exit_2() {
 // Issue #354 — dynamic gas estimation (M-3 from #352 code-review).
 //
 // Override precedence: CLI flag / env var > provider.estimate_eip1559_fees().
-// Partial override (only one of max-fee / max-prio set) → exit 2 (InvalidInput)
-// per #297 M11. Invalid wei value (not parseable as u128) → exit 2 (clap parse
+// Partial override (only one of max-fee / max-prio set) → exit 1 (InvalidInput)
+// per #297 M11. Invalid wei value (not parseable as u128) → exit 1 (clap parse
 // error). The override path must wire through to the signed envelope — Anvil
 // test queries the broadcast tx back via alloy and asserts max_fee_per_gas
 // matches the CLI override.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn send_command_with_invalid_max_fee_wei_yields_exit_2() {
-    // L28 Gate C: invalid override rejected at clap parse (exit 2).
+fn send_command_with_invalid_max_fee_wei_yields_exit_1() {
+    // L28 Gate C: invalid override rejected at clap parse (exit 1).
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
 
@@ -3126,8 +3115,8 @@ fn send_command_with_invalid_max_fee_wei_yields_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "invalid --max-fee-per-gas value must yield exit 2\nstdout: {stdout}\nstderr: {stderr}"
+        Some(1),
+        "invalid --max-fee-per-gas value must yield exit 1\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
         stderr.contains("invalid") || stderr.contains("parse"),
@@ -3136,8 +3125,8 @@ fn send_command_with_invalid_max_fee_wei_yields_exit_2() {
 }
 
 #[test]
-fn send_command_with_only_max_fee_per_gas_yields_exit_2() {
-    // L28 Gate C: partial override (one of two) rejected as InvalidInput (exit 2).
+fn send_command_with_only_max_fee_per_gas_yields_exit_1() {
+    // L28 Gate C: partial override (one of two) rejected as InvalidInput (exit 1).
     // EIP-1559 requires BOTH max-fee-per-gas + max-priority-fee-per-gas OR NEITHER.
     let tmp = TempDir::new().expect("tempdir");
     let data_dir = tmp.path().to_path_buf();
@@ -3183,8 +3172,8 @@ fn send_command_with_only_max_fee_per_gas_yields_exit_2() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(
         out.status.code(),
-        Some(2),
-        "partial override (only --max-fee-per-gas) must yield exit 2\nstdout: {stdout}\nstderr: {stderr}"
+        Some(1),
+        "partial override (only --max-fee-per-gas) must yield exit 1\nstdout: {stdout}\nstderr: {stderr}"
     );
     assert!(
         stderr.contains("either set both --max-fee-per-gas and --max-priority-fee-per-gas")
