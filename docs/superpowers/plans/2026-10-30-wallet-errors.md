@@ -1806,13 +1806,13 @@ The matrix below was produced by building all five CLIs and crawling `--help` ac
 | `--max-fee-gwei` | — | ✓ | ✓ | — | — |
 | `--fee-rate` | ✓ | — | — | — | — |
 | `--priority-fee` | — | — | — | — | ✓ |
-| endpoint override | `--esplora-url` | `--rpc-url` | `--rpc-url` | `--rpc-url`, `--rpc` | `--url` |
+| endpoint override | `--esplora-url` | `--rpc-url` | `--rpc-url` | `--rpc-url`, `--rpc` | `--rpc`, `--url` |
 | SPKI pin override | `--pin-spki`, `--esplora-spki-pin` | — | — | — | `--spki-pin` |
 
 Notes that must accompany the table:
 
 - **Seven flags are common to all five CLIs:** `--address`, `--data-dir`, `--dry-run`, `--id`, `--json`, `--mnemonic`, `--to`. (The grilling of the recommendations document recorded **six** and omitted `--mnemonic`; measuring against the built binaries gives seven. Solana has both `--mnemonic` and `--mnemonic-file`.)
-- **The endpoint override has four different spellings** across the five CLIs and means something slightly different on each — this is genuinely per-chain and is *not* unified by this phase.
+- **The endpoint override has four different spellings** across the five CLIs and means something slightly different on each — this is genuinely per-chain and is *not* unified by this phase. On `sol` the two are genuinely different things: `--rpc` is the **global runtime override** (present on every subcommand's `--help`), while `--url` is the argument of **`sol config set-rpc`**, which writes the endpoint into the config instead of overriding it for one invocation.
 - **The SPKI pin has three names over two chains.** `eth`, `polygon` and `tron` take their pin from configuration, not from a flag.
 - `--network` is not universal: Solana selects a `--cluster`.
 - `--mnemonic-file` exists on three CLIs, not all five; Bitcoin uses `--password-file` / `--password-stdin`, and `eth` has no mnemonic-file flag.
