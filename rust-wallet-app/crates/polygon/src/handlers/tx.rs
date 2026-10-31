@@ -49,7 +49,7 @@ pub async fn tx_list(
 ///
 /// Per design doc §5.5. Parses the tx_hash as a 32-byte B256 hex
 /// (EIP-55 insensitive — `B256::from_str` accepts both cased and
-/// lowercased). Invalid format → `Error::InvalidInput` (exit 2).
+/// lowercased). Invalid format → `Error::InvalidInput` (exit 1).
 /// Live `provider.get_transaction_by_hash` deferred to a follow-up
 /// release (RPC body lands alongside other read-side RPC bodies).
 pub async fn tx_get(tx_hash: &str, _json: bool) -> polygon_wallet_core::Result<()> {

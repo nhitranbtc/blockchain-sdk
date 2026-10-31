@@ -4768,6 +4768,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "wallet-errors",
  "zeroize",
 ]
 

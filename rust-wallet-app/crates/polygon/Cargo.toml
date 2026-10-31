@@ -19,6 +19,12 @@ path = "src/main.rs"
 polygon-wallet-core    = { path = "../polygon-wallet-core" }
 evm-wallet-core        = { path = "../evm-wallet-core" }
 
+# The shared cross-chain exit-code table. `src/error.rs` classifies the
+# core error variants into `wallet_errors::ErrorCategory`, and the shared
+# table maps each category to its exit code — the only exit-code table in
+# the workspace.
+wallet-errors          = { workspace = true }
+
 # T6b (clap tree + dispatch per L25 sub-task split). Issue #426 / design §3.4.
 # `clap = { workspace = true }` carries the `derive` + `env` features per
 # `rust-wallet-app/Cargo.toml:67`. `tokio` enables the `block_on(async { ... })`

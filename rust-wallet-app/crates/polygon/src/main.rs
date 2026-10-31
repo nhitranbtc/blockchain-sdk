@@ -10,8 +10,10 @@
 //! for the full T6 surface (31 user-stories + 3 cross-cutting flags).
 
 mod cli;
+mod error;
 mod handlers;
 
+use error::classify;
 use handlers::map_wallet_err;
 use handlers::wallet::read_pk_file;
 use zeroize::Zeroizing;
@@ -32,8 +34,13 @@ fn resolve_password_with(
 ) -> polygon_wallet_core::Result<String> {
     // Non-empty argv wins; empty argv falls through to env (matches
     // `btc/src/handlers.rs:86` — a wallet created with an empty password
-    // is unrecoverable, so we refuse it at resolution time rather than
-    // silently accepting it).
+    // is unrecoverable, so an empty ARGV password is not accepted here
+    // but passed through to the next source instead). An empty ENV
+    // password is NOT refused at this layer: it reaches the handler,
+    // which rejects it up front on the create/import paths
+    // (`InvalidPassword`, exit 1) and, on the paths that open an
+    // existing wallet, the library raises `Crypto` → `DecryptionFailed`
+    // (`Signing`, exit 4).
     if let Some(p) = cli_pw {
         if !p.is_empty() {
             eprintln!(
@@ -66,7 +73,7 @@ fn resolve_password_with(
 /// must call `resolve_password` BEFORE entering the tokio runtime.
 ///
 /// Mirrors `eth/src/main.rs:421-429`. Returns `Error::InvalidInput`
-/// (exit 2) when every source fails.
+/// (exit 1) when every source fails.
 #[allow(dead_code)] // wired into fn main() in T6 follow-up (before tokio runtime)
 fn resolve_password(cli_pw: Option<&str>) -> polygon_wallet_core::Result<String> {
     let env_pw = std::env::var("POLYGON_PASSWORD").ok();
@@ -96,7 +103,22 @@ fn main() -> std::process::ExitCode {
     // through `block_on` — a no-op for sync fns. Async commands
     // (wallet_balance / future send / sync) drive real work.
     use clap::Parser;
-    let cli = cli::Cli::parse();
+    let cli = match cli::Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // A clap usage error is a user error (exit 1), not a network error
+            // (exit 2). `--help` and `--version` keep clap's exit 0.
+            let code = e.exit_code();
+            // `print()` returns `io::Result<()>` and `Result` is `#[must_use]` —
+            // the write result is dropped deliberately: the process exits either way.
+            let _ = e.print();
+            std::process::exit(if code == 0 {
+                0
+            } else {
+                wallet_errors::ErrorCategory::User.exit_code()
+            });
+        }
+    };
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -105,10 +127,7 @@ fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
-            // T6b: all errors map to exit 1. Per-error mapping lands in
-            // T6c when the error table becomes meaningful (currently every
-            // error is `Error::Rpc`).
-            std::process::ExitCode::from(1)
+            std::process::ExitCode::from(classify(&e).exit_code() as u8)
         }
     }
 }
@@ -154,7 +173,7 @@ fn default_data_dir() -> std::path::PathBuf {
 
 /// Resolve a wallet name to (wallet_id, network). Sign dispatch takes
 /// no `--network`; same name may exist across networks — surface
-/// ambiguity as `InvalidInput` (exit 2) rather than silently picking.
+/// ambiguity as `InvalidInput` (exit 1) rather than silently picking.
 ///
 /// Implementation: iterate every known `Network` variant and call
 /// `WalletManager::lookup_by_name(name, network)`. Per-network lookup
@@ -226,11 +245,10 @@ fn unlock_wallet_by_name(
     // `PrivateKeySigner::from_slice` fails iff the unlocked 32 bytes
     // aren't a valid k256 scalar (all-zero, >= curve order) — that is
     // **keystore corruption**, not a caller-input error. Map to
-    // `Error::Rpc` per the exit-code table at `handlers/mod.rs:53-58`
-    // (filesystem/serialization/corruption → Rpc exit 3). L12 type-design
-    // nit finding — `InvalidInput` (exit 2) would mislead the operator
-    // into "wrong password" retries when the actual problem is a bad
-    // keystore file.
+    // `Error::Rpc` (Network, exit 2) per the shared `wallet-errors`
+    // table. L12 type-design nit finding — `InvalidInput` (User,
+    // exit 1) would mislead the operator into "wrong password" retries
+    // when the actual problem is a bad keystore file.
     let signer =
         alloy_signer_local::PrivateKeySigner::from_slice(secret.as_ref()).map_err(|e| {
             Error::Rpc(format!(
@@ -1219,7 +1237,7 @@ mod sign_dispatch_tests {
     //!
     //! Lock-down coverage:
     //! 1. Happy path: SignMessage round-trip (create wallet, dispatch returns signature)
-    //! 2. Sad path: SignMessage wrong password returns InvalidPassword
+    //! 2. Sad path: SignMessage wrong password returns DecryptionFailed (exit 4)
     //! 3. Happy path: SignTyped chain_id=137 passes Q7 gate
     //! 4. Sad path: SignTyped chain_id=1 rejected at Q7 gate
 
@@ -1288,16 +1306,17 @@ mod sign_dispatch_tests {
         );
     }
 
-    /// Test #2: wrong password surfaces as a caller-side error (exit 2).
-    /// `unlock_signer` re-derives the keystore key and AEAD-decrypts with
-    /// the supplied password; tag mismatch → `WalletError::Crypto(...)`.
-    /// `map_wallet_err` (handlers/mod.rs:66) translates Crypto →
-    /// `Error::InvalidInput` (exit 2, per #455 L12 cluster mapping:
-    /// caller-side errors → InvalidInput). Assert the variant + that
-    /// the message names the crypto path so a future swap to a generic
-    /// `Error::Rpc` doesn't silently mask auth-tag failures.
+    /// Test #2: wrong password surfaces as a credential failure
+    /// (`DecryptionFailed`, Signing, exit 4). `unlock_signer` re-derives
+    /// the keystore key and AEAD-decrypts with the supplied password;
+    /// tag mismatch → `WalletError::Crypto(...)`. `map_wallet_err`
+    /// (handlers/mod.rs) translates Crypto → `Error::DecryptionFailed` —
+    /// the SAME variant and exit code a corrupt wallet blob produces, so
+    /// the two are indistinguishable (both `Signing`, exit 4) and neither
+    /// is `User`: a wrong passphrase is a credential failure, not
+    /// operator input an automation rule should retry.
     #[test]
-    fn dispatch_sign_message_wrong_password_returns_invalid_input() {
+    fn dispatch_sign_message_wrong_password_returns_decryption_failed() {
         let data_dir = fixture_wallet(
             "w",
             "correct-horse-battery-staple",
@@ -1314,12 +1333,14 @@ mod sign_dispatch_tests {
         };
         let r = dispatch_sign_message(&args, &data_dir);
         match r {
-            Err(Error::InvalidInput(msg)) => assert!(
+            Err(Error::DecryptionFailed(msg)) => assert!(
                 msg.contains("crypto") || msg.contains("AES"),
                 "wrong-password message must name the crypto path (no silent \
                  masking to Rpc); got {msg:?}"
             ),
-            other => panic!("wrong password must surface as InvalidInput (exit 2); got {other:?}"),
+            other => {
+                panic!("wrong password must surface as DecryptionFailed (exit 4); got {other:?}")
+            }
         }
     }
 
@@ -1469,7 +1490,7 @@ mod sign_dispatch_tests {
     }
 
     /// Test #7 (L12 code-review finding #3 part B): `--verify` mismatch
-    /// surfaces as `Error::InvalidInput` (exit 2, caller-side). Sister
+    /// surfaces as `Error::InvalidInput` (exit 1, caller-side). Sister
     /// test at `handlers/sign.rs:299-309` covers the handler in
     /// isolation; this exercises the dispatch path end-to-end.
     #[test]
@@ -1498,7 +1519,7 @@ mod sign_dispatch_tests {
                 msg.contains("verify") || msg.contains("mismatch"),
                 "--verify mismatch must surface as InvalidInput naming the verify path; got {msg:?}"
             ),
-            other => panic!("--verify mismatch must return InvalidInput (exit 2); got {other:?}"),
+            other => panic!("--verify mismatch must return InvalidInput (exit 1); got {other:?}"),
         }
     }
 
@@ -1506,7 +1527,7 @@ mod sign_dispatch_tests {
     /// returns `InvalidInput` per the handler deferral notice at
     /// `handlers/sign.rs:159-163`. Pinning the contract so a future
     /// refactor that drops the `verify_address.is_some()` short-circuit
-    /// doesn't silently change exit code from 2 to 3.
+    /// doesn't silently change exit code from 1 to 2.
     #[test]
     fn dispatch_sign_typed_verify_returns_invalid_input() {
         let password = "correct-horse-battery-staple";

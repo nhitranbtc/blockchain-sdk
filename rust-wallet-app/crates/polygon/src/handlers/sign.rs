@@ -108,7 +108,7 @@ pub fn sign_message(
 ///
 /// 1. **CLI gate** — `assert_polygon_chain_id(chain_id)` rejects any
 ///    `--chain-id` value outside `{137, 80002}` with `Error::InvalidInput`
-///    (exit 2). Validates operator intent.
+///    (exit 1). Validates operator intent.
 ///
 /// 2. **Domain gate** — `assert_domain_chain_id_consistency` (helper
 ///    below) parses `typed_data.domain.chainId` if present and runs it
@@ -199,8 +199,8 @@ pub fn sign_typed_data(
     // Q7 + C1 gate (step 1): CLI --chain-id must be Polygon PoS.
     assert_polygon_chain_id(chain_id)?;
     // Q7 + #463 gate (step 2): parse typed_data_json, gate domain.chainId.
-    // Deliberately `InvalidInput` (exit 2), not the lib-side `WalletCorrupt`
-    // (exit 5) that `From<serde_json::Error>` would yield — malformed
+    // Deliberately `InvalidInput` (exit 1), not the lib-side `WalletCorrupt`
+    // (exit 4) that `From<serde_json::Error>` would yield — malformed
     // typed-data JSON from the CLI is operator input error, not wallet
     // file corruption. (Behavior reclassification flagged in PR body.)
     let parsed: serde_json::Value = serde_json::from_str(typed_data_json)
@@ -218,7 +218,7 @@ pub fn sign_typed_data(
     })?;
     // --verify deferred alongside the alloy eip712 feature gate.
     // Maps to Error::InvalidInput (caller-side: requested a flag we
-    // can't honour yet) — exit 2, not exit 3 (Rpc).
+    // can't honour yet) — exit 1, not exit 2 (Rpc).
     if verify_address.is_some() {
         return Err(Error::InvalidInput(
             "eip712 --verify deferred to follow-up PR alongside alloy eip712 feature gate".into(),
@@ -356,7 +356,7 @@ mod tests {
     }
 
     /// T6d-3 test #10: `sign_message` --verify with WRONG address returns
-    /// `Error::InvalidInput` (exit 2) — protects against silent address
+    /// `Error::InvalidInput` (exit 1) — protects against silent address
     /// substitution attacks.
     #[test]
     fn sign_message_verify_mismatch_returns_invalid_input() {
@@ -367,7 +367,7 @@ mod tests {
         let r = super::sign_message(&signer, msg, Some(wrong_addr));
         assert!(
             matches!(r, Err(Error::InvalidInput(_))),
-            "--verify mismatch must return InvalidInput (exit 2); got {r:?}"
+            "--verify mismatch must return InvalidInput (exit 1); got {r:?}"
         );
     }
 
@@ -641,8 +641,8 @@ mod tests {
         }
     }
 
-    /// Malformed JSON — parse error maps to `InvalidInput` (exit 2),
-    /// NOT `WalletCorrupt` (exit 5). Operator input error class.
+    /// Malformed JSON — parse error maps to `InvalidInput` (exit 1),
+    /// NOT `WalletCorrupt` (exit 4). Operator input error class.
     #[test]
     fn sign_typed_data_rejects_malformed_json_as_invalid_input() {
         let signer = cli_test_signer();
@@ -653,7 +653,7 @@ mod tests {
                 "parse error must mention 'parse'; got {msg}"
             ),
             other => panic!(
-                "malformed JSON must map to InvalidInput (exit 2), not WalletCorrupt; got {other:?}"
+                "malformed JSON must map to InvalidInput (exit 1), not WalletCorrupt; got {other:?}"
             ),
         }
     }

@@ -48,7 +48,7 @@ pub struct FeeEstimate {
 /// same scheme guard as the wallet handlers (moved to
 /// `super::validate_rpc_scheme` so future handlers don't duplicate
 /// the policy). Returns `Error::InvalidInput` for non-https / non-
-/// loopback-http URLs so the operator sees the fix at exit 2.
+/// loopback-http URLs so the operator sees the fix at exit 1.
 pub(crate) fn build_provider(
     rpc_url: Option<&str>,
     network: Network,
@@ -80,7 +80,7 @@ pub(crate) fn build_provider(
 /// `rpc_url` overrides the per-network default when `Some`. The chain_id
 /// returned by the RPC must equal `network.chain_id()` — a hostile or
 /// misconfigured RPC that reports a different chain is rejected as
-/// `Error::InvalidInput` (exit 2) so operators see the mismatch at
+/// `Error::InvalidInput` (exit 1) so operators see the mismatch at
 /// the boundary, not as a silently-signed transaction.
 /// RPC timeout for `fetch_fee_estimate` (10s). Without this, a slow /
 /// hostile RPC at the `fee` boundary can hang the CLI indefinitely —
