@@ -141,7 +141,7 @@ Notes:
 | User error | 1 | Invalid args, missing file, unknown wallet, invalid mnemonic or address, ABI decode failure |
 | Network error | 2 | RPC unreachable, gas estimate failed, receipt timeout |
 | Insufficient funds | 3 | Balance below amount + fee |
-| Signing error | 4 | Wrong password, invalid key, corrupt or tampered wallet file, encryption or KDF failure, transaction construction failure, internal machinery failure, feature not yet implemented |
+| Signing error | 4 | Wrong password, key derivation failure, corrupt or tampered wallet file, encryption or KDF failure, transaction construction failure, internal machinery failure, feature not yet implemented |
 | Broadcast error | 5 | Tx REVERTED, node rejected |
 
 **Implementation (2026-10-30, unified).** The category→exit-code table lives in one
@@ -212,26 +212,23 @@ Four intentional divergences from the categories above:
   finding**: closing them means changing `eth` and `polygon` together, against
   the already-merged ETH migration, with both `CHANGELOG.md` bullets
   corrected.
-- **A chain reaches only the categories its engine can express, and TRON
-  reaches four of the six.** `tron-wallet-core`'s `Error` has **no**
-  insufficient-funds variant and **no** broadcast-rejection variant, so the
-  `tron` CLI never returns 3 or 5: a node-side transaction rejection is
-  reported as `Network` (2), the same code as an unreachable node. Solana
-  reaches all six. This is a property of the engine, not of the taxonomy —
-  the table above is the specification for every chain that *can* reach a
-  category.
-- **The `polygon` CLI reaches only three of the six in practice.** Its
-  `map_wallet_err` translates the wallet library's errors into `Rpc`,
+- **A chain reaches only the categories its engine can express. Solana reaches
+  all six; `eth`, `polygon`, `btc` and `tron` each reach four** — 0, 1, 2 and 4.
+  None of the EVM, Bitcoin or TRON engines constructs an insufficient-funds or
+  a broadcast-rejection error outside its own variant-coverage tests, so **3
+  and 5 are unreachable in all four**; a node-side transaction rejection is
+  reported as `Network` (2), the same code as an unreachable node. This is a
+  property of the engines, not of the taxonomy — the table above is the
+  specification for every chain that *can* reach a category.
+- **The `polygon` CLI translates the wallet library's errors the same way `eth`
+  does.** Its `map_wallet_err` maps the library's errors into `Rpc`,
   `WalletCorrupt`, `DecryptionFailed`, `InvalidMnemonic`, `InvalidPrivateKey`,
   `WalletNotFound`, `WalletNotFoundByName` and `WalletExists`, and the CLI
-  itself raises `InvalidInput` and `InvalidPassword`, so in practice it exits
-  **1** (operator input), **2** (node unreachable, RPC failure, local I/O) or
-  **4** (a wrong passphrase or a corrupt wallet file). The insufficient-funds
-  (3) and broadcast-rejection (5) codes are **classified but not yet
-  constructed** by the CLI; they become observable when its error construction
-  is extended. A wrong passphrase exits 4 rather than 1 so that it stays
-  indistinguishable from a corrupt wallet file, exactly as in the other four
-  chains.
+  itself raises `InvalidInput` and `InvalidPassword` — so it exits **1**
+  (operator input), **2** (node unreachable, RPC failure, local I/O) or **4**
+  (a wrong passphrase or a corrupt wallet file), exactly as `eth` does. A
+  wrong passphrase exits 4 rather than 1 so that it stays indistinguishable
+  from a corrupt wallet file, exactly as in the other four chains.
 
 **This changed the exit codes of all five CLIs.** Automation that keys on exit
 codes must be updated — see the `**BREAKING**` entries in `CHANGELOG.md`.
@@ -299,7 +296,6 @@ the anychain gap).
 
 - `docs/wallets/2026-08-23-ethereum-rust-sdks-deep-dive.md` — ETH precedent
 - `docs/wallets/2026-08-27-tron-anychain-sdks-deep-dive.md` — TRON primary
-- `docs/wallets/2026-09-05-adr-0001-tron-sdk-anychain-vs-raw-primitives.md` — TRON ADR
 - `rust-wallet-app/crates/bitcoin-wallet-core/src/chain/spki.rs` — SPKI pin verifier (BTC impl; TRON + EVM have parallel impls, see security-primitive table above)
 - `rust-wallet-app/crates/wallet-errors/src/lib.rs` — the shared exit-code table (`ErrorCategory`)
 - `rust-wallet-app/crates/sol/src/handlers/error.rs:68` — exit code classifier (`fn classify`)
