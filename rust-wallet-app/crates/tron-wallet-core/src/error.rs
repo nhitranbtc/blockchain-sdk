@@ -55,9 +55,9 @@ pub enum Error {
 
     /// Phase 5 — wallet persistence layer refused an operation
     /// (missing id, storage IO failure, rename conflict). Distinct
-    /// from the KDF/AEAD `Encryption` variant below so the CLI can
-    /// map "wallet file not found" to exit code 4
-    /// (`wallet/balance issue` per plan §Phase 6).
+    /// from the KDF/AEAD `Encryption` variant below, so the CLI can
+    /// tell a wallet-persistence failure from a decryption failure.
+    /// Category: User (exit 1).
     #[error("wallet: {0}")]
     Wallet(String),
 

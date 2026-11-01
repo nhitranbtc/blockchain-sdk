@@ -49,15 +49,15 @@ use crate::cli::UnitArg;
 
 /// CLI-level error. Wraps the core error so the category mapping lives in
 /// exactly one place, and adds the two cases the core has no variant for:
-/// a declined confirmation, and an argument shape rejected before the core is
-/// reached.
+/// a declined confirmation, and the CLI's own rejection — operator input, or
+/// a missing runtime fixture.
 #[derive(Debug)]
 pub enum CliError {
     /// Propagated from `tron-wallet-core`.
     Core(CoreError),
     /// Operator declined a confirmation prompt.
     Abort,
-    /// Argument shape the CLI rejects before reaching the core.
+    /// The CLI's own rejection — operator input, or a missing runtime fixture.
     BadInput(String),
 }
 
@@ -89,7 +89,7 @@ pub fn classify(err: &CliError) -> wallet_errors::ErrorCategory {
     match err {
         // Operator declined a confirmation prompt.
         CliError::Abort => ErrorCategory::User,
-        // Argument shape the CLI rejects before reaching the core.
+        // The CLI's own rejection — operator input, or a missing runtime fixture.
         CliError::BadInput(_) => ErrorCategory::User,
         CliError::Core(e) => classify_core(e),
     }

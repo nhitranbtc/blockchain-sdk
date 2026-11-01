@@ -223,11 +223,13 @@ Four intentional divergences from the categories above:
   workspace is inside test code; `sol-wallet-core` declares both, but its
   `BroadcastFailed` (`sol-wallet-core/src/error.rs:79`) has no production
   construction site and its `InsufficientFunds` is built only by
-  `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:48`),
-  whose only callers are two integration tests — the `sol` CLI's send paths
-  do no balance check. So **all five CLIs reach exactly four of the six: 0,
-  1, 2 and 4**. A node-side transaction rejection is reported as `Network`
-  (2), the same code as an unreachable node. This is a property of the
+  `check_native_balance` (`sol-wallet-core/src/chain/preflight.rs:37`),
+  which no production code calls — its only callers are two integration
+  tests — so the `sol` CLI's send paths do no balance check. So **all five
+  CLIs reach exactly four of the six: 0, 1, 2 and 4**. A node-side
+  rejection at broadcast submission is reported as `Network` (2), the same
+  code as an unreachable node; on `sol`, a transaction the cluster executed
+  and rejected is reported as confirmed (0). This is a property of the
   engines, not of the taxonomy — the table above is the specification for
   every chain that *can* reach a category.
 - **The `polygon` CLI translates the wallet library's errors the same way `eth`
